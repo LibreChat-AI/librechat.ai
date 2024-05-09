@@ -39,7 +39,7 @@ const config: DocsThemeConfig = {
   toc: {
     backToTop: true,
   },
-  docsRepositoryBase: 'https://github.com/fuegovic/website-lc/tree/main', //TODO: Update URL
+  docsRepositoryBase: 'https://github.com/noreplylibrechatai/librechat.ai/tree/main',
   footer: {
     content: <FooterMenu />,
   },
