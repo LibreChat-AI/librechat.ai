@@ -63,12 +63,10 @@ const config: DocsThemeConfig = {
           : '/images/socialcards/default-image.png'
 
     const image = frontMatter.ogImage
-      ? 'https://nextra.librechat.cfd' + frontMatter.ogImage // Use frontmatter image if available
+      ? 'https://www.librechat.ai' + frontMatter.ogImage // Use frontmatter image if available
       : defaultImage // Use default image based on path if frontmatter image is not available
 
-    const video = frontMatter.ogVideo
-      ? 'https://nextra.librechat.cfd' + frontMatter.ogVideo //TODO Update URL
-      : null
+    const video = frontMatter.ogVideo ? 'https://www.librechat.ai' + frontMatter.ogVideo : null
 
     return (
       <>
@@ -83,8 +81,8 @@ const config: DocsThemeConfig = {
         <meta property="og:image" content={image} />
         <meta property="twitter:image" content={image} />
         <meta name="twitter:card" content="summary_large_image" />
-        <meta name="twitter:site:domain" content="librechat.ai" /> //TODO Update URL
-        <meta name="twitter:url" content="https://librechat.ai" /> //TODO Update URL
+        <meta name="twitter:site:domain" content="librechat.ai" />
+        <meta name="twitter:url" content="https://librechat.ai" />
         <style
           dangerouslySetInnerHTML={{
             __html: `html { --font-geist-sans: ${GeistSans.style.fontFamily}; }`,

@@ -2,7 +2,7 @@
 
 /** @type {import('next-sitemap').IConfig} */
 module.exports = {
-  siteUrl: 'https://www.librechat.cfd',
+  siteUrl: 'https://www.librechat.ai',
   generateRobotsTxt: true,
   changefreq: 'daily',
   exclude: ['*/_meta'],
