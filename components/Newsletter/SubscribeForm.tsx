@@ -3,6 +3,8 @@ import toast, { Toaster } from 'react-hot-toast'
 import validator from 'validator'
 import style from './newsletterform.module.css'
 
+const isDevelopment = true //TODO
+
 const SubscribeForm = () => {
   const [email, setEmail] = useState('')
   const [isLoading, setIsLoading] = useState(false)
@@ -49,12 +51,17 @@ const SubscribeForm = () => {
         <form onSubmit={handleSubmit} className={style[`form-container`]}>
           <input
             type="email"
-            placeholder="Enter your email"
+            placeholder={isDevelopment ? 'Coming soon...' : 'Enter your email'}
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             className={style[`email-input`]}
+            readOnly={isDevelopment}
           />
-          <button type="submit" className={style[`subscribe-button`]} disabled={isLoading}>
+          <button
+            type="submit"
+            className={style[`subscribe-button`]}
+            disabled={isLoading || isDevelopment}
+          >
             {isLoading ? 'Subscribing...' : 'Subscribe'}
           </button>
         </form>
