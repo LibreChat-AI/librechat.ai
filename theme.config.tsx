@@ -39,7 +39,7 @@ const config: DocsThemeConfig = {
   toc: {
     backToTop: true,
   },
-  docsRepositoryBase: 'https://github.com/noreplylibrechatai/librechat.ai/tree/main',
+  docsRepositoryBase: 'https://github.com/LibreChat-AI/librechat.ai/tree/main',
   footer: {
     content: <FooterMenu />,
   },
