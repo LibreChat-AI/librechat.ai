@@ -18,7 +18,7 @@ const config: DocsThemeConfig = {
     link: 'https://github.com/danny-avila/LibreChat',
   },
   chat: {
-    link: 'https:discord.librechat.ai',
+    link: 'https://discord.librechat.ai',
   },
   search: {
     placeholder: 'Search...',
