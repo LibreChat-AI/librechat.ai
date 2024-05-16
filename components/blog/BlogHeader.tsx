@@ -2,7 +2,6 @@ import Image from 'next/image'
 import { useRouter } from 'next/router'
 import { Page } from 'nextra'
 import { getPagesUnderRoute } from 'nextra/context'
-import Link from 'next/link'
 import { Author } from '../Author/Authors'
 import { Video } from '../Video'
 
@@ -17,13 +16,6 @@ export const BlogHeader = () => {
 
   return (
     <div className="md:mt-10 flex flex-col gap-10">
-      <Link
-        href={`/blog${page.route ? '#' + page.route.replace('/blog/', '') : ''}`}
-        className="md:mb-10"
-      >
-        ← Back
-      </Link>
-
       <div>
         <div className="text-lg text-primary/60 mb-3">
           {new Date(date).toLocaleDateString('en-US', {

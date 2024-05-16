@@ -1,12 +1,12 @@
 export default {
   '*': {
     theme: {
-      toc: false,
+      toc: true,
       sidebar: false,
       pagination: true,
       typesetting: 'article',
       layout: 'default',
-      breadcrumb: false,
+      breadcrumb: true,
     },
   },
 }
