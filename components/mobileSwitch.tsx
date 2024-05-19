@@ -26,6 +26,8 @@ export default function MobileSwitch(props: {
   }, [])
 
   return (
-    <div ref={objectRef}>{isMobile === null ? null : isMobile ? props.mobile : props.desktop}</div>
+    <div ref={objectRef}>
+      {isMobile === null ? null : isMobile ? <>{props.mobile}</> : <>{props.desktop}</>}
+    </div>
   )
 }
