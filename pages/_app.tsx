@@ -11,7 +11,7 @@ import { Hubspot, hsPageView } from '@/components/analytics/hubspot'
 import { GeistSans } from 'geist/font/sans'
 import { Analytics } from '@vercel/analytics/react'
 import { SpeedInsights } from '@vercel/speed-insights/next'
-// import { GeistMono } from "geist/font/mono";
+import { GeistMono } from 'geist/font/mono'
 
 export default function App({ Component, pageProps }) {
   const router = useRouter()
@@ -37,8 +37,10 @@ export default function App({ Component, pageProps }) {
     }
   }, [])
   return (
-    // <div className={`${GeistSans.variable} font-sans ${GeistMono.variable}`}>
-    <div className={`${GeistSans.variable}`}>
+    <div
+      className={`${GeistSans.variable} font-sans ${GeistMono.variable} font-mono ${GeistSans.variable} `}
+    >
+      {/* <div className={`${GeistSans.variable}`}> */}
       <PostHogProvider client={posthog}>
         <Component {...pageProps} />
         <Analytics />

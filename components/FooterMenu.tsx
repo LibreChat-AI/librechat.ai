@@ -111,7 +111,7 @@ const FooterMenu = () => {
           </div>
         ))}
         <div className="flex items-center justify-between md:col-span-6">
-          <div className="font-mono text-sm">© {new Date().getFullYear()} LibreChat</div>
+          <div className="font-sans text-sm">© {new Date().getFullYear()} LibreChat</div>
           <div className="flex ml-auto">
             <SocialIcon
               url="https://github.librechat.ai/"
