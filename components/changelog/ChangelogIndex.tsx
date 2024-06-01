@@ -39,7 +39,7 @@ export const ChangelogIndex = ({ maxItems }: { maxItems?: number }) => {
                 </div>
                 <Accordion.Item value={page.meta?.title || page.frontMatter?.title || page.name}>
                   <Accordion.Trigger asChild>
-                    <div key={page.route} className="block group cursor-pointer">
+                    <div key={page.route} className="block group cursor-pointer select-none">
                       {page.frontMatter?.ogVideo ? (
                         <Video
                           src={page.frontMatter.ogVideo}
