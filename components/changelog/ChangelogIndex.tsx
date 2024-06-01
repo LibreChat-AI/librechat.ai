@@ -26,12 +26,8 @@ export const ChangelogIndex = ({ maxItems }: { maxItems?: number }) => {
               },
             )
             return (
-              <div
-                className="md:grid md:grid-cols-4 md:gap-5 py-16 transition-all"
-                id={pageName}
-                key={pageName}
-              >
-                <div className="hidden md:block opacity-80 text-lg group-hover:opacity-100 sticky top-24 self-start">
+              <div className="md:flex md:gap-4 py-6 transition-all" id={pageName} key={pageName}>
+                <div className="hidden md:block opacity-80 text-sm group-hover:opacity-100 sticky top-24 self-start md:min-w-44">
                   {page.frontMatter?.date
                     ? new Date(page.frontMatter.date).toLocaleDateString('en-US', {
                         year: 'numeric',
@@ -41,9 +37,9 @@ export const ChangelogIndex = ({ maxItems }: { maxItems?: number }) => {
                       })
                     : null}
                 </div>
-                <div className="md:col-span-3">
-                  <Accordion.Item value={page.meta?.title || page.frontMatter?.title || page.name}>
-                    <Accordion.Trigger key={page.route} className="block group">
+                <Accordion.Item value={page.meta?.title || page.frontMatter?.title || page.name}>
+                  <Accordion.Trigger asChild>
+                    <div key={page.route} className="block group cursor-pointer">
                       {page.frontMatter?.ogVideo ? (
                         <Video
                           src={page.frontMatter.ogVideo}
@@ -67,7 +63,7 @@ export const ChangelogIndex = ({ maxItems }: { maxItems?: number }) => {
                           />
                         </div>
                       ) : null}
-                      <div className="md:hidden opacity-80 text-sm mb-4 group-hover:opacity-100">
+                      <div className="md:hidden opacity-80 mb-4 text-sm group-hover:opacity-100">
                         {page.frontMatter?.date
                           ? new Date(page.frontMatter.date).toLocaleDateString('en-US', {
                               year: 'numeric',
@@ -77,21 +73,21 @@ export const ChangelogIndex = ({ maxItems }: { maxItems?: number }) => {
                             })
                           : null}
                       </div>
-                      <h2 className="block font-mono text-3xl opacity-90 group-hover:opacity-100">
+                      <h2 className="block font-mono text-2xl opacity-90 group-hover:opacity-100">
                         {page.meta?.title || page.frontMatter?.title || page.name}
                       </h2>
-                      <div className="opacity-80 mt-4 text-lg group-hover:opacity-100">
+                      <div className="opacity-80 text-lg group-hover:opacity-100">
                         {page.frontMatter?.description}
                       </div>
-                    </Accordion.Trigger>
-                    <Accordion.Content className="mt-8">
-                      <div className="prose dark:prose-dark max-w-none">
-                        {/* Dynamic import of the MDX content */}
-                        <MarkdownContent />
-                      </div>
-                    </Accordion.Content>
-                  </Accordion.Item>
-                </div>
+                    </div>
+                  </Accordion.Trigger>
+                  <Accordion.Content className="mt-4">
+                    <div className="prose dark:prose-dark bg-secondary/45 p-4 rounded-lg max-w-screen-lg">
+                      {/* Dynamic import of the MDX content */}
+                      <MarkdownContent />
+                    </div>
+                  </Accordion.Content>
+                </Accordion.Item>
               </div>
             )
           })}
