@@ -7,7 +7,13 @@ const changelogItems = getPagesUnderRoute('/changelog') as Array<Page & { frontM
 
 export default function Changelog({ className }: { className?: string }) {
   const changelog = changelogItems
-    .filter((page) => page.route && page.frontMatter.title && page.frontMatter.date)
+    .filter(
+      (page) =>
+        page.route &&
+        !page.route.includes('content') &&
+        page.frontMatter.title &&
+        page.frontMatter.date,
+    )
     .sort((a, b) => new Date(b.frontMatter.date).getTime() - new Date(a.frontMatter.date).getTime())
     .slice(0, 20)
     .map(({ route, frontMatter }) => ({

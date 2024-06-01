@@ -3,6 +3,6 @@ export default {
   authentication: 'Authentication',
   librechat_yaml: 'librechat.yaml',
   mongodb: 'MongoDB',
-  pre_configured_ai: 'Pre-Configured AIs',
+  pre_configured_ai: 'AI Providers',
   tools: 'Tools and Plugins',
 }

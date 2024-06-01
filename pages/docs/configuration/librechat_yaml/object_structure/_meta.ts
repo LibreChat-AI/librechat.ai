@@ -1,12 +1,12 @@
 export default {
-  config: 'Config',
+  config: 'Root Settings',
   file_config: 'File Config',
-  interface: 'Interface',
+  interface: 'Interface (UI)',
   model_specs: 'Model Specs',
   registration: 'Registration',
   assistants_endpoint: 'Assistants Endpoint',
   custom_endpoint: 'Custom Endpoint',
   azure_openai: 'Azure OpenAI',
-  model_config: 'Model Config',
-  default_params: 'Default Parameters',
+  model_config: 'Azure Model Config',
+  default_params: 'API Default Parameters',
 }

@@ -39,6 +39,8 @@ const nonPermanentRedirects = [
   ['/gh-support', 'https://github.com/danny-avila/LibreChat/discussions/categories/support'],
   ['/gh-discussions', 'https://github.com/danny-avila/LibreChat/discussions'],
   ['/roadmap', '/docs/roadmap'],
+  /* Danny moved these :P */
+  ['/docs/configuration/librechat_yaml/ai_endpoints/azure', '/docs/configuration/azure'],
   // Redirect to overview pages
   ...[].map((path) => [path, path + '/overview']),
 ]
