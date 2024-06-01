@@ -1,5 +1,11 @@
 export default {
   index: 'Get Started',
+  quick_start: {
+    title: 'Quick Start',
+    children: {
+      index: 'Quick Start Overview',
+    },
+  },
   local: 'Local Installation',
   remote: 'Remote Hosting',
   configuration: 'Configuration',
