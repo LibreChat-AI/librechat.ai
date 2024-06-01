@@ -3,5 +3,5 @@ export default {
   ai_endpoints: 'Custom AI Endpoints',
   setup: 'Setup',
   example: 'Example Configs',
-  object_structure: 'Object Structure',
+  object_structure: 'Settings',
 }
