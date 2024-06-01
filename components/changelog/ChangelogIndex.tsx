@@ -20,7 +20,7 @@ export const ChangelogIndex = ({ maxItems }: { maxItems?: number }) => {
           .map((page, i) => {
             const pageName = page.route.replace('/changelog/', '')
             const MarkdownContent = dynamic(
-              import(`../../pages/changelog/content/config_v1.0.0.mdx`),
+              import(`@/components/changelog/content/${pageName}.mdx`),
               {
                 ssr: false,
               },
