@@ -6,7 +6,7 @@ export function QuickStartLocal() {
       <div className="flex gap-2 items-center">
         {/* Text */}
         <span className="ml-2 text-lg font-bold text-gray-600 dark:text-gray-300">
-          ⚡ Quick Start (Local Setup)
+          ⚡ Quick Local Setup
         </span>
         {/* CSS for hover effect */}
         <style jsx>{`
