@@ -13,6 +13,10 @@ const menuItems: {
         href: '/about',
       },
       { name: 'Contact Us', href: '/about#contact-us' },
+      {
+        name: 'Features',
+        href: '/features',
+      },
     ],
   },
   {
@@ -50,15 +54,6 @@ const menuItems: {
       {
         name: 'Remote Install',
         href: '/docs/remote',
-      },
-    ],
-  },
-  {
-    heading: 'Features',
-    items: [
-      {
-        name: 'Features',
-        href: '/features',
       },
     ],
   },
