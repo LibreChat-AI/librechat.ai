@@ -1,6 +1,6 @@
 import Image from 'next/image'
 
-export function Changelog() {
+export default function Changelog() {
   return (
     <>
       <div className="flex gap-2 items-center">

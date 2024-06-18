@@ -1,6 +1,6 @@
 import Image from 'next/image'
 
-export function OurAuthors() {
+export default function OurAuthors() {
   return (
     <>
       <div className="flex gap-2 items-center">

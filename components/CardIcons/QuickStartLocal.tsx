@@ -1,6 +1,6 @@
 // import Image from 'next/image'
 
-export function QuickStartLocal() {
+export default function QuickStartLocal() {
   return (
     <>
       <div className="flex gap-2 items-center">

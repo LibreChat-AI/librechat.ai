@@ -54,6 +54,15 @@ const menuItems: {
     ],
   },
   {
+    heading: 'Features',
+    items: [
+      {
+        name: 'Features',
+        href: '/features',
+      },
+    ],
+  },
+  {
     heading: 'Blog',
     items: [
       { name: 'Blog', href: '/blog' },

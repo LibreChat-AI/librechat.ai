@@ -1,6 +1,6 @@
 // import Image from 'next/image'
 
-export function CustomEndpoints() {
+export default function CustomEndpoints() {
   return (
     <>
       <div className="flex gap-2 items-center">
