@@ -5,8 +5,7 @@ import { SocialIcon } from 'react-social-icons'
 import BlogCard from '../blog/BlogCard'
 import Image from 'next/image'
 import { Cards } from 'nextra/components'
-import { Blog } from '@/components/CardIcons/Blog'
-import { OurAuthors } from '@/components/CardIcons/OurAuthors'
+import { OurAuthors, Blog } from '@/components/CardIcons'
 
 //TODO: Fix Mobile view to better handle more than 4 socials;
 //TODO: Better fallback social icon (the default one is the "share" icon)

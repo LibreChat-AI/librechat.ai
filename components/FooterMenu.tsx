@@ -13,6 +13,10 @@ const menuItems: {
         href: '/about',
       },
       { name: 'Contact Us', href: '/about#contact-us' },
+      {
+        name: 'Features',
+        href: '/docs/features',
+      },
     ],
   },
   {

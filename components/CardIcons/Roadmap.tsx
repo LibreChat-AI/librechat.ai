@@ -1,6 +1,6 @@
 import Image from 'next/image'
 
-export function Roadmap() {
+export default function Roadmap() {
   return (
     <>
       <div className="flex gap-2 items-center">

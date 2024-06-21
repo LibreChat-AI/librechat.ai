@@ -1,6 +1,6 @@
 import Image from 'next/image'
 
-export function Blog() {
+export default function Blog() {
   return (
     <>
       <div className="flex gap-2 items-center">

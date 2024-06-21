@@ -1,13 +1,13 @@
 import Image from 'next/image'
 
-export default function ToolKit() {
+export default function Features() {
   return (
     <>
       <div className="flex gap-2 items-center">
         {/* Image */}
-        <Image src="/images/cards/toolbox.svg" alt="ToolKit Logo" width={30} height={30} />
+        <Image src="/images/cards/sparkles.svg" alt="Features Logo" width={30} height={30} />
         {/* Text */}
-        <span className="ml-2 text-lg font-bold text-gray-600 dark:text-gray-300">ToolKit</span>
+        <span className="ml-2 text-lg font-bold text-gray-600 dark:text-gray-300">Features</span>
         {/* CSS for hover effect */}
         <style jsx>{`
           div {

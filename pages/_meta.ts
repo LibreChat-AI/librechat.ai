@@ -74,6 +74,14 @@ export default {
       timestamp: false,
     },
   },
+  features: {
+    title: 'Features',
+    type: 'page',
+    display: 'hidden',
+    theme: {
+      timestamp: false,
+    },
+  },
   subscribe: {
     title: 'Subscribe',
     type: 'page',

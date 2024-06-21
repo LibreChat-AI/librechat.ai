@@ -1,6 +1,6 @@
 import Image from 'next/image'
 
-export function Logo() {
+export default function Logo() {
   return (
     <>
       <div className="flex gap-2 items-center">
