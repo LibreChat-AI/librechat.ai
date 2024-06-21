@@ -15,7 +15,7 @@ const menuItems: {
       { name: 'Contact Us', href: '/about#contact-us' },
       {
         name: 'Features',
-        href: '/features',
+        href: '/docs/features',
       },
     ],
   },
