@@ -39,6 +39,7 @@ const nonPermanentRedirects = [
   ['/gh-support', 'https://github.com/danny-avila/LibreChat/discussions/categories/support'],
   ['/gh-discussions', 'https://github.com/danny-avila/LibreChat/discussions'],
   ['/roadmap', '/docs/roadmap'],
+  ['/features', '/docs/features'],
   /* Danny moved these :P */
   ['/docs/configuration/librechat_yaml/ai_endpoints/azure', '/docs/configuration/azure'],
   // Redirect to overview pages
