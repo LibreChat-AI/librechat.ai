@@ -1,18 +1,39 @@
 import validator from 'validator'
+// Add the type declaration for validator
+import '@types/validator'
 import dbConnect from '@/utils/dbConnect'
 import Subscriber from '@/utils/Subscriber'
-import { createMailgunClient } from 'mailgun-utility'
 import crypto from 'crypto'
+import FormData from 'form-data'
+import Mailgun from 'mailgun.js'
+import { NextApiRequest, NextApiResponse } from 'next'
 
-const mailgunClient = createMailgunClient(process.env.MAILGUN_DOMAIN, process.env.MAILGUN_API_KEY)
+interface EmailValidationResult {
+  result: string
+  engagement: {
+    behavior: string
+    isbot: boolean
+    engaging: boolean
+  }
+  risk: string
+  address: string
+  did_you_mean: string | null
+  reason: string[]
+}
 
-async function sendVerificationEmail(userEmail: string, link: string) {
+const mailgun = new Mailgun(FormData)
+const mg = mailgun.client({
+  username: 'api',
+  key: process.env.MAILGUN_API_KEY || 'key-yourkeyhere',
+})
+
+async function sendVerificationEmail(userEmail: string, link: string): Promise<void> {
   try {
-    const result = await mailgunClient.sendEmail({
+    const result = await mg.messages.create(process.env.MAILGUN_DOMAIN, {
       from: 'noreply@librechat.ai',
       to: userEmail,
       subject: 'Verify your email for our newsletter',
-      html: `<p>Please verify your email by clicking the following link: <a href="${link}" >here</a></p>`,
+      html: `<p>Please verify your email by clicking the following link: <a href="${link}">here</a></p>`,
     })
     console.log('Email sent:', result)
   } catch (error) {
@@ -20,18 +41,24 @@ async function sendVerificationEmail(userEmail: string, link: string) {
   }
 }
 
-async function validateUserEmail(userEmail: string) {
+async function validateUserEmail(
+  userEmail: string,
+): Promise<{ isValid: boolean; reasons?: string[]; didYouMean?: string }> {
   try {
-    const result = await mailgunClient.validateEmail(userEmail)
+    const result = (await mg.validate.get(userEmail)) as unknown as EmailValidationResult
     console.log('Validation result:', result)
-    return result.is_valid
+    const isValid =
+      result.result === 'deliverable' && !result.engagement.isbot && result.risk === 'low'
+    const reasons = isValid ? undefined : result.reason
+    const didYouMean = result.did_you_mean
+    return { isValid, reasons, didYouMean }
   } catch (error) {
     console.error('Failed to validate email:', error)
-    return false
+    return { isValid: false, reasons: ['Failed to validate email due to an error.'] }
   }
 }
 
-export default async function handler(req, res) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse): Promise<void> {
   const { method, body } = req
 
   if (method !== 'POST') {
@@ -45,10 +72,14 @@ export default async function handler(req, res) {
   }
 
   try {
-    const isEmailValid = await validateUserEmail(email)
+    const { isValid, reasons, didYouMean } = await validateUserEmail(email)
 
-    if (!isEmailValid) {
-      return res.status(422).json({ message: 'Invalid email address' })
+    if (!isValid) {
+      return res.status(422).json({
+        message: 'Invalid email address',
+        reasons,
+        didYouMean,
+      })
     }
 
     await dbConnect()
@@ -59,14 +90,9 @@ export default async function handler(req, res) {
       return res.status(409).json({ message: 'Email already subscribed' })
     }
 
-    const token: string = crypto.randomBytes(32).toString('hex')
+    const token = crypto.randomBytes(32).toString('hex')
 
-    await new Subscriber({ email, token })
-
-    // const newSubscriber = new Subscriber({ email })
-    // await newSubscriber.save()
-
-    // Send verification email
+    await new Subscriber({ email, token }).save()
 
     const verificationLink = `https://librechat.ai/api/verify?email=${encodeURIComponent(email)}&token=${encodeURIComponent(token)}`
 
