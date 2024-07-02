@@ -9,7 +9,19 @@ const SubscriberSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    default: 'subscribed',
+    default: 'pending',
+  },
+  token: {
+    type: String,
+    required: false,
+  },
+  tokenExpires: {
+    type: Date,
+    index: { expires: '7d' },
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now,
   },
 })
 
