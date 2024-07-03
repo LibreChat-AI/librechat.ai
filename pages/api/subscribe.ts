@@ -1,6 +1,4 @@
 import validator from 'validator'
-// Add the type declaration for validator
-import '@types/validator'
 import dbConnect from '@/utils/dbConnect'
 import Subscriber from '@/utils/Subscriber'
 import crypto from 'crypto'
@@ -24,7 +22,7 @@ interface EmailValidationResult {
 const mailgun = new Mailgun(FormData)
 const mg = mailgun.client({
   username: 'api',
-  key: process.env.MAILGUN_API_KEY || 'key-yourkeyhere',
+  key: process.env.MAILGUN_API_KEY,
 })
 
 async function sendVerificationEmail(userEmail: string, link: string): Promise<void> {
