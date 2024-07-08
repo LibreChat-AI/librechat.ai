@@ -13,11 +13,8 @@ const SubscriberSchema = new mongoose.Schema({
   },
   token: {
     type: String,
-    required: false,
-  },
-  tokenExpires: {
-    type: Date,
     index: { expires: '7d' },
+    required: false,
   },
   createdAt: {
     type: Date,

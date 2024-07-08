@@ -23,11 +23,8 @@ export default async function handler(req, res) {
       return res.status(404).json({ message: 'Invalid email or token' })
     }
 
-    const tokenAge = Date.now() - subscriber.createdAt.getTime()
-    const tokenExpirationTime = 7 * 24 * 60 * 60 * 1000
-
-    if (tokenAge > tokenExpirationTime) {
-      return res.status(400).json({ message: 'Verification link has expired' })
+    if (!subscriber.token) {
+      return res.status(400).json({ message: 'Token expired' })
     }
 
     subscriber.status = 'subscribed'

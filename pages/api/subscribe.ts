@@ -25,12 +25,24 @@ const mg = mailgun.client({
   key: process.env.MAILGUN_API_KEY,
 })
 
+async function createMember(email: string): Promise<void> {
+  try {
+    const result = await mg.lists.members.createMember(process.env.MAILGUN_LIST, {
+      address: email,
+      subscribed: false,
+    })
+    console.log('Member created:', result)
+  } catch (error) {
+    console.error('Failed to create member:', error)
+  }
+}
+
 async function sendVerificationEmail(userEmail: string, link: string): Promise<void> {
   try {
     const result = await mg.messages.create(process.env.MAILGUN_DOMAIN, {
       from: 'noreply@librechat.ai',
       to: userEmail,
-      subject: 'Verify your email for our newsletter',
+      subject: "And one last thing... Let's verify your email!",
       html: `<p>Please verify your email by clicking the following link: <a href="${link}">here</a></p>`,
     })
     console.log('Email sent:', result)
@@ -70,6 +82,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
+    await dbConnect()
+
+    const existingSubscriber = await Subscriber.findOne({ email })
+
+    if (existingSubscriber) {
+      return res.status(409).json({ message: 'Email already subscribed' })
+    }
+
     const { isValid, reasons, didYouMean } = await validateUserEmail(email)
 
     if (!isValid) {
@@ -80,13 +100,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       })
     }
 
-    await dbConnect()
-
-    const existingSubscriber = await Subscriber.findOne({ email })
-
-    if (existingSubscriber) {
-      return res.status(409).json({ message: 'Email already subscribed' })
-    }
+    await createMember(email)
 
     const token = crypto.randomBytes(32).toString('hex')
 
