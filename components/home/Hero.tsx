@@ -5,7 +5,7 @@ export function Hero() {
   const heroMap = {
     headlineOne: 'Librechat',
     headlineTwo: 'Every AI in One Place',
-    headlineThree: 'Built for Everyone',
+    headlineThree: 'The Original AI Chat UI (est. 2023-01)',
     subtitleOne:
       'LibreChat is a free, open source AI chat platform. This Web UI offers vast customization, supporting numerous AI providers, services, and integrations. Serves all AI Conversations in one place with a familiar interface, innovative enhancements, for as many users as you need.',
     // subtitleTwo: '',
