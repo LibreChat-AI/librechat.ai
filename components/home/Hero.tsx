@@ -1,11 +1,13 @@
 import Link from 'next/link'
+import cn from 'clsx'
+
 import styles from './hero.module.css'
 
 export function Hero() {
   const heroMap = {
-    headlineOne: 'Librechat',
-    headlineTwo: 'Every AI in One Place',
-    headlineThree: 'Built for Everyone',
+    headlineOne: 'LibreChat',
+    headlineTwo: 'Every AI for Everyone',
+    headlineThree: 'The Original, Open-Source AI Chat UI',
     subtitleOne:
       'LibreChat is a free, open source AI chat platform. This Web UI offers vast customization, supporting numerous AI providers, services, and integrations. Serves all AI Conversations in one place with a familiar interface, innovative enhancements, for as many users as you need.',
     // subtitleTwo: '',
@@ -30,7 +32,8 @@ export function Hero() {
               <span className={styles.headlineOne}>{heroMap.headlineOne}</span>
               <br className="max-md:_hidden" />
               <span className={styles.headlineTwo}>{heroMap.headlineTwo}</span>
-              <span className={styles.headlineThree}>{heroMap.headlineThree}</span>
+              <span className={cn(styles.headlineThree, 'text-xl')}>{heroMap.headlineThree}</span>
+              <span className="text-lg block">{"(est. Jan '23)"}</span>
               <br className="max-md:_hidden" />
               <span className={styles.pops}>
                 <span className={styles.pop}></span>
