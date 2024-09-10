@@ -4,6 +4,7 @@ export default {
   interface: 'Interface (UI)',
   model_specs: 'Model Specs',
   registration: 'Registration',
+  aws_bedrock: 'AWS Bedrock',
   assistants_endpoint: 'Assistants Endpoint',
   custom_endpoint: 'Custom Endpoint',
   azure_openai: 'Azure OpenAI',
