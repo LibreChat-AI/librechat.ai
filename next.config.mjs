@@ -64,7 +64,7 @@ const withNextra = nextra({
 // next config
 const nextraConfig = withNextra({
   experimental: {
-    esmExternals: 'loose', // <-- add this
+    esmExternals: 'loose',
     serverComponentsExternalPackages: ['mongoose'],
     scrollRestoration: true,
   },
