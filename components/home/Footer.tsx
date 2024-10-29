@@ -1,4 +1,3 @@
-import RetroGrid from '../magicui/retro-grid'
 import { HomeSection } from './components/HomeSection'
 
 export const Footer = () => (
@@ -9,7 +8,6 @@ export const Footer = () => (
           <span key={letter}>{letter}</span>
         ))}
       </div>
-      <RetroGrid />
     </div>
   </HomeSection>
 )

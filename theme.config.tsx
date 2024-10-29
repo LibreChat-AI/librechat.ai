@@ -1,5 +1,4 @@
 import React from 'react'
-import Link from 'next/link'
 import { useRouter } from 'next/router'
 import { GeistSans } from 'geist/font/sans'
 import { DocsThemeConfig, useConfig, ThemeSwitch } from 'nextra-theme-docs'
@@ -109,18 +108,6 @@ const config: DocsThemeConfig = {
     Button,
     Carousel,
     OptionTable,
-  },
-  banner: {
-    key: 'new-docs',
-    dismissible: true,
-    content: (
-      <Link href="#">
-        {/* mobile */}
-        <span className="sm:hidden">Meet the New LibreChat Resources Hub! 🚀</span>
-        {/* desktop */}
-        <span className="hidden sm:inline">Meet the New LibreChat Resources Hub! 🚀</span>
-      </Link>
-    ),
   },
 }
 
