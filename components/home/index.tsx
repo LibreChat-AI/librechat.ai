@@ -1,7 +1,7 @@
-import { Hero } from './Hero'
-import { Usage } from './Usage'
-import Features from './Features'
 import NewsletterForm from '@/components/Newsletter/SubscribeForm'
+import Features from './Features'
+import { Usage } from './Usage'
+import { Hero } from './Hero'
 
 export const Home = () => (
   <>

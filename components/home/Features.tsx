@@ -1,16 +1,10 @@
 import { BentoCard, BentoGrid } from '@/components/magicui/bento-grid'
 import { GitFork, BrainCog, Code, Bot, Search, Image as ImageIcon } from 'lucide-react'
-import { HomeSection } from './components/HomeSection'
-import { Header } from '../Header'
-// import bentoTracePng from './img/bento_trace.png'
-// import bentoTraceDarkPng from './img/bento_trace_dark.png'
-// import bentoMetricsPng from './img/bento_metrics.png'
-// import bentoMetricsDarkPng from './img/bento_metrics_dark.png'
-// import bentoPromptPng from './img/bento_prompt_management.png'
-// import bentoPromptDarkPng from './img/bento_prompt_management_dark.png'
 import Image, { type StaticImageData } from 'next/image'
+import { HomeSection } from './components/HomeSection'
 import AgentsLight from './img/agents_light.png'
 import AgentsDark from './img/agents_dark.png'
+import { Header } from '../Header'
 
 const BentoBgImage = ({
   imgLight,
