@@ -16,11 +16,11 @@ export default function DateTicker({
   delay?: number
 }) {
   const ref = useRef<HTMLSpanElement>(null)
-  const initialDate = startDate || new Date(targetDate.getTime() + 30 * 24 * 60 * 60 * 1000) // Default to 1 month after targetDate
+  const initialDate = startDate || new Date(targetDate.getTime() + 30 * 24 * 60 * 60 * 1000)
   const motionValue = useMotionValue(initialDate.getTime())
   const springValue = useSpring(motionValue, {
-    damping: 150,
-    stiffness: 100, // Lower stiffness for a longer animation
+    damping: 100,
+    stiffness: 100,
   })
   const isInView = useInView(ref, { once: true, margin: '0px' })
 
