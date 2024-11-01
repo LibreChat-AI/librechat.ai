@@ -37,7 +37,7 @@ export const ContainerScroll = ({ children }: { children: React.ReactNode }) => 
       ref={containerRef}
     >
       <div
-        className="py-10 md:py-60 h-full w-full relative"
+        className="py-10 md:py-60 h-auto w-auto relative"
         style={{
           perspective: '500px',
         }}
@@ -68,9 +68,9 @@ export const Card = ({
         scale,
         translateY,
       }}
-      className="max-w-3xl mx-auto h-[25rem] md:h-[30rem] w-full rounded-[30px] shadow-2xl"
+      className="max-w-3xl mx-auto h-auto w-full rounded-[30px] shadow-2xl"
     >
-      <div className="h-full w-full overflow-hidden rounded-2xl bg-background md:rounded-2xl md:p-4">
+      <div className="h-full w-full overflow-hidden rounded-2xl bg-background md:rounded-2xl">
         {children}
       </div>
     </motion.div>

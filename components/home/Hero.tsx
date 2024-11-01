@@ -17,9 +17,9 @@ const HERO_TITLE = {
 const HERO_DESCRIPTION =
   'The ultimate open-source hub for all your AI conversations, fully customizable and compatible with any AI provider — all in one sleek interface'
 const DEMO_LINK = 'https://demo.librechat.cfd'
-const GITHUB_LINK = 'https://github.com/danny-avila/librechat'
-const GITHUB_STARS_IMG =
-  'https://img.shields.io/github/stars/danny-avila/librechat?label=librechat&style=social'
+// const GITHUB_LINK = 'https://github.com/danny-avila/librechat'
+// const GITHUB_STARS_IMG =
+//   'https://img.shields.io/github/stars/danny-avila/librechat?label=librechat&style=social'
 const REPO_OF_THE_DAY_LINK = 'https://trendshift.io/repositories/4685'
 const ROSS_INDEX_LINK = 'https://runacap.com/ross-index/q1-24/'
 
@@ -47,42 +47,54 @@ const HeroDescription = React.memo(() => (
   </span>
 ))
 
-const HeroButtons = React.memo(() => (
-  <div className="flex gap-4 flex-wrap items-center justify-center mt-16">
-    <HoverBorderGradient
-      onClick={() => window.open(DEMO_LINK, '_blank')}
-      containerClassName="rounded-full"
-      as="button"
-      className="dark:bg-black bg-white text-black dark:text-white flex items-center space-x-2"
-    >
-      <span>Try demo</span>
-    </HoverBorderGradient>
-  </div>
-))
-
 const HeroLinks = React.memo(() => (
-  <div className="grid grid-cols-2 md:grid-cols-3 gap-y-5 gap-x-3 items-center justify-items-center my-10 flex-wrap">
-    <Link href={GITHUB_LINK}>
-      <img alt="LibreChat Github stars" src={GITHUB_STARS_IMG} />
-    </Link>
-    <Link href={REPO_OF_THE_DAY_LINK}>
-      <CardContainer className="inter-var">
-        <CardBody className="bg-transparent w-auto h-auto p-2">
-          <CardItem translateZ="100" className="cursor-pointer">
+  <div className="flex items-center justify-center gap-x-16 flex-wrap">
+    <CardContainer className="inter-var">
+      <Link href={REPO_OF_THE_DAY_LINK}>
+        <CardBody className="bg-transparent w-auto h-auto px-12">
+          <CardItem
+            translateZ="100"
+            className="cursor-pointer shadow-2xl dark:hover:shadow-emerald-500/[0.1]"
+          >
             <RepoOfTheDay />
           </CardItem>
         </CardBody>
-      </CardContainer>
-    </Link>
-    <Link href={ROSS_INDEX_LINK}>
-      <CardContainer className="inter-var">
-        <CardBody className="bg-transparent w-auto h-auto p-2">
-          <CardItem translateZ="100" className="cursor-pointer">
+      </Link>
+    </CardContainer>
+    <div className="flex gap-4 flex-wrap items-center justify-center">
+      <HoverBorderGradient
+        onClick={() => window.open(DEMO_LINK, '_blank')}
+        containerClassName="rounded-full"
+        as="button"
+        className="dark:bg-black bg-white text-black dark:text-white flex items-center space-x-2"
+      >
+        <span>Try demo</span>
+      </HoverBorderGradient>
+    </div>
+    {/* <CardContainer className="inter-var">
+      <Link href={GITHUB_LINK}>
+        <CardBody className="bg-transparent w-auto h-auto px-12">
+          <CardItem
+            translateZ="100"
+            className="cursor-pointer shadow-2xl dark:hover:shadow-emerald-500/[0.1]"
+          >
+            <img alt="LibreChat Github stars" src={GITHUB_STARS_IMG} />
+          </CardItem>
+        </CardBody>
+      </Link>
+    </CardContainer> */}
+    <CardContainer className="inter-var">
+      <Link href={ROSS_INDEX_LINK}>
+        <CardBody className="bg-transparent w-full h-full px-12">
+          <CardItem
+            translateZ="100"
+            className="cursor-pointer shadow-2xl dark:hover:shadow-emerald-500/[0.1]"
+          >
             <RossIndex />
           </CardItem>
         </CardBody>
-      </CardContainer>
-    </Link>
+      </Link>
+    </CardContainer>
   </div>
 ))
 
@@ -92,7 +104,7 @@ export function Hero() {
       <div className="flex flex-col items-center justify-center gap-3 md:min-h-[calc(60vh-100px)] lg:py-20">
         <HeroTitle />
         <HeroDescription />
-        <HeroButtons />
+        <HeroLinks />
         <div className="flex flex-col overflow-hidden">
           <ContainerScroll>
             <Image
@@ -100,13 +112,12 @@ export function Hero() {
               alt="LibreChat UI"
               height={800}
               width={1600}
-              className="mx-auto rounded-2xl object-cover h-full object-left-top"
+              className="mx-auto rounded-2xl object-cover object-left-top"
               draggable={false}
             />
           </ContainerScroll>
         </div>
       </div>
-      <HeroLinks />
     </HomeSection>
   )
 }
