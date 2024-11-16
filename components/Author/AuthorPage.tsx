@@ -43,7 +43,7 @@ const AuthorCard: React.FC<{ author: AuthorMetadata }> = ({ author }) => {
             socialsEntries.map(([key, value]) => (
               <a
                 key={key}
-                href={value as string}
+                href={value}
                 className="btn btn-square relative overflow-hidden"
                 title={`See ${author.name}'s ${key}`}
                 target="_blank"
@@ -52,7 +52,7 @@ const AuthorCard: React.FC<{ author: AuthorMetadata }> = ({ author }) => {
                 onClick={(e) => e.stopPropagation()}
               >
                 <SocialIcon
-                  url={value as string}
+                  url={value}
                   className="absolute inset-0 w-full h-full transform scale-100 transition-transform opacity-100 hover:scale-90"
                   bgColor="#9B9B9B80"
                   fgColor="background"
