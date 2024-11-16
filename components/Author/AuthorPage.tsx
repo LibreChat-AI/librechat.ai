@@ -23,7 +23,9 @@ const AuthorCard: React.FC<{ author: AuthorMetadata }> = ({ author }) => {
     setIsClient(true)
   }, [])
 
-  const socialsEntries = Object.entries(author.socials ?? {}).filter(([, value]) => !!value)
+  const socialsEntries = Object.entries(author.socials ?? {}).filter(
+    ([, value]) => !!value,
+  ) as unknown as [string, string][]
 
   return (
     <Link href={`/authors/${author.authorid}`}>
