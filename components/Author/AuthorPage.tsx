@@ -11,7 +11,9 @@ interface AuthorMetadata {
   name: string
   bio: string
   ogImage: string
-  socials?: Record<string, string>
+  socials?: {
+    [key: string]: string
+  }
 }
 
 const AuthorCard: React.FC<{ author: AuthorMetadata }> = ({ author }) => {
@@ -21,9 +23,7 @@ const AuthorCard: React.FC<{ author: AuthorMetadata }> = ({ author }) => {
     setIsClient(true)
   }, [])
 
-  const socialsEntries: [string, string][] = Object.entries(author.socials ?? {}).filter(
-    ([, value]) => !!value,
-  )
+  const socialsEntries = Object.entries(author.socials ?? {}).filter(([, value]) => !!value)
 
   return (
     <Link href={`/authors/${author.authorid}`}>
