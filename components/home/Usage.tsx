@@ -58,7 +58,7 @@ export const Usage = () => (
             ))} */}
           </div>
         </div>
-        <div className="flex flex-row justify-around sm:justify-center sm:gap-10">
+        <div className="flex flex-col sm:flex-row justify-around sm:justify-center gap-4 sm:gap-10">
           {stats.map((item) => (
             <div key={item.name} className="text-center">
               <p className="text-xl sm:text-2xl font-bold text-primary/80 font-mono">

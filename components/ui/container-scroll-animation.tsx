@@ -8,27 +8,10 @@ export const ContainerScroll = ({ children }: { children: React.ReactNode }) => 
     offset: ['start end', 'center start'],
   })
 
-  const [isMobile, setIsMobile] = React.useState(false)
-
-  React.useEffect(() => {
-    const checkMobile = () => {
-      setIsMobile(window.innerWidth <= 768)
-    }
-    checkMobile()
-    window.addEventListener('resize', checkMobile)
-    return () => window.removeEventListener('resize', checkMobile)
-  }, [])
-
-  const scaleDimensions = () => {
-    return isMobile ? [0.7, 0.9] : [2.1, 1.5]
-  }
-
-  const scale = useTransform(scrollYProgress, [0, 0.45], scaleDimensions())
-
-  const translateY = useTransform(scrollYProgress, [0, 0.45], [0, -100])
+  const translateY = useTransform(scrollYProgress, [0.3, 0.75], [-100, 200])
   const translateYSpring = useSpring(translateY, { stiffness: 600, damping: 80 })
 
-  const rotate = useTransform(scrollYProgress, [0.05, 0.45], ['40deg', '0deg'])
+  const rotate = useTransform(scrollYProgress, [0.3, 0.75], ['40deg', '0deg'])
   const rotateSpring = useSpring(rotate, { stiffness: 600, damping: 80 })
 
   return (
@@ -37,12 +20,12 @@ export const ContainerScroll = ({ children }: { children: React.ReactNode }) => 
       ref={containerRef}
     >
       <div
-        className="py-10 md:py-60 h-auto w-auto relative"
+        className="py-10 md:py-52 h-auto w-auto relative"
         style={{
-          perspective: '500px',
+          perspective: '800px',
         }}
       >
-        <Card rotate={rotateSpring} scale={scale} translateY={translateYSpring}>
+        <Card rotate={rotateSpring} scale={useSpring(1.5)} translateY={translateYSpring}>
           {children}
         </Card>
       </div>
