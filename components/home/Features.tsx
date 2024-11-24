@@ -1,7 +1,10 @@
-import { BentoCard, BentoGrid } from '@/components/magicui/bento-grid'
-import { GitFork, BrainCog, Code, Bot, Search, Image as ImageIcon } from 'lucide-react'
+import { ReactNode } from 'react'
 import Image, { type StaticImageData } from 'next/image'
+import { GitFork, BrainCog, Code, Bot, Search, Image as ImageIcon } from 'lucide-react'
+import { BentoCard, BentoGrid } from '@/components/magicui/bento-grid'
 import { HomeSection } from './components/HomeSection'
+import ArtifactsLight from './img/artifacts_light.png'
+import ArtifactsDark from './img/artifacts_dark.png'
 import AgentsLight from './img/agents_light.png'
 import AgentsDark from './img/agents_dark.png'
 import { Header } from '../Header'
@@ -49,7 +52,7 @@ type Feature = {
   description: string
   href: string
   cta: string
-  background: React.ReactNode | null
+  background: ReactNode | null
   className: string
 }
 
@@ -60,7 +63,7 @@ const features: Feature[] = [
     description: 'Advanced agents with file handling, code interpretation, and API actions',
     href: '/docs/tracing',
     cta: 'Meet the Agents!',
-    background: <BentoBgImage imgLight={AgentsLight} imgDark={AgentsDark} alt="Tracing" />,
+    background: <BentoBgImage imgLight={AgentsLight} imgDark={AgentsDark} alt="Agents" />,
     className: 'md:row-start-1 md:row-end-4 md:col-start-2 md:col-end-2',
   },
   {
@@ -69,7 +72,7 @@ const features: Feature[] = [
     description: 'Create React, HTML code, and Mermaid diagrams in chat',
     href: '/docs/user_guides/artifacts',
     cta: 'Craft Some Code!',
-    background: null,
+    background: <BentoBgImage imgLight={ArtifactsLight} imgDark={ArtifactsDark} alt="Artifacts" />,
     className: 'md:col-start-1 md:col-end-2 md:row-start-1 md:row-end-3',
   },
   {
@@ -113,7 +116,7 @@ const features: Feature[] = [
 
 export default function Features() {
   return (
-    <HomeSection id="features">
+    <HomeSection>
       <Header
         title="Discover the Possibilities"
         description="Explore our unique and powerful features"

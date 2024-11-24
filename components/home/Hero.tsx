@@ -105,18 +105,16 @@ export function Hero() {
         <HeroTitle />
         <HeroDescription />
         <HeroLinks />
-        <div className="flex flex-col overflow-hidden">
-          <ContainerScroll>
-            <Image
-              src={DemoImage}
-              alt="LibreChat UI"
-              height={800}
-              width={1600}
-              className="mx-auto rounded-2xl object-cover object-left-top"
-              draggable={false}
-            />
-          </ContainerScroll>
-        </div>
+        <ContainerScroll>
+          <Image
+            src={DemoImage}
+            alt="LibreChat UI"
+            height={800}
+            width={1600}
+            className="mx-auto rounded-2xl object-cover object-left-top"
+            draggable={false}
+          />
+        </ContainerScroll>
       </div>
     </HomeSection>
   )
