@@ -32,7 +32,7 @@ const menuItems: {
       },
       {
         name: 'Demo',
-        href: 'https://demo.librechat.cfd/',
+        href: 'https://chat.librechat.ai/',
       },
       {
         name: 'Status',

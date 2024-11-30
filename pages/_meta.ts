@@ -33,7 +33,7 @@ export default {
   demo: {
     type: 'page',
     title: 'Demo',
-    href: 'https://demo.librechat.cfd/',
+    href: 'https://chat.librechat.ai/',
     // display: 'hidden',
   },
   changelog: {
