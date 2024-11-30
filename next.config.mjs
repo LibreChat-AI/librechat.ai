@@ -32,7 +32,7 @@ const cspHeader = `
 const nonPermanentRedirects = [
   // Up to date Redirects:
   ['/discord', 'https://discord.librechat.ai'],
-  ['/demo', 'https://demo.librechat.cfd'],
+  ['/demo', 'https://chat.librechat.ai'],
   ['/issue', 'https://github.com/danny-avila/LibreChat/issues/new/choose'],
   ['/new-issue', 'https://github.com/danny-avila/LibreChat/issues/new/choose'],
   ['/issues', 'https://github.com/danny-avila/LibreChat/issues'],
