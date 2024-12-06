@@ -10,13 +10,13 @@ import DemoImage from './img/demo.png'
 import Image from 'next/image'
 
 const HERO_TITLE = {
-  firstPart: 'Unify Your',
+  firstPart: 'Unify',
   highlight: 'AI',
   lastPart: 'Power',
 }
 const HERO_DESCRIPTION =
-  'The ultimate open-source app for all your AI conversations, fully customizable and compatible with any AI provider — all in one sleek interface'
-const DEMO_LINK = 'https://preview.librechat.ai/'
+  ' is the ultimate open-source app for all your AI conversations, fully customizable and compatible with any AI provider — all in one sleek interface'
+const DEMO_LINK = 'https://chat.librechat.ai/'
 // const GITHUB_LINK = 'https://github.com/danny-avila/librechat'
 // const GITHUB_STARS_IMG =
 //   'https://img.shields.io/github/stars/danny-avila/librechat?label=librechat&style=social'
@@ -42,7 +42,10 @@ const HeroTitle = React.memo(() => (
 ))
 
 const HeroDescription = React.memo(() => (
-  <span className="mt-2 text-primary/70 text-lg lg:text-xl md:text-balance tracking-wide text-center p-2 lg:p-0">
+  <span className="mt-2 text-primary/70 text-lg lg:text-2xl md:text-balance tracking-wide text-center p-2 lg:p-0">
+    <span className="bg-gradient-to-r from-blue-600 to-violet-600 bg-clip-text text-transparent">
+      LibreChat
+    </span>
     {HERO_DESCRIPTION}
   </span>
 ))
@@ -101,7 +104,7 @@ const HeroLinks = React.memo(() => (
 export function Hero() {
   return (
     <HomeSection>
-      <div className="flex flex-col items-center justify-center gap-3 md:min-h-[calc(60vh-100px)] lg:py-20">
+      <div className="flex flex-col items-center justify-center gap-4 md:min-h-[calc(60vh-100px)] lg:py-20">
         <HeroTitle />
         <HeroDescription />
         <HeroLinks />
