@@ -1,4 +1,4 @@
-import NewsletterForm from '@/components/Newsletter/SubscribeForm'
+// import NewsletterForm from '@/components/Newsletter/SubscribeForm'
 import Features from './Features'
 import { Usage } from './Usage'
 import { Hero } from './Hero'
@@ -9,7 +9,7 @@ export const Home = () => (
       <Hero />
       <Usage />
       <Features />
-      <NewsletterForm />
+      {/* <NewsletterForm /> */}
     </main>
   </>
 )
