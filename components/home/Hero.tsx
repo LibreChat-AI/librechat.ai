@@ -16,7 +16,7 @@ const HERO_TITLE = {
 }
 const HERO_DESCRIPTION =
   'The ultimate open-source hub for all your AI conversations, fully customizable and compatible with any AI provider — all in one sleek interface'
-const DEMO_LINK = 'https://demo.librechat.cfd'
+const DEMO_LINK = 'https://preview.librechat.ai/'
 // const GITHUB_LINK = 'https://github.com/danny-avila/librechat'
 // const GITHUB_STARS_IMG =
 //   'https://img.shields.io/github/stars/danny-avila/librechat?label=librechat&style=social'
