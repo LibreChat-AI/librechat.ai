@@ -1,6 +1,6 @@
 import { ReactNode } from 'react'
 import Image, { type StaticImageData } from 'next/image'
-import { GitFork, BrainCog, Code, Bot, Search, Image as ImageIcon } from 'lucide-react'
+import { GitFork, BrainCog, Code, Bot, Search, Image as ImageIcon, Terminal } from 'lucide-react'
 import { BentoCard, BentoGrid } from '@/components/magicui/bento-grid'
 import { HomeSection } from './components/HomeSection'
 import ArtifactsLight from './img/artifacts_light.png'
@@ -61,18 +61,19 @@ const features: Feature[] = [
     Icon: Bot,
     name: 'Agents',
     description: 'Advanced agents with file handling, code interpretation, and API actions',
-    href: '/docs/tracing',
+    href: '/docs/agents',
     cta: 'Meet the Agents!',
     background: <BentoBgImage imgLight={AgentsLight} imgDark={AgentsDark} alt="Agents" />,
     className: 'md:row-start-1 md:row-end-4 md:col-start-2 md:col-end-2',
   },
   {
-    Icon: Code,
-    name: 'Artifacts',
-    description: 'Create React, HTML code, and Mermaid diagrams in chat',
-    href: '/docs/user_guides/artifacts',
-    cta: 'Craft Some Code!',
-    background: <BentoBgImage imgLight={ArtifactsLight} imgDark={ArtifactsDark} alt="Artifacts" />,
+    Icon: Terminal,
+    name: 'Code Interpreter',
+    description:
+      'Execute code in multiple languages securely via API with zero setup - Python, JavaScript, TypeScript, Go, and more',
+    href: '/docs/code-interpreter',
+    cta: 'Start Coding!',
+    background: null,
     className: 'md:col-start-1 md:col-end-2 md:row-start-1 md:row-end-3',
   },
   {
@@ -85,13 +86,22 @@ const features: Feature[] = [
     className: 'md:col-start-1 md:col-end-2 md:row-start-3 md:row-end-4',
   },
   {
+    Icon: Code,
+    name: 'Artifacts',
+    description: 'Create React, HTML code, and Mermaid diagrams in chat',
+    href: '/docs/user_guides/artifacts',
+    cta: 'Craft Some Code!',
+    background: <BentoBgImage imgLight={ArtifactsLight} imgDark={ArtifactsDark} alt="Artifacts" />,
+    className: 'md:col-start-3 md:col-end-3 md:row-start-1 md:row-end-2',
+  },
+  {
     Icon: ImageIcon,
     name: 'Multimodal',
     description: 'Analyze images and chat with files using various endpoints',
     href: '/docs/user_guides/rag_api',
     cta: 'Image This!',
     background: null,
-    className: 'md:col-start-3 md:col-end-3 md:row-start-1 md:row-end-2',
+    className: 'md:col-start-3 md:col-end-3 md:row-start-2 md:row-end-3',
   },
   {
     Icon: GitFork,
@@ -101,7 +111,7 @@ const features: Feature[] = [
     href: '/docs/user_guides/fork',
     cta: 'Fork It Up!',
     background: null,
-    className: 'md:col-start-3 md:col-end-3 md:row-start-2 md:row-end-3',
+    className: 'md:col-start-3 md:col-end-3 md:row-start-3 md:row-end-4',
   },
   {
     Icon: Search,
@@ -118,7 +128,7 @@ export default function Features() {
   return (
     <HomeSection>
       <Header
-        title="Discover the Possibilities"
+        title="Unlock Potential"
         description="Explore our unique and powerful features"
         button={{ href: '/docs', text: 'Explore docs' }}
       />
