@@ -2,6 +2,7 @@ import { ReactNode } from 'react'
 import Image, { type StaticImageData } from 'next/image'
 import { GitFork, BrainCog, Code, Bot, Search, Image as ImageIcon, Terminal } from 'lucide-react'
 import { BentoCard, BentoGrid } from '@/components/magicui/bento-grid'
+import CodeInterpreter from './img/code_interpreter.gif'
 import { HomeSection } from './components/HomeSection'
 import ArtifactsLight from './img/artifacts_light.png'
 import ArtifactsDark from './img/artifacts_dark.png'
@@ -71,9 +72,11 @@ const features: Feature[] = [
     name: 'Code Interpreter',
     description:
       'Execute code in multiple languages securely via API with zero setup - Python, JavaScript, TypeScript, Go, and more',
-    href: '/docs/code-interpreter',
+    href: '/docs/features/code_interpreter',
     cta: 'Start Coding!',
-    background: null,
+    background: (
+      <BentoBgImage imgLight={CodeInterpreter} imgDark={CodeInterpreter} alt="Artifacts" />
+    ),
     className: 'md:col-start-1 md:col-end-2 md:row-start-1 md:row-end-3',
   },
   {
