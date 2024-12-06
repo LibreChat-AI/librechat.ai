@@ -6,6 +6,12 @@ export default {
       index: 'Quick Start Overview',
     },
   },
+  features: {
+    title: '✨ Features',
+    children: {
+      index: 'Features Overview',
+    },
+  },
   local: 'Local Installation',
   remote: 'Remote Hosting',
   configuration: 'Configuration',
