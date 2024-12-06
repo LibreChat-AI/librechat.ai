@@ -62,7 +62,7 @@ const features: Feature[] = [
     Icon: Bot,
     name: 'Agents',
     description: 'Advanced agents with file handling, code interpretation, and API actions',
-    href: '/docs/agents',
+    href: '/docs/features/agents',
     cta: 'Meet the Agents!',
     background: <BentoBgImage imgLight={AgentsLight} imgDark={AgentsDark} alt="Agents" />,
     className: 'md:row-start-1 md:row-end-4 md:col-start-2 md:col-end-2',
