@@ -1,7 +1,7 @@
 export default {
   index: 'Get Started',
   quick_start: {
-    title: 'Quick Start',
+    title: '⚡ Quick Start',
     children: {
       index: 'Quick Start Overview',
     },
