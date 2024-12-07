@@ -42,6 +42,15 @@ const nonPermanentRedirects = [
   ['/features', '/docs/features'],
   /* Danny moved these :P */
   ['/docs/configuration/librechat_yaml/ai_endpoints/azure', '/docs/configuration/azure'],
+  ['/docs/user_guides/artifacts', '/docs/features/artifacts'],
+  ['/docs/user_guides/fork', '/docs/features/fork'],
+  ['/docs/user_guides/authentication', '/docs/features/authentication'],
+  ['/docs/user_guides/mod_system', '/docs/features/mod_system'],
+  ['/docs/user_guides/search', '/docs/features/search'],
+  ['/docs/user_guides/import_convos', '/docs/features/import_convos'],
+  ['/docs/user_guides/password_reset', '/docs/features/password_reset'],
+  ['/docs/user_guides/rag_api', '/docs/features/rag_api'],
+  ['/docs/user_guides/plugins', '/docs/features/plugins'],
   // Redirect to overview pages
   ...[].map((path) => [path, path + '/overview']),
 ]
@@ -64,7 +73,7 @@ const withNextra = nextra({
 // next config
 const nextraConfig = withNextra({
   experimental: {
-    esmExternals: 'loose', // <-- add this
+    esmExternals: 'loose',
     serverComponentsExternalPackages: ['mongoose'],
     scrollRestoration: true,
   },

@@ -1,6 +1,6 @@
+import validator from 'validator'
 import React, { useState } from 'react'
 import toast, { Toaster } from 'react-hot-toast'
-import validator from 'validator'
 import style from './newsletterform.module.css'
 
 const isDevelopment = true //TODO
