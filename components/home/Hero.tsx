@@ -43,7 +43,7 @@ const HeroTitle = React.memo(() => (
 ))
 
 const HeroDescription = React.memo(() => (
-  <span className="mt-2 text-primary/70 text-lg lg:text-2xl md:text-balance tracking-wide text-center p-2 lg:p-0">
+  <span className="mt-4 text-primary/70 text-lg lg:text-2xl md:text-balance tracking-wide text-center p-2 lg:p-0">
     <span className="bg-gradient-to-r from-blue-600 to-violet-600 bg-clip-text text-transparent">
       LibreChat
     </span>
@@ -74,7 +74,7 @@ const HeroDescription = React.memo(() => (
 ))
 
 const HeroLinks = React.memo(() => (
-  <div className="flex items-center justify-center gap-x-16 flex-wrap">
+  <div className="flex items-center justify-center gap-x-14 flex-wrap">
     <CardContainer className="inter-var">
       <Link href={REPO_OF_THE_DAY_LINK}>
         <CardBody className="bg-transparent w-auto h-auto px-12">
@@ -127,7 +127,7 @@ const HeroLinks = React.memo(() => (
 export function Hero() {
   return (
     <HomeSection>
-      <div className="flex flex-col items-center justify-center gap-4 md:min-h-[calc(60vh-100px)] lg:py-20">
+      <div className="flex flex-col items-center justify-center gap-2 md:min-h-[calc(60vh-100px)] lg:py-20">
         <HeroTitle />
         <HeroDescription />
         <HeroLinks />

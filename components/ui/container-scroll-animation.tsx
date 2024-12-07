@@ -20,7 +20,7 @@ export const ContainerScroll = ({ children }: { children: React.ReactNode }) => 
       ref={containerRef}
     >
       <div
-        className="py-10 md:py-52 h-auto w-auto relative"
+        className="py-10 md:py-32 h-auto w-auto relative"
         style={{
           perspective: '800px',
         }}

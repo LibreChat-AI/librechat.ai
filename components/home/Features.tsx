@@ -21,7 +21,7 @@ const BentoBgImage = ({
 }) => (
   <>
     <Image
-      className="opacity-30 top-0 right-0 dark:hidden hidden md:block"
+      className="opacity-60 top-0 right-0 dark:hidden hidden md:block"
       style={{
         objectFit: 'contain',
         objectPosition: 'top right',
@@ -33,7 +33,7 @@ const BentoBgImage = ({
       sizes="(min-width: 1024px) 33vw, 100vw"
     />
     <Image
-      className="opacity-30 top-0 right-0 hidden dark:md:block"
+      className="opacity-60 top-0 right-0 hidden dark:md:block"
       style={{
         objectFit: 'contain',
         objectPosition: 'top right',
