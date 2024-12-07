@@ -39,7 +39,7 @@ export const Card = ({
   translateY,
   children,
 }: {
-  rotate: MotionValue<string>
+  rotate: MotionValue<number | string>
   scale: MotionValue<number>
   translateY: MotionValue<number>
   children: React.ReactNode
