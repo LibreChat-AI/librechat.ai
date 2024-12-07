@@ -14,6 +14,13 @@ module.exports = {
   root: true,
   reportUnusedDisableDirectives: true,
   ignorePatterns: ['next-env.d.ts'],
+  extends: [
+    'eslint:recommended',
+    'plugin:@typescript-eslint/recommended',
+    'plugin:@next/next/recommended',
+    'plugin:import/typescript',
+    'prettier',
+  ],
   overrides: [
     // Rules for all files
     {
@@ -56,7 +63,6 @@ module.exports = {
         'plugin:react/recommended',
         'plugin:react/jsx-runtime',
         'plugin:react-hooks/recommended',
-        'plugin:@next/next/recommended',
       ],
       rules: {
         'react/prop-types': 'off',
