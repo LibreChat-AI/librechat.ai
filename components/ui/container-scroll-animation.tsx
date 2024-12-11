@@ -1,12 +1,19 @@
 import React, { useRef } from 'react'
 import { useScroll, useTransform, motion, MotionValue, useSpring } from 'framer-motion'
 
-export const ContainerScroll = ({ children }: { children: React.ReactNode }) => {
+interface ContainerScrollProps {
+  children: React.ReactNode
+  className?: string
+}
+
+export const ContainerScroll: React.FC<ContainerScrollProps> = ({ children, className = '' }) => {
   const containerRef = useRef<HTMLDivElement>(null)
   const { scrollYProgress } = useScroll({
     target: containerRef,
     offset: ['start end', 'center start'],
   })
+
+  console.log(scrollYProgress)
 
   const translateY = useTransform(scrollYProgress, [0.3, 0.75], [-100, 200])
   const translateYSpring = useSpring(translateY, { stiffness: 600, damping: 80 })
@@ -16,11 +23,11 @@ export const ContainerScroll = ({ children }: { children: React.ReactNode }) => 
 
   return (
     <div
-      className="flex flex-col items-center justify-center relative px-2 md:px-60"
+      className={`flex flex-col items-center justify-center relative px-2 md:px-60 ${className}`}
       ref={containerRef}
     >
       <div
-        className="py-10 md:py-52 h-auto w-auto relative"
+        className="py-10 md:pb-52 md:pt-24 h-auto w-auto relative"
         style={{
           perspective: '800px',
         }}
