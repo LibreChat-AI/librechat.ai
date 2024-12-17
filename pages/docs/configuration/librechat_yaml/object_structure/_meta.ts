@@ -5,6 +5,7 @@ export default {
   model_specs: 'Model Specs',
   registration: 'Registration',
   agents: 'Agents',
+  mcp_servers: 'MCP Servers',
   aws_bedrock: 'AWS Bedrock',
   assistants_endpoint: 'Assistants API',
   custom_endpoint: 'Custom Endpoint',
