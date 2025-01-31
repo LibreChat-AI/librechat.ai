@@ -3,6 +3,7 @@ export default {
   OAuth2: {
     type: 'separator',
   },
+  apple: 'Apple',
   discord: 'Discord',
   facebook: 'Facebook',
   github: 'GitHub',
