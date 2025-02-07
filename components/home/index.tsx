@@ -1,13 +1,15 @@
+// import NewsletterForm from '@/components/Newsletter/SubscribeForm'
+import Features from './Features'
+import { Usage } from './Usage'
 import { Hero } from './Hero'
-import Feature from './feature'
-import NewsletterForm from '@/components/Newsletter/SubscribeForm'
 
 export const Home = () => (
   <>
     <main className="relative overflow-hidden w-full">
       <Hero />
-      <Feature locate={''} />
-      <NewsletterForm />
+      <Usage />
+      <Features />
+      {/* <NewsletterForm /> */}
     </main>
   </>
 )

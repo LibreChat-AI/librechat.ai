@@ -18,7 +18,8 @@ interface AuthorMetadata {
   name: string
   bio: string
   ogImage: string
-  socials?: Record<string, string> // Dynamically match social media platforms
+  socials?: Record<string, string | undefined> // Dynamically match social media platforms
+  date: string | number | Date
 }
 
 interface AuthorProfileProps {
@@ -28,7 +29,7 @@ interface AuthorProfileProps {
 const AuthorProfile: React.FC<AuthorProfileProps> = ({ authorId }) => {
   const authors = getPagesUnderRoute('/authors') as Array<Page & { frontMatter: AuthorMetadata }>
   const author = authors.find((a) => a.frontMatter.authorid === authorId)?.frontMatter
-  const blogPosts = getPagesUnderRoute('/blog') as Array<Page & { frontMatter: any }>
+  const blogPosts = getPagesUnderRoute('/blog') as Array<Page & { frontMatter: AuthorMetadata }>
 
   // Filter posts by the current authorId
   const authorPosts = blogPosts.filter((post) => post.frontMatter.authorid === authorId)
@@ -104,7 +105,7 @@ const AuthorProfile: React.FC<AuthorProfileProps> = ({ authorId }) => {
             <BlogCard
               key={post.route}
               page={post}
-              handleTagClick={(tag) => console.log('Tag clicked:', tag)}
+              handleTagClick={(tag: unknown) => console.log('Tag clicked:', tag)}
               selectedTags={undefined}
             />
           ))}

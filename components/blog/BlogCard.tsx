@@ -18,7 +18,7 @@ const BlogCard = ({ page, handleTagClick, selectedTags = [] }) => {
 
   useEffect(() => {
     const updateCardWidth = () => {
-      setCardWidth(document.querySelector('.blog-card').clientWidth)
+      setCardWidth(document.querySelector('.blog-card')?.clientWidth ?? 0)
     }
     window.addEventListener('resize', updateCardWidth)
     updateCardWidth()

@@ -1,5 +1,14 @@
 import Link from 'next/link'
-import { SocialIcon } from 'react-social-icons'
+import { FloatingDock } from '@/components/ui/floating-dock'
+import {
+  IconBrandGithub,
+  IconBrandDiscord,
+  IconBrandLinkedin,
+  IconBrandTwitter,
+  IconBrandYoutube,
+  IconMail,
+} from '@tabler/icons-react'
+import { useMediaQuery } from 'react-responsive'
 
 const menuItems: {
   heading: string
@@ -23,6 +32,10 @@ const menuItems: {
     heading: 'Resources',
     items: [
       {
+        name: 'Code Interpreter API',
+        href: 'https://code.librechat.ai/pricing',
+      },
+      {
         name: 'Changelog',
         href: '/changelog',
       },
@@ -32,7 +45,7 @@ const menuItems: {
       },
       {
         name: 'Demo',
-        href: 'https://demo.librechat.cfd/',
+        href: 'https://chat.librechat.ai/',
       },
       {
         name: 'Status',
@@ -97,6 +110,41 @@ const menuItems: {
 ]
 
 const FooterMenu = () => {
+  const isMobile = useMediaQuery({ query: '(max-width: 640px)' })
+
+  const socialLinks = [
+    {
+      title: 'GitHub',
+      icon: <IconBrandGithub className="h-full w-full text-neutral-500 dark:text-neutral-300" />,
+      href: 'https://github.librechat.ai/',
+    },
+    {
+      title: 'Discord',
+      icon: <IconBrandDiscord className="h-full w-full text-neutral-500 dark:text-neutral-300" />,
+      href: 'https://discord.librechat.ai/',
+    },
+    {
+      title: 'LinkedIn',
+      icon: <IconBrandLinkedin className="h-full w-full text-neutral-500 dark:text-neutral-300" />,
+      href: 'https://linkedin.librechat.ai/',
+    },
+    {
+      title: 'Twitter',
+      icon: <IconBrandTwitter className="h-full w-full text-neutral-500 dark:text-neutral-300" />,
+      href: 'https://x.com/LibreChatAI',
+    },
+    {
+      title: 'YouTube',
+      icon: <IconBrandYoutube className="h-full w-full text-neutral-500 dark:text-neutral-300" />,
+      href: 'https://www.youtube.com/@LibreChat',
+    },
+    {
+      title: 'Email',
+      icon: <IconMail className="h-full w-full text-neutral-500 dark:text-neutral-300" />,
+      href: 'mailto:contact@librechat.ai',
+    },
+  ]
+
   return (
     <div className="w-full">
       <div className="grid grid-cols-2 md:grid-cols-6 text-base gap-y-8 gap-x-2">
@@ -116,52 +164,10 @@ const FooterMenu = () => {
         ))}
         <div className="flex items-center justify-between md:col-span-6">
           <div className="font-sans text-sm">© {new Date().getFullYear()} LibreChat</div>
-          <div className="flex ml-auto">
-            <SocialIcon
-              url="https://github.librechat.ai/"
-              className="absolute inset-0 w-full h-full transform scale-100 transition-transform opacity-100 hover:scale-90"
-              style={{ height: 40, width: 40 }}
-              bgColor="background"
-              fgColor="#9B9B9B80"
-            />
-            <SocialIcon
-              url="https://discord.librechat.ai/"
-              className="absolute inset-0 w-full h-full transform scale-100 transition-transform opacity-100 hover:scale-90"
-              style={{ height: 40, width: 40 }}
-              bgColor="background"
-              fgColor="#9B9B9B80"
-            />
-            <SocialIcon
-              url="https://linkedin.librechat.ai/"
-              className="absolute inset-0 w-full h-full transform scale-100 transition-transform opacity-100 hover:scale-90"
-              style={{ height: 40, width: 40 }}
-              bgColor="background"
-              fgColor="#9B9B9B80"
-            />
-            <SocialIcon
-              url="https://x.com/LibreChatAI"
-              className="absolute inset-0 w-full h-full transform scale-100 transition-transform opacity-100 hover:scale-90"
-              style={{ height: 40, width: 40 }}
-              bgColor="background"
-              fgColor="#9B9B9B80"
-            />
-            <SocialIcon
-              url="https://www.youtube.com/@LibreChat"
-              className="absolute inset-0 w-full h-full transform scale-100 transition-transform opacity-100 hover:scale-90"
-              style={{ height: 40, width: 40 }}
-              bgColor="background"
-              fgColor="#9B9B9B80"
-            />
-            <SocialIcon
-              url="mailto:contact@librechat.ai"
-              className="absolute inset-0 w-full h-full transform scale-100 transition-transform opacity-100 hover:scale-90"
-              style={{ height: 40, width: 40 }}
-              bgColor="background"
-              fgColor="#9B9B9B80"
-            />
-          </div>
+          {!isMobile && <FloatingDock items={socialLinks} desktopClassName="ml-auto" />}
         </div>
       </div>
+      {isMobile && <FloatingDock items={socialLinks} mobileClassName="mt-4" />}
     </div>
   )
 }

@@ -7,6 +7,11 @@ export default {
       layout: 'raw',
     },
   },
+  code_interpreter: {
+    type: 'page',
+    title: '✨ Code Interpreter',
+    href: 'https://code.librechat.ai/pricing',
+  },
   docs: {
     type: 'page',
     title: 'Docs',
@@ -33,7 +38,7 @@ export default {
   demo: {
     type: 'page',
     title: 'Demo',
-    href: 'https://demo.librechat.cfd/',
+    href: 'https://chat.librechat.ai/',
     // display: 'hidden',
   },
   changelog: {
