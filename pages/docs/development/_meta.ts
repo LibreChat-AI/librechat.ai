@@ -1,7 +1,6 @@
 export default {
   index: 'Intro',
   get_started: 'Get Started',
-  translation: 'Translation',
   tools_and_plugins: 'Tools and Plugins',
   testing: 'Testing',
   debugging: 'Debugging (WIP)',

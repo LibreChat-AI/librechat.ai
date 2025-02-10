@@ -16,6 +16,7 @@ export default {
   remote: '☁️ Remote Hosting',
   configuration: '⚙️ Configuration',
   user_guides: '📘 User Guides',
+  translation: '🌍 Translation',
   contributing: {
     // "title": "Contributing",
     type: 'separator',
