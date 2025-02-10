@@ -1,3 +1,3 @@
 export default {
-  index: 'Translation Guide',
+  index: 'Intro',
 }
