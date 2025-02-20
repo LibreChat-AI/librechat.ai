@@ -5,7 +5,6 @@ interface ISubscriber extends Document {
   status: string
 }
 
-// Define the schema
 const SubscriberSchema = new Schema({
   email: {
     type: String,
