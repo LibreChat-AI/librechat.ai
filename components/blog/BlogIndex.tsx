@@ -1,25 +1,61 @@
 import React, { useEffect, useState } from 'react'
 import { getPagesUnderRoute } from 'nextra/context'
-import { Page } from 'nextra'
+import type { Page } from 'nextra'
 import BlogCard from './BlogCard'
 import Select from 'react-select'
 import { AuthorSmall } from '../Author/AuthorsSmall'
 
+interface FrontMatter {
+  date: string
+  title: string
+  tags?: string[]
+  authorid?: string
+}
+
+type BlogPage = Page & {
+  frontMatter: FrontMatter
+  route: string
+}
+
 export const BlogIndex = ({ maxItems }: { maxItems?: number }) => {
   const [selectedTags, setSelectedTags] = useState<string[]>([])
-
   const [selectedAuthor, setSelectedAuthor] = useState<string | null>(null)
+  const [menuPortalTarget, setMenuPortalTarget] = useState<HTMLElement | null>(null)
 
-  const allPages = getPagesUnderRoute('/blog') as Array<Page & { frontMatter: any }>
+  const allPages = getPagesUnderRoute('/blog') as BlogPage[]
 
-  const allTags = Array.from(new Set(allPages.flatMap((page) => page.frontMatter.tags || []))).sort(
-    (a, b) => a.toLowerCase().localeCompare(b.toLowerCase()),
-  )
+  const allTags = Array.from(
+    new Set(
+      allPages
+        .flatMap((page) => page.frontMatter?.tags || [])
+        .filter((tag): tag is string => typeof tag === 'string' && tag.length > 0),
+    ),
+  ).sort((a, b) => {
+    if (typeof a === 'string' && typeof b === 'string') {
+      return a.toLowerCase().localeCompare(b.toLowerCase())
+    }
+    return 0
+  })
 
-  const allAuthors = Array.from(new Set(allPages.map((page) => page.frontMatter.authorid))).sort()
+  const allAuthors = Array.from(
+    new Set(
+      allPages
+        .map((page) => page.frontMatter?.authorid)
+        .filter((author): author is string => typeof author === 'string' && author.length > 0),
+    ),
+  ).sort((a, b) => {
+    if (typeof a === 'string' && typeof b === 'string') {
+      return a.localeCompare(b)
+    }
+    return 0
+  })
 
   const sortedPages = allPages
-    .sort((a, b) => new Date(b.frontMatter.date).getTime() - new Date(a.frontMatter.date).getTime())
+    .sort((a, b) => {
+      const dateA = new Date(a.frontMatter?.date || 0).getTime()
+      const dateB = new Date(b.frontMatter?.date || 0).getTime()
+      return dateB - dateA
+    })
     .slice(0, maxItems)
 
   const handleTagClick = (tag: string) => {
@@ -31,22 +67,21 @@ export const BlogIndex = ({ maxItems }: { maxItems?: number }) => {
     })
   }
 
-  const handleAuthorClick = (author: string) => {
+  const handleAuthorClick = (author: string | null) => {
     setSelectedAuthor(author === 'all' ? null : author)
   }
 
   const filteredPages = selectedTags.length
     ? sortedPages.filter(
         (page) =>
-          page.frontMatter.tags && selectedTags.every((tag) => page.frontMatter.tags.includes(tag)),
+          page.frontMatter?.tags &&
+          selectedTags.every((tag) => page.frontMatter.tags?.includes(tag)),
       )
     : sortedPages
 
   const finalFilteredPages = selectedAuthor
-    ? filteredPages.filter((page) => page.frontMatter.authorid === selectedAuthor)
+    ? filteredPages.filter((page) => page.frontMatter?.authorid === selectedAuthor)
     : filteredPages
-
-  const [menuPortalTarget, setMenuPortalTarget] = useState(null)
 
   useEffect(() => {
     setMenuPortalTarget(document.body)
