@@ -3,5 +3,5 @@ export default {
   Configuration_Examples: {
     type: 'separator',
   },
-  auht0: 'Auth0',
+  auth0: 'Auth0',
 }
