@@ -4,6 +4,7 @@ export default {
   interface: 'Interface (UI)',
   model_specs: 'Model Specs',
   registration: 'Registration',
+  balance: 'Balance',
   agents: 'Agents',
   mcp_servers: 'MCP Servers',
   aws_bedrock: 'AWS Bedrock',
