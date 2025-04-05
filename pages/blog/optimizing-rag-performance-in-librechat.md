@@ -1,5 +1,3 @@
-Perfect — I’ve merged both versions of **"Manual: Optimizing RAG Performance in LibreChat"** into a single, cleaned-up, blog-ready Markdown guide. This merged version consolidates the extra detail from the second file (like index tuning and deeper PostgreSQL advice) into the original structure for clarity and completeness.
-
 ---
 
 # Optimizing RAG Performance in LibreChat (Detailed Guide)
@@ -275,4 +273,3 @@ Test each change independently. Always monitor API logs and resource usage. If i
 
 ---
 
-Would you like this in a `.md` file for PR submission? I can generate it and structure it inside a `blog/` folder with metadata.
