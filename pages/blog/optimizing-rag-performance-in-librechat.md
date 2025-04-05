@@ -67,7 +67,7 @@ Check with `\di` again. Look for a `hnsw` or `ivfflat` index type.
 docker stats vectordb
 ```
 
-Watch for memory or CPU saturation. PostgreSQL benefits from abundant RAM.
+Watch for memory and/or CPU saturation. PostgreSQL benefits from abundant RAM.
 
 #### Optional: Set resource limits in `docker-compose.override.yml`
 
