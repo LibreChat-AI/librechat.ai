@@ -98,6 +98,18 @@ const nextraConfig = withNextra({
         port: '',
         pathname: '/**',
       },
+      {
+        protocol: 'https',
+        hostname: 'www.librechat.ai',
+        port: '',
+        pathname: '/**',
+      },
+      {
+        protocol: 'https',
+        hostname: 'librechat.ai',
+        port: '',
+        pathname: '/**',
+      },
     ],
   },
   headers() {

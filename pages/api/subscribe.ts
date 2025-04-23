@@ -1,8 +1,13 @@
+import type { NextApiRequest, NextApiResponse } from 'next'
 import validator from 'validator'
 import dbConnect from '@/utils/dbConnect'
 import Subscriber from '@/utils/Subscriber'
 
-export default async function handler(req, res) {
+type ResponseData = {
+  message: string
+}
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse<ResponseData>) {
   const { method, body } = req
 
   if (method !== 'POST') {
