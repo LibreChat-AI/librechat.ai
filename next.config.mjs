@@ -74,9 +74,9 @@ const withNextra = nextra({
 const nextraConfig = withNextra({
   experimental: {
     esmExternals: 'loose',
-    serverComponentsExternalPackages: ['mongoose'],
     scrollRestoration: true,
   },
+  serverExternalPackages: ['mongoose'],
   transpilePackages: ['react-tweet', 'react-syntax-highlighter', 'geist'],
   images: {
     remotePatterns: [
