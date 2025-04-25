@@ -1,4 +1,6 @@
 // import Image, { type StaticImageData } from 'next/image'
+import axios from 'axios'
+import { useEffect, useState } from 'react'
 import { HomeSection } from './components/HomeSection'
 // import Link from 'next/link'
 import NumberTicker from '@/components/ui/number-ticker'
@@ -21,20 +23,42 @@ import DateTicker from '@/components/ui/date-ticker'
 //   },
 // ]
 
-const stats = [
-  { name: 'GitHub stars', value: 19500 },
+const initialStats = [
+  { name: 'GitHub stars', value: 24900 },
   { name: 'Docker pulls', value: 2810000 },
   { name: 'Project started', value: new Date('2023-01-11') },
 ]
 
-export const Usage = () => (
-  <HomeSection className="pt-2 sm:pt-2 lg:pt-2 xl:pt-2">
-    <div className="py-14">
-      <h2 className="text-center text-lg font-semibold leading-8 mb-8">Usage statistics</h2>
-      <div className="flex flex-col gap-8">
-        <div className="relative">
-          <div className="flex flex-wrap xl:flex-nowrap justify-between">
-            {/* {users.map((user) => (
+export const Usage = () => {
+  const [stats, setStats] = useState(initialStats)
+
+  useEffect(() => {
+    const fetchGitHubStats = async () => {
+      try {
+        const response = await axios.get('/api/github-stats')
+        if (response.data?.stars) {
+          setStats((prevStats) =>
+            prevStats.map((stat) =>
+              stat.name === 'GitHub stars' ? { ...stat, value: response.data.stars } : stat,
+            ),
+          )
+        }
+      } catch (error) {
+        console.error('Failed to fetch GitHub stats:', error)
+      }
+    }
+
+    fetchGitHubStats()
+  }, [])
+
+  return (
+    <HomeSection className="pt-2 sm:pt-2 lg:pt-2 xl:pt-2">
+      <div className="py-14">
+        <h2 className="text-center text-lg font-semibold leading-8 mb-8">Usage statistics</h2>
+        <div className="flex flex-col gap-8">
+          <div className="relative">
+            <div className="flex flex-wrap xl:flex-nowrap justify-between">
+              {/* {users.map((user) => (
               <a
                 key={user.name}
                 href={user.href}
@@ -56,26 +80,27 @@ export const Usage = () => (
                 />
               </a>
             ))} */}
+            </div>
+          </div>
+          <div className="flex flex-col sm:flex-row justify-around sm:justify-center gap-4 sm:gap-10">
+            {stats.map((item) => (
+              <div key={item.name} className="text-center">
+                <p className="text-xl sm:text-2xl font-bold text-primary/80 font-mono">
+                  {item.name === 'Project started' && item.value instanceof Date ? (
+                    <DateTicker targetDate={item.value} />
+                  ) : typeof item.value === 'number' ? (
+                    <NumberTicker value={item.value} />
+                  ) : (
+                    item.value.toString()
+                  )}
+                  <span className="ml-1 hidden sm:inline">{'+'}</span>
+                </p>
+                <p className="mt-2 text-xs sm:text-sm text-primary/70">{item.name}</p>
+              </div>
+            ))}
           </div>
         </div>
-        <div className="flex flex-col sm:flex-row justify-around sm:justify-center gap-4 sm:gap-10">
-          {stats.map((item) => (
-            <div key={item.name} className="text-center">
-              <p className="text-xl sm:text-2xl font-bold text-primary/80 font-mono">
-                {item.name === 'Project started' && item.value instanceof Date ? (
-                  <DateTicker targetDate={item.value} />
-                ) : typeof item.value === 'number' ? (
-                  <NumberTicker value={item.value} />
-                ) : (
-                  item.value.toString()
-                )}
-                <span className="ml-1 hidden sm:inline">{'+'}</span>
-              </p>
-              <p className="mt-2 text-xs sm:text-sm text-primary/70">{item.name}</p>
-            </div>
-          ))}
-        </div>
       </div>
-    </div>
-  </HomeSection>
-)
+    </HomeSection>
+  )
+}
