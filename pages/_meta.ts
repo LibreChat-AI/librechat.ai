@@ -48,14 +48,6 @@ export default {
       layout: 'full',
     },
   },
-  pricing: {
-    title: 'Pricing',
-    display: 'hidden',
-    type: 'page',
-    theme: {
-      layout: 'full',
-    },
-  },
   tos: {
     title: 'Terms of Service',
     type: 'page',
