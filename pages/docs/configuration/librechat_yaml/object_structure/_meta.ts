@@ -13,4 +13,5 @@ export default {
   azure_openai: 'Azure OpenAI',
   model_config: 'Azure Model Config',
   default_params: 'API Default Parameters',
+  custom_params: 'Customize Endpoint Parameters',
 }
