@@ -1,7 +1,7 @@
 import '../style.css'
 import 'vidstack/styles/base.css'
 import '../src/overrides.css'
-import Script from 'next/script'
+// import Script from 'next/script'
 import { useEffect } from 'react'
 import { useRouter } from 'next/router'
 import posthog from 'posthog-js'
@@ -48,11 +48,11 @@ export default function App({ Component, pageProps }) {
         {process.env.NEXT_PUBLIC_CRISP_WEBSITE_ID ? <CrispWidget /> : null}
       </PostHogProvider>
       <Hubspot />
-      <Script
+      {/* <Script
         src="https://app.termly.io/resource-blocker/26739b38-1a89-4742-ab53-d8d724b77f51?autoBlock=on"
         strategy="beforeInteractive"
         type="text/javascript"
-      />
+      /> */}
     </div>
   )
 }

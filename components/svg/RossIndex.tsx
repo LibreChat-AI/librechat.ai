@@ -9,7 +9,7 @@ function RossIndex() {
       viewBox="0 0 260 56"
       fill="none"
     >
-      <g clip-path="url(#clip0_120_69)">
+      <g clipPath="url(#clip0_120_69)">
         <path
           d="M248 0H12C5.373 0 0 5.373 0 12V44C0 50.627 5.373 56 12 56H248C254.627 56 260 50.627 260 44V12C260 5.373 254.627 0 248 0Z"
           fill="#111111"
