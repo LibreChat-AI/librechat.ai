@@ -2,6 +2,7 @@ export default {
   config: 'Root Settings',
   file_config: 'File Config',
   interface: 'Interface (UI)',
+  turnstile: 'Cloudflare Turnstile',
   model_specs: 'Model Specs',
   registration: 'Registration',
   balance: 'Balance',
