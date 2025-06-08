@@ -6,6 +6,7 @@ export default {
   model_specs: 'Model Specs',
   registration: 'Registration',
   balance: 'Balance',
+  memory: 'Memory',
   agents: 'Agents',
   mcp_servers: 'MCP Servers',
   aws_bedrock: 'AWS Bedrock',
