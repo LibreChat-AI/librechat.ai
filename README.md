@@ -4,7 +4,7 @@ Based on [Nextra](https://nextra.site/)
 
 ## Local Development
 
-Pre-requisites: Node.js 18+, pnpm 9+
+Pre-requisites: Node.js v20.19.0+ (or ^22.12.0 or >= 23.0.0), pnpm 9+
 
 1. Optional: Create env based on [.env.template](./.env.template)
 2. Run `pnpm i` to install the dependencies.
