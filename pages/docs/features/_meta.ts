@@ -1,5 +1,6 @@
 export default {
   index: 'Overview',
+  mcp: 'MCP',
   agents: 'Agents',
   code_interpreter: 'Code Interpreter API',
   artifacts: 'Artifacts - Generative UI',
