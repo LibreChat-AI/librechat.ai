@@ -41,7 +41,7 @@ const menuItems: {
       },
       {
         name: 'Roadmap',
-        href: '/blog/2024-02-19_2024_roadmap',
+        href: '/blog/2025-02-20_2025_roadmap',
       },
       {
         name: 'Demo',
