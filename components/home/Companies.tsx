@@ -6,6 +6,7 @@ interface Company {
   name: string
   logo: string
   logoDark?: string
+  logoColor?: string
   url?: string
 }
 
@@ -19,6 +20,12 @@ const companies: Company[] = [
     name: 'ClickHouse',
     logo: '/images/logos/ClickHouse_light.svg',
     logoDark: '/images/logos/ClickHouse_dark.svg',
+  },
+  {
+    name: 'Boston University',
+    logo: '/images/logos/BostonUniversity_light.png',
+    logoDark: '/images/logos/BostonUniversity_dark.png',
+    logoColor: '/images/logos/BostonUniversity_color.png',
   },
 ]
 
@@ -52,27 +59,67 @@ export const Companies = () => {
         <div className={styles.scrollContainer} style={containerStyle}>
           <div className={styles.scrollContent}>
             {duplicatedCompanies.map((company, index) => (
-              <div key={`logo-${index}`} className={styles.logoItem}>
-                {/* Light logo */}
-                <Image
-                  src={company.logo}
-                  alt={`${company.name} logo`}
-                  className={`${styles.logo} ${company.logoDark ? 'dark:hidden' : ''}`}
-                  width={120}
-                  height={60}
-                  unoptimized
-                  priority={index < companies.length}
-                />
-                {company.logoDark && (
-                  <Image
-                    src={company.logoDark}
-                    alt={`${company.name} logo`}
-                    className={`${styles.logo} hidden dark:block`}
-                    width={120}
-                    height={60}
-                    unoptimized
-                    priority={index < companies.length}
-                  />
+              <div
+                key={`logo-${index}`}
+                className={`${styles.logoItem} ${company.logoColor ? 'group' : ''}`}
+              >
+                {company.logoColor ? (
+                  <div className="relative">
+                    {/* Light logo */}
+                    <Image
+                      src={company.logo}
+                      alt={`${company.name} logo`}
+                      className={`${styles.logo} dark:hidden group-hover:opacity-0 transition-opacity duration-300`}
+                      width={120}
+                      height={60}
+                      unoptimized
+                      priority={index < companies.length}
+                    />
+                    {/* Dark logo */}
+                    <Image
+                      src={company.logoDark}
+                      alt={`${company.name} logo`}
+                      className={`${styles.logo} hidden dark:block group-hover:opacity-0 transition-opacity duration-300`}
+                      width={120}
+                      height={60}
+                      unoptimized
+                      priority={index < companies.length}
+                    />
+                    {/* Color logo */}
+                    <Image
+                      src={company.logoColor}
+                      alt={`${company.name} logo`}
+                      className={`${styles.logo} absolute top-0 left-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300`}
+                      width={120}
+                      height={60}
+                      unoptimized
+                      priority={index < companies.length}
+                    />
+                  </div>
+                ) : (
+                  <>
+                    {/* Light logo */}
+                    <Image
+                      src={company.logo}
+                      alt={`${company.name} logo`}
+                      className={`${styles.logo} ${company.logoDark ? 'dark:hidden' : ''}`}
+                      width={120}
+                      height={60}
+                      unoptimized
+                      priority={index < companies.length}
+                    />
+                    {company.logoDark && (
+                      <Image
+                        src={company.logoDark}
+                        alt={`${company.name} logo`}
+                        className={`${styles.logo} hidden dark:block`}
+                        width={120}
+                        height={60}
+                        unoptimized
+                        priority={index < companies.length}
+                      />
+                    )}
+                  </>
                 )}
               </div>
             ))}
