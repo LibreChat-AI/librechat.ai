@@ -4,6 +4,7 @@ export default {
   librechat_yaml: 'librechat.yaml',
   authentication: 'Authentication',
   mongodb: 'MongoDB',
+  redis: 'Redis',
   pre_configured_ai: 'AI Providers',
   tools: 'Tools and Plugins',
   cdn: 'CDN',

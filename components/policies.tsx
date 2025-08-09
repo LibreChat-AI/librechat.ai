@@ -2,43 +2,63 @@ import { Link } from 'nextra-theme-docs'
 import { Button } from 'nextra/components'
 
 const PrivacyPolicy = () => {
+  const currentDate = new Date().toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  })
+
   return (
     <main className="max-w-xl mx-auto">
       <div className="p-5">
-        <h1 className="text-3xl font-extrabold pb-6">Privacy Policy for LibreChat</h1>
+        <h1 className="text-3xl font-extrabold pb-6">Privacy Policy for LibreChat Documentation</h1>
 
         <pre className="leading-relaxed whitespace-pre-wrap" style={{ fontFamily: 'sans-serif' }}>
-          {`Effective Date: February 18, 2024
+          {`Effective Date: ${currentDate}
 
-This Privacy Policy outlines the types of personal information that is received and collected by LibreChat`}{' '}
+This Privacy Policy outlines how the LibreChat documentation website (`}{' '}
           <Link href="https://librechat.ai">https://librechat.ai</Link>
-          {` and how it is used.
+          {`) operates with respect to user privacy.
 
-1. Information Collection
+1. No Data Collection
 
-We collect personal information when you interact with our site, including your name, email address, and payment information. This information is used for order processing and to place you on an email waitlist for feature updates.
+We do not collect, store, or process any personal information when you visit our documentation site. This includes:
+- No collection of names, email addresses, or contact information
+- No use of cookies or tracking technologies
+- No analytics or usage tracking
+- No user accounts or authentication
 
-In addition to personal information, we use web cookies to enhance your experience on our site by understanding how our site is used.
+2. Purpose of This Site
 
-2. Use of Information
+This website serves solely as documentation for the open-source LibreChat project. It provides:
+- Installation guides
+- Configuration documentation
+- API references
+- User guides
+- Contributing guidelines
 
-The information we collect is used solely for the purposes specified: order processing and to inform you of feature updates. We value your privacy and do not share your personal information with third parties.
+3. External Links
 
-3. Children's Privacy
+Our documentation may contain links to external websites, including:
+- The LibreChat GitHub repository
+- Third-party service documentation
+- Community resources
 
-LibreChat is committed to protecting the privacy of children. We do not knowingly collect any personal information from children under the age of 13.
+We are not responsible for the privacy practices of these external sites.
 
-4. Updates to This Policy
+4. Changes to This Policy
 
-We may update this privacy policy from time to time. When we do, we will notify you by email. We encourage you to periodically review this page for the latest information on our privacy practices.
+We may update this privacy policy to reflect changes in our practices or for clarity. Any updates will be posted on this page with an updated effective date.
 
-5. Contact Us
+5. Contact Information
 
-If you have any questions about this Privacy Policy, please contact us at`}{' '}
-          <Link href="mailto:contact@librechat.ai">contact@librechat.ai</Link>
-          {`. 
+For questions about this privacy policy or the LibreChat project, please visit our GitHub repository at`}{' '}
+          <Link href="https://github.com/danny-avila/LibreChat">
+            https://github.com/danny-avila/LibreChat
+          </Link>
+          {`.
 
-Your use of LibreChat indicates your agreement to this Privacy Policy.`}
+By using this documentation site, you acknowledge that no personal data is collected or processed.`}
         </pre>
       </div>
       <Button onClick={() => window.open('/', '_self')}>← Go Back</Button>
@@ -47,44 +67,91 @@ Your use of LibreChat indicates your agreement to this Privacy Policy.`}
 }
 
 const TermsOfServices = () => {
+  const currentDate = new Date().toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  })
+
   return (
     <main className="max-w-xl mx-auto">
       <div className="p-5">
-        <h1 className="text-3xl font-extrabold pb-6">Terms and Conditions for LibreChat</h1>
+        <h1 className="text-3xl font-extrabold pb-6">
+          Terms of Service for LibreChat Documentation
+        </h1>
 
         <pre className="leading-relaxed whitespace-pre-wrap" style={{ fontFamily: 'sans-serif' }}>
-          {`Effective Date: February 18, 2024
+          {`Effective Date: ${currentDate}
 
-Welcome to LibreChat, the informational website for the open-source AI chat platform, available at `}{' '}
+Welcome to the LibreChat documentation website, available at `}{' '}
           <Link href="https://librechat.ai">https://librechat.ai</Link>
-          {`. These Terms of Service ("Terms") govern your use of our website and the services we offer. By accessing or using the Website, you agree to be bound by these Terms and our Privacy Policy, accessible at `}{' '}
-          <Link href="https://librechat.ai/privacy">https://librechat.ai//privacy</Link>
-          {`.
+          {`. These Terms of Service ("Terms") govern your use of our documentation website.
 
-1. Ownership
-Upon purchasing a package from LibreChat, you are granted the right to download and use the code for accessing an admin panel for LibreChat. While you own the downloaded code, you are expressly prohibited from reselling, redistributing, or otherwise transferring the code to third parties without explicit permission from LibreChat.
+1. Purpose and Scope
 
-2. User Data
-We collect personal data, such as your name, email address, and payment information, as described in our Privacy Policy. This information is collected to provide and improve our services, process transactions, and communicate with you.
+This website provides documentation for LibreChat, an open-source AI chat platform. The site is purely informational and includes:
+- Technical documentation
+- Installation and setup guides
+- Configuration references
+- API documentation
+- Contributing guidelines
+- Blog posts related to LibreChat
 
-3. Non-Personal Data Collection
-The Website uses cookies to enhance user experience, analyze site usage, and facilitate certain functionalities. By using the Website, you consent to the use of cookies in accordance with our Privacy Policy.
+2. No Commercial Services
 
-4. Use of the Website
-You agree to use the Website only for lawful purposes and in a manner that does not infringe the rights of, restrict, or inhibit anyone else's use and enjoyment of the Website. Prohibited behavior includes harassing or causing distress or inconvenience to any person, transmitting obscene or offensive content, or disrupting the normal flow of dialogue within the Website.
+This documentation site:
+- Does not sell any products or services
+- Does not require payment for access
+- Does not collect user data or personal information
+- Does not require user registration or accounts
 
-5. Governing Law
-These Terms shall be governed by and construed in accordance with the laws of the United States, without giving effect to any principles of conflicts of law.
+3. Open Source Project
 
-6. Changes to the Terms
-We reserve the right to modify these Terms at any time. We will notify users of any changes by email. Your continued use of the Website after such changes have been notified will constitute your consent to such changes.
+LibreChat is an open-source project licensed under the MIT License. The source code is available at:`}{' '}
+          <Link href="https://github.com/danny-avila/LibreChat">
+            https://github.com/danny-avila/LibreChat
+          </Link>
+          {`
 
-7. Contact Information
-If you have any questions about these Terms, please contact us at `}{' '}
-          <Link href="mailto:contact@librechat.ai">contact@librechat.ai</Link>
-          {`.
+4. Use of Documentation
 
-By using the Website, you acknowledge that you have read these Terms of Service and agree to be bound by them.`}
+You may freely:
+- Access and read all documentation
+- Share links to the documentation
+- Use the documentation to implement and configure LibreChat
+- Contribute improvements to the documentation via GitHub
+
+5. No Warranty
+
+This documentation is provided "as is" without warranty of any kind. While we strive for accuracy, we make no guarantees about:
+- The completeness or accuracy of the documentation
+- The suitability of LibreChat for any particular purpose
+- The availability of this documentation site
+
+6. External Resources
+
+Our documentation may reference or link to third-party services, tools, or resources. We are not responsible for:
+- The content or practices of external sites
+- The availability of external resources
+- Any issues arising from the use of third-party services
+
+7. Intellectual Property
+
+The documentation content is licensed under the MIT License, consistent with the LibreChat project. You are free to use, modify, and distribute the documentation in accordance with this license.
+
+8. Changes to Terms
+
+We may update these terms to reflect changes in the project or for clarity. Updates will be posted on this page with a new effective date.
+
+9. Contact
+
+For questions about these terms or to contribute to the project, please visit:`}{' '}
+          <Link href="https://github.com/danny-avila/LibreChat">
+            https://github.com/danny-avila/LibreChat
+          </Link>
+          {`
+
+By using this documentation site, you agree to these Terms of Service.`}
         </pre>
       </div>
     </main>
@@ -92,32 +159,70 @@ By using the Website, you acknowledge that you have read these Terms of Service 
 }
 
 const CookiePolicy = () => {
+  const currentDate = new Date().toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  })
+
   return (
     <main className="max-w-xl mx-auto">
       <div className="p-5">
-        <h1 className="text-3xl font-extrabold pb-6">Cookie Policy for LibreChat</h1>
+        <h1 className="text-3xl font-extrabold pb-6">Cookie Policy for LibreChat Documentation</h1>
 
         <pre className="leading-relaxed whitespace-pre-wrap" style={{ fontFamily: 'sans-serif' }}>
-          {`Effective Date: February 18, 2024
+          {`Effective Date: ${currentDate}
 
-1. What Are Cookies
-As is common practice with almost all professional websites, this site uses cookies, which are tiny files that are downloaded to your computer, to improve your experience. This page describes what information they gather, how we use it, and why we sometimes need to store these cookies. We will also share how you can prevent these cookies from being stored; however, this may downgrade or 'break' certain elements of the site's functionality.
+1. No Cookies Used
 
-2. How We Use Cookies
-We use cookies for various reasons detailed below. Unfortunately, in most cases, there are no industry standard options for disabling cookies without completely disabling the functionality and features they add to this site. It is recommended that you leave on all cookies if you are not sure whether you need them or not, in case they are used to provide a service that you use.
+The LibreChat documentation website (`}{' '}
+          <Link href="https://librechat.ai">https://librechat.ai</Link>
+          {`) does not use cookies or any similar tracking technologies.
 
-3. Disabling Cookies
-You can prevent the setting of cookies by adjusting the settings on your browser (see your browser Help for how to do this). Be aware that disabling cookies will affect the functionality of this and many other websites that you visit. Disabling cookies will usually result in also disabling certain functionality and features of this site. Therefore, it is recommended that you do not disable cookies.
+2. No Data Collection
 
-4. The Cookies We Set
-  - Site preferences cookies: In order to provide you with a great experience on this site, we provide the functionality to set your preferences for how this site runs when you use it. In order to remember your preferences, we need to set cookies so that this information can be called whenever you interact with a page that is affected by your preferences.
-  - Third-party cookies: In some special cases, we also use cookies provided by trusted third parties. The following section details which third-party cookies you might encounter through this site.
+We do not:
+- Set or read cookies
+- Use web beacons or tracking pixels
+- Employ analytics or tracking scripts
+- Collect any personal information
+- Track user behavior or preferences
 
-  5. Contact Information
-If you have any questions about these policies, please contact us at `}{' '}
-          <Link href="mailto:contact@librechat.ai">contact@librechat.ai</Link>
-          {`.
-`}
+3. Third-Party Services
+
+While our site does not use cookies, please note:
+- External links may lead to sites that use cookies
+- Your browser may have its own cookie settings
+- We are not responsible for cookies set by external sites
+
+4. Browser Storage
+
+This documentation site may use browser features like:
+- Local storage for theme preferences (light/dark mode)
+- Session storage for navigation state
+
+This data is stored only in your browser and is never transmitted to any server.
+
+5. Your Privacy
+
+Since we don't use cookies or collect data:
+- There's nothing to opt out of
+- No personal information is at risk
+- Your browsing is completely private
+
+6. Changes to This Policy
+
+Any updates to this policy will be posted here with a new effective date. However, we do not anticipate adding cookies or tracking to this documentation site.
+
+7. Contact
+
+For questions about this policy or the LibreChat project, visit:`}{' '}
+          <Link href="https://github.com/danny-avila/LibreChat">
+            https://github.com/danny-avila/LibreChat
+          </Link>
+          {`
+
+By using this site, you acknowledge that no cookies or tracking technologies are employed.`}
         </pre>
       </div>
       <Button onClick={() => window.open('/', '_self')}>← Go Back</Button>
