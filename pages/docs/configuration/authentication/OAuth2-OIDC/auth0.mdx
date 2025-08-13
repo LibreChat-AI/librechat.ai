@@ -1,0 +1,212 @@
+---
+title: Auth0
+description: Configure Auth0 as an OpenID Connect provider for LibreChat
+---
+
+# Auth0 OpenID Connect Configuration
+
+This guide walks you through configuring Auth0 as an OpenID Connect provider for LibreChat.
+
+## Overview
+
+Auth0 can be used as an OpenID Connect provider for LibreChat. When using Auth0 with token reuse enabled (`OPENID_REUSE_TOKENS=true`), you must configure the `OPENID_AUDIENCE` environment variable to prevent authentication issues.
+
+## Prerequisites
+
+- An Auth0 account with an active tenant
+- Admin access to create applications and APIs in Auth0
+- LibreChat instance ready for configuration
+
+## Configuration Steps
+
+### Step 1: Create an Auth0 Application
+
+1. Go to **Auth0 Dashboard** → **Applications** → **Applications**
+2. Click **"Create Application"**
+3. Configure the application:
+   - **Name**: `LibreChat` (or your preferred name)
+   - **Application Type**: Select **"Single Page Application"**
+4. Click **"Create"**
+
+### Step 2: Configure Application Settings
+
+<Callout type="warning" title="HTTPS Required">
+Auth0 does not allow `http://localhost` URLs in production applications. For local development/testing, you'll need to use HTTPS. You can use services like:
+- **ngrok**: `ngrok http 3080` (provides HTTPS tunnel to localhost)
+- **Caddy**: Local HTTPS proxy server
+- **localtunnel**: Similar to ngrok
+
+Example with ngrok:
+```bash
+ngrok http 3080
+# This will give you a URL like: https://abc123.ngrok.io
+```
+</Callout>
+
+1. In your application's **Settings** tab:
+2. Set **Allowed Callback URLs**: 
+   ```bash
+   https://your-domain.ngrok.io/oauth/openid/callback
+   ```
+   (Use your ngrok URL for testing, or your production HTTPS URL)
+3. Set **Allowed Logout URLs** (if using end session):
+   ```bash
+   https://your-domain.ngrok.io
+   ```
+4. Set **Allowed Web Origins**:
+   ```bash
+   https://your-domain.ngrok.io
+   ```
+5. Save the changes
+
+### Step 3: Create an Auth0 API (Required for Token Reuse)
+
+<Callout type="warning" title="Important for Token Reuse">
+This step is **required** when using `OPENID_REUSE_TOKENS=true`. Without it, Auth0 will return opaque tokens that cannot be validated by LibreChat, causing infinite refresh loops.
+</Callout>
+
+1. **Go to Auth0 Dashboard** → **Applications** → **APIs**
+2. **Click "Create API"**
+3. **Configure the API:**
+   - **Name**: `LibreChat API` (or your preferred name)
+   - **Identifier**: `https://api.librechat.ai` (or your preferred identifier)
+     - **Note**: This is just a unique identifier, not an actual URL. It doesn't need to be accessible.
+     - Common patterns: `https://api.yourdomain.com`, `https://librechat.yourdomain.com`, etc.
+   - **Signing Algorithm**: RS256 (recommended)
+4. **Click "Create"**
+
+### Step 4: Configure Offline Access
+
+1. **Go to your API's Settings** → **Access Settings**
+2. Enable **"Allow Offline Access"**
+3. Save the changes
+
+### Step 5: Gather Configuration Values
+
+In your Auth0 Application's **Basic Information** section, you'll find:
+
+- **Domain**: Shows as `dev-example.us.auth0.com` (you'll need to add `https://` prefix)
+- **Client ID**: A long alphanumeric string
+- **Client Secret**: Hidden by default (click to reveal)
+
+<Callout type="info" title="Important">
+The **Domain** shown in Auth0 doesn't include the `https://` prefix. You must add it when configuring the `OPENID_ISSUER`.
+
+Example: If Auth0 shows `dev-abc123.us.auth0.com`, use `https://dev-abc123.us.auth0.com`
+</Callout>
+
+### Step 6: Configure LibreChat Environment Variables
+
+Add the following environment variables to your `.env` file:
+
+```bash
+# OpenID Connect Configuration
+# Domain from Basic Information (add https:// prefix)
+OPENID_ISSUER=https://dev-abc123.us.auth0.com
+
+# Client ID from Basic Information
+OPENID_CLIENT_ID=your_long_alphanumeric_client_id
+
+# Client Secret from Basic Information (click to reveal)
+OPENID_CLIENT_SECRET=your_client_secret_from_basic_information
+
+# Callback URL (must match what's configured in Auth0)
+OPENID_CALLBACK_URL=/oauth/openid/callback
+
+# Token Configuration
+OPENID_REUSE_TOKENS=true
+OPENID_SCOPE=openid profile email offline_access
+
+# IMPORTANT: Your Auth0 API identifier (from Step 3)
+OPENID_AUDIENCE=https://api.librechat.ai
+
+# Security Settings (recommended)
+OPENID_USE_PKCE=true
+
+# Session Configuration (generate a secure random string)
+OPENID_SESSION_SECRET=your-secure-session-secret-32-chars-or-more
+
+# Optional: Custom button appearance
+OPENID_BUTTON_LABEL=Continue with Auth0
+# OPENID_IMAGE_URL=https://path-to-auth0-logo.png
+
+# If using ngrok for testing, also update:
+# DOMAIN_CLIENT=https://your-domain.ngrok.io
+# DOMAIN_SERVER=https://your-domain.ngrok.io
+```
+
+## Understanding OPENID_AUDIENCE
+
+### The Problem
+
+When using Auth0 with `OPENID_REUSE_TOKENS=true`:
+- Auth0 returns **opaque access tokens** (JWE format) by default
+- LibreChat expects **signed JWT tokens** (JWS format) that can be validated
+- Without proper configuration, this mismatch causes authentication failures and infinite refresh loops
+
+### The Solution
+
+The `OPENID_AUDIENCE` environment variable:
+- Must be set to your Auth0 API identifier (created in Step 3)
+- Forces Auth0 to issue signed JWT access tokens instead of opaque tokens
+- Enables LibreChat to validate tokens using Auth0's JWKS endpoint
+
+### How It Works
+
+When `OPENID_AUDIENCE` is configured:
+1. LibreChat includes the `audience` parameter in authorization requests
+2. Auth0 recognizes the audience as a registered API
+3. Auth0 issues JWT access tokens that can be validated
+4. LibreChat successfully validates tokens and authentication works properly
+
+## Environment Variable Reference
+
+<OptionTable
+  options={[
+    ['OPENID_AUDIENCE', 'string', 'The identifier of your Auth0 API. Required when using OPENID_REUSE_TOKENS=true with Auth0 to prevent opaque token issues.', 'OPENID_AUDIENCE=https://api.librechat.ai'],
+  ]}
+/>
+
+## Troubleshooting
+
+### Infinite Refresh Loop
+
+**Symptoms**: Page reloads continuously after clicking "Continue with OpenID"
+
+**Solution**: 
+1. Ensure `OPENID_AUDIENCE` is set to your Auth0 API identifier
+2. Verify the API was created in Auth0 and offline access is enabled
+3. Check that the audience value matches exactly
+
+### Invalid Token Errors
+
+**Symptoms**: Authentication fails with token validation errors
+
+**Solution**:
+1. Enable debug logging: `DEBUG_OPENID_REQUESTS=true`
+2. Verify Auth0 is returning JWT tokens (not opaque tokens)
+3. Check JWKS endpoint is accessible
+
+### Missing Refresh Token
+
+**Symptoms**: No refresh token in authentication response
+
+**Solution**:
+1. Ensure `offline_access` is included in `OPENID_SCOPE`
+2. Verify "Allow Offline Access" is enabled in your Auth0 API settings
+
+## Best Practices
+
+1. **Always use HTTPS** - Auth0 requires HTTPS for all callback URLs
+2. **Testing locally** - Use ngrok or similar services to create HTTPS tunnels to localhost
+3. **Secure your session secret** - Use a strong, random value for `OPENID_SESSION_SECRET`
+4. **Enable PKCE** - Set `OPENID_USE_PKCE=true` for enhanced security
+5. **Restrict callback URLs** - Only allow your actual domain in Auth0 settings
+6. **Monitor logs** - Use `DEBUG_OPENID_REQUESTS=true` during setup
+7. **API Identifier** - Remember it's just an identifier, not an actual endpoint that needs to exist
+
+## Additional Resources
+
+- [Auth0 Documentation](https://auth0.com/docs)
+- [Auth0 Access Tokens](https://auth0.com/docs/secure/tokens/access-tokens/get-access-tokens)
+- [LibreChat OpenID Token Reuse](/docs/configuration/authentication/OAuth2-OIDC/token-reuse)
