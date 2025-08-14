@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useMemo } from 'react'
 import Image from 'next/image'
 import styles from './companies.module.css'
 
@@ -27,23 +27,38 @@ const companies: Company[] = [
     logoDark: '/images/logos/BostonUniversity_dark.png',
     logoColor: '/images/logos/BostonUniversity_color.png',
   },
+  {
+    name: 'Daimler Truck',
+    logo: '/images/logos/DaimlerTruck_light.svg',
+    logoDark: '/images/logos/DaimlerTruck_dark.svg',
+  },
 ]
 
-export const Companies = () => {
-  const minLogos = 15
-  const duplicateCount = Math.ceil(minLogos / companies.length)
-  const duplicatedCompanies = Array(duplicateCount * 2)
-    .fill(companies)
-    .flat()
+export const Companies: React.FC = React.memo(() => {
+  const minLogos = 8 // Reduced minimum for better performance
+
+  const displayCount = Math.max(minLogos, companies.length)
+
+  const logosToShow = useMemo(
+    () => Array.from({ length: displayCount }, (_, i) => companies[i % companies.length]),
+    [displayCount],
+  )
+
+  // Create duplicated array for seamless infinite scroll
+  const duplicatedLogos = useMemo(() => [...logosToShow, ...logosToShow], [logosToShow])
 
   const baseSpeed = 2
-  const duration = Math.max(70, companies.length * baseSpeed)
-  const mobileDuration = Math.max(15, companies.length * 1.5)
+  const duration = useMemo(() => Math.max(40, logosToShow.length * baseSpeed), [logosToShow.length])
+  const mobileDuration = useMemo(() => Math.max(30, logosToShow.length * 1.5), [logosToShow.length])
 
-  const containerStyle = {
-    '--scroll-duration': `${duration}s`,
-    '--scroll-duration-mobile': `${mobileDuration}s`,
-  } as React.CSSProperties
+  const containerStyle = useMemo(
+    () =>
+      ({
+        '--scroll-duration': `${duration}s`,
+        '--scroll-duration-mobile': `${mobileDuration}s`,
+      }) as React.CSSProperties,
+    [duration, mobileDuration],
+  )
 
   return (
     <section className="py-20">
@@ -58,76 +73,79 @@ export const Companies = () => {
         </div>
         <div className={styles.scrollContainer} style={containerStyle}>
           <div className={styles.scrollContent}>
-            {duplicatedCompanies.map((company, index) => (
-              <div
-                key={`logo-${index}`}
-                className={`${styles.logoItem} ${company.logoColor ? 'group' : ''}`}
-              >
-                {company.logoColor ? (
-                  <div className="relative">
-                    {/* Light logo */}
-                    <Image
-                      src={company.logo}
-                      alt={`${company.name} logo`}
-                      className={`${styles.logo} dark:hidden group-hover:opacity-0 transition-opacity duration-300`}
-                      width={120}
-                      height={60}
-                      unoptimized
-                      priority={index < companies.length}
-                    />
-                    {/* Dark logo */}
-                    <Image
-                      src={company.logoDark}
-                      alt={`${company.name} logo`}
-                      className={`${styles.logo} hidden dark:block group-hover:opacity-0 transition-opacity duration-300`}
-                      width={120}
-                      height={60}
-                      unoptimized
-                      priority={index < companies.length}
-                    />
-                    {/* Color logo */}
-                    <Image
-                      src={company.logoColor}
-                      alt={`${company.name} logo`}
-                      className={`${styles.logo} absolute top-0 left-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300`}
-                      width={120}
-                      height={60}
-                      unoptimized
-                      priority={index < companies.length}
-                    />
-                  </div>
-                ) : (
-                  <>
-                    {/* Light logo */}
-                    <Image
-                      src={company.logo}
-                      alt={`${company.name} logo`}
-                      className={`${styles.logo} ${company.logoDark ? 'dark:hidden' : ''}`}
-                      width={120}
-                      height={60}
-                      unoptimized
-                      priority={index < companies.length}
-                    />
-                    {company.logoDark && (
+            {duplicatedLogos.map((company, index) => {
+              const isFirstFewLogos = index < Math.min(4, logosToShow.length)
+              const key = `${company.name}-${index}`
+
+              return (
+                <div key={key} className={`${styles.logoItem} ${company.logoColor ? 'group' : ''}`}>
+                  {company.logoColor ? (
+                    <div className="relative">
                       <Image
-                        src={company.logoDark}
+                        src={company.logo}
                         alt={`${company.name} logo`}
-                        className={`${styles.logo} hidden dark:block`}
+                        className={`${styles.logo} dark:hidden group-hover:opacity-0 transition-opacity duration-300`}
                         width={120}
                         height={60}
                         unoptimized
-                        priority={index < companies.length}
+                        priority={isFirstFewLogos}
+                        loading={isFirstFewLogos ? 'eager' : 'lazy'}
                       />
-                    )}
-                  </>
-                )}
-              </div>
-            ))}
+                      <Image
+                        src={company.logoDark || company.logo}
+                        alt={`${company.name} logo`}
+                        className={`${styles.logo} hidden dark:block group-hover:opacity-0 transition-opacity duration-300`}
+                        width={120}
+                        height={60}
+                        unoptimized
+                        priority={isFirstFewLogos}
+                        loading={isFirstFewLogos ? 'eager' : 'lazy'}
+                      />
+                      <Image
+                        src={company.logoColor}
+                        alt={`${company.name} logo`}
+                        className={`${styles.logo} absolute top-0 left-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300`}
+                        width={120}
+                        height={60}
+                        unoptimized
+                        priority={isFirstFewLogos}
+                        loading={isFirstFewLogos ? 'eager' : 'lazy'}
+                      />
+                    </div>
+                  ) : (
+                    <>
+                      <Image
+                        src={company.logo}
+                        alt={`${company.name} logo`}
+                        className={`${styles.logo} ${company.logoDark ? 'dark:hidden' : ''}`}
+                        width={120}
+                        height={60}
+                        unoptimized
+                        priority={isFirstFewLogos}
+                        loading={isFirstFewLogos ? 'eager' : 'lazy'}
+                      />
+                      {company.logoDark && (
+                        <Image
+                          src={company.logoDark}
+                          alt={`${company.name} logo`}
+                          className={`${styles.logo} hidden dark:block`}
+                          width={120}
+                          height={60}
+                          unoptimized
+                          priority={isFirstFewLogos}
+                          loading={isFirstFewLogos ? 'eager' : 'lazy'}
+                        />
+                      )}
+                    </>
+                  )}
+                </div>
+              )
+            })}
           </div>
         </div>
       </div>
     </section>
   )
-}
+})
 
 export default Companies
