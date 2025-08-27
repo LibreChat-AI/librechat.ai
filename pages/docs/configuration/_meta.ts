@@ -7,6 +7,7 @@ export default {
   redis: 'Redis',
   pre_configured_ai: 'AI Providers',
   tools: 'Tools and Plugins',
+  sharepoint: 'SharePoint Files',
   cdn: 'CDN',
   azure: 'Azure OpenAI',
   docker_override: 'Docker Override',
