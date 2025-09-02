@@ -4,6 +4,7 @@ export default {
   model_specs: 'Model Specs',
   registration: 'Registration',
   file_config: 'File Config',
+  transactions: 'Transactions',
   balance: 'Balance',
   agents: 'Agents',
   mcp_servers: 'MCP Servers',
