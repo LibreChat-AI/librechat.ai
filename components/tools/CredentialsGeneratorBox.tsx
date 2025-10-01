@@ -3,7 +3,13 @@ import useCredentialsGenerator from './credentialsGenerator' // Adjust the path 
 
 const CredsGenerator = () => {
   const { generateCredentials } = useCredentialsGenerator()
-  const [credentials, setCredentials] = useState(null)
+  const [credentials, setCredentials] = useState<{
+    CREDS_KEY: string
+    CREDS_IV: string
+    JWT_SECRET: string
+    JWT_REFRESH_SECRET: string
+    MEILI_KEY: string
+  } | null>(null)
   const [copyEnabled, setCopyEnabled] = useState(false) // State to track whether copy is enabled
   const [showTooltip, setShowTooltip] = useState(false) // State to track tooltip visibility
 

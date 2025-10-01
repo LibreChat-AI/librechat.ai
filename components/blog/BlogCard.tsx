@@ -1,10 +1,19 @@
 import React, { useState, useEffect } from 'react'
 import Image from 'next/image'
 import { useRouter } from 'next/router'
-import { Video } from '../Video'
+import type { Page, MdxFile } from 'nextra'
 import { Author } from '../Author/Authors'
+import { Video } from '../Video'
 
-const BlogCard = ({ page, handleTagClick, selectedTags = [] }) => {
+const BlogCard = ({
+  page,
+  handleTagClick,
+  selectedTags = [],
+}: {
+  page: MdxFile & Page
+  handleTagClick: (tag: string) => void
+  selectedTags?: string[]
+}) => {
   const router = useRouter()
   const [cardWidth, setCardWidth] = useState(0)
   const [maxDescriptionLength, setMaxDescriptionLength] = useState(160)
@@ -82,8 +91,8 @@ const BlogCard = ({ page, handleTagClick, selectedTags = [] }) => {
           <div>{truncateDescription(page.frontMatter?.description || '')}</div>
         </div>
         <div className="flex items-center justify-between absolute bottom-4 left-4 right-4">
-          <Author authorid={page.frontMatter.authorid} />
-          <span className="text-sm opacity-60">{page.frontMatter.date}</span>
+          <Author authorid={page.frontMatter?.authorid} />
+          <span className="text-sm opacity-60">{page.frontMatter?.date}</span>
         </div>
       </div>
     </div>

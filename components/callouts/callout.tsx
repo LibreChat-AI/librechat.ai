@@ -43,7 +43,7 @@ export function Callout({
     setIsCollapsed(!isCollapsed)
   }
 
-  const [initialMaxHeight, setInitialMaxHeight] = useState(null)
+  const [initialMaxHeight, setInitialMaxHeight] = useState<number | null>(null)
 
   React.useEffect(() => {
     if (contentRef.current) {
