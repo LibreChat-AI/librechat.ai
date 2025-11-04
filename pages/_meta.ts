@@ -7,11 +7,6 @@ export default {
       layout: 'raw',
     },
   },
-  code_interpreter: {
-    type: 'page',
-    title: '✨ Code Interpreter',
-    href: 'https://code.librechat.ai/pricing',
-  },
   docs: {
     type: 'page',
     title: 'Docs',
