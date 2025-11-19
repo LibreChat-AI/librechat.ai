@@ -7,6 +7,7 @@ export default {
   transactions: 'Transactions',
   balance: 'Balance',
   agents: 'Agents',
+  agents_config: 'Agents Settings (Global)',
   mcp_servers: 'MCP Servers',
   ocr: 'OCR',
   memory: 'Memory',
