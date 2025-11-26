@@ -32,10 +32,6 @@ const menuItems: {
     heading: 'Resources',
     items: [
       {
-        name: 'Code Interpreter API',
-        href: 'https://code.librechat.ai/pricing',
-      },
-      {
         name: 'Changelog',
         href: '/changelog',
       },

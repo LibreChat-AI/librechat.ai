@@ -2,16 +2,17 @@ import '../style.css'
 import 'vidstack/styles/base.css'
 import '../src/overrides.css'
 // import Script from 'next/script'
+import posthog from 'posthog-js'
 import { useEffect } from 'react'
 import { useRouter } from 'next/router'
-import posthog from 'posthog-js'
-import { PostHogProvider } from 'posthog-js/react'
-import { CrispWidget } from '@/components/supportChat'
-import { Hubspot, hsPageView } from '@/components/analytics/hubspot'
 import { GeistSans } from 'geist/font/sans'
+import { GeistMono } from 'geist/font/mono'
+import { PostHogProvider } from 'posthog-js/react'
 import { Analytics } from '@vercel/analytics/react'
 import { SpeedInsights } from '@vercel/speed-insights/next'
-import { GeistMono } from 'geist/font/mono'
+import { Hubspot, hsPageView } from '@/components/analytics/hubspot'
+import { CrispWidget } from '@/components/supportChat'
+import { Banner } from '@/components/Banner'
 
 export default function App({ Component, pageProps }) {
   const router = useRouter()
@@ -42,6 +43,7 @@ export default function App({ Component, pageProps }) {
     >
       {/* <div className={`${GeistSans.variable}`}> */}
       <PostHogProvider client={posthog}>
+        <Banner storageKey="clickhouse-announcement" />
         <Component {...pageProps} />
         <Analytics />
         <SpeedInsights />
