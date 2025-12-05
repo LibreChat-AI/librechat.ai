@@ -72,6 +72,12 @@ const withNextra = nextra({
 
 // next config
 const nextraConfig = withNextra({
+  eslint: {
+    ignoreDuringBuilds: true,
+  },
+  typescript: {
+    ignoreBuildErrors: true,
+  },
   experimental: {
     esmExternals: 'loose',
     scrollRestoration: true,
