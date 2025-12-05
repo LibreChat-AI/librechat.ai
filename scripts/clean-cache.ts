@@ -1,5 +1,6 @@
-import { execSync } from 'child_process'
-import os from 'os'
+/* eslint-disable @typescript-eslint/no-require-imports */
+const { execSync } = require('child_process')
+const os = require('os')
 
 function cleanCache() {
   const isWindows = os.platform() === 'win32'
