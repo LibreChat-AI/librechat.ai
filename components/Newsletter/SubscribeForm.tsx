@@ -36,7 +36,7 @@ const SubscribeForm = () => {
       } else {
         toast.error('Subscription failed')
       }
-    } catch (error) {
+    } catch {
       toast.error('Subscription failed')
     } finally {
       setIsLoading(false)

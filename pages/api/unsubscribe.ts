@@ -12,7 +12,7 @@ export default async function handler(req, res) {
 
     try {
       await dbConnect()
-    } catch (error) {
+    } catch {
       return res.status(500).json({ message: 'Database connection failed' })
     }
 
@@ -28,7 +28,7 @@ export default async function handler(req, res) {
       } else {
         res.status(404).json({ message: 'Subscriber not found' })
       }
-    } catch (error) {
+    } catch {
       res.status(500).json({ message: 'Unsubscription failed' })
     }
   } else {
