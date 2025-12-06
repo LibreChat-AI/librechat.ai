@@ -12,4 +12,5 @@ export default {
   azure: 'Azure OpenAI',
   docker_override: 'Docker Override',
   mod_system: 'Automated Moderation',
+  banner: 'Banner',
 }
