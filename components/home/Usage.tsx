@@ -24,8 +24,8 @@ import DateTicker from '@/components/ui/date-ticker'
 // ]
 
 const initialStats = [
-  { name: 'GitHub stars', value: 30450 },
-  { name: 'Docker pulls', value: 7788560 },
+  { name: 'GitHub stars', value: 32000 },
+  { name: 'Docker pulls', value: 14132549 },
   { name: 'Project started', value: new Date('2023-01-11') },
 ]
 
