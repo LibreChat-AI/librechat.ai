@@ -14,6 +14,7 @@ export default {
   custom_params: 'Customize Endpoint Parameters',
   azure_openai: 'Azure OpenAI',
   aws_bedrock: 'AWS Bedrock',
+  anthropic_vertex: 'Anthropic Vertex AI',
   model_config: 'Azure Model Config',
   actions: 'Actions (OpenAPI Specs)',
   turnstile: 'Cloudflare Turnstile',
