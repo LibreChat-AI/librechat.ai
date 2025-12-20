@@ -4,6 +4,7 @@ export default {
   docker_linux: 'Docker (Remote Linux)',
   huggingface: 'Hugging Face',
   railway: 'Railway',
+  cloudron: 'Cloudron',
   tunnels_proxies: {
     // "title": "Contributing",
     type: 'separator',
