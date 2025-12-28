@@ -1,0 +1,221 @@
+---
+title: Stripe Integration
+description: Configure Stripe subscriptions for automatic token allocation and subscription management
+---
+
+# Stripe Integration
+
+LibreChat supports Stripe subscriptions for automatic token allocation and subscription management. This feature enables users to subscribe to plans (Standard or Plus) and automatically receive tokens on a recurring basis.
+
+## Overview
+
+The Stripe integration provides:
+
+- **Subscription Management**: Users can subscribe to monthly or yearly plans
+- **Automatic Token Allocation**: Tokens are automatically added to user balances based on their subscription plan
+- **Customer Portal**: Users can manage their billing, update payment methods, and cancel subscriptions
+- **Webhook Support**: Automatic handling of subscription lifecycle events (creation, updates, cancellations, renewals)
+
+## Environment Variables
+
+Configure the following environment variables in your `.env` file:
+
+### Required Variables
+
+```bash
+# Stripe Secret Key (found in Stripe Dashboard -> Developers -> API keys)
+STRIPE_SECRET_KEY=sk_test_...
+
+# Stripe Webhook Secret (created when setting up webhook endpoint)
+STRIPE_WEBHOOK_SECRET=whsec_...
+
+# Stripe Publishable Key (found in Stripe Dashboard -> Developers -> API keys)
+VITE_STRIPE_PUBLISHABLE_KEY=pk_test_...
+
+# Stripe Pricing Table IDs (created in Stripe Dashboard -> Products -> Pricing tables)
+VITE_STRIPE_PRICING_TABLE_ID_LIGHT=prctbl_...
+VITE_STRIPE_PRICING_TABLE_ID_DARK=prctbl_...
+```
+
+### Optional Price ID Variables
+
+These are optional if you're using Stripe Pricing Tables. If you need to reference specific price IDs for plan detection:
+
+```bash
+# Standard Plan - Monthly
+STRIPE_PRICE_STANDARD_MONTHLY_CAD=price_...
+STRIPE_PRICE_STANDARD_MONTHLY_USD=price_...
+
+# Standard Plan - Yearly
+STRIPE_PRICE_STANDARD_YEARLY_CAD=price_...
+STRIPE_PRICE_STANDARD_YEARLY_USD=price_...
+
+# Plus Plan - Monthly
+STRIPE_PRICE_PLUS_MONTHLY_CAD=price_...
+STRIPE_PRICE_PLUS_MONTHLY_USD=price_...
+
+# Plus Plan - Yearly
+STRIPE_PRICE_PLUS_YEARLY_CAD=price_...
+STRIPE_PRICE_PLUS_YEARLY_USD=price_...
+```
+
+### Token Allocation Variables
+
+Configure token amounts per subscription plan:
+
+```bash
+# Number of tokens allocated per subscription cycle
+SUBSCRIPTION_STANDARD_TOKENS=300000  # Default: 300,000 tokens
+SUBSCRIPTION_PLUS_TOKENS=750000      # Default: 750,000 tokens
+```
+
+## Stripe Dashboard Setup
+
+### 1. Create Products and Prices
+
+1. Go to Stripe Dashboard → Products
+2. Create two products: "Standard" and "Plus"
+3. For each product, create pricing options:
+   - Monthly subscription price
+   - Yearly subscription price (optional)
+   - Set prices in both USD and CAD if needed
+
+### 2. Create Pricing Tables
+
+1. Go to Stripe Dashboard → Products → Pricing tables
+2. Create a pricing table for light theme
+3. Create a pricing table for dark theme
+4. Add your Standard and Plus products to each table
+5. Copy the Pricing Table IDs and set them as `VITE_STRIPE_PRICING_TABLE_ID_LIGHT` and `VITE_STRIPE_PRICING_TABLE_ID_DARK`
+
+### 3. Configure Webhook Endpoint
+
+1. Go to Stripe Dashboard → Developers → Webhooks
+2. Click "Add endpoint"
+3. Set the endpoint URL to: `https://your-domain.com/api/stripe/webhook`
+4. Select the following events to listen for:
+   - `checkout.session.completed`
+   - `customer.subscription.created`
+   - `customer.subscription.updated`
+   - `customer.subscription.deleted`
+   - `invoice.payment_succeeded`
+   - `invoice.paid`
+   - `invoice.payment_failed`
+5. Copy the webhook signing secret and set it as `STRIPE_WEBHOOK_SECRET`
+
+### 4. Get API Keys
+
+1. Go to Stripe Dashboard → Developers → API keys
+2. Copy your Publishable key → set as `VITE_STRIPE_PUBLISHABLE_KEY`
+3. Copy your Secret key → set as `STRIPE_SECRET_KEY`
+
+## Subscription Plans
+
+LibreChat supports two subscription tiers:
+
+### Standard Plan
+
+- **Default Tokens**: 300,000 tokens per cycle
+- Configure via `SUBSCRIPTION_STANDARD_TOKENS` environment variable
+
+### Plus Plan
+
+- **Default Tokens**: 750,000 tokens per cycle
+- Configure via `SUBSCRIPTION_PLUS_TOKENS` environment variable
+
+## How It Works
+
+### Subscription Flow
+
+1. **User Subscribes**: User clicks subscribe button and is shown Stripe Pricing Table
+2. **Checkout**: User completes checkout through Stripe
+3. **Webhook Processing**: Stripe sends webhook events to LibreChat
+4. **Token Allocation**: Tokens are automatically added to user's balance
+5. **Recurring Renewals**: Monthly or yearly renewals automatically add more tokens
+
+### Subscription Lifecycle
+
+- **New Subscription**: Tokens are added immediately after successful payment
+- **Monthly Renewal**: Tokens are added automatically each month via webhook
+- **Yearly Renewal**: Full year's tokens are added on renewal
+- **Cancellation**: Subscription is marked as canceled, no further tokens are added
+- **Payment Failure**: Subscription status is updated, user is notified
+
+### Token Refill Behavior
+
+- **Monthly Subscriptions**: Tokens are added each month via `invoice.payment_succeeded` webhook
+- **Yearly Subscriptions**:
+  - Full year's tokens are added on subscription creation
+  - Full year's tokens are added again on yearly renewal
+  - Monthly refills are handled by a cron job (if configured)
+
+## Customer Portal
+
+Users can manage their subscriptions through Stripe's Customer Portal:
+
+- Update payment methods
+- View billing history
+- Cancel subscriptions
+- Resume canceled subscriptions
+
+The Customer Portal is accessed through the subscription settings in LibreChat's UI. The portal automatically redirects users back to LibreChat after completion.
+
+## API Endpoints
+
+The Stripe integration exposes the following endpoints:
+
+- `POST /api/stripe/webhook` - Handles Stripe webhook events (requires `express.raw()` middleware)
+- `GET /api/stripe/session-status?session_id=...` - Get checkout session status
+- `POST /api/stripe/create-portal-session` - Create Customer Portal session
+
+## Database Fields
+
+The following user fields are used for subscription management:
+
+- `stripeCustomerId` - Stripe customer ID
+- `stripeSubscriptionId` - Stripe subscription ID
+- `subscriptionPlan` - Plan type: `'standard'`, `'plus'`, or `null`
+- `subscriptionStatus` - Status: `'active'`, `'canceled'`, `'past_due'`, `'unpaid'`, `'trialing'`, `'incomplete'`, `'incomplete_expired'`, `'paused'`, or `null`
+- `subscriptionPeriodEnd` - Date when subscription period ends
+
+Balance-related fields are stored in the `Balance` collection:
+
+- `balanceType: 'subscription'`
+- `subscriptionPlan` - Plan type
+- `autoRefillEnabled: true`
+- `refillIntervalValue: 1`
+- `refillIntervalUnit: 'months'`
+- `refillAmount` - Token amount per refill
+- `tokenCredits` - Current token balance
+- `subscriptionCredits` - Total subscription tokens
+
+## Troubleshooting
+
+### Webhook Not Receiving Events
+
+1. Verify webhook URL is correctly configured in Stripe Dashboard
+2. Ensure `STRIPE_WEBHOOK_SECRET` is set correctly
+3. Check that webhook endpoint is publicly accessible
+4. Verify webhook signature verification in logs
+
+### Tokens Not Being Added
+
+1. Check webhook logs for processing errors
+2. Verify subscription status in database
+3. Ensure price IDs match your Stripe configuration
+4. Check token allocation environment variables
+
+### Pricing Table Not Displaying
+
+1. Verify `VITE_STRIPE_PUBLISHABLE_KEY` is set
+2. Verify pricing table IDs are correct
+3. Check browser console for Stripe script errors
+4. Ensure Stripe Pricing Table script can load (check CSP if applicable)
+
+## Security Considerations
+
+- Never expose `STRIPE_SECRET_KEY` in client-side code
+- Always verify webhook signatures using `STRIPE_WEBHOOK_SECRET`
+- Use HTTPS for webhook endpoints
+- Implement rate limiting on webhook endpoints
+- Keep Stripe API keys secure and rotate them regularly

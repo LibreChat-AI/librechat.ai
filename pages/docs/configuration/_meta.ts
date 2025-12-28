@@ -13,4 +13,5 @@ export default {
   docker_override: 'Docker Override',
   mod_system: 'Automated Moderation',
   banner: 'Banner',
+  stripe: 'Stripe Integration',
 }
