@@ -3,6 +3,7 @@ export default {
   mcp: 'MCP',
   agents: 'Agents',
   code_interpreter: 'Code Interpreter API',
+  piston_code_executor: 'Piston Code Executor',
   artifacts: 'Artifacts - Generative UI',
   web_search: 'Web Search',
   memory: 'Memory',
