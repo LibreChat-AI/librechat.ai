@@ -46,17 +46,19 @@ You have two options for authenticating with your Azure Storage Account:
 
 ### Option B: Using Managed Identity
 
-If your LibreChat application is running on an Azure service that supports Managed Identity (such as an Azure VM, App Service, or AKS), you can use that instead of a connection string.
+If your LibreChat application is running on an Azure service that supports Managed Identity (such as an Azure VM, App Service, Container Apps, or AKS), you can use that instead of a connection string.
 
 1. **Assign Managed Identity:**
-   - Ensure your Azure resource (VM, App Service, or AKS) has a system-assigned or user-assigned Managed Identity enabled.
+   - Ensure your Azure resource (VM, App Service, Container Apps, or AKS) has a system-assigned or user-assigned Managed Identity enabled.
 
 2. **Grant Storage Permissions:**
-   - In your storage account, assign the **Storage Blob Data Contributor** (or a similarly scoped role) to your Managed Identity. This allows your application to access Blob Storage without a connection string.
+   - In your storage account, assign the following roles to your Managed Identity:
+     - **Storage Blob Data Contributor** - Required for reading and writing blobs
+     - **Storage Blob Delegator** - Required for generating User Delegation SAS tokens (only needed when `AZURE_STORAGE_PUBLIC_ACCESS=false`)
 
 ## 3. Update Your Environment Variables
 
-Create or update your `.env` file in your project’s root with the following configuration:
+Create or update your `.env` file in your project's root with the following configuration:
 
 ```bash filename=".env"
 # Option A: Using a Connection String
@@ -67,12 +69,58 @@ AZURE_STORAGE_ACCOUNT_NAME=yourAccountName
 
 AZURE_STORAGE_PUBLIC_ACCESS=false
 AZURE_CONTAINER_NAME=files
+
+# Optional: URL signing configuration (only applies when AZURE_STORAGE_PUBLIC_ACCESS=false)
+# Recommended: 3600 (1 hour) for typical usage
+AZURE_URL_EXPIRY_SECONDS=3600
 ```
 
 - **AZURE_STORAGE_CONNECTION_STRING:** Set this if you are using Option A.
 - **AZURE_STORAGE_ACCOUNT_NAME:** Set this if you are using Option B (Managed Identity). Do not set both.
 - **AZURE_STORAGE_PUBLIC_ACCESS:** Set to `false` if you do not want your blobs to be publicly accessible by default. Set to `true` if you need public access (for example, for publicly viewable images).
-- **AZURE_CONTAINER_NAME:** This is the container name your application will use (e.g., `files`). The application will automatically create this container if it doesn’t exist.
+- **AZURE_CONTAINER_NAME:** This is the container name your application will use (e.g., `files`). The application will automatically create this container if it doesn't exist.
+- **AZURE_URL_EXPIRY_SECONDS:** Controls how long signed URLs remain valid (default: 120 seconds, max: 7 days). See URL Signing Configuration below.
+
+### URL Signing Configuration (Optional)
+
+When `AZURE_STORAGE_PUBLIC_ACCESS` is set to `false`, LibreChat automatically generates signed URLs (SAS tokens) for secure file access. You can configure how long these URLs remain valid:
+
+```bash filename=".env"
+# URL expiry time in seconds (default: 120 seconds, max: 7 days)
+# Recommended values:
+#   - 3600 (1 hour) - Good balance of security and usability
+#   - 7200 (2 hours) - For longer sessions
+#   - 86400 (1 day) - For minimal refresh overhead
+AZURE_URL_EXPIRY_SECONDS=3600
+```
+
+**How URL refresh works:**
+
+- LibreChat automatically refreshes signed URLs before they expire
+- The refresh check is cached per user for half the expiry time (minimum 1 minute) to avoid excessive database updates
+- For example, with a 1-hour expiry, refresh checks occur at most every 30 minutes per user
+- User avatars and file attachments are both automatically refreshed
+
+<Callout type="warning" title="Short Expiry Times">
+  Setting `AZURE_URL_EXPIRY_SECONDS` to very short values (under 300 seconds) may cause images to expire before they can be refreshed, resulting in broken images. We recommend at least 3600 seconds (1 hour) for production use.
+</Callout>
+
+**Signing method selection:**
+
+LibreChat automatically selects the appropriate signing method based on your configuration:
+
+- When `AZURE_STORAGE_CONNECTION_STRING` is set: Uses **Account Key signing** (extracts the key from the connection string)
+- When only `AZURE_STORAGE_ACCOUNT_NAME` is set: Uses **User Delegation SAS** via Managed Identity
+
+<Callout type="info" title="Managed Identity Requirements">
+  User Delegation SAS requires the `Storage Blob Delegator` role in addition to `Storage Blob Data Contributor` on your Managed Identity. The delegation key is cached for 7 days and automatically refreshed.
+</Callout>
+
+**Switching between public and private access:**
+
+If you change `AZURE_STORAGE_PUBLIC_ACCESS` after files have been uploaded:
+- **Public → Private:** Existing plain URLs will be signed on the next refresh cycle
+- **Private → Public:** Signed URLs will be converted to plain URLs when they expire or on the next refresh
 
 ## 4. Configure LibreChat to Use Azure Blob Storage
 
@@ -95,14 +143,15 @@ Sign in to the Azure Portal, create a storage account, and wait for deployment t
 
 2. **Set Up Authentication:**
 - **Option A:** Retrieve the connection string from **"Access keys"** in your storage account.
-- **Option B:** Use Managed Identity by enabling it on your Azure resource and granting it appropriate storage permissions.
+- **Option B:** Use Managed Identity by enabling it on your Azure resource and granting it `Storage Blob Data Contributor` and `Storage Blob Delegator` roles.
 
 3. **Update Environment Variables:**  
 In your `.env` file, set either:
 - `AZURE_STORAGE_CONNECTION_STRING` (for Option A), or
 - `AZURE_STORAGE_ACCOUNT_NAME` (for Option B), along with:
-- `AZURE_STORAGE_PUBLIC_ACCESS` and
-- `AZURE_CONTAINER_NAME`.
+- `AZURE_STORAGE_PUBLIC_ACCESS`
+- `AZURE_CONTAINER_NAME`
+- `AZURE_URL_EXPIRY_SECONDS` (optional, for signed URL expiry control)
 
 4. **Configure LibreChat:**  
 Set `fileStrategy` to `"azure_blob"` in your `librechat.yaml` configuration file.
@@ -145,14 +194,25 @@ Add the following environment variables to your `.env` file:
 ```bash filename=".env"
 # Azurite connection string for local development
 AZURE_STORAGE_CONNECTION_STRING="DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;"
+
+# Use public access for simpler local testing
 AZURE_STORAGE_PUBLIC_ACCESS=true
 AZURE_CONTAINER_NAME=files
+
+# Or test with signed URLs locally (requires connection string)
+# AZURE_STORAGE_PUBLIC_ACCESS=false
+# AZURE_URL_EXPIRY_SECONDS=300
 ```
 
 Notes:
 - The `AccountKey` value is the default development key used by Azurite
 - The connection uses `http` protocol instead of `https` for local development
 - The `BlobEndpoint` points to the local Azurite instance running on port 10000
+- Signed URLs work with Azurite when using the connection string
+
+<Callout type="info" title="Testing Signed URLs Locally">
+  To test signed URL functionality locally, set `AZURE_STORAGE_PUBLIC_ACCESS=false` and use the connection string. Managed Identity (User Delegation SAS) cannot be tested locally as it requires Azure infrastructure.
+</Callout>
 
 ### 3. Verify the Connection
 
