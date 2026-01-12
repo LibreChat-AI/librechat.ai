@@ -8,6 +8,7 @@ export default {
   balance: 'Balance',
   agents: 'Agents',
   mcp_servers: 'MCP Servers',
+  mcp_settings: 'MCP Settings',
   ocr: 'OCR',
   memory: 'Memory',
   custom_endpoint: 'Custom Endpoint',
