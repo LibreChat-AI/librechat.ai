@@ -4,6 +4,7 @@ export default {
   docker_linux: 'Docker (Remote Linux)',
   huggingface: 'Hugging Face',
   railway: 'Railway',
+  northflank: 'Northflank',
   tunnels_proxies: {
     // "title": "Contributing",
     type: 'separator',
