@@ -11,6 +11,7 @@ export default {
   cdn: 'CDN',
   azure: 'Azure OpenAI',
   docker_override: 'Docker Override',
+  tos: 'Terms of Service - i18n',
   mod_system: 'Automated Moderation',
   banner: 'Banner',
 }
