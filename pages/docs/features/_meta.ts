@@ -6,6 +6,7 @@ export default {
   artifacts: 'Artifacts - Generative UI',
   web_search: 'Web Search',
   memory: 'Memory',
+  resumable_streams: 'Resumable Streams',
   image_gen: 'Image Generation',
   upload_as_text: 'Upload as Text',
   ocr: 'OCR for Documents',
