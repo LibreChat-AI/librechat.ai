@@ -12,5 +12,6 @@ export default {
   azure: 'Azure OpenAI',
   docker_override: 'Docker Override',
   mod_system: 'Automated Moderation',
+  langfuse: 'Langfuse Tracing',
   banner: 'Banner',
 }
