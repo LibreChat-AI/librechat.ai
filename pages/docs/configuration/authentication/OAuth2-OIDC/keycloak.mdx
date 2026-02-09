@@ -69,3 +69,202 @@ If you want to restrict access to users with specific roles, you can define role
   # Optional: redirects the user to the end session endpoint after logging out
   OPENID_USE_END_SESSION_ENDPOINT=true 
   ```
+
+---
+
+## OIDC Group Synchronization
+
+<Callout type="info" title="Automatic Group Sync">
+LibreChat can automatically synchronize Keycloak roles/groups to enable granular permissions for agents, prompts, files, and conversations. This feature requires **token reuse** to be enabled.
+</Callout>
+
+### Overview
+
+The OIDC Group Synchronization feature allows LibreChat to:
+- Automatically extract groups/roles from JWT token claims
+- Create groups in LibreChat's database
+- Sync user memberships on every login
+- Enable ACL-based permissions for shared resources
+- Support any OIDC provider (Keycloak, Auth0, Okta, etc.)
+
+### Prerequisites
+
+- `OPENID_REUSE_TOKENS=true` must be enabled (see [Token Reuse documentation](/docs/configuration/authentication/OAuth2-OIDC/token-reuse))
+- Keycloak realm roles or groups configured
+- Users assigned to roles/groups in Keycloak
+
+### Configuration
+
+Add the following variables to your `.env` file:
+
+```bash filename=".env"
+# Required: Enable token reuse (prerequisite)
+OPENID_REUSE_TOKENS=true
+
+# Enable OIDC group synchronization
+OPENID_SYNC_GROUPS_FROM_TOKEN=true
+
+# Path to groups/roles in JWT token (dot notation)
+# For Keycloak realm roles:
+OPENID_GROUPS_CLAIM_PATH=realm_access.roles
+
+# For Keycloak client roles:
+# OPENID_GROUPS_CLAIM_PATH=resource_access.librechat.roles
+
+# For Keycloak groups (requires group mapper):
+# OPENID_GROUPS_CLAIM_PATH=groups
+
+# Which token to extract groups from
+OPENID_GROUPS_TOKEN_KIND=access  # or 'id'
+
+# Source identifier for synced groups (optional)
+# IMPORTANT: Only 'local', 'entra', or 'oidc' are valid values due to schema constraints
+# Use 'oidc' for all OpenID Connect providers (do NOT use provider-specific names)
+OPENID_GROUP_SOURCE=oidc  # default: 'oidc'
+
+# Exclude specific roles/groups from sync (optional)
+# Comma-separated list: exact names or regex patterns (prefix with 'regex:')
+OPENID_GROUPS_EXCLUDE_PATTERN=default-roles-mediawan,manage-account,offline_access,regex:^view-.*
+```
+
+### Filtering Roles/Groups (Exclusion Pattern)
+
+<Callout type="tip" title="Filter System Roles">
+Use `OPENID_GROUPS_EXCLUDE_PATTERN` to prevent system roles, default roles, and authentication-only roles from being synced as groups.
+</Callout>
+
+The exclusion pattern supports two types of matching:
+
+**1. Exact Match (case-insensitive):**
+```bash
+OPENID_GROUPS_EXCLUDE_PATTERN=default-roles-mediawan,manage-account,view-profile
+```
+Excludes roles with exact names: `default-roles-mediawan`, `manage-account`, `view-profile`
+
+**2. Regex Pattern (prefix with `regex:`):**
+```bash
+OPENID_GROUPS_EXCLUDE_PATTERN=regex:^default-.*,regex:^manage-.*
+```
+- `regex:^default-.*` - Excludes anything starting with "default-" 
+- `regex:^manage-.*` - Excludes anything starting with "manage-"
+
+**3. Mixed (recommended):**
+```bash
+OPENID_GROUPS_EXCLUDE_PATTERN=default-roles-mediawan,offline_access,uma_authorization,regex:^manage-.*,regex:^view-.*
+```
+
+**Common Keycloak exclusions:**
+```bash
+# Exclude all system/default roles and account management
+OPENID_GROUPS_EXCLUDE_PATTERN=offline_access,uma_authorization,regex:^default-.*,regex:^manage-.*,regex:^view-.*
+```
+
+**Why exclude roles?**
+- **System roles** (`offline_access`, `uma_authorization`) - Not relevant for resource permissions
+- **Default realm roles** (`default-roles-*`) - Assigned to everyone, not useful for group-based access
+- **Account management roles** (`manage-account`, `view-profile`) - Authentication-related, not business groups
+- **OPENID_REQUIRED_ROLE** - If you use a role for login authorization, you might not want it as a group
+
+**Example scenario:**
+
+Your Keycloak realm has roles:
+- `admin` ✅ (business role, sync as group)
+- `developers` ✅ (team role, sync as group)
+- `default-roles-mediawan` ❌ (everyone has this, exclude)
+- `manage-account` ❌ (system role, exclude)
+- `offline_access` ❌ (OAuth scope, exclude)
+
+Configuration:
+```bash
+OPENID_GROUPS_EXCLUDE_PATTERN=default-roles-mediawan,manage-account,offline_access
+```
+
+Result: Only `admin` and `developers` are synced as groups.
+
+### How It Works
+
+1. **User logs in** via Keycloak
+2. **Groups are extracted** from the JWT token based on `OPENID_GROUPS_CLAIM_PATH`
+3. **Groups are created** in LibreChat if they don't exist
+4. **User is added** to all extracted groups automatically
+5. **Removed from old groups** if roles were revoked in Keycloak
+6. **Groups are available** for sharing agents, prompts, conversations, and files
+
+### Example: Using Realm Roles
+
+If your Keycloak realm has roles like `admin`, `developers`, and `engineering`:
+
+1. Users with these roles will automatically be added to corresponding groups in LibreChat
+2. You can share resources with these groups in the LibreChat UI
+3. Permissions are automatically synced on every login
+
+### Example: Using Keycloak Groups
+
+To use actual Keycloak groups instead of roles:
+
+1. **Create a Group Membership mapper** in your Keycloak client:
+   - Go to your client → Client Scopes → Select scope → Add Mapper
+   - Choose "Group Membership"
+   - Set Token Claim Name to `groups`
+   - Enable "Full group path" if you want hierarchical groups
+
+2. **Update configuration:**
+   ```bash filename=".env"
+   OPENID_GROUPS_CLAIM_PATH=groups
+   ```
+
+3. Groups like `/engineering/backend` will be synced as `engineering-backend` in LibreChat
+
+### Viewing Synced Groups
+
+After logging in, check your MongoDB database:
+
+```bash
+mongosh librechat
+db.groups.find({ source: 'oidc' })
+```
+
+You should see groups with:
+- `name`: The role/group name
+- `source`: `oidc` (value of `OPENID_GROUP_SOURCE`, must be 'local', 'entra', or 'oidc')
+- `memberIds`: Array of user IDs
+- `idOnTheSource`: The original role/group identifier
+
+### Using Groups for Permissions
+
+Once groups are synced, you can:
+
+1. **Share Agents** - Assign specific groups to agents
+2. **Share Prompts** - Make prompts available to certain groups
+3. **Share Conversations** - Collaborate with team members in specific groups
+4. **Control File Access** - Restrict file visibility by group
+
+All permissions are managed through the LibreChat UI's sharing interface.
+
+### Troubleshooting
+
+**Groups not syncing:**
+- Verify `OPENID_REUSE_TOKENS=true` is set
+- Check that users have roles/groups assigned in Keycloak
+- Verify `OPENID_GROUPS_CLAIM_PATH` matches your JWT token structure
+- Check backend logs for error messages
+
+**To debug, decode your JWT token:**
+1. Login to LibreChat
+2. Get the access token from Keycloak
+3. Decode it at https://jwt.io
+4. Find where your roles/groups are located in the token structure
+5. Update `OPENID_GROUPS_CLAIM_PATH` accordingly
+
+**Common claim paths:**
+- Keycloak realm roles: `realm_access.roles`
+- Keycloak client roles: `resource_access.{client-id}.roles`
+- Keycloak groups: `groups` (requires mapper)
+- Auth0 groups: `https://your-domain.auth0.com/groups`
+
+### Limitations
+
+- Groups are synchronized on login only (not real-time)
+- Group names are sanitized (special characters removed, slashes converted to hyphens)
+- Maximum 100 characters per group name
+- Requires OIDC provider to include groups/roles in JWT tokens
