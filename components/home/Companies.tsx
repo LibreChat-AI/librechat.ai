@@ -87,7 +87,8 @@ export const Companies: React.FC = React.memo(() => {
                         className={`${styles.logo} dark:hidden group-hover:opacity-0 transition-opacity duration-300`}
                         width={120}
                         height={60}
-                        unoptimized
+                        sizes="120px"
+                        unoptimized={company.logo.endsWith('.svg')}
                         priority={isFirstFewLogos}
                         loading={isFirstFewLogos ? 'eager' : 'lazy'}
                       />
@@ -97,7 +98,8 @@ export const Companies: React.FC = React.memo(() => {
                         className={`${styles.logo} hidden dark:block group-hover:opacity-0 transition-opacity duration-300`}
                         width={120}
                         height={60}
-                        unoptimized
+                        sizes="120px"
+                        unoptimized={(company.logoDark || company.logo).endsWith('.svg')}
                         priority={isFirstFewLogos}
                         loading={isFirstFewLogos ? 'eager' : 'lazy'}
                       />
@@ -107,7 +109,8 @@ export const Companies: React.FC = React.memo(() => {
                         className={`${styles.logo} absolute top-0 left-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300`}
                         width={120}
                         height={60}
-                        unoptimized
+                        sizes="120px"
+                        unoptimized={company.logoColor.endsWith('.svg')}
                         priority={isFirstFewLogos}
                         loading={isFirstFewLogos ? 'eager' : 'lazy'}
                       />
@@ -120,7 +123,8 @@ export const Companies: React.FC = React.memo(() => {
                         className={`${styles.logo} ${company.logoDark ? 'dark:hidden' : ''}`}
                         width={120}
                         height={60}
-                        unoptimized
+                        sizes="120px"
+                        unoptimized={company.logo.endsWith('.svg')}
                         priority={isFirstFewLogos}
                         loading={isFirstFewLogos ? 'eager' : 'lazy'}
                       />
@@ -131,7 +135,8 @@ export const Companies: React.FC = React.memo(() => {
                           className={`${styles.logo} hidden dark:block`}
                           width={120}
                           height={60}
-                          unoptimized
+                          sizes="120px"
+                          unoptimized={company.logoDark.endsWith('.svg')}
                           priority={isFirstFewLogos}
                           loading={isFirstFewLogos ? 'eager' : 'lazy'}
                         />

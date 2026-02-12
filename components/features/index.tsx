@@ -33,7 +33,13 @@ export function Feature({
     >
       {children}
       {href ? (
-        <Link className={styles.link} href={href} target="_blank">
+        <Link
+          className={styles.link}
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="Learn more"
+        >
           <ArrowRight width="1.5em" />
         </Link>
       ) : null}

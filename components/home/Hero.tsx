@@ -117,6 +117,8 @@ export function Hero() {
             width={1600}
             className="dark:block hidden mx-auto rounded-2xl object-cover object-left-top w-full max-w-md sm:max-w-lg md:max-w-xl lg:max-w-2xl"
             draggable={false}
+            priority
+            sizes="(max-width: 640px) 100vw, (max-width: 768px) 32rem, (max-width: 1024px) 36rem, (max-width: 1280px) 42rem, 672px"
           />
           <Image
             src={DemoImageLight}
@@ -125,6 +127,8 @@ export function Hero() {
             width={1600}
             className="block dark:hidden mx-auto rounded-2xl object-cover object-left-top w-full max-w-md sm:max-w-lg md:max-w-xl lg:max-w-2xl"
             draggable={false}
+            priority
+            sizes="(max-width: 640px) 100vw, (max-width: 768px) 32rem, (max-width: 1024px) 36rem, (max-width: 1280px) 42rem, 672px"
           />
         </ContainerScroll>
         {/* Mobile */}
@@ -136,6 +140,8 @@ export function Hero() {
             width={800}
             className="dark:block hidden mx-auto rounded-2xl object-cover object-left-top w-full max-w-sm"
             draggable={false}
+            priority
+            sizes="(max-width: 640px) 24rem, 384px"
           />
           <Image
             src={DemoImageMobileLight}
@@ -144,6 +150,8 @@ export function Hero() {
             width={800}
             className="block dark:hidden mx-auto rounded-2xl object-cover object-left-top w-full max-w-sm"
             draggable={false}
+            priority
+            sizes="(max-width: 640px) 24rem, 384px"
           />
         </div>
       </div>

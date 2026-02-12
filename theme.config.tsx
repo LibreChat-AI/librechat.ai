@@ -69,8 +69,13 @@ const config: DocsThemeConfig = {
 
     return (
       <>
+        <title>{title}</title>
+        <link rel="canonical" href={url} />
         <meta name="theme-color" content="#000" />
         <meta property="og:url" content={url} />
+        <meta property="og:type" content="website" />
+        <meta property="og:locale" content="en_US" />
+        <meta property="og:site_name" content="LibreChat" />
         <meta httpEquiv="Content-Language" content="en" />
         <meta name="title" content={title} />
         <meta property="og:title" content={title} />
