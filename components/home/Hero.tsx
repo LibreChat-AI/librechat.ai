@@ -20,9 +20,6 @@ const HERO_TITLE = {
 const HERO_DESCRIPTION =
   ' is the ultimate open-source app for all your AI conversations, fully customizable and compatible with any AI provider — all in one sleek interface'
 const DEMO_LINK = 'https://chat.librechat.ai/'
-// const GITHUB_LINK = 'https://github.com/danny-avila/librechat'
-// const GITHUB_STARS_IMG =
-//   'https://img.shields.io/github/stars/danny-avila/librechat?label=librechat&style=social'
 const REPO_OF_THE_DAY_LINK = 'https://trendshift.io/repositories/4685'
 const ROSS_INDEX_LINK = 'https://runacap.com/ross-index/q1-24/'
 
@@ -43,6 +40,7 @@ const HeroTitle = React.memo(() => (
     </h1>
   </div>
 ))
+HeroTitle.displayName = 'HeroTitle'
 
 const HeroDescription = React.memo(() => (
   <span className="mt-4 text-primary/70 text-base md:text-lg lg:text-2xl tracking-wide text-center p-2 lg:p-0">
@@ -61,6 +59,7 @@ const HeroDescription = React.memo(() => (
     </div>
   </span>
 ))
+HeroDescription.displayName = 'HeroDescription'
 
 const HeroLinks = React.memo(() => (
   <div className="flex items-center justify-center gap-x-14 flex-wrap">
@@ -78,7 +77,7 @@ const HeroLinks = React.memo(() => (
     </CardContainer>
     <div className="flex gap-4 flex-wrap items-center justify-center">
       <HoverBorderGradient
-        onClick={() => window.open(DEMO_LINK, '_blank')}
+        onClick={() => window.open(DEMO_LINK, '_blank', 'noopener')}
         containerClassName="rounded-full"
         as="button"
         className="dark:bg-black bg-white text-black dark:text-white flex items-center space-x-2"
@@ -100,7 +99,9 @@ const HeroLinks = React.memo(() => (
     </CardContainer>
   </div>
 ))
+HeroLinks.displayName = 'HeroLinks'
 
+/** Homepage hero section with title, description, CTA links, and responsive demo screenshots. */
 export function Hero() {
   return (
     <HomeSection>

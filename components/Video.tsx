@@ -3,6 +3,7 @@ import { MediaPlayer, MediaOutlet, useMediaRemote, useMediaStore } from '@vidsta
 import { Play } from 'lucide-react'
 import { useState, useRef } from 'react'
 
+/** Video embed component using vidstack. Supports poster overlays, gif-style autoplay, and lazy loading. */
 export const Video = ({
   src,
   poster,

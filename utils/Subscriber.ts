@@ -1,3 +1,4 @@
+/** Mongoose model for newsletter subscribers. Stores email (unique, lowercase) and subscription status. */
 import mongoose, { Schema, Model, Document } from 'mongoose'
 
 interface ISubscriber extends Document {

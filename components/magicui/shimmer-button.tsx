@@ -1,3 +1,4 @@
+/** Button with an animated shimmer/spark border effect using CSS custom properties. */
 import { cn } from '@/lib/utils'
 import { CSSProperties } from 'react'
 

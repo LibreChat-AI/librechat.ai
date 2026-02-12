@@ -2,11 +2,16 @@ import dbConnect from '@/utils/dbConnect'
 import Subscriber from '@/utils/Subscriber'
 import validator from 'validator'
 
+/**
+ * POST /api/unsubscribe - Unsubscribe an email from the newsletter.
+ * Body: { email: string }
+ * Responses: 200 OK, 400 Invalid email, 404 Subscriber not found, 405 Method Not Allowed.
+ */
 export default async function handler(req, res) {
   if (req.method === 'POST') {
     const { email } = req.body
 
-    if (!validator.isEmail(email)) {
+    if (!email || !validator.isEmail(email)) {
       return res.status(400).json({ message: 'Invalid email format' })
     }
 

@@ -10,6 +10,7 @@ import { Frame } from './components/Frame'
 import { OptionTable } from 'components/table'
 import FooterMenu from './components/FooterMenu'
 
+/** Nextra docs theme configuration. Social card images are chosen based on the current page path (docs, blog, changelog). */
 const config: DocsThemeConfig = {
   logo: <Logo />,
   logoLink: '/',
@@ -71,7 +72,6 @@ const config: DocsThemeConfig = {
       <>
         <title>{title}</title>
         <link rel="canonical" href={url} />
-        <meta name="theme-color" content="#000" />
         <meta property="og:url" content={url} />
         <meta property="og:type" content="website" />
         <meta property="og:locale" content="en_US" />

@@ -7,10 +7,11 @@ import Image from 'next/image'
 import { Cards } from 'nextra/components'
 import { OurAuthors, Blog } from '@/components/CardIcons'
 
-//TODO: Fix Mobile view to better handle more than 4 socials;
-//TODO: Better fallback social icon (the default one is the "share" icon)
-//TODO: Tag selection on "Recent Posts by" (author pages)
-//TODO: fix profile pic position when no bio
+// Known issues:
+// - Mobile: social icons overflow when author has more than 4 social links
+// - SocialIcon uses the generic "share" icon when the platform is unrecognized
+// - "Recent Posts by" section does not support filtering by tag
+// - Profile image positioning is off when the author has no bio text
 
 interface AuthorMetadata {
   authorid: string

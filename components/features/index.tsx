@@ -5,6 +5,16 @@ import Link from 'next/link'
 import type { ReactNode } from 'react'
 import styles from './style.module.css'
 
+interface FeatureProps {
+  medium?: boolean
+  large?: boolean
+  centered?: boolean
+  children: ReactNode
+  lightOnly?: boolean
+  className?: string
+  href?: string
+}
+
 export function Feature({
   medium,
   large,
@@ -14,7 +24,7 @@ export function Feature({
   className,
   href,
   ...props
-}) {
+}: FeatureProps) {
   return (
     <motion.div
       initial={{ opacity: 0 }}

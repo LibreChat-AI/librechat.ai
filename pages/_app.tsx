@@ -1,7 +1,6 @@
 import '../style.css'
 import 'vidstack/styles/base.css'
 import '../src/overrides.css'
-// import Script from 'next/script'
 import posthog from 'posthog-js'
 import { useEffect } from 'react'
 import { useRouter } from 'next/router'
@@ -13,13 +12,14 @@ import { SpeedInsights } from '@vercel/speed-insights/next'
 import { Hubspot, hsPageView } from '@/components/analytics/hubspot'
 import { CrispWidget } from '@/components/supportChat'
 import { Banner } from '@/components/Banner'
+import type { AppProps } from 'next/app'
 
-export default function App({ Component, pageProps }) {
+export default function App({ Component, pageProps }: AppProps) {
   const router = useRouter()
   useEffect(() => {
     // Initialize PostHog
-    if (typeof window !== 'undefined') {
-      posthog.init(process.env.NEXT_PUBLIC_POSTHOG_KEY || '', {
+    if (typeof window !== 'undefined' && process.env.NEXT_PUBLIC_POSTHOG_KEY) {
+      posthog.init(process.env.NEXT_PUBLIC_POSTHOG_KEY, {
         api_host: process.env.NEXT_PUBLIC_POSTHOG_HOST || 'https://eu.posthog.com',
         // Enable debug mode in development
         loaded: (posthog) => {
@@ -28,7 +28,7 @@ export default function App({ Component, pageProps }) {
       })
     }
     // Track page views
-    const handleRouteChange = (path) => {
+    const handleRouteChange = (path: string) => {
       posthog.capture('$pageview')
       hsPageView(path)
     }
@@ -38,10 +38,7 @@ export default function App({ Component, pageProps }) {
     }
   }, [])
   return (
-    <div
-      className={`${GeistSans.variable} font-sans ${GeistMono.variable} font-mono ${GeistSans.variable} `}
-    >
-      {/* <div className={`${GeistSans.variable}`}> */}
+    <div className={`${GeistSans.variable} font-sans ${GeistMono.variable} font-mono`}>
       <PostHogProvider client={posthog}>
         <Banner storageKey="clickhouse-announcement" />
         <Component {...pageProps} />
@@ -50,11 +47,6 @@ export default function App({ Component, pageProps }) {
         {process.env.NEXT_PUBLIC_CRISP_WEBSITE_ID ? <CrispWidget /> : null}
       </PostHogProvider>
       <Hubspot />
-      {/* <Script
-        src="https://app.termly.io/resource-blocker/26739b38-1a89-4742-ab53-d8d724b77f51?autoBlock=on"
-        strategy="beforeInteractive"
-        type="text/javascript"
-      /> */}
     </div>
   )
 }

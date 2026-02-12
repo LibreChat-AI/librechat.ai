@@ -4,6 +4,7 @@ interface BannerProps {
   storageKey: string
 }
 
+/** Dismissible announcement banner persisted via localStorage. */
 export function Banner({ storageKey }: BannerProps) {
   const [isVisible, setIsVisible] = useState(false)
 

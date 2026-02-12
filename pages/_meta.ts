@@ -34,7 +34,6 @@ export default {
     type: 'page',
     title: 'Demo',
     href: 'https://chat.librechat.ai/',
-    // display: 'hidden',
   },
   changelog: {
     type: 'page',

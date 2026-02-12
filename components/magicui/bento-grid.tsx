@@ -1,3 +1,4 @@
+/** BentoGrid layout and BentoCard component for showcasing features in a responsive grid. */
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { ArrowRight } from 'lucide-react'
@@ -24,7 +25,7 @@ const BentoCard = ({
   name: string
   className: string
   background: ReactNode
-  Icon: any
+  Icon: React.ComponentType<{ className?: string }>
   description: string
   href: string
   cta: string

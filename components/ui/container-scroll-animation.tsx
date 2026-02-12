@@ -13,8 +13,6 @@ export const ContainerScroll: React.FC<ContainerScrollProps> = ({ children, clas
     offset: ['start end', 'center start'],
   })
 
-  console.log(scrollYProgress)
-
   const translateY = useTransform(scrollYProgress, [0.3, 0.75], [-100, 200])
   const translateYSpring = useSpring(translateY, { stiffness: 600, damping: 80 })
 

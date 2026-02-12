@@ -10,6 +10,7 @@ import {
 import Link from 'next/link'
 import { useRef, useState } from 'react'
 
+/** Animated icon dock with mouse-proximity scaling on desktop and a simple row on mobile. */
 export const FloatingDock = ({
   items,
   desktopClassName,

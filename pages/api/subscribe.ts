@@ -7,6 +7,11 @@ type ResponseData = {
   message: string
 }
 
+/**
+ * POST /api/subscribe - Add a newsletter subscriber.
+ * Body: { email: string }
+ * Responses: 201 Created, 409 Conflict (already subscribed), 422 Invalid email, 405 Method Not Allowed.
+ */
 export default async function handler(req: NextApiRequest, res: NextApiResponse<ResponseData>) {
   const { method, body } = req
 
@@ -34,7 +39,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
 
     return res.status(201).json({ message: 'Subscription successful' })
   } catch (error) {
-    console.error('Error:', error)
+    console.error('Subscription error:', error.message)
     return res.status(500).json({ message: 'Subscription failed' })
   }
 }

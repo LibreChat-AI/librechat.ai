@@ -127,6 +127,7 @@ const features: Feature[] = [
   },
 ]
 
+/** Homepage features showcase using a bento grid layout with linked feature cards. */
 export default function Features() {
   return (
     <HomeSection>

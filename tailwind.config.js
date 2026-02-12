@@ -1,4 +1,9 @@
-/** @type {import('tailwindcss').Config} */
+/**
+ * Tailwind CSS configuration for the LibreChat docs site.
+ * Colors use CSS custom properties (HSL) defined in style.css, enabling light/dark theme switching.
+ * Custom animations (marquee, shimmer, border-beam, etc.) support the Magic UI components.
+ * @type {import('tailwindcss').Config}
+ */
 module.exports = {
   darkMode: ['class'],
   content: [
@@ -145,7 +150,7 @@ module.exports = {
         },
       },
     },
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    plugins: [require('tailwindcss-animate')],
   },
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  plugins: [require('tailwindcss-animate')],
 }

@@ -1,3 +1,7 @@
+/**
+ * GET /api/github-stats - Returns the current GitHub star count for the LibreChat repo.
+ * Response: { stars: number } with 1-hour CDN cache.
+ */
 import type { NextApiRequest, NextApiResponse } from 'next'
 import axios from 'axios'
 

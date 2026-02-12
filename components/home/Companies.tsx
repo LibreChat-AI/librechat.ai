@@ -34,6 +34,7 @@ const companies: Company[] = [
   },
 ]
 
+/** Scrolling logo marquee showcasing companies that use LibreChat. */
 export const Companies: React.FC = React.memo(() => {
   const minLogos = 8 // Reduced minimum for better performance
 
@@ -64,10 +65,10 @@ export const Companies: React.FC = React.memo(() => {
     <section className="py-20">
       <div className="w-full px-4 sm:px-6 lg:px-8">
         <div className="text-center mb-16">
-          <h2 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white sm:text-4xl">
+          <h2 className="text-3xl font-bold tracking-tight text-foreground sm:text-4xl">
             Trusted by companies worldwide
           </h2>
-          <p className="mt-4 text-lg text-gray-600 dark:text-gray-300">
+          <p className="mt-4 text-lg text-muted-foreground">
             Join thousands of organizations using LibreChat
           </p>
         </div>
@@ -152,5 +153,6 @@ export const Companies: React.FC = React.memo(() => {
     </section>
   )
 })
+Companies.displayName = 'Companies'
 
 export default Companies

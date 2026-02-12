@@ -1,3 +1,4 @@
+/** Infinite scrolling marquee with horizontal or vertical direction and optional pause-on-hover. */
 import { cn } from '@/lib/utils'
 
 interface MarqueeProps {

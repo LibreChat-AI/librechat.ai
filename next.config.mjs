@@ -11,10 +11,11 @@ const withBundleAnalyzer = NextBundleAnalyzer({
 /**
  * CSP headers
  * img-src https to allow loading images from SSO providers
+ * 'unsafe-inline' is required for Nextra's inline styles and Next.js script injection
  */
 const cspHeader = `
   default-src 'self' https: wss:;
-  script-src 'self' 'unsafe-eval' 'unsafe-inline' https:;
+  script-src 'self' 'unsafe-inline' https:;
   style-src 'self' 'unsafe-inline' https:;
   img-src 'self' https: blob: data:;
   media-src 'self' https: blob: data:;
@@ -76,12 +77,15 @@ const nextraConfig = withNextra({
     ignoreDuringBuilds: true,
   },
   typescript: {
+    // Skip type checking during build (types are checked in CI separately)
     ignoreBuildErrors: true,
   },
   experimental: {
+    // 'loose' mode allows mixing ESM and CJS imports for compatibility with older packages
     esmExternals: 'loose',
     scrollRestoration: true,
   },
+  // Prevent mongoose from being bundled into client-side JavaScript
   serverExternalPackages: ['mongoose'],
   transpilePackages: ['react-tweet', 'react-syntax-highlighter', 'geist'],
   images: {
@@ -96,12 +100,14 @@ const nextraConfig = withNextra({
         protocol: 'https',
         hostname: 'github.com',
         port: '',
-        pathname: '/**',
+        // Restricted to user avatar and repo asset paths
+        pathname: '/{user-attachments,danny-avila}/**',
       },
       {
         protocol: 'https',
         hostname: 'firebasestorage.googleapis.com',
         port: '',
+        // Broad path required - Firebase Storage uses dynamic bucket paths
         pathname: '/**',
       },
       {
@@ -125,7 +131,7 @@ const nextraConfig = withNextra({
         headers: [
           {
             key: 'x-frame-options',
-            value: 'SAMEORIGIN',
+            value: 'DENY',
           },
           {
             key: 'X-Content-Type-Options',
@@ -137,7 +143,7 @@ const nextraConfig = withNextra({
           },
           {
             key: 'Permissions-Policy',
-            value: 'autoplay=*, fullscreen=*, microphone=*',
+            value: 'autoplay=(self), fullscreen=(self), microphone=()',
           },
         ],
       },
