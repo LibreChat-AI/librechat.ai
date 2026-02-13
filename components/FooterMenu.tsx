@@ -1,7 +1,8 @@
 import Link from 'next/link'
 import { FloatingDock } from '@/components/ui/floating-dock'
-import { Github, Linkedin, Twitter, Youtube, Mail } from 'lucide-react'
+import { Github, Linkedin, Youtube, Mail } from 'lucide-react'
 import Discord from './icons/discord'
+import X from './icons/x'
 
 const menuItems: {
   heading: string
@@ -117,8 +118,8 @@ const FooterMenu = () => {
       href: 'https://linkedin.librechat.ai/',
     },
     {
-      title: 'Twitter',
-      icon: <Twitter className="h-full w-full text-neutral-500 dark:text-neutral-300" />,
+      title: 'X',
+      icon: <X className="h-full w-full text-neutral-500 dark:text-neutral-300" />,
       href: 'https://x.com/LibreChatAI',
     },
     {
