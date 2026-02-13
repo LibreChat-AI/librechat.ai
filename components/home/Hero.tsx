@@ -64,7 +64,7 @@ HeroDescription.displayName = 'HeroDescription'
 const HeroLinks = React.memo(() => (
   <div className="flex items-center justify-center gap-x-14 flex-wrap">
     <CardContainer className="inter-var">
-      <Link href={REPO_OF_THE_DAY_LINK}>
+      <Link href={REPO_OF_THE_DAY_LINK} aria-label="#1 Repository of the Day on TrendShift">
         <CardBody className="bg-transparent w-auto h-auto px-12">
           <CardItem
             translateZ="100"
@@ -86,7 +86,7 @@ const HeroLinks = React.memo(() => (
       </HoverBorderGradient>
     </div>
     <CardContainer className="inter-var">
-      <Link href={ROSS_INDEX_LINK}>
+      <Link href={ROSS_INDEX_LINK} aria-label="ROSS Index Q1 2024">
         <CardBody className="bg-transparent w-full h-full px-12">
           <CardItem
             translateZ="100"
