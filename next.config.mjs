@@ -15,7 +15,7 @@ const withBundleAnalyzer = NextBundleAnalyzer({
  */
 const cspHeader = `
   default-src 'self' https: wss:;
-  script-src 'self' 'unsafe-inline' https:;
+  script-src 'self' 'unsafe-inline' ${process.env.NODE_ENV === 'development' ? "'unsafe-eval'" : ''} https:;
   style-src 'self' 'unsafe-inline' https:;
   img-src 'self' https: blob: data:;
   media-src 'self' https: blob: data:;
@@ -84,6 +84,7 @@ const nextraConfig = withNextra({
     // 'loose' mode allows mixing ESM and CJS imports for compatibility with older packages
     esmExternals: 'loose',
     scrollRestoration: true,
+    optimizePackageImports: ['lucide-react', 'framer-motion'],
   },
   // Prevent mongoose from being bundled into client-side JavaScript
   serverExternalPackages: ['mongoose'],

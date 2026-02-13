@@ -1,5 +1,4 @@
 import Link from 'next/link'
-import { FloatingDock } from '@/components/ui/floating-dock'
 import { Github, Linkedin, Youtube, Mail } from 'lucide-react'
 import Discord from './icons/discord'
 import X from './icons/x'
@@ -99,41 +98,41 @@ const menuItems: {
   },
 ]
 
-/** Site footer with navigation link columns and social media icon dock. */
-const FooterMenu = () => {
-  const socialLinks = [
-    {
-      title: 'GitHub',
-      icon: <Github className="h-full w-full text-neutral-500 dark:text-neutral-300" />,
-      href: 'https://github.librechat.ai/',
-    },
-    {
-      title: 'Discord',
-      icon: <Discord className="h-full w-full text-neutral-500 dark:text-neutral-300" />,
-      href: 'https://discord.librechat.ai/',
-    },
-    {
-      title: 'LinkedIn',
-      icon: <Linkedin className="h-full w-full text-neutral-500 dark:text-neutral-300" />,
-      href: 'https://linkedin.librechat.ai/',
-    },
-    {
-      title: 'X',
-      icon: <X className="h-full w-full text-neutral-500 dark:text-neutral-300" />,
-      href: 'https://x.com/LibreChatAI',
-    },
-    {
-      title: 'YouTube',
-      icon: <Youtube className="h-full w-full text-neutral-500 dark:text-neutral-300" />,
-      href: 'https://www.youtube.com/@LibreChat',
-    },
-    {
-      title: 'Email',
-      icon: <Mail className="h-full w-full text-neutral-500 dark:text-neutral-300" />,
-      href: 'mailto:contact@librechat.ai',
-    },
-  ]
+const socialLinks = [
+  {
+    title: 'GitHub',
+    icon: <Github className="h-4 w-4" />,
+    href: 'https://github.librechat.ai/',
+  },
+  {
+    title: 'Discord',
+    icon: <Discord className="h-4 w-4" />,
+    href: 'https://discord.librechat.ai/',
+  },
+  {
+    title: 'LinkedIn',
+    icon: <Linkedin className="h-4 w-4" />,
+    href: 'https://linkedin.librechat.ai/',
+  },
+  {
+    title: 'X',
+    icon: <X className="h-4 w-4" />,
+    href: 'https://x.com/LibreChatAI',
+  },
+  {
+    title: 'YouTube',
+    icon: <Youtube className="h-4 w-4" />,
+    href: 'https://www.youtube.com/@LibreChat',
+  },
+  {
+    title: 'Email',
+    icon: <Mail className="h-4 w-4" />,
+    href: 'mailto:contact@librechat.ai',
+  },
+]
 
+/** Site footer with navigation link columns and social media icon links. */
+const FooterMenu = () => {
   return (
     <div className="w-full">
       <nav
@@ -157,7 +156,18 @@ const FooterMenu = () => {
       </nav>
       <div className="flex items-center justify-between mt-8">
         <div className="font-sans text-sm">&copy; {new Date().getFullYear()} LibreChat</div>
-        <FloatingDock items={socialLinks} desktopClassName="ml-auto" />
+        <nav aria-label="Social media" className="flex items-center gap-1">
+          {socialLinks.map((link) => (
+            <Link
+              key={link.title}
+              href={link.href}
+              aria-label={link.title}
+              className="flex items-center justify-center h-9 w-9 rounded-full text-neutral-500 dark:text-neutral-300 transition-colors duration-200 hover:text-primary hover:bg-neutral-100 dark:hover:bg-neutral-800"
+            >
+              {link.icon}
+            </Link>
+          ))}
+        </nav>
       </div>
     </div>
   )

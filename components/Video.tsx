@@ -1,3 +1,4 @@
+import 'vidstack/styles/base.css'
 import { cn } from '@/lib/utils'
 import { MediaPlayer, MediaOutlet, useMediaRemote, useMediaStore } from '@vidstack/react'
 import { Play } from 'lucide-react'
