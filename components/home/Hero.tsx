@@ -1,14 +1,9 @@
 import React from 'react'
 import Link from 'next/link'
 import Image from 'next/image'
-import { ContainerScroll } from '@/components/ui/container-scroll-animation'
-import { CardBody, CardContainer, CardItem } from '../ui/3d-card'
-import { HoverBorderGradient } from '../ui/hover-border-gradient'
 import DemoImageMobileLight from './img/demo_mobile_light.png'
 import DemoImageMobileDark from './img/demo_mobile_dark.png'
-import RepoOfTheDay from '@/components/svg/RepoOfTheDay'
 import { HomeSection } from './components/HomeSection'
-import RossIndex from '@/components/svg/RossIndex'
 import DemoImageLight from './img/demo_light.png'
 import DemoImageDark from './img/demo_dark.png'
 
@@ -20,20 +15,16 @@ const HERO_TITLE = {
 const HERO_DESCRIPTION =
   ' is the ultimate open-source app for all your AI conversations, fully customizable and compatible with any AI provider — all in one sleek interface'
 const DEMO_LINK = 'https://chat.librechat.ai/'
-const REPO_OF_THE_DAY_LINK = 'https://trendshift.io/repositories/4685'
-const ROSS_INDEX_LINK = 'https://runacap.com/ross-index/q1-24/'
 
 const HeroTitle = React.memo(() => (
   <div className="w-full text-center">
     <h1 className="text-7xl lg:text-9xl font-bold font-mono inline-block">
       {HERO_TITLE.firstPart}{' '}
-      <span className="relative inline-block bg-gradient-to-r from-blue-600 to-violet-600 bg-clip-text text-transparent">
+      <span className="relative inline-block text-foreground">
         {HERO_TITLE.highlight}
         <div className="absolute -bottom-1 left-0 right-0">
-          <div className="bg-gradient-to-r from-transparent via-indigo-500 to-transparent h-[2px] blur-sm" />
-          <div className="bg-gradient-to-r from-transparent via-indigo-500 to-transparent h-px" />
-          <div className="bg-gradient-to-r from-transparent via-sky-500 to-transparent h-[5px] blur-sm" />
-          <div className="bg-gradient-to-r from-transparent via-sky-500 to-transparent h-px" />
+          <div className="bg-gradient-to-r from-transparent via-muted-foreground to-transparent h-[2px] blur-sm" />
+          <div className="bg-gradient-to-r from-transparent via-muted-foreground to-transparent h-px" />
         </div>
       </span>{' '}
       {HERO_TITLE.lastPart}
@@ -43,60 +34,24 @@ const HeroTitle = React.memo(() => (
 HeroTitle.displayName = 'HeroTitle'
 
 const HeroDescription = React.memo(() => (
-  <span className="mt-4 text-primary/70 text-base md:text-lg lg:text-2xl tracking-wide text-center p-2 lg:p-0">
-    <span className="bg-gradient-to-r from-blue-600 to-violet-600 bg-clip-text text-transparent">
-      LibreChat
-    </span>
+  <span className="mt-4 text-muted-foreground text-base md:text-lg lg:text-2xl tracking-wide text-center p-2 lg:p-0">
+    <span className="font-semibold text-foreground">LibreChat</span>
     {HERO_DESCRIPTION}
-    <div className="flex justify-center mt-4">
-      <div className="w-full max-w-md lg:max-w-lg xl:max-w-xl h-20 relative">
-        {/* Gradients */}
-        <div className="absolute left-1/2 transform -translate-x-1/2 top-0 bg-gradient-to-r from-transparent via-indigo-500 to-transparent h-[2px] w-3/4 blur-sm" />
-        <div className="absolute left-1/2 transform -translate-x-1/2 top-0 bg-gradient-to-r from-transparent via-indigo-500 to-transparent h-px w-3/4" />
-        <div className="absolute left-1/2 transform -translate-x-1/2 top-0 bg-gradient-to-r from-transparent via-sky-500 to-transparent h-[5px] w-1/4 blur-sm" />
-        <div className="absolute left-1/2 transform -translate-x-1/2 top-0 bg-gradient-to-r from-transparent via-sky-500 to-transparent h-px w-1/4" />
-      </div>
-    </div>
   </span>
 ))
 HeroDescription.displayName = 'HeroDescription'
 
 const HeroLinks = React.memo(() => (
-  <div className="flex items-center justify-center gap-x-14 flex-wrap">
-    <CardContainer className="inter-var">
-      <Link href={REPO_OF_THE_DAY_LINK} aria-label="#1 Repository of the Day on TrendShift">
-        <CardBody className="bg-transparent w-auto h-auto px-12">
-          <CardItem
-            translateZ="100"
-            className="cursor-pointer shadow-2xl dark:hover:shadow-emerald-500/[0.1]"
-          >
-            <RepoOfTheDay />
-          </CardItem>
-        </CardBody>
-      </Link>
-    </CardContainer>
-    <div className="flex gap-4 flex-wrap items-center justify-center">
-      <HoverBorderGradient
-        onClick={() => window.open(DEMO_LINK, '_blank', 'noopener')}
-        containerClassName="rounded-full"
-        as="button"
-        className="dark:bg-black bg-white text-black dark:text-white flex items-center space-x-2"
-      >
-        <span>Try demo</span>
-      </HoverBorderGradient>
-    </div>
-    <CardContainer className="inter-var">
-      <Link href={ROSS_INDEX_LINK} aria-label="ROSS Index Q1 2024">
-        <CardBody className="bg-transparent w-full h-full px-12">
-          <CardItem
-            translateZ="100"
-            className="cursor-pointer shadow-2xl dark:hover:shadow-emerald-500/[0.1]"
-          >
-            <RossIndex />
-          </CardItem>
-        </CardBody>
-      </Link>
-    </CardContainer>
+  <div className="flex items-center justify-center gap-x-6 flex-wrap">
+    <Link
+      href={DEMO_LINK}
+      target="_blank"
+      rel="noopener"
+      className="inline-flex items-center rounded-full border border-border bg-background px-6 py-2.5 text-sm font-medium text-foreground transition-colors hover:bg-muted"
+      aria-label="Try the LibreChat demo"
+    >
+      Try demo
+    </Link>
   </div>
 ))
 HeroLinks.displayName = 'HeroLinks'
@@ -110,13 +65,13 @@ export function Hero() {
         <HeroDescription />
         <HeroLinks />
         {/* Desktop */}
-        <ContainerScroll className="hidden md:block">
+        <div className="hidden md:block w-full max-w-md sm:max-w-lg md:max-w-xl lg:max-w-2xl mx-auto">
           <Image
             src={DemoImageDark}
             alt="LibreChat UI Dark"
             height={800}
             width={1600}
-            className="dark:block hidden mx-auto rounded-2xl object-cover object-left-top w-full max-w-md sm:max-w-lg md:max-w-xl lg:max-w-2xl"
+            className="dark:block hidden mx-auto rounded-2xl object-cover object-left-top w-full"
             draggable={false}
             priority
             sizes="(max-width: 640px) 100vw, (max-width: 768px) 32rem, (max-width: 1024px) 36rem, (max-width: 1280px) 42rem, 672px"
@@ -126,12 +81,12 @@ export function Hero() {
             alt="LibreChat UI Light"
             height={800}
             width={1600}
-            className="block dark:hidden mx-auto rounded-2xl object-cover object-left-top w-full max-w-md sm:max-w-lg md:max-w-xl lg:max-w-2xl"
+            className="block dark:hidden mx-auto rounded-2xl object-cover object-left-top w-full"
             draggable={false}
             priority
             sizes="(max-width: 640px) 100vw, (max-width: 768px) 32rem, (max-width: 1024px) 36rem, (max-width: 1280px) 42rem, 672px"
           />
-        </ContainerScroll>
+        </div>
         {/* Mobile */}
         <div className="block md:hidden">
           <Image

@@ -1,14 +1,25 @@
-import { ReactNode } from 'react'
+import { type ReactNode } from 'react'
 import Image, { type StaticImageData } from 'next/image'
-import { GitFork, BrainCog, Code, Bot, Search, Image as ImageIcon, Terminal } from 'lucide-react'
-import { BentoCard, BentoGrid } from '@/components/magicui/bento-grid'
+import {
+  GitFork,
+  BrainCog,
+  Code,
+  Bot,
+  Search,
+  Image as ImageIcon,
+  Terminal,
+  ArrowRight,
+} from 'lucide-react'
+import { Button } from '@/components/ui/button'
 import CodeInterpreter from './img/code_interpreter.gif'
 import { HomeSection } from './components/HomeSection'
 import ArtifactsLight from './img/artifacts_light.png'
 import ArtifactsDark from './img/artifacts_dark.png'
 import AgentsLight from './img/agents_light.png'
 import AgentsDark from './img/agents_dark.png'
+import { cn } from '@/lib/utils'
 import { Header } from '../Header'
+import Link from 'next/link'
 
 const BentoBgImage = ({
   imgLight,
@@ -48,7 +59,7 @@ const BentoBgImage = ({
 )
 
 type Feature = {
-  Icon: React.ComponentType
+  Icon: React.ComponentType<{ className?: string }>
   name: string
   description: string
   href: string
@@ -136,11 +147,39 @@ export default function Features() {
         description="Explore our unique and powerful features"
         button={{ href: '/docs', text: 'Explore docs' }}
       />
-      <BentoGrid>
+      <div className="grid w-full auto-rows-[13rem] grid-cols-3 gap-3">
         {features.map((feature) => (
-          <BentoCard key={feature.name} {...feature} />
+          <Link
+            key={feature.name}
+            className={cn(
+              'group relative col-span-3 flex flex-col justify-between overflow-hidden rounded border',
+              'bg-white',
+              'transform-gpu dark:bg-transparent dark:backdrop-blur-md',
+              feature.className,
+            )}
+            href={feature.href}
+          >
+            {feature.background}
+            <div />
+            <div className="pointer-events-none z-10 flex transform-gpu flex-col gap-1 p-6 transition-all duration-300 group-hover:-translate-y-10">
+              <feature.Icon className="h-8 w-8 lg:h-12 lg:w-12 origin-left transform-gpu text-neutral-600 transition-all duration-300 ease-in-out group-hover:scale-75" />
+              <h3 className="text-xl font-semibold text-neutral-700 dark:text-neutral-300">
+                {feature.name}
+              </h3>
+              <p className="max-w-lg dark:text-neutral-400 text-neutral-500">
+                {feature.description}
+              </p>
+            </div>
+            <div className="pointer-events-none absolute bottom-0 flex w-full translate-y-10 transform-gpu flex-row items-center p-4 opacity-0 transition-all duration-300 group-hover:translate-y-0 group-hover:opacity-100">
+              <Button variant="ghost" size="sm" className="ml-2 pointer-events-auto">
+                {feature.cta}
+                <ArrowRight className="ml-2 h-4 w-4" />
+              </Button>
+            </div>
+            <div className="pointer-events-none absolute inset-0 transform-gpu transition-all duration-300 group-hover:bg-black/[.03] group-hover:dark:bg-neutral-800/20" />
+          </Link>
         ))}
-      </BentoGrid>
+      </div>
     </HomeSection>
   )
 }

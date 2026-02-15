@@ -1,3 +1,5 @@
+'use client'
+
 import ArrowRight from '../svg/ArrowRight'
 import cn from 'clsx'
 import { motion } from 'framer-motion'

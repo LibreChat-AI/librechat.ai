@@ -1,3 +1,5 @@
+'use client'
+
 // Carousel.tsx
 import React, { useEffect, useRef } from 'react'
 import Glide from '@glidejs/glide'

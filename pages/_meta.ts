@@ -7,40 +7,10 @@ export default {
       layout: 'raw',
     },
   },
-  docs: {
-    type: 'page',
-    title: 'Docs',
-  },
-  blog: {
-    title: 'Blog',
-    type: 'page',
-    theme: {
-      layout: 'full',
-    },
-  },
-  authors: {
-    title: 'Authors',
-    type: 'folder',
-    theme: {
-      toc: false,
-      sidebar: false,
-      pagination: true,
-      layout: 'default',
-      breadcrumb: false,
-      timestamp: false,
-    },
-  },
   demo: {
     type: 'page',
     title: 'Demo',
     href: 'https://chat.librechat.ai/',
-  },
-  changelog: {
-    type: 'page',
-    title: 'Changelog',
-    theme: {
-      layout: 'full',
-    },
   },
   tos: {
     title: 'Terms of Service',
