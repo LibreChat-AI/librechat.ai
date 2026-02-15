@@ -1,13 +1,22 @@
-/** @type {import('tailwindcss').Config} */
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { createPreset } = require('fumadocs-ui/tailwind-plugin')
+
+/**
+ * Tailwind CSS configuration for the LibreChat docs site.
+ * Colors use CSS custom properties (HSL) defined in app/global.css and style.css.
+ * Fumadocs UI preset provides documentation-specific styling.
+ * @type {import('tailwindcss').Config}
+ */
 module.exports = {
   darkMode: ['class'],
+  presets: [createPreset()],
   content: [
     './components/**/*.{js,jsx,ts,tsx,mdx}',
     './pages/**/*.{js,jsx,ts,tsx,mdx}',
     './app/**/*.{js,ts,jsx,tsx,mdx}',
-    './src/**/*.{js,jsx,ts,tsx,mdx}',
-    './theme.config.tsx',
-    './lib/**/*.{js,jsx,ts,tsx,mdx}',
+    './content/**/*.{md,mdx}',
+    './lib/**/*.{js,jsx,ts,tsx}',
+    './node_modules/fumadocs-ui/dist/**/*.js',
   ],
   theme: {
     container: {
@@ -23,19 +32,6 @@ module.exports = {
         mono: ['var(--font-geist-mono)'],
       },
       colors: {
-        gray: {
-          50: '#fafafa',
-          100: '#f5f5f5',
-          200: '#e5e5e5',
-          300: '#d4d4d4',
-          400: '#a3a3a3',
-          500: '#737373',
-          600: '#525252',
-          700: '#404040',
-          800: '#262626',
-          900: '#171717',
-        },
-        blackish: '#000000',
         border: 'hsl(var(--border))',
         input: 'hsl(var(--input))',
         ring: 'hsl(var(--ring))',
@@ -78,74 +74,19 @@ module.exports = {
       animation: {
         'accordion-down': 'accordion-down 0.2s ease-out',
         'accordion-up': 'accordion-up 0.2s ease-out',
-        'border-beam': 'border-beam calc(var(--duration)*1s) infinite linear',
-        meteor: 'meteor 5s linear infinite',
-        spin: 'spin calc(var(--speed) * 2) infinite linear',
-        slide: 'slide var(--speed) ease-in-out infinite alternate',
-        gradient: 'gradient 6s linear infinite',
-        marquee: 'marquee var(--duration) linear infinite',
-        grid: 'grid 20s linear infinite',
-        'marquee-vertical': 'marquee-vertical var(--duration) linear infinite',
       },
       keyframes: {
         'accordion-down': {
-          from: { height: 0 },
+          from: { height: '0' },
           to: { height: 'var(--radix-accordion-content-height)' },
         },
         'accordion-up': {
           from: { height: 'var(--radix-accordion-content-height)' },
-          to: { height: 0 },
-        },
-        'border-beam': {
-          '100%': {
-            'offset-distance': '100%',
-          },
-        },
-        grid: {
-          '0%': { transform: 'translateY(-50%)' },
-          '100%': { transform: 'translateY(0)' },
-        },
-        meteor: {
-          '0%': { transform: 'rotate(215deg) translateX(0)', opacity: 1 },
-          '70%': { opacity: 1 },
-          '100%': {
-            transform: 'rotate(215deg) translateX(-500px)',
-            opacity: 0,
-          },
-        },
-        marquee: {
-          from: { transform: 'translateX(0)' },
-          to: { transform: 'translateX(calc(-100% - var(--gap)))' },
-        },
-        'marquee-vertical': {
-          from: { transform: 'translateY(0)' },
-          to: { transform: 'translateY(calc(-100% - var(--gap)))' },
-        },
-        gradient: {
-          to: { 'background-position': '200% center' },
-        },
-        spin: {
-          '0%': {
-            rotate: '0deg',
-          },
-          '15%, 35%': {
-            rotate: '90deg',
-          },
-          '65%, 85%': {
-            rotate: '270deg',
-          },
-          '100%': {
-            rotate: '360deg',
-          },
-        },
-        slide: {
-          to: {
-            transform: 'translate(calc(100cqw - 100%), 0)',
-          },
+          to: { height: '0' },
         },
       },
     },
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    plugins: [require('tailwindcss-animate')],
   },
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  plugins: [require('tailwindcss-animate')],
 }

@@ -18,7 +18,7 @@ const LogoContextMenu: React.FC<{
         <DropdownMenuItem
           onClick={(e) => {
             e.preventDefault()
-            window.open('/', '_blank')
+            window.open('/', '_blank', 'noopener')
           }}
         >
           <ExternalLink size={14} className="mr-2" />
@@ -28,7 +28,7 @@ const LogoContextMenu: React.FC<{
         <DropdownMenuItem
           onClick={(e) => {
             e.preventDefault()
-            window.open('/librechat.png', '_blank')
+            window.open('/librechat.png', '_blank', 'noopener')
           }}
         >
           <Download size={14} className="mr-2" />
@@ -37,7 +37,7 @@ const LogoContextMenu: React.FC<{
         <DropdownMenuItem
           onClick={(e) => {
             e.preventDefault()
-            window.open('/librechat.svg', '_blank')
+            window.open('/librechat.svg', '_blank', 'noopener')
           }}
         >
           <Download size={14} className="mr-2" />
@@ -47,7 +47,7 @@ const LogoContextMenu: React.FC<{
         <DropdownMenuItem
           onClick={(e) => {
             e.preventDefault()
-            window.open('/librechat_alt.png', '_blank')
+            window.open('/librechat_alt.png', '_blank', 'noopener')
           }}
         >
           <Download size={14} className="mr-2" />
@@ -56,7 +56,7 @@ const LogoContextMenu: React.FC<{
         <DropdownMenuItem
           onClick={(e) => {
             e.preventDefault()
-            window.open('/librechat_alt.svg', '_blank')
+            window.open('/librechat_alt.svg', '_blank', 'noopener')
           }}
         >
           <Download size={14} className="mr-2" />

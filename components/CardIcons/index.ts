@@ -1,3 +1,5 @@
+'use client'
+
 export { default as OurAuthors } from './OurAuthors'
 export { default as QuickStartLocal } from './QuickStartLocal'
 export { default as Roadmap } from './Roadmap'

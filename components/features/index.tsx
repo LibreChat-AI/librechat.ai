@@ -1,9 +1,21 @@
+'use client'
+
 import ArrowRight from '../svg/ArrowRight'
 import cn from 'clsx'
 import { motion } from 'framer-motion'
 import Link from 'next/link'
 import type { ReactNode } from 'react'
 import styles from './style.module.css'
+
+interface FeatureProps {
+  medium?: boolean
+  large?: boolean
+  centered?: boolean
+  children: ReactNode
+  lightOnly?: boolean
+  className?: string
+  href?: string
+}
 
 export function Feature({
   medium,
@@ -14,7 +26,7 @@ export function Feature({
   className,
   href,
   ...props
-}) {
+}: FeatureProps) {
   return (
     <motion.div
       initial={{ opacity: 0 }}
@@ -33,7 +45,13 @@ export function Feature({
     >
       {children}
       {href ? (
-        <Link className={styles.link} href={href} target="_blank">
+        <Link
+          className={styles.link}
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="Learn more"
+        >
           <ArrowRight width="1.5em" />
         </Link>
       ) : null}

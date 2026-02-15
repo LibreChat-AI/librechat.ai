@@ -1,12 +1,6 @@
-export default function GitHub({
-  className,
-  ...props
-}: {
-  className: string
-  fillClassName?: string
-  color?: string
-  props?: React.SVGProps<SVGSVGElement>
-}) {
+import React from 'react'
+
+export default function GitHub({ className, ...props }: React.SVGProps<SVGSVGElement>) {
   return (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className={className} {...props}>
       <path

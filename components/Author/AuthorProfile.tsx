@@ -7,10 +7,11 @@ import Image from 'next/image'
 import { Cards } from 'nextra/components'
 import { OurAuthors, Blog } from '@/components/CardIcons'
 
-//TODO: Fix Mobile view to better handle more than 4 socials;
-//TODO: Better fallback social icon (the default one is the "share" icon)
-//TODO: Tag selection on "Recent Posts by" (author pages)
-//TODO: fix profile pic position when no bio
+// Known issues:
+// - Mobile: social icons overflow when author has more than 4 social links
+// - SocialIcon uses the generic "share" icon when the platform is unrecognized
+// - "Recent Posts by" section does not support filtering by tag
+// - Profile image positioning is off when the author has no bio text
 
 interface AuthorMetadata {
   authorid: string
@@ -81,6 +82,7 @@ const AuthorProfile: React.FC<AuthorProfileProps> = ({ authorId }) => {
                   key={key}
                   href={value}
                   className="btn btn-square relative overflow-hidden"
+                  aria-label={`Visit ${author.name}'s ${key}`}
                   title={`See ${author.name}'s ${key}`}
                   target="_blank"
                   rel="noopener noreferrer"
@@ -105,7 +107,7 @@ const AuthorProfile: React.FC<AuthorProfileProps> = ({ authorId }) => {
             <BlogCard
               key={post.route}
               page={post}
-              handleTagClick={(tag: unknown) => console.log('Tag clicked:', tag)}
+              handleTagClick={() => {}}
               selectedTags={undefined}
             />
           ))}
@@ -113,10 +115,10 @@ const AuthorProfile: React.FC<AuthorProfileProps> = ({ authorId }) => {
         <div style={{ marginTop: '75px' }}></div>
         <div>
           <Cards num={3}>
-            <Cards.Card title="" href="/blog" icon={<Blog />} image>
+            <Cards.Card title="Blog" href="/blog" icon={<Blog />} image>
               {null}
             </Cards.Card>
-            <Cards.Card title="" href="/authors" icon={<OurAuthors />} image>
+            <Cards.Card title="Our Authors" href="/authors" icon={<OurAuthors />} image>
               {null}
             </Cards.Card>
           </Cards>

@@ -1,7 +1,14 @@
 import cn from 'clsx'
 import Image from 'next/image'
 
-export function Screenshot({ src, alt, full, className = '' }) {
+interface ScreenshotProps {
+  src: string
+  alt: string
+  full?: boolean
+  className?: string
+}
+
+export function Screenshot({ src, alt, full, className = '' }: ScreenshotProps) {
   return (
     <div
       className={cn(
