@@ -50,7 +50,7 @@ function CardsBase({ children }: ChildrenProps) {
 
 export const Cards = Object.assign(CardsBase, { Card: CardComponent })
 
-function FileComponent({ children, name, ...props }: ChildrenProps & { name?: string }) {
+function FileComponent({ children, name, active, ...props }: ChildrenProps & { name?: string; active?: boolean }) {
   return (
     <div className="file" {...props}>
       {name && <span>{name}</span>}
@@ -59,7 +59,7 @@ function FileComponent({ children, name, ...props }: ChildrenProps & { name?: st
   )
 }
 
-function FolderComponent({ children, name, ...props }: ChildrenProps & { name?: string }) {
+function FolderComponent({ children, name, defaultOpen, ...props }: ChildrenProps & { name?: string; defaultOpen?: boolean }) {
   return (
     <div className="folder" {...props}>
       {name && <span>{name}/</span>}
