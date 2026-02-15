@@ -19,6 +19,7 @@ import DemoImageDark from '@/components/home/img/demo_dark.png'
 import DemoImageLight from '@/components/home/img/demo_light.png'
 import DemoImageMobileDark from '@/components/home/img/demo_mobile_dark.png'
 import DemoImageMobileLight from '@/components/home/img/demo_mobile_light.png'
+import FooterMenu from '@/components/FooterMenu'
 
 export const metadata: Metadata = {
   title: 'LibreChat - The Open-Source AI Platform',
@@ -43,9 +44,20 @@ async function getGitHubStars(): Promise<number> {
   }
 }
 
-async function getDockerPulls(): Promise<number> {
+const DOCKER_HUB_REPOS = [
+  'librechat/librechat',
+  'librechat/librechat-api',
+  'librechat/librechat-dev',
+  'librechat/librechat-dev-api',
+  'librechat/lc-dev',
+  'librechat/lc-dev-api',
+]
+
+const GHCR_PACKAGES = ['librechat', 'librechat-api', 'librechat-dev', 'librechat-dev-api']
+
+async function getDockerHubPulls(repo: string): Promise<number> {
   try {
-    const res = await fetch('https://hub.docker.com/v2/repositories/dannyavila/librechat/', {
+    const res = await fetch(`https://hub.docker.com/v2/repositories/${repo}/`, {
       next: { revalidate: 3600 },
     })
     if (!res.ok) return 0
@@ -54,6 +66,29 @@ async function getDockerPulls(): Promise<number> {
   } catch {
     return 0
   }
+}
+
+async function getGhcrDownloads(pkg: string): Promise<number> {
+  try {
+    const res = await fetch(
+      `https://github.com/danny-avila/LibreChat/pkgs/container/${pkg}`,
+      { next: { revalidate: 3600 } },
+    )
+    if (!res.ok) return 0
+    const html = await res.text()
+    const match = html.match(/Total downloads[\s\S]*?title="(\d+)"/)
+    return match ? parseInt(match[1], 10) : 0
+  } catch {
+    return 0
+  }
+}
+
+async function getContainerPulls(): Promise<number> {
+  const [dockerHubCounts, ghcrCounts] = await Promise.all([
+    Promise.all(DOCKER_HUB_REPOS.map(getDockerHubPulls)),
+    Promise.all(GHCR_PACKAGES.map(getGhcrDownloads)),
+  ])
+  return [...dockerHubCounts, ...ghcrCounts].reduce((sum, n) => sum + n, 0)
 }
 
 /* ---------------------------------------------------------------------------
@@ -80,24 +115,32 @@ const companies = [
     logoLight: '/images/logos/Shopify_light.svg',
     logoDark: '/images/logos/Shopify_dark.svg',
     isSvg: true,
-  },
-  {
-    name: 'ClickHouse',
-    logoLight: '/images/logos/ClickHouse_light.svg',
-    logoDark: '/images/logos/ClickHouse_dark.svg',
-    isSvg: true,
-  },
-  {
-    name: 'Boston University',
-    logoLight: '/images/logos/BostonUniversity_light.png',
-    logoDark: '/images/logos/BostonUniversity_dark.png',
-    isSvg: false,
+    height: 'h-12',
+    imgHeight: 48,
   },
   {
     name: 'Daimler Truck',
     logoLight: '/images/logos/DaimlerTruck_light.svg',
     logoDark: '/images/logos/DaimlerTruck_dark.svg',
     isSvg: true,
+    height: 'h-6',
+    imgHeight: 24,
+  },
+  {
+    name: 'Boston University',
+    logoLight: '/images/logos/BostonUniversity_light.png',
+    logoDark: '/images/logos/BostonUniversity_dark.png',
+    isSvg: false,
+    height: 'h-12',
+    imgHeight: 48,
+  },
+  {
+    name: 'ClickHouse',
+    logoLight: '/images/logos/ClickHouse_light.svg',
+    logoDark: '/images/logos/ClickHouse_dark.svg',
+    isSvg: true,
+    height: 'h-14',
+    imgHeight: 56,
   },
 ]
 
@@ -164,7 +207,7 @@ function HeroSection({ stars }: { stars: number }) {
             href="https://github.com/danny-avila/LibreChat"
             target="_blank"
             rel="noopener noreferrer"
-            className="mb-8 inline-flex items-center gap-2 rounded-full border border-border bg-muted px-4 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-accent"
+            className="mb-8 inline-flex items-center gap-2 rounded-full border border-border bg-muted px-4 py-3 text-sm text-muted-foreground transition-colors hover:bg-accent"
             aria-label={`LibreChat has ${formatNumber(stars)} stars on GitHub`}
           >
             <Star className="size-3.5" aria-hidden="true" />
@@ -267,20 +310,20 @@ function TrustedBySection() {
               <Image
                 src={company.logoLight}
                 alt={`${company.name} logo`}
-                className="block h-10 w-auto object-contain opacity-60 transition-opacity hover:opacity-100 dark:hidden"
-                width={120}
-                height={40}
-                sizes="120px"
+                className={`block ${company.height} w-auto object-contain opacity-60 transition-opacity hover:opacity-100 dark:hidden`}
+                width={160}
+                height={company.imgHeight}
+                sizes="160px"
                 unoptimized={company.isSvg}
               />
               {/* Dark mode logo */}
               <Image
                 src={company.logoDark}
                 alt={`${company.name} logo`}
-                className="hidden h-10 w-auto object-contain opacity-60 transition-opacity hover:opacity-100 dark:block"
-                width={120}
-                height={40}
-                sizes="120px"
+                className={`hidden ${company.height} w-auto object-contain opacity-60 transition-opacity hover:opacity-100 dark:block`}
+                width={160}
+                height={company.imgHeight}
+                sizes="160px"
                 unoptimized={company.isSvg}
               />
             </figure>
@@ -323,9 +366,9 @@ function FeaturesSection() {
                   />
                   <h3 className="mb-2 text-base font-semibold text-foreground">{feature.title}</h3>
                   <p className="flex-1 text-sm text-muted-foreground">{feature.description}</p>
-                  <span className="mt-4 inline-flex items-center text-sm font-medium text-foreground opacity-0 transition-opacity group-hover:opacity-100">
+                  <span className="mt-4 inline-flex items-center text-sm font-medium text-foreground opacity-0 transition-opacity group-hover:opacity-100" aria-hidden="true">
                     Learn more
-                    <ArrowRight className="ml-1 size-3.5" aria-hidden="true" />
+                    <ArrowRight className="ml-1 size-3.5" />
                   </span>
                 </Link>
               </article>
@@ -376,7 +419,7 @@ function CommunitySection({ stars, pulls }: { stars: number; pulls: number }) {
             href="https://github.com/danny-avila/LibreChat"
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-5 py-2.5 text-sm font-medium text-foreground transition-colors hover:bg-muted"
+            className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-5 py-3 text-sm font-medium text-foreground transition-colors hover:bg-muted"
             aria-label="LibreChat on GitHub"
           >
             <Github className="size-4" aria-hidden="true" />
@@ -386,7 +429,7 @@ function CommunitySection({ stars, pulls }: { stars: number; pulls: number }) {
             href="https://discord.librechat.ai"
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-5 py-2.5 text-sm font-medium text-foreground transition-colors hover:bg-muted"
+            className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-5 py-3 text-sm font-medium text-foreground transition-colors hover:bg-muted"
             aria-label="LibreChat on Discord"
           >
             <MessageSquare className="size-4" aria-hidden="true" />
@@ -432,15 +475,22 @@ function CTASection() {
  * --------------------------------------------------------------------------- */
 
 export default async function HomePage() {
-  const [stars, pulls] = await Promise.all([getGitHubStars(), getDockerPulls()])
+  const [stars, pulls] = await Promise.all([getGitHubStars(), getContainerPulls()])
 
   return (
-    <main className="min-h-screen">
-      <HeroSection stars={stars} />
-      <TrustedBySection />
-      <FeaturesSection />
-      <CommunitySection stars={stars} pulls={pulls} />
-      <CTASection />
-    </main>
+    <>
+      <main className="min-h-screen">
+        <HeroSection stars={stars} />
+        <TrustedBySection />
+        <FeaturesSection />
+        <CommunitySection stars={stars} pulls={pulls} />
+        <CTASection />
+      </main>
+      <div className="border-t border-border px-4 py-16 sm:px-6 lg:px-8">
+        <div className="mx-auto max-w-6xl">
+          <FooterMenu />
+        </div>
+      </div>
+    </>
   )
 }

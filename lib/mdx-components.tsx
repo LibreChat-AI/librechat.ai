@@ -118,6 +118,7 @@ function CardCompat({
   href,
   icon,
   arrow,
+  image,
   ...props
 }: {
   children?: ReactNode
@@ -125,6 +126,7 @@ function CardCompat({
   href?: string
   icon?: ReactNode
   arrow?: boolean
+  image?: boolean
   [key: string]: any
 }) {
   const content = (

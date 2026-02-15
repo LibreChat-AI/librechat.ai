@@ -101,32 +101,32 @@ const menuItems: {
 const socialLinks = [
   {
     title: 'GitHub',
-    icon: <Github className="h-4 w-4" />,
+    icon: <Github className="h-4 w-4" aria-hidden="true" />,
     href: 'https://github.librechat.ai/',
   },
   {
     title: 'Discord',
-    icon: <Discord className="h-4 w-4" />,
+    icon: <Discord className="h-4 w-4" aria-hidden="true" />,
     href: 'https://discord.librechat.ai/',
   },
   {
     title: 'LinkedIn',
-    icon: <Linkedin className="h-4 w-4" />,
+    icon: <Linkedin className="h-4 w-4" aria-hidden="true" />,
     href: 'https://linkedin.librechat.ai/',
   },
   {
     title: 'X',
-    icon: <X className="h-4 w-4" />,
+    icon: <X className="h-4 w-4" aria-hidden="true" />,
     href: 'https://x.com/LibreChatAI',
   },
   {
     title: 'YouTube',
-    icon: <Youtube className="h-4 w-4" />,
+    icon: <Youtube className="h-4 w-4" aria-hidden="true" />,
     href: 'https://www.youtube.com/@LibreChat',
   },
   {
     title: 'Email',
-    icon: <Mail className="h-4 w-4" />,
+    icon: <Mail className="h-4 w-4" aria-hidden="true" />,
     href: 'mailto:contact@librechat.ai',
   },
 ]
@@ -134,7 +134,7 @@ const socialLinks = [
 /** Site footer with navigation link columns and social media icon links. */
 const FooterMenu = () => {
   return (
-    <div className="w-full">
+    <footer className="w-full" role="contentinfo">
       <nav
         aria-label="Footer"
         className="grid grid-cols-2 md:grid-cols-6 text-base gap-y-8 gap-x-2"
@@ -169,7 +169,7 @@ const FooterMenu = () => {
           ))}
         </nav>
       </div>
-    </div>
+    </footer>
   )
 }
 
