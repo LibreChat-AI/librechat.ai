@@ -8,6 +8,7 @@ import { OptionTable } from '@/components/table'
 import { Frame } from '@/components/Frame'
 import { DocsHub } from '@/components/DocsHub'
 import { QuickStartHub } from '@/components/QuickStartHub'
+import { FeaturesHub } from '@/components/FeaturesHub'
 import Carousel from '@/components/carousel/Carousel'
 import type { ReactNode } from 'react'
 
@@ -204,6 +205,7 @@ export const mdxComponents = {
   Carousel,
   DocsHub,
   QuickStartHub,
+  FeaturesHub,
   Button: ({ children, ...props }: { children?: ReactNode; [key: string]: any }) => (
     <button className="rounded-md bg-fd-primary px-4 py-2 text-fd-primary-foreground" {...props}>
       {children}
