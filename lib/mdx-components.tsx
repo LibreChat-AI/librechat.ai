@@ -6,6 +6,8 @@ import { File, Folder, Files } from 'fumadocs-ui/components/files'
 import { Accordion, Accordions } from 'fumadocs-ui/components/accordion'
 import { OptionTable } from '@/components/table'
 import { Frame } from '@/components/Frame'
+import { DocsHub } from '@/components/DocsHub'
+import { QuickStartHub } from '@/components/QuickStartHub'
 import Carousel from '@/components/carousel/Carousel'
 import type { ReactNode } from 'react'
 
@@ -200,6 +202,8 @@ export const mdxComponents = {
   OptionTable,
   Frame,
   Carousel,
+  DocsHub,
+  QuickStartHub,
   Button: ({ children, ...props }: { children?: ReactNode; [key: string]: any }) => (
     <button className="rounded-md bg-fd-primary px-4 py-2 text-fd-primary-foreground" {...props}>
       {children}
