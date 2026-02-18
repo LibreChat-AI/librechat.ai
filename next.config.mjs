@@ -69,12 +69,10 @@ const nextraShims = resolve(process.cwd(), 'lib/nextra-shims');
 
 /** @type {import('next').NextConfig} */
 const config = {
-  eslint: {
-    ignoreDuringBuilds: true,
-  },
   typescript: {
     ignoreBuildErrors: true,
   },
+  turbopack: {},
   pageExtensions: ['mdx', 'md', 'jsx', 'js', 'tsx', 'ts'],
   webpack(webpackConfig, options) {
     // Nextra compatibility: redirect nextra imports to local shims
