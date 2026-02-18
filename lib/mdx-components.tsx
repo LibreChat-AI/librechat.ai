@@ -7,6 +7,7 @@ import { Accordion, Accordions } from 'fumadocs-ui/components/accordion'
 import { OptionTable } from '@/components/table'
 import { Frame } from '@/components/Frame'
 import { DocsHub } from '@/components/DocsHub'
+import { LocalInstallHub } from '@/components/LocalInstallHub'
 import { QuickStartHub } from '@/components/QuickStartHub'
 import { FeaturesHub } from '@/components/FeaturesHub'
 import Carousel from '@/components/carousel/Carousel'
@@ -228,6 +229,7 @@ export const mdxComponents = {
   DocsHub,
   QuickStartHub,
   FeaturesHub,
+  LocalInstallHub,
   Button: ({ children, ...props }: { children?: ReactNode; [key: string]: any }) => (
     <button className="rounded-md bg-fd-primary px-4 py-2 text-fd-primary-foreground" {...props}>
       {children}
