@@ -1,6 +1,5 @@
 import Image from 'next/image'
 import { useRouter } from 'next/router'
-import { Page } from 'nextra'
 import { getPagesUnderRoute } from 'nextra/context'
 import { Author } from '../Author/Authors'
 import { Video } from '../Video'
@@ -8,9 +7,7 @@ import { Video } from '../Video'
 export const BlogHeader = () => {
   const router = useRouter()
   const changelogPages = getPagesUnderRoute('/blog')
-  const page = changelogPages.find((page) => page.route === router.pathname) as Page & {
-    frontMatter: any
-  }
+  const page = changelogPages.find((page) => page.route === router.pathname)
 
   const { title, description, ogImage, ogVideo, gif, date, authorid } = page.frontMatter
 

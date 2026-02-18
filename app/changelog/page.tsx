@@ -31,7 +31,7 @@ export default function ChangelogPage() {
       description: entry.description,
       date,
       url: `/changelog/${slug}`,
-      version: (entry as any).version,
+      version: entry.version,
       type: slug.startsWith('config_') ? 'config' : 'release',
     }
   })

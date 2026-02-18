@@ -121,6 +121,7 @@ function CardCompat({
   href,
   icon,
   arrow,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   image,
   ...props
 }: {
@@ -181,6 +182,7 @@ function ImgCompat({ image, ...props }: { image?: boolean; [key: string]: any })
   }
   const DefaultImg = defaultMdxComponents.img
   if (DefaultImg) return <DefaultImg {...props} />
+  // eslint-disable-next-line @next/next/no-img-element
   return <img {...props} />
 }
 

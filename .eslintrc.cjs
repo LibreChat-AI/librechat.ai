@@ -208,6 +208,7 @@ module.exports = {
         'postcss.config.js',
         'tailwind.config.js',
         'next.config.js',
+        'next.config.mjs',
         '.eslintrc.cjs',
       ],
       env: {

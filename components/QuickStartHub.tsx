@@ -1,13 +1,5 @@
 import Link from 'next/link'
-import {
-  Container,
-  Plug,
-  Download,
-  Settings,
-  Play,
-  FileCode,
-  ArrowRight,
-} from 'lucide-react'
+import { Container, Plug, Download, Settings, Play, FileCode, ArrowRight } from 'lucide-react'
 
 const guides = [
   {
@@ -77,9 +69,11 @@ export function QuickStartHub() {
                 </p>
 
                 {/* Step preview */}
-                <ol className="mb-5 flex flex-1 flex-col gap-2.5" aria-label={`${guide.title} steps`}>
+                <ol
+                  className="mb-5 flex flex-1 flex-col gap-2.5"
+                  aria-label={`${guide.title} steps`}
+                >
                   {guide.steps.map((step, i) => {
-                    const StepIcon = step.icon
                     return (
                       <li key={step.label} className="flex items-center gap-3">
                         <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-fd-accent text-[10px] font-semibold text-fd-muted-foreground">

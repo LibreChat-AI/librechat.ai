@@ -1,20 +1,9 @@
 import Image from 'next/image'
 import { getPagesUnderRoute } from 'nextra/context'
-import { Page } from 'nextra'
-
-type AuthorPage = Page & {
-  frontMatter: {
-    name: string
-    ogImage: string
-    authorid: string
-  }
-}
 
 export const Author = ({ authorid }: { authorid: string }) => {
   const authorPages = getPagesUnderRoute('/authors')
-  const page = authorPages?.find(
-    (page) => (page as AuthorPage).frontMatter.authorid === authorid,
-  ) as AuthorPage
+  const page = authorPages?.find((page) => page.frontMatter.authorid === authorid)
 
   if (!page) {
     // Handle the case when the author page is not found
