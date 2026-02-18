@@ -56,7 +56,8 @@ const nonPermanentRedirects = [
   ['/docs/user_guides/import_convos', '/docs/features/import_convos'],
   ['/docs/user_guides/password_reset', '/docs/features/password_reset'],
   ['/docs/user_guides/rag_api', '/docs/features/rag_api'],
-  ['/docs/user_guides/plugins', '/docs/features/plugins'],
+  ['/docs/user_guides/plugins', '/docs/features/agents'],
+  ['/docs/features/plugins', '/docs/features/agents'],
 ];
 
 /**
