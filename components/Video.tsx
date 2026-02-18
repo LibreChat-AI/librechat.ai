@@ -1,8 +1,10 @@
+import 'vidstack/styles/base.css'
 import { cn } from '@/lib/utils'
 import { MediaPlayer, MediaOutlet, useMediaRemote, useMediaStore } from '@vidstack/react'
 import { Play } from 'lucide-react'
 import { useState, useRef } from 'react'
 
+/** Video embed component using vidstack. Supports poster overlays, gif-style autoplay, and lazy loading. */
 export const Video = ({
   src,
   poster,
@@ -48,6 +50,9 @@ export const Video = ({
       ) : panelDismissed ? null : (
         // Overlay with play button and poster image
         <div
+          role="button"
+          tabIndex={0}
+          aria-label={title ? `Play ${title}` : 'Play video'}
           className="group cursor-pointer absolute inset-0 z-10 flex flex-col justify-center items-center bg-cover"
           style={{
             backgroundImage: poster ? `url(${poster})` : undefined,
@@ -58,6 +63,13 @@ export const Video = ({
           onClick={() => {
             remote.play()
             setPanelDismissed(true)
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault()
+              remote.play()
+              setPanelDismissed(true)
+            }
           }}
         >
           <div className="p-3 md:p-6 rounded-full bg-black group-hover:ring-8 ring-black/20 bg-opacity-75 hover:bg-opacity-90 transition flex">

@@ -4,6 +4,7 @@ interface BannerProps {
   storageKey: string
 }
 
+/** Dismissible announcement banner persisted via localStorage. */
 export function Banner({ storageKey }: BannerProps) {
   const [isVisible, setIsVisible] = useState(false)
 
@@ -28,7 +29,7 @@ export function Banner({ storageKey }: BannerProps) {
           LibreChat is joining <span className="clickhouse-highlight">ClickHouse</span> to power the
           open-source Agentic Data Stack 🎉{' '}
           <a
-            href="http://clickhouse.com/blog/librechat-open-source-agentic-data-stack"
+            href="https://clickhouse.com/blog/librechat-open-source-agentic-data-stack"
             target="_blank"
             rel="noopener noreferrer"
           >

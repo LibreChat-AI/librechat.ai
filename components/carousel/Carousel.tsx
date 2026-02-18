@@ -1,3 +1,5 @@
+'use client'
+
 // Carousel.tsx
 import React, { useEffect, useRef } from 'react'
 import Glide from '@glidejs/glide'
@@ -49,10 +51,10 @@ const Carousel = ({ children, ...props }) => {
       </div>
       {showControls && (
         <div className={styles.glide__arrows} data-glide-el="controls">
-          <button className={`${styles.glide__arrow} glide__arrow--left}`} data-glide-dir="<">
+          <button className={`${styles.glide__arrow} glide__arrow--left}`} data-glide-dir="<" aria-label="Previous slide">
             ←
           </button>
-          <button className={`${styles.glide__arrow} glide__arrow--right}`} data-glide-dir=">">
+          <button className={`${styles.glide__arrow} glide__arrow--right}`} data-glide-dir=">" aria-label="Next slide">
             →
           </button>
         </div>
@@ -60,7 +62,7 @@ const Carousel = ({ children, ...props }) => {
       {showBullets && (
         <div className={styles.glide__bullets} data-glide-el="controls[nav]">
           {React.Children.map(children, (_, index) => (
-            <button className={styles.glide__bullets} data-glide-dir={`=${index}`}></button>
+            <button className={styles.glide__bullets} data-glide-dir={`=${index}`} aria-label={`Go to slide ${index + 1}`}></button>
           ))}
         </div>
       )}

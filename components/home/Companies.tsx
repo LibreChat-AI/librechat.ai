@@ -1,6 +1,5 @@
 import React, { useMemo } from 'react'
 import Image from 'next/image'
-import styles from './companies.module.css'
 
 interface Company {
   name: string
@@ -34,118 +33,106 @@ const companies: Company[] = [
   },
 ]
 
+/** Company logos section showcasing companies that use LibreChat. */
 export const Companies: React.FC = React.memo(() => {
-  const minLogos = 8 // Reduced minimum for better performance
-
-  const displayCount = Math.max(minLogos, companies.length)
-
   const logosToShow = useMemo(
-    () => Array.from({ length: displayCount }, (_, i) => companies[i % companies.length]),
-    [displayCount],
-  )
-
-  // Create duplicated array for seamless infinite scroll
-  const duplicatedLogos = useMemo(() => [...logosToShow, ...logosToShow], [logosToShow])
-
-  const baseSpeed = 2
-  const duration = useMemo(() => Math.max(40, logosToShow.length * baseSpeed), [logosToShow.length])
-  const mobileDuration = useMemo(() => Math.max(30, logosToShow.length * 1.5), [logosToShow.length])
-
-  const containerStyle = useMemo(
-    () =>
-      ({
-        '--scroll-duration': `${duration}s`,
-        '--scroll-duration-mobile': `${mobileDuration}s`,
-      }) as React.CSSProperties,
-    [duration, mobileDuration],
+    () => Array.from({ length: 8 }, (_, i) => companies[i % companies.length]),
+    [],
   )
 
   return (
     <section className="py-20">
       <div className="w-full px-4 sm:px-6 lg:px-8">
         <div className="text-center mb-16">
-          <h2 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white sm:text-4xl">
+          <h2 className="text-3xl font-bold tracking-tight text-foreground sm:text-4xl">
             Trusted by companies worldwide
           </h2>
-          <p className="mt-4 text-lg text-gray-600 dark:text-gray-300">
+          <p className="mt-4 text-lg text-muted-foreground">
             Join thousands of organizations using LibreChat
           </p>
         </div>
-        <div className={styles.scrollContainer} style={containerStyle}>
-          <div className={styles.scrollContent}>
-            {duplicatedLogos.map((company, index) => {
-              const isFirstFewLogos = index < Math.min(4, logosToShow.length)
-              const key = `${company.name}-${index}`
+        <div className="flex flex-wrap items-center justify-center gap-8 md:gap-12">
+          {logosToShow.map((company, index) => {
+            const isFirstFewLogos = index < 4
+            const key = `${company.name}-${index}`
 
-              return (
-                <div key={key} className={`${styles.logoItem} ${company.logoColor ? 'group' : ''}`}>
-                  {company.logoColor ? (
-                    <div className="relative">
+            return (
+              <div
+                key={key}
+                className={`flex items-center justify-center px-4 py-2 ${company.logoColor ? 'group' : ''}`}
+              >
+                {company.logoColor ? (
+                  <div className="relative">
+                    <Image
+                      src={company.logo}
+                      alt={`${company.name} logo`}
+                      className="dark:hidden group-hover:opacity-0 transition-opacity duration-300 h-10 w-auto object-contain"
+                      width={120}
+                      height={60}
+                      sizes="120px"
+                      unoptimized={company.logo.endsWith('.svg')}
+                      priority={isFirstFewLogos}
+                      loading={isFirstFewLogos ? 'eager' : 'lazy'}
+                    />
+                    <Image
+                      src={company.logoDark || company.logo}
+                      alt={`${company.name} logo`}
+                      className="hidden dark:block group-hover:opacity-0 transition-opacity duration-300 h-10 w-auto object-contain"
+                      width={120}
+                      height={60}
+                      sizes="120px"
+                      unoptimized={(company.logoDark || company.logo).endsWith('.svg')}
+                      priority={isFirstFewLogos}
+                      loading={isFirstFewLogos ? 'eager' : 'lazy'}
+                    />
+                    <Image
+                      src={company.logoColor}
+                      alt={`${company.name} logo`}
+                      className="absolute top-0 left-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300 h-10 w-auto object-contain"
+                      width={120}
+                      height={60}
+                      sizes="120px"
+                      unoptimized={company.logoColor.endsWith('.svg')}
+                      priority={isFirstFewLogos}
+                      loading={isFirstFewLogos ? 'eager' : 'lazy'}
+                    />
+                  </div>
+                ) : (
+                  <>
+                    <Image
+                      src={company.logo}
+                      alt={`${company.name} logo`}
+                      className={`h-10 w-auto object-contain ${company.logoDark ? 'dark:hidden' : ''}`}
+                      width={120}
+                      height={60}
+                      sizes="120px"
+                      unoptimized={company.logo.endsWith('.svg')}
+                      priority={isFirstFewLogos}
+                      loading={isFirstFewLogos ? 'eager' : 'lazy'}
+                    />
+                    {company.logoDark && (
                       <Image
-                        src={company.logo}
+                        src={company.logoDark}
                         alt={`${company.name} logo`}
-                        className={`${styles.logo} dark:hidden group-hover:opacity-0 transition-opacity duration-300`}
+                        className="hidden dark:block h-10 w-auto object-contain"
                         width={120}
                         height={60}
-                        unoptimized
+                        sizes="120px"
+                        unoptimized={company.logoDark.endsWith('.svg')}
                         priority={isFirstFewLogos}
                         loading={isFirstFewLogos ? 'eager' : 'lazy'}
                       />
-                      <Image
-                        src={company.logoDark || company.logo}
-                        alt={`${company.name} logo`}
-                        className={`${styles.logo} hidden dark:block group-hover:opacity-0 transition-opacity duration-300`}
-                        width={120}
-                        height={60}
-                        unoptimized
-                        priority={isFirstFewLogos}
-                        loading={isFirstFewLogos ? 'eager' : 'lazy'}
-                      />
-                      <Image
-                        src={company.logoColor}
-                        alt={`${company.name} logo`}
-                        className={`${styles.logo} absolute top-0 left-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300`}
-                        width={120}
-                        height={60}
-                        unoptimized
-                        priority={isFirstFewLogos}
-                        loading={isFirstFewLogos ? 'eager' : 'lazy'}
-                      />
-                    </div>
-                  ) : (
-                    <>
-                      <Image
-                        src={company.logo}
-                        alt={`${company.name} logo`}
-                        className={`${styles.logo} ${company.logoDark ? 'dark:hidden' : ''}`}
-                        width={120}
-                        height={60}
-                        unoptimized
-                        priority={isFirstFewLogos}
-                        loading={isFirstFewLogos ? 'eager' : 'lazy'}
-                      />
-                      {company.logoDark && (
-                        <Image
-                          src={company.logoDark}
-                          alt={`${company.name} logo`}
-                          className={`${styles.logo} hidden dark:block`}
-                          width={120}
-                          height={60}
-                          unoptimized
-                          priority={isFirstFewLogos}
-                          loading={isFirstFewLogos ? 'eager' : 'lazy'}
-                        />
-                      )}
-                    </>
-                  )}
-                </div>
-              )
-            })}
-          </div>
+                    )}
+                  </>
+                )}
+              </div>
+            )
+          })}
         </div>
       </div>
     </section>
   )
 })
+Companies.displayName = 'Companies'
 
 export default Companies

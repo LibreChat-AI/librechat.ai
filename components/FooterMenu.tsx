@@ -1,14 +1,7 @@
 import Link from 'next/link'
-import { FloatingDock } from '@/components/ui/floating-dock'
-import {
-  IconBrandGithub,
-  IconBrandDiscord,
-  IconBrandLinkedin,
-  IconBrandTwitter,
-  IconBrandYoutube,
-  IconMail,
-} from '@tabler/icons-react'
-import { useMediaQuery } from 'react-responsive'
+import { Github, Linkedin, Youtube, Mail } from 'lucide-react'
+import Discord from './icons/discord'
+import X from './icons/x'
 
 const menuItems: {
   heading: string
@@ -105,45 +98,47 @@ const menuItems: {
   },
 ]
 
+const socialLinks = [
+  {
+    title: 'GitHub',
+    icon: <Github className="h-4 w-4" aria-hidden="true" />,
+    href: 'https://github.librechat.ai/',
+  },
+  {
+    title: 'Discord',
+    icon: <Discord className="h-4 w-4" aria-hidden="true" />,
+    href: 'https://discord.librechat.ai/',
+  },
+  {
+    title: 'LinkedIn',
+    icon: <Linkedin className="h-4 w-4" aria-hidden="true" />,
+    href: 'https://linkedin.librechat.ai/',
+  },
+  {
+    title: 'X',
+    icon: <X className="h-4 w-4" aria-hidden="true" />,
+    href: 'https://x.com/LibreChatAI',
+  },
+  {
+    title: 'YouTube',
+    icon: <Youtube className="h-4 w-4" aria-hidden="true" />,
+    href: 'https://www.youtube.com/@LibreChat',
+  },
+  {
+    title: 'Email',
+    icon: <Mail className="h-4 w-4" aria-hidden="true" />,
+    href: 'mailto:contact@librechat.ai',
+  },
+]
+
+/** Site footer with navigation link columns and social media icon links. */
 const FooterMenu = () => {
-  const isMobile = useMediaQuery({ query: '(max-width: 640px)' })
-
-  const socialLinks = [
-    {
-      title: 'GitHub',
-      icon: <IconBrandGithub className="h-full w-full text-neutral-500 dark:text-neutral-300" />,
-      href: 'https://github.librechat.ai/',
-    },
-    {
-      title: 'Discord',
-      icon: <IconBrandDiscord className="h-full w-full text-neutral-500 dark:text-neutral-300" />,
-      href: 'https://discord.librechat.ai/',
-    },
-    {
-      title: 'LinkedIn',
-      icon: <IconBrandLinkedin className="h-full w-full text-neutral-500 dark:text-neutral-300" />,
-      href: 'https://linkedin.librechat.ai/',
-    },
-    {
-      title: 'Twitter',
-      icon: <IconBrandTwitter className="h-full w-full text-neutral-500 dark:text-neutral-300" />,
-      href: 'https://x.com/LibreChatAI',
-    },
-    {
-      title: 'YouTube',
-      icon: <IconBrandYoutube className="h-full w-full text-neutral-500 dark:text-neutral-300" />,
-      href: 'https://www.youtube.com/@LibreChat',
-    },
-    {
-      title: 'Email',
-      icon: <IconMail className="h-full w-full text-neutral-500 dark:text-neutral-300" />,
-      href: 'mailto:contact@librechat.ai',
-    },
-  ]
-
   return (
-    <div className="w-full">
-      <div className="grid grid-cols-2 md:grid-cols-6 text-base gap-y-8 gap-x-2">
+    <footer className="w-full" role="contentinfo">
+      <nav
+        aria-label="Footer"
+        className="grid grid-cols-2 md:grid-cols-6 text-base gap-y-8 gap-x-2"
+      >
         {menuItems.map((menu) => (
           <div key={menu.heading}>
             <p className="pb-2 font-mono font-bold text-primary">{menu.heading}</p>
@@ -158,13 +153,23 @@ const FooterMenu = () => {
             </ul>
           </div>
         ))}
-        <div className="flex items-center justify-between md:col-span-6">
-          <div className="font-sans text-sm">© {new Date().getFullYear()} LibreChat</div>
-          {!isMobile && <FloatingDock items={socialLinks} desktopClassName="ml-auto" />}
-        </div>
+      </nav>
+      <div className="flex items-center justify-between mt-8">
+        <div className="font-sans text-sm">&copy; {new Date().getFullYear()} LibreChat</div>
+        <nav aria-label="Social media" className="flex items-center gap-1">
+          {socialLinks.map((link) => (
+            <Link
+              key={link.title}
+              href={link.href}
+              aria-label={link.title}
+              className="flex items-center justify-center h-9 w-9 rounded-full text-neutral-500 dark:text-neutral-300 transition-colors duration-200 hover:text-primary hover:bg-neutral-100 dark:hover:bg-neutral-800"
+            >
+              {link.icon}
+            </Link>
+          ))}
+        </nav>
       </div>
-      {isMobile && <FloatingDock items={socialLinks} mobileClassName="mt-4" />}
-    </div>
+    </footer>
   )
 }
 

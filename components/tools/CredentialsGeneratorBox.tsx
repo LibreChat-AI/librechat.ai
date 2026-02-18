@@ -42,11 +42,12 @@ const CredsGenerator = () => {
         <div>
           <p style={{ fontSize: '0.8rem', marginBottom: '5px', marginTop: '10px' }}>CREDS_KEY</p>
           <div className="input-container">
-            <input type="text" value={credentials?.CREDS_KEY || ''} placeholder="" readOnly />
+            <input type="text" value={credentials?.CREDS_KEY || ''} placeholder="" readOnly aria-label="CREDS_KEY value" />
             <button
               className="copy-button"
               onClick={() => handleCopy(credentials?.CREDS_KEY)}
               disabled={!copyEnabled}
+              aria-label="Copy CREDS_KEY"
             >
               Copy
             </button>
@@ -55,11 +56,12 @@ const CredsGenerator = () => {
         <div>
           <p style={{ fontSize: '0.8rem', marginBottom: '5px', marginTop: '10px' }}>CREDS_IV</p>
           <div className="input-container">
-            <input type="text" value={credentials?.CREDS_IV || ''} placeholder="" readOnly />
+            <input type="text" value={credentials?.CREDS_IV || ''} placeholder="" readOnly aria-label="CREDS_IV value" />
             <button
               className="copy-button"
               onClick={() => handleCopy(credentials?.CREDS_IV)}
               disabled={!copyEnabled}
+              aria-label="Copy CREDS_IV"
             >
               Copy
             </button>
@@ -68,11 +70,12 @@ const CredsGenerator = () => {
         <div>
           <p style={{ fontSize: '0.8rem', marginBottom: '5px', marginTop: '10px' }}>JWT_SECRET</p>
           <div className="input-container">
-            <input type="text" value={credentials?.JWT_SECRET || ''} placeholder="" readOnly />
+            <input type="text" value={credentials?.JWT_SECRET || ''} placeholder="" readOnly aria-label="JWT_SECRET value" />
             <button
               className="copy-button"
               onClick={() => handleCopy(credentials?.JWT_SECRET)}
               disabled={!copyEnabled}
+              aria-label="Copy JWT_SECRET"
             >
               Copy
             </button>
@@ -88,11 +91,13 @@ const CredsGenerator = () => {
               value={credentials?.JWT_REFRESH_SECRET || ''}
               placeholder=""
               readOnly
+              aria-label="JWT_REFRESH_SECRET value"
             />
             <button
               className="copy-button"
               onClick={() => handleCopy(credentials?.JWT_REFRESH_SECRET)}
               disabled={!copyEnabled}
+              aria-label="Copy JWT_REFRESH_SECRET"
             >
               Copy
             </button>
@@ -103,11 +108,12 @@ const CredsGenerator = () => {
             MEILI_MASTER_KEY
           </p>
           <div className="input-container">
-            <input type="text" value={credentials?.MEILI_KEY || ''} placeholder="" readOnly />
+            <input type="text" value={credentials?.MEILI_KEY || ''} placeholder="" readOnly aria-label="MEILI_MASTER_KEY value" />
             <button
               className="copy-button"
               onClick={() => handleCopy(credentials?.MEILI_KEY)}
               disabled={!copyEnabled}
+              aria-label="Copy MEILI_MASTER_KEY"
             >
               Copy
             </button>
@@ -119,6 +125,7 @@ const CredsGenerator = () => {
         className="generate-button"
         style={{ display: 'block', margin: '0 auto', marginTop: '15px' }}
         onClick={handleGenerate}
+        aria-label="Generate new credentials"
       >
         Generate
       </button>
