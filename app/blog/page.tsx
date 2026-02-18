@@ -70,6 +70,7 @@ export default function BlogPage() {
                     src={entry.ogImage}
                     alt={entry.title}
                     fill
+                    sizes="(max-width: 768px) 100vw, 50vw"
                     className="object-cover transition-transform group-hover:scale-105"
                     unoptimized={entry.ogImage.endsWith('.gif')}
                   />
