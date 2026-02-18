@@ -13,6 +13,8 @@ import {
   Star,
   MessageSquare,
 } from 'lucide-react'
+import { HomeLayout } from 'fumadocs-ui/layouts/home'
+import { baseOptions } from '@/app/layout.config'
 import type { Metadata } from 'next'
 
 import DemoImageDark from '@/components/home/img/demo_dark.png'
@@ -70,10 +72,9 @@ async function getDockerHubPulls(repo: string): Promise<number> {
 
 async function getGhcrDownloads(pkg: string): Promise<number> {
   try {
-    const res = await fetch(
-      `https://github.com/danny-avila/LibreChat/pkgs/container/${pkg}`,
-      { next: { revalidate: 3600 } },
-    )
+    const res = await fetch(`https://github.com/danny-avila/LibreChat/pkgs/container/${pkg}`, {
+      next: { revalidate: 3600 },
+    })
     if (!res.ok) return 0
     const html = await res.text()
     const match = html.match(/Total downloads[\s\S]*?title="(\d+)"/)
@@ -207,11 +208,17 @@ function HeroSection({ stars }: { stars: number }) {
             href="https://github.com/danny-avila/LibreChat"
             target="_blank"
             rel="noopener noreferrer"
-            className="mb-8 inline-flex items-center gap-2 rounded-full border border-border bg-muted px-4 py-3 text-sm text-muted-foreground transition-colors hover:bg-accent"
-            aria-label={`LibreChat has ${formatNumber(stars)} stars on GitHub`}
+            className="mb-8 inline-flex items-center rounded-full border border-border text-sm transition-colors hover:bg-accent"
+            aria-label={`Star LibreChat on GitHub — ${formatNumber(stars)} stars`}
           >
-            <Star className="size-3.5" aria-hidden="true" />
-            <span>{formatNumber(stars)} stars on GitHub</span>
+            <span className="inline-flex items-center gap-2 px-4 py-2 text-foreground">
+              <Github className="size-4" aria-hidden="true" />
+              Star on GitHub
+            </span>
+            <span className="inline-flex items-center gap-1.5 border-l border-border px-3 py-2 text-muted-foreground">
+              <Star className="size-3.5" aria-hidden="true" />
+              {formatNumber(stars)}
+            </span>
           </Link>
         )}
 
@@ -366,7 +373,10 @@ function FeaturesSection() {
                   />
                   <h3 className="mb-2 text-base font-semibold text-foreground">{feature.title}</h3>
                   <p className="flex-1 text-sm text-muted-foreground">{feature.description}</p>
-                  <span className="mt-4 inline-flex items-center text-sm font-medium text-foreground opacity-0 transition-opacity group-hover:opacity-100" aria-hidden="true">
+                  <span
+                    className="mt-4 inline-flex items-center text-sm font-medium text-foreground opacity-0 transition-opacity group-hover:opacity-100"
+                    aria-hidden="true"
+                  >
                     Learn more
                     <ArrowRight className="ml-1 size-3.5" />
                   </span>
@@ -478,7 +488,7 @@ export default async function HomePage() {
   const [stars, pulls] = await Promise.all([getGitHubStars(), getContainerPulls()])
 
   return (
-    <>
+    <HomeLayout {...baseOptions}>
       <main className="min-h-screen">
         <HeroSection stars={stars} />
         <TrustedBySection />
@@ -491,6 +501,6 @@ export default async function HomePage() {
           <FooterMenu />
         </div>
       </div>
-    </>
+    </HomeLayout>
   )
 }
