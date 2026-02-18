@@ -30,7 +30,7 @@ const menuItems: {
       },
       {
         name: 'Roadmap',
-        href: '/blog/2025-02-20_2025_roadmap',
+        href: '/blog/2026-02-11_2026_roadmap',
       },
       {
         name: 'Demo',
