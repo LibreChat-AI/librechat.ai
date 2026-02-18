@@ -3,6 +3,7 @@ import { mdxComponents } from '@/lib/mdx-components'
 import { DocsPage, DocsBody, DocsTitle, DocsDescription } from 'fumadocs-ui/page'
 import { notFound } from 'next/navigation'
 import { LLMCopyButton, ViewOptions } from '@/components/page-actions'
+import { Feedback } from '@/components/Feedback'
 import type { Metadata } from 'next'
 
 interface PageProps {
@@ -37,6 +38,7 @@ export default async function Page(props: PageProps) {
       <DocsBody>
         <MDX components={mdxComponents} />
       </DocsBody>
+      <Feedback />
     </DocsPage>
   )
 }

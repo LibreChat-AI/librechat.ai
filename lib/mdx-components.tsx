@@ -2,7 +2,7 @@ import defaultMdxComponents from 'fumadocs-ui/mdx'
 import { Callout } from 'fumadocs-ui/components/callout'
 import { Step, Steps } from 'fumadocs-ui/components/steps'
 import { Tabs } from 'fumadocs-ui/components/tabs'
-import { File, Folder, Files } from 'fumadocs-ui/components/files'
+import { File as FumadocsFile, Folder, Files } from 'fumadocs-ui/components/files'
 import { Accordion, Accordions } from 'fumadocs-ui/components/accordion'
 import { OptionTable } from '@/components/table'
 import { Frame } from '@/components/Frame'
@@ -169,7 +169,27 @@ function CardCompat({
 function FileTreeCompat({ children, ...props }: { children?: ReactNode; [key: string]: any }) {
   return <Files {...props}>{children}</Files>
 }
-;(FileTreeCompat as any).File = File
+function FileCompat({
+  active,
+  className,
+  ...props
+}: {
+  active?: boolean
+  className?: string
+  name: string
+  icon?: ReactNode
+  [key: string]: any
+}) {
+  return (
+    <FumadocsFile
+      className={
+        active ? `${className ?? ''} bg-fd-accent text-fd-accent-foreground`.trim() : className
+      }
+      {...props}
+    />
+  )
+}
+;(FileTreeCompat as any).File = FileCompat
 ;(FileTreeCompat as any).Folder = Folder
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -197,7 +217,7 @@ export const mdxComponents = {
   Cards: CardsCompat,
   Card: CardCompat,
   FileTree: FileTreeCompat,
-  File,
+  File: FileCompat,
   Folder,
   Files,
   Accordion,

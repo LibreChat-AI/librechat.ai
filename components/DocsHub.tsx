@@ -1,7 +1,6 @@
 import Link from 'next/link'
 import {
-  Container,
-  Plug,
+  Rocket,
   Server,
   Cloud,
   Settings,
@@ -11,61 +10,82 @@ import {
   FileText,
   Map,
   MessageSquare,
-  ArrowRight,
   ChevronRight,
+  Terminal,
 } from 'lucide-react'
 
-const quickstart = [
+const paths = [
   {
-    icon: Container,
-    title: 'Local Setup',
-    description: 'Get LibreChat running on your machine in minutes using Docker.',
-    href: '/docs/quick_start/local_setup',
+    id: 'deploy',
+    title: 'Deploy',
+    items: [
+      {
+        icon: Rocket,
+        title: 'Quick Start',
+        description: 'Docker setup in 5 minutes',
+        href: '/docs/quick_start',
+      },
+      {
+        icon: Server,
+        title: 'Local Installation',
+        description: 'Docker, npm, and Helm Chart',
+        href: '/docs/local',
+      },
+      {
+        icon: Cloud,
+        title: 'Remote Hosting',
+        description: 'DigitalOcean, Railway, and more',
+        href: '/docs/remote',
+      },
+    ],
   },
   {
-    icon: Plug,
-    title: 'Custom Endpoints',
-    description: 'Connect to OpenRouter, Ollama, Deepseek, Groq, and other AI providers.',
-    href: '/docs/quick_start/custom_endpoints',
-  },
-]
-
-const categories = [
-  {
-    icon: Server,
-    title: 'Local Installation',
-    description: 'Docker, npm, and Helm Chart deployment',
-    href: '/docs/local',
-  },
-  {
-    icon: Cloud,
-    title: 'Remote Hosting',
-    description: 'DigitalOcean, Railway, HuggingFace, and more',
-    href: '/docs/remote',
+    id: 'configure',
+    title: 'Configure',
+    items: [
+      {
+        icon: Settings,
+        title: 'Configuration',
+        description: 'Environment variables, YAML, and auth',
+        href: '/docs/configuration',
+      },
+      {
+        icon: Terminal,
+        title: 'Custom Endpoints',
+        description: 'Connect Ollama, Deepseek, Groq, and more',
+        href: '/docs/quick_start/custom_endpoints',
+      },
+    ],
   },
   {
-    icon: Settings,
-    title: 'Configuration',
-    description: 'Environment variables, YAML, auth, and endpoints',
-    href: '/docs/configuration',
+    id: 'use',
+    title: 'Use',
+    items: [
+      {
+        icon: Sparkles,
+        title: 'Features',
+        description: 'MCP, Agents, Code Interpreter, Artifacts',
+        href: '/docs/features',
+      },
+      {
+        icon: BookOpen,
+        title: 'User Guides',
+        description: 'Presets, tips, and best practices',
+        href: '/docs/user_guides',
+      },
+    ],
   },
   {
-    icon: Sparkles,
-    title: 'Features',
-    description: 'MCP, Agents, Code Interpreter, Artifacts, and more',
-    href: '/docs/features',
-  },
-  {
-    icon: BookOpen,
-    title: 'User Guides',
-    description: 'Presets, AI overview, tips, and best practices',
-    href: '/docs/user_guides',
-  },
-  {
-    icon: Code,
-    title: 'Development',
-    description: 'Contributing, architecture, and debugging',
-    href: '/docs/development',
+    id: 'contribute',
+    title: 'Contribute',
+    items: [
+      {
+        icon: Code,
+        title: 'Development',
+        description: 'Contributing, architecture, and debugging',
+        href: '/docs/development',
+      },
+    ],
   },
 ]
 
@@ -90,10 +110,13 @@ const resources = [
   },
 ]
 
-function SectionHeading({ children }: { children: React.ReactNode }) {
+function SectionHeading({ children, id }: { children: React.ReactNode; id: string }) {
   return (
-    <div className="mb-5 flex items-center gap-3">
-      <h2 className="shrink-0 text-xs font-semibold uppercase tracking-widest text-fd-muted-foreground">
+    <div className="mb-4 flex items-center gap-3">
+      <h2
+        id={id}
+        className="shrink-0 text-xs font-semibold uppercase tracking-widest text-fd-muted-foreground"
+      >
         {children}
       </h2>
       <div className="h-px flex-1 bg-fd-border" aria-hidden="true" />
@@ -104,82 +127,43 @@ function SectionHeading({ children }: { children: React.ReactNode }) {
 export function DocsHub() {
   return (
     <nav className="not-prose space-y-10" aria-label="Documentation navigation">
-      {/* Quick Start - Primary actions, visually prominent */}
-      <section aria-labelledby="qs-heading">
-        <SectionHeading>
-          <span id="qs-heading">Quick Start</span>
-        </SectionHeading>
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          {quickstart.map((item) => {
-            const Icon = item.icon
-            return (
-              <Link
-                key={item.title}
-                href={item.href}
-                className="group relative rounded-xl border border-fd-border bg-fd-card p-6 transition-all duration-200 hover:border-fd-foreground/20 hover:shadow-lg hover:shadow-fd-foreground/[0.03]"
-              >
-                <div className="mb-4 inline-flex rounded-lg border border-fd-border bg-fd-background p-2.5 transition-colors group-hover:border-fd-foreground/20">
-                  <Icon
-                    className="size-5 text-fd-muted-foreground transition-colors group-hover:text-fd-foreground"
-                    aria-hidden="true"
-                  />
-                </div>
-                <h3 className="mb-1.5 text-base font-semibold text-fd-foreground">{item.title}</h3>
-                <p className="mb-4 text-sm leading-relaxed text-fd-muted-foreground">
-                  {item.description}
-                </p>
-                <span
-                  className="inline-flex items-center gap-1 text-sm font-medium text-fd-muted-foreground transition-all group-hover:gap-1.5 group-hover:text-fd-foreground"
-                  aria-hidden="true"
+      {/* Intent-based path groups */}
+      {paths.map((path) => (
+        <section key={path.id} aria-labelledby={`${path.id}-heading`}>
+          <SectionHeading id={`${path.id}-heading`}>{path.title}</SectionHeading>
+          <div className="overflow-hidden rounded-xl border border-fd-border">
+            {path.items.map((item, i) => {
+              const Icon = item.icon
+              return (
+                <Link
+                  key={item.title}
+                  href={item.href}
+                  className={`group flex items-center gap-4 px-5 py-4 transition-colors hover:bg-fd-accent${i < path.items.length - 1 ? ' border-b border-fd-border' : ''}`}
                 >
-                  Get started
-                  <ArrowRight className="size-3.5 transition-transform group-hover:translate-x-0.5" />
-                </span>
-              </Link>
-            )
-          })}
-        </div>
-      </section>
-
-      {/* Documentation - Clean navigation list */}
-      <section aria-labelledby="docs-heading">
-        <SectionHeading>
-          <span id="docs-heading">Documentation</span>
-        </SectionHeading>
-        <div className="overflow-hidden rounded-xl border border-fd-border">
-          {categories.map((item, i) => {
-            const Icon = item.icon
-            return (
-              <Link
-                key={item.title}
-                href={item.href}
-                className={`group flex items-center gap-4 px-5 py-4 transition-colors hover:bg-fd-accent${i < categories.length - 1 ? ' border-b border-fd-border' : ''}`}
-              >
-                <div className="shrink-0 rounded-md bg-fd-accent p-2 transition-colors group-hover:bg-fd-background">
-                  <Icon
-                    className="size-4 text-fd-muted-foreground transition-colors group-hover:text-fd-foreground"
+                  <div className="shrink-0 rounded-md bg-fd-accent p-2 transition-colors group-hover:bg-fd-background">
+                    <Icon
+                      className="size-4 text-fd-muted-foreground transition-colors group-hover:text-fd-foreground"
+                      aria-hidden="true"
+                    />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <span className="text-sm font-medium text-fd-foreground">{item.title}</span>
+                    <p className="text-xs text-fd-muted-foreground">{item.description}</p>
+                  </div>
+                  <ChevronRight
+                    className="size-4 shrink-0 text-fd-muted-foreground/40 transition-all group-hover:translate-x-0.5 group-hover:text-fd-foreground"
                     aria-hidden="true"
                   />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <span className="text-sm font-medium text-fd-foreground">{item.title}</span>
-                  <p className="text-xs text-fd-muted-foreground">{item.description}</p>
-                </div>
-                <ChevronRight
-                  className="size-4 shrink-0 text-fd-muted-foreground/40 transition-all group-hover:translate-x-0.5 group-hover:text-fd-foreground"
-                  aria-hidden="true"
-                />
-              </Link>
-            )
-          })}
-        </div>
-      </section>
+                </Link>
+              )
+            })}
+          </div>
+        </section>
+      ))}
 
-      {/* Resources - Compact links */}
+      {/* Resources */}
       <section aria-labelledby="resources-heading">
-        <SectionHeading>
-          <span id="resources-heading">Resources</span>
-        </SectionHeading>
+        <SectionHeading id="resources-heading">Resources</SectionHeading>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           {resources.map((item) => {
             const Icon = item.icon
