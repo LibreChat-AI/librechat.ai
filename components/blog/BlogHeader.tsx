@@ -1,13 +1,15 @@
+'use client'
+
 import Image from 'next/image'
-import { useRouter } from 'next/router'
+import { usePathname } from 'next/navigation'
 import { getPagesUnderRoute } from 'nextra/context'
 import { Author } from '../Author/Authors'
 import { Video } from '../Video'
 
 export const BlogHeader = () => {
-  const router = useRouter()
+  const pathname = usePathname()
   const changelogPages = getPagesUnderRoute('/blog')
-  const page = changelogPages.find((page) => page.route === router.pathname)
+  const page = changelogPages.find((page) => page.route === pathname)
 
   const { title, description, ogImage, ogVideo, gif, date, authorid } = page.frontMatter
 
