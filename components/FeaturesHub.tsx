@@ -23,6 +23,7 @@ import {
   ShieldCheck,
   ArrowRight,
   ChevronRight,
+  Sparkles,
 } from 'lucide-react'
 
 type Feature = {
@@ -30,6 +31,16 @@ type Feature = {
   title: string
   description: string
   href: string
+  tag?: string
+}
+
+const hero: Feature = {
+  icon: Cable,
+  title: 'Model Context Protocol',
+  description:
+    'Connect AI models to any external tool or service through MCP — the open standard for AI tool integration. LibreChat is an official MCP client.',
+  href: '/docs/features/mcp',
+  tag: 'Official MCP Client',
 }
 
 const highlights: Feature[] = [
@@ -41,66 +52,57 @@ const highlights: Feature[] = [
     href: '/docs/features/agents',
   },
   {
-    icon: Cable,
-    title: 'Model Context Protocol',
-    description:
-      'Connect AI models to any tool or service through MCP, the universal standard for AI tool integration.',
-    href: '/docs/features/mcp',
-  },
-  {
     icon: Terminal,
     title: 'Code Interpreter',
     description:
-      'Execute code in Python, JavaScript, Go, Rust, and more — securely sandboxed with zero setup.',
+      'Execute Python, JavaScript, Go, Rust, and more — securely sandboxed with zero setup.',
     href: '/docs/features/code_interpreter',
+  },
+  {
+    icon: Code,
+    title: 'Artifacts',
+    description:
+      'Generate React components, HTML pages, and Mermaid diagrams directly inside chat.',
+    href: '/docs/features/artifacts',
+  },
+  {
+    icon: Brain,
+    title: 'Memory',
+    description:
+      'Persistent context across conversations so your AI remembers preferences and history.',
+    href: '/docs/features/memory',
+  },
+  {
+    icon: Globe,
+    title: 'Web Search',
+    description: 'Give any model live internet access with built-in search and reranking.',
+    href: '/docs/features/web_search',
+  },
+  {
+    icon: Shield,
+    title: 'Authentication',
+    description: 'Enterprise-ready SSO with OAuth2, SAML, LDAP, and two-factor authentication.',
+    href: '/docs/features/authentication',
   },
 ]
 
 type Category = {
   title: string
   id: string
+  layout: 'grid' | 'list'
   items: Feature[]
 }
 
 const categories: Category[] = [
   {
-    title: 'AI & Agents',
-    id: 'ai-agents',
-    items: [
-      {
-        icon: Cable,
-        title: 'MCP',
-        description: 'Universal AI tool integration via Model Context Protocol',
-        href: '/docs/features/mcp',
-      },
-      {
-        icon: Bot,
-        title: 'Agents',
-        description: 'Custom AI assistants with tools and actions',
-        href: '/docs/features/agents',
-      },
-      {
-        icon: Terminal,
-        title: 'Code Interpreter',
-        description: 'Secure code execution in 8+ languages',
-        href: '/docs/features/code_interpreter',
-      },
-      {
-        icon: Code,
-        title: 'Artifacts',
-        description: 'Generate React, HTML, and Mermaid diagrams in chat',
-        href: '/docs/features/artifacts',
-      },
-    ],
-  },
-  {
     title: 'Search & Knowledge',
     id: 'search-knowledge',
+    layout: 'grid',
     items: [
       {
         icon: Globe,
         title: 'Web Search',
-        description: 'Search the web to enhance conversations',
+        description: 'Live internet access with built-in search and reranking',
         href: '/docs/features/web_search',
       },
       {
@@ -132,6 +134,7 @@ const categories: Category[] = [
   {
     title: 'Media',
     id: 'media',
+    layout: 'grid',
     items: [
       {
         icon: ImageIcon,
@@ -150,6 +153,7 @@ const categories: Category[] = [
   {
     title: 'Chat',
     id: 'chat',
+    layout: 'list',
     items: [
       {
         icon: GitFork,
@@ -192,11 +196,12 @@ const categories: Category[] = [
   {
     title: 'Security',
     id: 'security',
+    layout: 'list',
     items: [
       {
         icon: Shield,
         title: 'Authentication',
-        description: 'Multi-user auth with OAuth2, LDAP, and more',
+        description: 'Multi-user auth with OAuth2, SAML, LDAP, and more',
         href: '/docs/features/authentication',
       },
       {
@@ -215,10 +220,13 @@ const categories: Category[] = [
   },
 ]
 
-function SectionHeading({ children }: { children: React.ReactNode }) {
+function SectionHeading({ children, id }: { children: React.ReactNode; id: string }) {
   return (
     <div className="mb-5 flex items-center gap-3">
-      <h2 className="shrink-0 text-xs font-semibold uppercase tracking-widest text-fd-muted-foreground">
+      <h2
+        id={id}
+        className="shrink-0 text-xs font-semibold uppercase tracking-widest text-fd-muted-foreground"
+      >
         {children}
       </h2>
       <div className="h-px flex-1 bg-fd-border" aria-hidden="true" />
@@ -226,79 +234,135 @@ function SectionHeading({ children }: { children: React.ReactNode }) {
   )
 }
 
+function FeatureCard({ feature }: { feature: Feature }) {
+  const Icon = feature.icon
+  return (
+    <Link
+      href={feature.href}
+      className="group flex flex-col rounded-xl border border-fd-border bg-fd-card p-5 transition-all duration-200 hover:border-fd-foreground/20 hover:shadow-lg hover:shadow-fd-foreground/[0.03]"
+    >
+      <div className="mb-3 inline-flex w-fit rounded-lg border border-fd-border bg-fd-background p-2 transition-colors group-hover:border-fd-foreground/20">
+        <Icon
+          className="size-4 text-fd-muted-foreground transition-colors group-hover:text-fd-foreground"
+          aria-hidden="true"
+        />
+      </div>
+      <h3 className="mb-1 text-sm font-semibold text-fd-foreground">{feature.title}</h3>
+      <p className="mb-3 flex-1 text-xs leading-relaxed text-fd-muted-foreground">
+        {feature.description}
+      </p>
+      <span
+        className="inline-flex items-center gap-1 text-xs font-medium text-fd-muted-foreground transition-all group-hover:gap-1.5 group-hover:text-fd-foreground"
+        aria-hidden="true"
+      >
+        Learn more
+        <ArrowRight className="size-3 transition-transform group-hover:translate-x-0.5" />
+      </span>
+    </Link>
+  )
+}
+
+function ListItem({ item, last }: { item: Feature; last: boolean }) {
+  const Icon = item.icon
+  return (
+    <Link
+      href={item.href}
+      className={`group flex items-center gap-4 px-5 py-3.5 transition-colors hover:bg-fd-accent${last ? '' : ' border-b border-fd-border'}`}
+    >
+      <div className="shrink-0 rounded-md bg-fd-accent p-1.5 transition-colors group-hover:bg-fd-background">
+        <Icon
+          className="size-3.5 text-fd-muted-foreground transition-colors group-hover:text-fd-foreground"
+          aria-hidden="true"
+        />
+      </div>
+      <div className="min-w-0 flex-1">
+        <span className="text-sm font-medium text-fd-foreground">{item.title}</span>
+        <p className="text-xs text-fd-muted-foreground">{item.description}</p>
+      </div>
+      <ChevronRight
+        className="size-4 shrink-0 text-fd-muted-foreground/40 transition-all group-hover:translate-x-0.5 group-hover:text-fd-foreground"
+        aria-hidden="true"
+      />
+    </Link>
+  )
+}
+
 export function FeaturesHub() {
+  const HeroIcon = hero.icon
+
   return (
     <nav className="not-prose space-y-10" aria-label="Features navigation">
-      {/* Highlights - 3 prominent feature cards */}
-      <section aria-labelledby="highlights-heading">
-        <SectionHeading>
-          <span id="highlights-heading">Highlights</span>
-        </SectionHeading>
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-          {highlights.map((feature) => {
-            const Icon = feature.icon
-            return (
-              <Link
-                key={feature.title}
-                href={feature.href}
-                className="group relative flex flex-col rounded-xl border border-fd-border bg-fd-card p-5 transition-all duration-200 hover:border-fd-foreground/20 hover:shadow-lg hover:shadow-fd-foreground/[0.03]"
-              >
-                <div className="mb-3 inline-flex rounded-lg border border-fd-border bg-fd-background p-2 transition-colors group-hover:border-fd-foreground/20">
-                  <Icon
-                    className="size-4 text-fd-muted-foreground transition-colors group-hover:text-fd-foreground"
-                    aria-hidden="true"
-                  />
-                </div>
-                <h3 className="mb-1 text-sm font-semibold text-fd-foreground">{feature.title}</h3>
-                <p className="mb-3 flex-1 text-xs leading-relaxed text-fd-muted-foreground">
-                  {feature.description}
-                </p>
-                <span
-                  className="inline-flex items-center gap-1 text-xs font-medium text-fd-muted-foreground transition-all group-hover:gap-1.5 group-hover:text-fd-foreground"
-                  aria-hidden="true"
-                >
-                  Learn more
-                  <ArrowRight className="size-3 transition-transform group-hover:translate-x-0.5" />
+      {/* Hero feature — MCP */}
+      <section aria-labelledby="hero-heading">
+        <SectionHeading id="hero-heading">Featured</SectionHeading>
+        <Link
+          href={hero.href}
+          className="group relative flex flex-col overflow-hidden rounded-xl border border-fd-foreground/15 bg-fd-card transition-all duration-200 hover:border-fd-foreground/25 hover:shadow-lg hover:shadow-fd-foreground/[0.04] sm:flex-row"
+        >
+          {/* Icon area */}
+          <div className="flex items-center justify-center border-b border-fd-border bg-fd-accent/50 p-8 sm:w-32 sm:border-b-0 sm:border-r">
+            <HeroIcon
+              className="size-10 text-fd-muted-foreground transition-colors group-hover:text-fd-foreground"
+              aria-hidden="true"
+            />
+          </div>
+          {/* Content */}
+          <div className="flex flex-1 flex-col justify-center p-5 sm:p-6">
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              <h3 className="text-base font-semibold text-fd-foreground">{hero.title}</h3>
+              {hero.tag && (
+                <span className="rounded-full bg-fd-primary px-2.5 py-0.5 text-[10px] font-medium text-fd-primary-foreground">
+                  {hero.tag}
                 </span>
-              </Link>
-            )
-          })}
+              )}
+            </div>
+            <p className="mb-3 text-sm leading-relaxed text-fd-muted-foreground">
+              {hero.description}
+            </p>
+            <span
+              className="inline-flex items-center gap-1.5 text-sm font-medium text-fd-foreground transition-colors group-hover:text-fd-foreground/80"
+              aria-hidden="true"
+            >
+              Read the docs
+              <ArrowRight className="size-3.5 transition-transform group-hover:translate-x-0.5" />
+            </span>
+          </div>
+        </Link>
+      </section>
+
+      {/* Highlights — 6 top features in a 3x2 grid */}
+      <section aria-labelledby="highlights-heading">
+        <SectionHeading id="highlights-heading">
+          <span className="inline-flex items-center gap-1.5">
+            <Sparkles className="size-3" aria-hidden="true" />
+            Core Features
+          </span>
+        </SectionHeading>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {highlights.map((feature) => (
+            <FeatureCard key={feature.title} feature={feature} />
+          ))}
         </div>
       </section>
 
-      {/* Category sections */}
+      {/* Category sections — mixed layouts */}
       {categories.map((category) => (
         <section key={category.id} aria-labelledby={`${category.id}-heading`}>
-          <SectionHeading>
-            <span id={`${category.id}-heading`}>{category.title}</span>
-          </SectionHeading>
-          <div className="overflow-hidden rounded-xl border border-fd-border">
-            {category.items.map((item, i) => {
-              const Icon = item.icon
-              return (
-                <Link
-                  key={item.title}
-                  href={item.href}
-                  className={`group flex items-center gap-4 px-5 py-3.5 transition-colors hover:bg-fd-accent${i < category.items.length - 1 ? ' border-b border-fd-border' : ''}`}
-                >
-                  <div className="shrink-0 rounded-md bg-fd-accent p-1.5 transition-colors group-hover:bg-fd-background">
-                    <Icon
-                      className="size-3.5 text-fd-muted-foreground transition-colors group-hover:text-fd-foreground"
-                      aria-hidden="true"
-                    />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <span className="text-sm font-medium text-fd-foreground">{item.title}</span>
-                    <p className="text-xs text-fd-muted-foreground">{item.description}</p>
-                  </div>
-                  <ChevronRight
-                    className="size-4 shrink-0 text-fd-muted-foreground/40 transition-all group-hover:translate-x-0.5 group-hover:text-fd-foreground"
-                    aria-hidden="true"
-                  />
-                </Link>
-              )
-            })}
-          </div>
+          <SectionHeading id={`${category.id}-heading`}>{category.title}</SectionHeading>
+
+          {category.layout === 'grid' ? (
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {category.items.map((item) => (
+                <FeatureCard key={item.title} feature={item} />
+              ))}
+            </div>
+          ) : (
+            <div className="overflow-hidden rounded-xl border border-fd-border">
+              {category.items.map((item, i) => (
+                <ListItem key={item.title} item={item} last={i === category.items.length - 1} />
+              ))}
+            </div>
+          )}
         </section>
       ))}
     </nav>
