@@ -241,7 +241,7 @@ function FeatureCard({ feature }: { feature: Feature }) {
       href={feature.href}
       className="group flex flex-col rounded-xl border border-fd-border bg-fd-card p-5 transition-all duration-200 hover:border-fd-foreground/20 hover:shadow-lg hover:shadow-fd-foreground/[0.03]"
     >
-      <div className="mb-3 inline-flex rounded-lg border border-fd-border bg-fd-background p-2 transition-colors group-hover:border-fd-foreground/20">
+      <div className="mb-3 inline-flex w-fit rounded-lg border border-fd-border bg-fd-background p-2 transition-colors group-hover:border-fd-foreground/20">
         <Icon
           className="size-4 text-fd-muted-foreground transition-colors group-hover:text-fd-foreground"
           aria-hidden="true"

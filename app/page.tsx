@@ -35,16 +35,33 @@ export const metadata: Metadata = {
  * Data fetching (server-side, cached)
  * --------------------------------------------------------------------------- */
 
-async function getGitHubStars(): Promise<number> {
+async function getGitHubData(): Promise<{ stars: number; contributors: number }> {
   try {
-    const res = await fetch('https://api.github.com/repos/danny-avila/LibreChat', {
-      next: { revalidate: 3600 },
-    })
-    if (!res.ok) return 0
-    const data = await res.json()
-    return data.stargazers_count ?? 0
+    const [repoRes, contribRes] = await Promise.all([
+      fetch('https://api.github.com/repos/danny-avila/LibreChat', {
+        next: { revalidate: 3600 },
+      }),
+      fetch(
+        'https://api.github.com/repos/danny-avila/LibreChat/contributors?per_page=1&anon=true',
+        { next: { revalidate: 3600 } },
+      ),
+    ])
+
+    const repoData = repoRes.ok ? await repoRes.json() : {}
+    const stars = repoData.stargazers_count ?? 0
+
+    let contributors = 0
+    if (contribRes.ok) {
+      const linkHeader = contribRes.headers.get('link')
+      if (linkHeader) {
+        const match = linkHeader.match(/page=(\d+)>;\s*rel="last"/)
+        contributors = match ? parseInt(match[1], 10) : 0
+      }
+    }
+
+    return { stars, contributors }
   } catch {
-    return 0
+    return { stars: 0, contributors: 0 }
   }
 }
 
@@ -408,7 +425,15 @@ function FeaturesSection() {
  * Community Section
  * --------------------------------------------------------------------------- */
 
-function CommunitySection({ stars, pulls }: { stars: number; pulls: number }) {
+function CommunitySection({
+  stars,
+  pulls,
+  contributors,
+}: {
+  stars: number
+  pulls: number
+  contributors: number
+}) {
   return (
     <section className="border-y border-border px-4 py-24 sm:px-6 lg:px-8">
       <div className="mx-auto max-w-4xl">
@@ -422,7 +447,7 @@ function CommunitySection({ stars, pulls }: { stars: number; pulls: number }) {
         </header>
 
         {/* Stats */}
-        <div className="mb-16 grid grid-cols-2 gap-8">
+        <div className="mb-16 grid grid-cols-3 gap-8">
           <div className="text-center">
             <p className="text-4xl font-bold tracking-tight text-foreground sm:text-5xl">
               {stars > 0 ? formatNumber(stars) : '--'}
@@ -434,6 +459,12 @@ function CommunitySection({ stars, pulls }: { stars: number; pulls: number }) {
               {pulls > 0 ? formatNumber(pulls) : '--'}
             </p>
             <p className="mt-2 text-sm text-muted-foreground">Docker Pulls</p>
+          </div>
+          <div className="text-center">
+            <p className="text-4xl font-bold tracking-tight text-foreground sm:text-5xl">
+              {contributors > 0 ? formatNumber(contributors) : '--'}
+            </p>
+            <p className="mt-2 text-sm text-muted-foreground">Contributors</p>
           </div>
         </div>
 
@@ -499,7 +530,7 @@ function CTASection() {
  * --------------------------------------------------------------------------- */
 
 export default async function HomePage() {
-  const [stars, pulls] = await Promise.all([getGitHubStars(), getContainerPulls()])
+  const [{ stars, contributors }, pulls] = await Promise.all([getGitHubData(), getContainerPulls()])
 
   return (
     <HomeLayout {...baseOptions} nav={{ ...baseOptions.nav, transparentMode: 'top' }}>
@@ -507,7 +538,7 @@ export default async function HomePage() {
         <HeroSection stars={stars} />
         <TrustedBySection />
         <FeaturesSection />
-        <CommunitySection stars={stars} pulls={pulls} />
+        <CommunitySection stars={stars} pulls={pulls} contributors={contributors} />
         <CTASection />
       </main>
       <div className="border-t border-border px-4 py-16 sm:px-6 lg:px-8">
