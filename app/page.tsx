@@ -488,7 +488,7 @@ export default async function HomePage() {
   const [stars, pulls] = await Promise.all([getGitHubStars(), getContainerPulls()])
 
   return (
-    <HomeLayout {...baseOptions}>
+    <HomeLayout {...baseOptions} nav={{ ...baseOptions.nav, transparentMode: 'top' }}>
       <main className="min-h-screen">
         <HeroSection stars={stars} />
         <TrustedBySection />
