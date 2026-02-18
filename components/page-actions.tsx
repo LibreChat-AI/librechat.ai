@@ -114,7 +114,7 @@ export function ViewOptions({ markdownUrl }: { markdownUrl: string; githubUrl?: 
       },
       {
         title: 'Open in LibreChat',
-        href: `${LIBRECHAT_DEMO}/c/new?${new URLSearchParams({ prompt: q, submit: 'true' })}`,
+        href: `${LIBRECHAT_DEMO}/c/new?${new URLSearchParams({ prompt: q })}`,
         icon: (
           // eslint-disable-next-line @next/next/no-img-element
           <img src="/librechat.svg" alt="" width={16} height={16} className="size-4" />
