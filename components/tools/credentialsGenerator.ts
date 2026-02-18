@@ -1,30 +1,17 @@
-import crypto from 'crypto'
-
 const credentialsGenerator = () => {
-  const generateRandomHex = (length) => {
-    return crypto.randomBytes(length).toString('hex')
+  const generateRandomHex = (byteLength: number): string => {
+    const bytes = new Uint8Array(byteLength)
+    window.crypto.getRandomValues(bytes)
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
   }
 
-  const generateCredentials = () => {
-    const keyLength = 32
-    const ivLength = 16
-    const jwtLength = 32
-    const meiliLenght = 16
-
-    const key = generateRandomHex(keyLength)
-    const iv = generateRandomHex(ivLength)
-    const jwt = generateRandomHex(jwtLength)
-    const jwt2 = generateRandomHex(jwtLength)
-    const meili = generateRandomHex(meiliLenght)
-
-    return {
-      CREDS_KEY: key,
-      CREDS_IV: iv,
-      JWT_SECRET: jwt,
-      JWT_REFRESH_SECRET: jwt2,
-      MEILI_KEY: meili,
-    }
-  }
+  const generateCredentials = () => ({
+    CREDS_KEY: generateRandomHex(32),
+    CREDS_IV: generateRandomHex(16),
+    JWT_SECRET: generateRandomHex(32),
+    JWT_REFRESH_SECRET: generateRandomHex(32),
+    MEILI_KEY: generateRandomHex(16),
+  })
 
   return { generateCredentials }
 }
