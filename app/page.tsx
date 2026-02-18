@@ -3,11 +3,13 @@ import Link from 'next/link'
 import {
   Bot,
   Terminal,
-  BrainCog,
+  Settings2,
   Code,
-  ImageIcon,
-  GitFork,
   Search,
+  Plug,
+  Brain,
+  Globe,
+  ShieldCheck,
   ArrowRight,
   Github,
   Star,
@@ -163,7 +165,7 @@ const features = [
     href: '/docs/features/code_interpreter',
   },
   {
-    icon: BrainCog,
+    icon: Settings2,
     title: 'Models',
     description: 'AI model selection including Anthropic, AWS, OpenAI, Azure, and more',
     href: '/docs/configuration/pre_configured_ai',
@@ -175,22 +177,34 @@ const features = [
     href: '/docs/features/artifacts',
   },
   {
-    icon: ImageIcon,
-    title: 'Multimodal',
-    description: 'Analyze images and chat with files using various endpoints',
-    href: '/docs/features',
-  },
-  {
-    icon: GitFork,
-    title: 'Fork',
-    description: 'Split messages into multiple conversation threads for better context',
-    href: '/docs/features/fork',
-  },
-  {
     icon: Search,
     title: 'Search',
     description: 'Search for messages, files, and code snippets in an instant',
     href: '/docs/configuration/meilisearch',
+  },
+  {
+    icon: Plug,
+    title: 'MCP',
+    description: 'Connect to any tool or service with Model Context Protocol support',
+    href: '/docs/features/mcp',
+  },
+  {
+    icon: Brain,
+    title: 'Memory',
+    description: 'Persistent context across conversations so your AI remembers you',
+    href: '/docs/features/memory',
+  },
+  {
+    icon: Globe,
+    title: 'Web Search',
+    description: 'Give any model live internet access with built-in search and reranking',
+    href: '/docs/features/web_search',
+  },
+  {
+    icon: ShieldCheck,
+    title: 'Authentication',
+    description: 'Enterprise-ready SSO with OAuth, SAML, LDAP, and two-factor auth',
+    href: '/docs/configuration/authentication',
   },
 ]
 
