@@ -19,6 +19,7 @@ export default async function Page(props: PageProps) {
   return (
     <DocsPage
       toc={page.data.toc}
+      tableOfContent={{ style: 'clerk' }}
       lastUpdate={page.data.lastModified}
       editOnGithub={{
         owner: 'LibreChat-AI',
