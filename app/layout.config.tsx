@@ -5,7 +5,7 @@ export const baseOptions: BaseLayoutProps = {
     title: (
       <>
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/librechat-logo.svg" alt="" width={20} height={20} aria-hidden="true" />
+        <img src="/librechat.svg" alt="" width={20} height={20} aria-hidden="true" />
         LibreChat
       </>
     ),
