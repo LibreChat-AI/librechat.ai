@@ -18,13 +18,15 @@ export const Author = ({ authorid }: { authorid: string }) => {
       <a href={`/authors/${authorid}`} className="group shrink-0" rel="noopener noreferrer">
         <div className="flex justify-end gap-2" key={name}>
           <div className="flex items-center gap-2">
-            <Image
-              src={ogImage}
-              width={40}
-              height={40}
-              className="rounded-full"
-              alt={`Picture ${name}`}
-            />
+            {ogImage ? (
+              <Image
+                src={ogImage}
+                width={40}
+                height={40}
+                className="rounded-full"
+                alt={`Picture ${name}`}
+              />
+            ) : null}
             <span className="text-primary/60 group-hover:text-primary whitespace-nowrap">
               {name}
             </span>

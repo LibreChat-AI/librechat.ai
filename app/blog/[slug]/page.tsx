@@ -1,4 +1,5 @@
 import { notFound } from 'next/navigation'
+import Image from 'next/image'
 import Link from 'next/link'
 import { InlineTOC } from 'fumadocs-ui/components/inline-toc'
 import { mdxComponents } from '@/lib/mdx-components'
@@ -51,6 +52,16 @@ export default async function BlogPostPage(props: PageProps) {
           </time>
           {(post as any).author && <span>by {(post as any).author}</span>}
         </div>
+        {post.ogImage && (
+          <Image
+            src={post.ogImage}
+            alt={post.title}
+            width={1200}
+            height={630}
+            className="mt-6 border rounded-2xl"
+            unoptimized={post.ogImage.endsWith('.gif')}
+          />
+        )}
       </header>
 
       {post.toc && post.toc.length > 0 && <InlineTOC items={post.toc} />}

@@ -16,6 +16,7 @@ interface FeedEntry {
   url: string
   author?: string
   ogImage?: string
+  ogImagePosition?: string
 }
 
 const dateFormatter = new Intl.DateTimeFormat('en-US', {
@@ -43,6 +44,7 @@ export default function BlogPage() {
       url: `/blog/${getSlug(post._file.path)}`,
       author: (post as any).author,
       ogImage: post.ogImage,
+      ogImagePosition: (post as any).ogImagePosition,
     })
   }
 
@@ -72,6 +74,9 @@ export default function BlogPage() {
                     fill
                     sizes="(max-width: 768px) 100vw, 50vw"
                     className="object-cover transition-transform group-hover:scale-105"
+                    style={
+                      entry.ogImagePosition ? { objectPosition: entry.ogImagePosition } : undefined
+                    }
                     unoptimized={entry.ogImage.endsWith('.gif')}
                   />
                 ) : (
