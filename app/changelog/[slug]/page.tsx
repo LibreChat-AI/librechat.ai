@@ -74,6 +74,8 @@ export async function generateMetadata(props: PageProps): Promise<Metadata> {
   const entry = findEntry(params.slug)
   if (!entry) notFound()
 
+  const ogImage = (entry as any).ogImage ?? '/images/socialcards/default-changelog-image.png'
+
   return {
     title: entry.title,
     description: entry.description,
@@ -81,6 +83,7 @@ export async function generateMetadata(props: PageProps): Promise<Metadata> {
       title: entry.title,
       description: entry.description,
       type: 'article',
+      images: [ogImage],
     },
   }
 }
