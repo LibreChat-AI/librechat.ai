@@ -1,7 +1,12 @@
 'use client'
 
+import Link from 'next/link'
 import { track } from '@vercel/analytics'
 import type { ReactNode, AnchorHTMLAttributes } from 'react'
+
+function isExternalHref(href: string): boolean {
+  return href.startsWith('http') || href.startsWith('mailto:')
+}
 
 export function TrackedLink({
   href,
@@ -9,12 +14,10 @@ export function TrackedLink({
   children,
   className,
   ...props
-}: {
+}: AnchorHTMLAttributes<HTMLAnchorElement> & {
   href: string
   title?: string
   children: ReactNode
-  className?: string
-  [key: string]: any
 }) {
   const handleClick = () => {
     track('card_click', {
@@ -23,10 +26,25 @@ export function TrackedLink({
     })
   }
 
+  if (isExternalHref(href)) {
+    return (
+      <a
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        className={className}
+        onClick={handleClick}
+        {...props}
+      >
+        {children}
+      </a>
+    )
+  }
+
   return (
-    <a href={href} className={className} onClick={handleClick} {...props}>
+    <Link href={href} className={className} onClick={handleClick} {...props}>
       {children}
-    </a>
+    </Link>
   )
 }
 
@@ -43,13 +61,21 @@ export function TrackedAnchor({
     track('link_click', {
       href,
       label: String(label).slice(0, 100),
-      external: href.startsWith('http'),
+      external: isExternalHref(href),
     })
   }
 
+  if (isExternalHref(href)) {
+    return (
+      <a href={href} target="_blank" rel="noopener noreferrer" onClick={handleClick} {...props}>
+        {children}
+      </a>
+    )
+  }
+
   return (
-    <a href={href} onClick={handleClick} {...props}>
+    <Link href={href} onClick={handleClick} {...props}>
       {children}
-    </a>
+    </Link>
   )
 }

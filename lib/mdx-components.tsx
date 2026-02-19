@@ -166,16 +166,14 @@ function CardCompat({
     </div>
   )
 }
-;(CardsCompat as any).Card = CardCompat
+const CardsWithCard = Object.assign(CardsCompat, { Card: CardCompat })
 
 function FileTreeCompat({ children, ...props }: { children?: ReactNode; [key: string]: any }) {
   return <Files {...props}>{children}</Files>
 }
-;(FileTreeCompat as any).File = File
-;(FileTreeCompat as any).Folder = Folder
+const FileTreeWithChildren = Object.assign(FileTreeCompat, { File, Folder })
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-function ImgCompat({ image, ...props }: { image?: boolean; [key: string]: any }) {
+function ImgCompat({ image: _, ...props }: { image?: boolean; [key: string]: any }) {
   const src = typeof props.src === 'string' ? props.src : ''
   const isExternal = src.startsWith('http://') || src.startsWith('https://')
   if (isExternal) {
@@ -197,9 +195,9 @@ export const mdxComponents = {
   Step,
   Tab: TabCompat,
   Tabs: TabsCompat,
-  Cards: CardsCompat,
+  Cards: CardsWithCard,
   Card: CardCompat,
-  FileTree: FileTreeCompat,
+  FileTree: FileTreeWithChildren,
   File,
   Folder,
   Files,
