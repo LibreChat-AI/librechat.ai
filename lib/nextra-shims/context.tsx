@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
 /**
  * Nextra compatibility shim for `nextra/context`.
  * Provides stub implementations so existing pages/ components
