@@ -45,7 +45,7 @@ const nonPermanentRedirects = [
   ['/issues', 'https://github.com/danny-avila/LibreChat/issues'],
   ['/gh-support', 'https://github.com/danny-avila/LibreChat/discussions/categories/support'],
   ['/gh-discussions', 'https://github.com/danny-avila/LibreChat/discussions'],
-  ['/roadmap', '/docs/roadmap'],
+  ['/roadmap', '/blog/2026-02-18_2026_roadmap'],
   ['/features', '/docs/features'],
   ['/docs/configuration/librechat_yaml/ai_endpoints/azure', '/docs/configuration/azure'],
   ['/docs/user_guides/artifacts', '/docs/features/artifacts'],
