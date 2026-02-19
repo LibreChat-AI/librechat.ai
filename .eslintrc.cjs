@@ -49,6 +49,7 @@ module.exports = {
         '@typescript-eslint/prefer-for-of': 'error',
         "no-sharp-comments": "off",
         "markdown/no-sharp-comments": "off",
+        '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_', destructuredArrayIgnorePattern: '^_' }],
         // todo: enable
         '@typescript-eslint/no-explicit-any': 'off',
         '@typescript-eslint/no-non-null-assertion': 'off',
