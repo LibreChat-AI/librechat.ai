@@ -90,9 +90,9 @@ const resources = [
   },
   {
     icon: Map,
-    title: '2025 Roadmap',
+    title: '2026 Roadmap',
     description: "What's planned",
-    href: '/blog/2025-02-20_2025_roadmap',
+    href: '/blog/2026-02-18_2026_roadmap',
   },
   {
     icon: MessageSquare,
