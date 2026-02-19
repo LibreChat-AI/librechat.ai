@@ -14,6 +14,7 @@ export const blog = defineCollections({
     date: z.string().or(z.date()),
     author: z.string().optional(),
     ogImage: z.string().optional(),
+    ogMetaImage: z.string().optional(),
     ogImagePosition: z.string().optional(),
     category: z.enum(['release', 'feature', 'guide', 'announcement']).optional(),
     featured: z.boolean().optional(),
