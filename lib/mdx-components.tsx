@@ -11,6 +11,7 @@ import { LocalInstallHub } from '@/components/LocalInstallHub'
 import { QuickStartHub } from '@/components/QuickStartHub'
 import { FeaturesHub } from '@/components/FeaturesHub'
 import Carousel from '@/components/carousel/Carousel'
+import { TrackedLink } from '@/components/TrackedLink'
 import type { ReactNode } from 'react'
 
 function mapCalloutType(type?: string): 'info' | 'warn' | 'error' {
@@ -144,8 +145,9 @@ function CardCompat({
 
   if (href) {
     return (
-      <a
+      <TrackedLink
         href={href}
+        title={title}
         className="group block rounded-xl border border-fd-border bg-fd-card p-5 transition-all hover:border-fd-primary/30 hover:bg-fd-accent hover:shadow-sm"
         {...props}
       >
@@ -155,7 +157,7 @@ function CardCompat({
             &rarr;
           </span>
         )}
-      </a>
+      </TrackedLink>
     )
   }
 
