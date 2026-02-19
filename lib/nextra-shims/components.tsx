@@ -32,20 +32,34 @@ function CardComponent({
   children,
   title,
   href,
+  icon,
   ...props
-}: ChildrenProps & { title?: string; href?: string }) {
+}: ChildrenProps & { title?: string; href?: string; icon?: ReactNode }) {
   const content = (
-    <div className="nextra-card" {...props}>
-      {title && <h3>{title}</h3>}
+    <div
+      className="nextra-card flex items-center gap-3 rounded-lg border border-gray-200 dark:border-gray-800 p-4 transition-colors hover:bg-gray-100 dark:hover:bg-gray-800/50"
+      {...props}
+    >
+      {icon && <span className="shrink-0 [&>svg]:h-6 [&>svg]:w-6">{icon}</span>}
+      {title && <h3 className="m-0 text-base font-medium">{title}</h3>}
       {children}
     </div>
   )
-  if (href) return <a href={href}>{content}</a>
+  if (href)
+    return (
+      <a
+        href={href}
+        className="no-underline"
+        {...(props.target ? { target: props.target, rel: 'noopener noreferrer' } : {})}
+      >
+        {content}
+      </a>
+    )
   return content
 }
 
 function CardsBase({ children }: ChildrenProps) {
-  return <div className="nextra-cards">{children}</div>
+  return <div className="nextra-cards mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">{children}</div>
 }
 
 export const Cards = Object.assign(CardsBase, { Card: CardComponent })
