@@ -88,7 +88,7 @@ export async function generateMetadata(props: PageProps): Promise<Metadata> {
   const post = findPost(params.slug)
   if (!post) notFound()
 
-  const ogImage = post.ogImage ?? '/images/socialcards/default-blog-image.png'
+  const ogImage = post.ogMetaImage ?? post.ogImage ?? '/images/socialcards/default-blog-image.png'
 
   return {
     title: post.title,
