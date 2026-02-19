@@ -1,0 +1,464 @@
+---
+title: Bedrock Inference Profiles
+icon: Bot
+description: Configure and use AWS Bedrock custom inference profiles with LibreChat for cross-region load balancing, cost allocation, and compliance controls.
+---
+
+This guide explains how to configure and use AWS Bedrock custom inference profiles with LibreChat, allowing you to route model requests through custom application inference profiles for better control, cost allocation, and cross-region load balancing.
+
+## Overview
+
+AWS Bedrock inference profiles allow you to create custom routing configurations for foundation models. When you create a custom (application) inference profile, AWS generates a unique ARN that doesn't contain model name information:
+
+```
+arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123def456
+```
+
+LibreChat's inference profile mapping feature allows you to:
+1. Map friendly model IDs to custom inference profile ARNs
+2. Route requests through your custom profiles while maintaining model capability detection
+3. Use environment variables for secure ARN management
+
+## Why Use Custom Inference Profiles?
+
+| Benefit | Description |
+|---------|-------------|
+| **Cross-Region Load Balancing** | Automatically distribute requests across multiple AWS regions |
+| **Cost Allocation** | Tag and track costs per application or team |
+| **Throughput Management** | Configure dedicated throughput for your applications |
+| **Compliance** | Route requests through specific regions for data residency |
+| **Monitoring** | Track usage per inference profile in CloudWatch |
+
+## Prerequisites
+
+Before you begin, ensure you have:
+
+1. **AWS Account** with Bedrock access enabled
+2. **AWS CLI** installed and configured
+3. **IAM Permissions**:
+   - `bedrock:CreateInferenceProfile`
+   - `bedrock:ListInferenceProfiles`
+   - `bedrock:GetInferenceProfile`
+   - `bedrock:InvokeModel` / `bedrock:InvokeModelWithResponseStream`
+4. **LibreChat** with Bedrock endpoint configured (see [AWS Bedrock Setup](/docs/configuration/pre_configured_ai/bedrock))
+
+## Creating Custom Inference Profiles
+
+> **Important**: Custom inference profiles can only be created via API (AWS CLI, SDK, etc.) and cannot be created from the AWS Console.
+
+### Method 1: AWS CLI (Recommended)
+
+#### Step 1: List Available System Inference Profiles
+
+```bash
+# List all inference profiles
+aws bedrock list-inference-profiles --region us-east-1
+
+# Filter for Claude models
+aws bedrock list-inference-profiles --region us-east-1 \
+  --query "inferenceProfileSummaries[?contains(inferenceProfileId, 'claude')]"
+```
+
+#### Step 2: Create a Custom Inference Profile
+
+```bash
+# Get the system inference profile ARN to copy from
+export SOURCE_PROFILE_ARN=$(aws bedrock list-inference-profiles --region us-east-1 \
+  --query "inferenceProfileSummaries[?inferenceProfileId=='us.anthropic.claude-3-7-sonnet-20250219-v1:0'].inferenceProfileArn" \
+  --output text)
+
+# Create your custom inference profile
+aws bedrock create-inference-profile \
+  --inference-profile-name "MyApp-Claude-3-7-Sonnet" \
+  --description "Custom inference profile for my application" \
+  --model-source copyFrom="$SOURCE_PROFILE_ARN" \
+  --region us-east-1
+```
+
+#### Step 3: Verify Creation
+
+```bash
+# List your custom profiles
+aws bedrock list-inference-profiles --type-equals APPLICATION --region us-east-1
+
+# Get details of a specific profile
+aws bedrock get-inference-profile \
+  --inference-profile-identifier "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123" \
+  --region us-east-1
+```
+
+### Method 2: Python Script
+
+```python
+import boto3
+
+AWS_REGION = 'us-east-1'
+
+def create_inference_profile(profile_name: str, source_model_id: str):
+    """
+    Create a custom inference profile for LibreChat.
+
+    Args:
+        profile_name: Name for your custom profile
+        source_model_id: The system inference profile ID to copy from
+                        (e.g., 'us.anthropic.claude-3-7-sonnet-20250219-v1:0')
+    """
+    bedrock = boto3.client('bedrock', region_name=AWS_REGION)
+
+    profiles = bedrock.list_inference_profiles()
+    source_arn = None
+    for profile in profiles['inferenceProfileSummaries']:
+        if profile['inferenceProfileId'] == source_model_id:
+            source_arn = profile['inferenceProfileArn']
+            break
+
+    if not source_arn:
+        raise ValueError(f"Source profile {source_model_id} not found")
+
+    response = bedrock.create_inference_profile(
+        inferenceProfileName=profile_name,
+        description=f'Custom inference profile for {profile_name}',
+        modelSource={'copyFrom': source_arn},
+        tags=[
+            {'key': 'Application', 'value': 'LibreChat'},
+            {'key': 'Environment', 'value': 'Production'}
+        ]
+    )
+
+    print(f"Created profile: {response['inferenceProfileArn']}")
+    return response['inferenceProfileArn']
+
+if __name__ == "__main__":
+    create_inference_profile(
+        "LibreChat-Claude-3-7-Sonnet",
+        "us.anthropic.claude-3-7-sonnet-20250219-v1:0"
+    )
+    create_inference_profile(
+        "LibreChat-Claude-Sonnet-4-5",
+        "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    )
+```
+
+## Configuring LibreChat
+
+### librechat.yaml Configuration
+
+Add the `bedrock` endpoint configuration to your `librechat.yaml`. For full field reference, see [AWS Bedrock Object Structure](/docs/configuration/librechat_yaml/object_structure/aws_bedrock).
+
+```yaml filename="librechat.yaml"
+endpoints:
+  bedrock:
+    # List the models you want available in the UI
+    models:
+      - "us.anthropic.claude-3-7-sonnet-20250219-v1:0"
+      - "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+      - "global.anthropic.claude-opus-4-5-20251101-v1:0"
+    # Map model IDs to their custom inference profile ARNs
+    inferenceProfiles:
+      # Using environment variable (recommended for security)
+      "us.anthropic.claude-3-7-sonnet-20250219-v1:0": "${BEDROCK_CLAUDE_37_PROFILE}"
+      # Using direct ARN
+      "us.anthropic.claude-sonnet-4-5-20250929-v1:0": "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123"
+      # Another env variable example
+      "global.anthropic.claude-opus-4-5-20251101-v1:0": "${BEDROCK_OPUS_45_PROFILE}"
+    # Optional: Configure available regions for cross-region inference
+    availableRegions:
+      - "us-east-1"
+      - "us-west-2"
+```
+
+### Environment Variables
+
+Add your AWS credentials and inference profile ARNs to your `.env` file:
+
+```bash filename=".env"
+#===================================#
+# AWS Bedrock Configuration         #
+#===================================#
+
+# AWS Credentials
+BEDROCK_AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
+BEDROCK_AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+BEDROCK_AWS_DEFAULT_REGION=us-east-1
+
+# Optional: Session token for temporary credentials
+# BEDROCK_AWS_SESSION_TOKEN=your-session-token
+
+# Inference Profile ARNs
+BEDROCK_CLAUDE_37_PROFILE=arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123
+BEDROCK_OPUS_45_PROFILE=arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/def456
+```
+
+## Setting Up Logging
+
+To verify that your inference profiles are being used correctly, enable AWS Bedrock model invocation logging.
+
+### 1. Create CloudWatch Log Group
+
+```bash
+aws logs create-log-group \
+  --log-group-name /aws/bedrock/model-invocations \
+  --region us-east-1
+```
+
+### 2. Create IAM Role for Bedrock Logging
+
+Create the trust policy file (`bedrock-logging-trust.json`):
+
+```json filename="bedrock-logging-trust.json"
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "bedrock.amazonaws.com"
+      },
+      "Action": "sts:AssumeRole",
+      "Condition": {
+        "StringEquals": {
+          "aws:SourceAccount": "YOUR_ACCOUNT_ID"
+        },
+        "ArnLike": {
+          "aws:SourceArn": "arn:aws:bedrock:us-east-1:YOUR_ACCOUNT_ID:*"
+        }
+      }
+    }
+  ]
+}
+```
+
+Create the role:
+
+```bash
+aws iam create-role \
+  --role-name BedrockLoggingRole \
+  --assume-role-policy-document file://bedrock-logging-trust.json
+```
+
+Attach CloudWatch Logs permissions:
+
+```bash
+aws iam put-role-policy \
+  --role-name BedrockLoggingRole \
+  --policy-name BedrockLoggingPolicy \
+  --policy-document '{
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Action": [
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ],
+        "Resource": "arn:aws:logs:us-east-1:YOUR_ACCOUNT_ID:log-group:/aws/bedrock/model-invocations:*"
+      }
+    ]
+  }'
+```
+
+Create S3 bucket for large data (required):
+
+```bash
+aws s3 mb s3://bedrock-logs-YOUR_ACCOUNT_ID --region us-east-1
+
+aws iam put-role-policy \
+  --role-name BedrockLoggingRole \
+  --policy-name BedrockS3Policy \
+  --policy-document '{
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Action": ["s3:PutObject"],
+        "Resource": "arn:aws:s3:::bedrock-logs-YOUR_ACCOUNT_ID/*"
+      }
+    ]
+  }'
+```
+
+### 3. Enable Model Invocation Logging
+
+```bash
+aws bedrock put-model-invocation-logging-configuration \
+  --logging-config '{
+    "cloudWatchConfig": {
+      "logGroupName": "/aws/bedrock/model-invocations",
+      "roleArn": "arn:aws:iam::YOUR_ACCOUNT_ID:role/BedrockLoggingRole",
+      "largeDataDeliveryS3Config": {
+        "bucketName": "bedrock-logs-YOUR_ACCOUNT_ID",
+        "keyPrefix": "large-data"
+      }
+    },
+    "textDataDeliveryEnabled": true,
+    "imageDataDeliveryEnabled": true,
+    "embeddingDataDeliveryEnabled": true
+  }' \
+  --region us-east-1
+```
+
+Verify logging is enabled:
+
+```bash
+aws bedrock get-model-invocation-logging-configuration --region us-east-1
+```
+
+## Verifying Your Configuration
+
+### View Logs via CLI
+
+After making a request through LibreChat, check the logs:
+
+```bash
+# Tail logs in real-time
+aws logs tail /aws/bedrock/model-invocations --follow --region us-east-1
+
+# View recent logs
+aws logs tail /aws/bedrock/model-invocations --since 5m --region us-east-1
+```
+
+### What to Look For
+
+In the log output, look for the `modelId` field:
+
+```json
+{
+  "timestamp": "2026-01-16T16:56:15Z",
+  "accountId": "123456789012",
+  "region": "us-east-1",
+  "requestId": "a8b9d8c9-87b3-41ea-8a02-e8bfdba7782f",
+  "operation": "ConverseStream",
+  "modelId": "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123",
+  "inferenceRegion": "us-west-2"
+}
+```
+
+**Success indicators:**
+- `modelId` shows your custom inference profile ARN (contains `application-inference-profile`)
+- `inferenceRegion` may vary (shows cross-region routing is working)
+
+**If mapping isn't working:**
+- `modelId` will show the raw model ID instead of the ARN
+
+### View Logs via AWS Console
+
+1. Open **CloudWatch** in the AWS Console
+2. Navigate to **Logs** > **Log groups**
+3. Select `/aws/bedrock/model-invocations`
+4. Click on the latest log stream
+5. Search for your inference profile ID
+
+## Monitoring Usage
+
+### CloudWatch Metrics
+
+View Bedrock metrics in CloudWatch:
+
+```bash
+aws cloudwatch list-metrics --namespace AWS/Bedrock --region us-east-1
+```
+
+### AWS Console
+
+1. **Bedrock Console** > **Inference profiles** > **Application** tab
+2. Click on your custom profile
+3. View invocation metrics and usage statistics
+
+## Troubleshooting
+
+### Common Issues
+
+| Issue | Cause | Solution |
+|-------|-------|----------|
+| Model not recognized | Missing model in `models` array | Add the model ID to `models` in librechat.yaml |
+| ARN not being used | Model ID doesn't match | Ensure the model ID in `inferenceProfiles` exactly matches what's in `models` |
+| Env variable not resolved | Typo or not set | Check `.env` file and ensure variable name matches `${VAR_NAME}` |
+| Access Denied | Missing IAM permissions | Add `bedrock:InvokeModel*` permissions for the inference profile ARN |
+| Profile not found | Wrong region | Ensure you're creating/using profiles in the same region |
+
+### Debug Checklist
+
+1. Model ID is in the `models` array
+2. Model ID in `inferenceProfiles` exactly matches (case-sensitive)
+3. Environment variable is set (if using `${VAR}` syntax)
+4. AWS credentials have permission to invoke the inference profile
+5. LibreChat has been restarted after config changes
+
+### Verify Config Loading
+
+Check that your config is being read correctly by examining the server logs when LibreChat starts.
+
+## Complete Example
+
+### librechat.yaml
+
+```yaml filename="librechat.yaml"
+version: 1.3.4
+
+endpoints:
+  bedrock:
+    models:
+      - "us.anthropic.claude-3-7-sonnet-20250219-v1:0"
+      - "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+      - "global.anthropic.claude-opus-4-5-20251101-v1:0"
+      - "us.amazon.nova-pro-v1:0"
+    inferenceProfiles:
+      "us.anthropic.claude-3-7-sonnet-20250219-v1:0": "${BEDROCK_CLAUDE_37_PROFILE}"
+      "us.anthropic.claude-sonnet-4-5-20250929-v1:0": "${BEDROCK_SONNET_45_PROFILE}"
+      "global.anthropic.claude-opus-4-5-20251101-v1:0": "${BEDROCK_OPUS_45_PROFILE}"
+    availableRegions:
+      - "us-east-1"
+      - "us-west-2"
+```
+
+### .env
+
+```bash filename=".env"
+# AWS Bedrock
+BEDROCK_AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
+BEDROCK_AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+BEDROCK_AWS_DEFAULT_REGION=us-east-1
+
+# Inference Profiles
+BEDROCK_CLAUDE_37_PROFILE=arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123
+BEDROCK_SONNET_45_PROFILE=arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/def456
+BEDROCK_OPUS_45_PROFILE=arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/ghi789
+```
+
+### Quick Setup Script
+
+```bash filename="setup-bedrock-profiles.sh"
+#!/bin/bash
+
+REGION="us-east-1"
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+
+# Create inference profiles
+for MODEL in "us.anthropic.claude-3-7-sonnet-20250219-v1:0" "us.anthropic.claude-sonnet-4-5-20250929-v1:0"; do
+  PROFILE_NAME="LibreChat-${MODEL//[.:]/-}"
+  SOURCE_ARN=$(aws bedrock list-inference-profiles --region $REGION \
+    --query "inferenceProfileSummaries[?inferenceProfileId=='$MODEL'].inferenceProfileArn" \
+    --output text)
+  if [ -n "$SOURCE_ARN" ]; then
+    echo "Creating profile for $MODEL..."
+    aws bedrock create-inference-profile \
+      --inference-profile-name "$PROFILE_NAME" \
+      --model-source copyFrom="$SOURCE_ARN" \
+      --region $REGION
+  fi
+done
+
+# List created profiles
+echo ""
+echo "Your custom inference profiles:"
+aws bedrock list-inference-profiles --type-equals APPLICATION --region $REGION \
+  --query "inferenceProfileSummaries[].{Name:inferenceProfileName,ARN:inferenceProfileArn}" \
+  --output table
+```
+
+## Related Resources
+
+- [AWS Bedrock Inference Profiles Documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/inference-profiles.html)
+- [AWS Bedrock Object Structure](/docs/configuration/librechat_yaml/object_structure/aws_bedrock) - YAML config field reference
+- [AWS Bedrock Setup](/docs/configuration/pre_configured_ai/bedrock) - Basic Bedrock configuration
+- [AWS Bedrock Model Invocation Logging](https://docs.aws.amazon.com/bedrock/latest/userguide/model-invocation-logging.html)

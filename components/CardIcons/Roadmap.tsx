@@ -8,7 +8,7 @@ export default function Roadmap() {
         <Image src="/images/cards/route.svg" alt="Roadmap Logo" width={30} height={30} />
         {/* Text */}
         <span className="ml-2 text-lg font-bold text-gray-600 dark:text-gray-300">
-          2025 Roadmap
+          2026 Roadmap
         </span>
         {/* CSS for hover effect */}
         <style jsx>{`

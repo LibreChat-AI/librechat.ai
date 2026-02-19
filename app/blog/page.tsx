@@ -1,3 +1,4 @@
+import Image from 'next/image'
 import Link from 'next/link'
 import { blog } from '@/lib/source'
 import type { Metadata } from 'next'
@@ -11,10 +12,19 @@ interface FeedEntry {
   title: string
   description?: string
   date: string
+  dateFormatted: string
   url: string
-  category: string
   author?: string
+  ogImage?: string
+  ogImagePosition?: string
 }
+
+const dateFormatter = new Intl.DateTimeFormat('en-US', {
+  year: 'numeric',
+  month: 'long',
+  day: 'numeric',
+  timeZone: 'UTC',
+})
 
 function getSlug(path: string): string {
   return path.replace(/\.mdx?$/, '')
@@ -24,14 +34,17 @@ export default function BlogPage() {
   const entries: FeedEntry[] = []
 
   for (const post of blog) {
+    const iso =
+      typeof post.date === 'string' ? post.date : new Date(post.date).toISOString().split('T')[0]
     entries.push({
       title: post.title,
       description: post.description,
-      date:
-        typeof post.date === 'string' ? post.date : new Date(post.date).toISOString().split('T')[0],
+      date: iso,
+      dateFormatted: dateFormatter.format(new Date(iso + 'T00:00:00Z')),
       url: `/blog/${getSlug(post._file.path)}`,
-      category: (post as any).category ?? 'guide',
       author: (post as any).author,
+      ogImage: post.ogImage,
+      ogImagePosition: (post as any).ogImagePosition,
     })
   }
 
@@ -46,32 +59,46 @@ export default function BlogPage() {
         </p>
       </header>
 
-      <div className="space-y-4">
+      <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
         {entries.map((entry) => (
           <article key={entry.url}>
             <Link
               href={entry.url}
-              className="group flex flex-col gap-2 rounded-lg border border-border p-6 transition-colors hover:bg-muted"
+              className="group flex h-full flex-col rounded-lg border border-border overflow-hidden transition-colors hover:bg-muted"
             >
-              <div className="flex items-center gap-3">
-                <time dateTime={entry.date} className="text-sm text-muted-foreground">
-                  {new Date(entry.date).toLocaleDateString('en-US', {
-                    year: 'numeric',
-                    month: 'long',
-                    day: 'numeric',
-                  })}
-                </time>
-                <span className="inline-flex rounded-full bg-muted px-2.5 py-0.5 text-xs font-medium capitalize text-muted-foreground">
-                  {entry.category}
-                </span>
+              <div className="relative h-48 w-full overflow-hidden bg-muted">
+                {entry.ogImage ? (
+                  <Image
+                    src={entry.ogImage}
+                    alt={entry.title}
+                    fill
+                    sizes="(max-width: 768px) 100vw, 50vw"
+                    className="object-cover transition-transform group-hover:scale-105"
+                    style={
+                      entry.ogImagePosition ? { objectPosition: entry.ogImagePosition } : undefined
+                    }
+                    unoptimized={entry.ogImage.endsWith('.gif')}
+                  />
+                ) : (
+                  <div className="flex h-full items-center justify-center text-4xl font-bold text-muted-foreground/30">
+                    {entry.title.charAt(0)}
+                  </div>
+                )}
               </div>
-              <h2 className="text-lg font-semibold text-foreground group-hover:text-foreground/80">
-                {entry.title}
-              </h2>
-              {entry.description && (
-                <p className="text-sm text-muted-foreground line-clamp-2">{entry.description}</p>
-              )}
-              {entry.author && <p className="text-xs text-muted-foreground">by {entry.author}</p>}
+              <div className="flex flex-1 flex-col gap-2 p-5">
+                <time dateTime={entry.date} className="text-sm text-muted-foreground">
+                  {entry.dateFormatted}
+                </time>
+                <h2 className="text-lg font-semibold text-foreground group-hover:text-foreground/80 line-clamp-2">
+                  {entry.title}
+                </h2>
+                {entry.description && (
+                  <p className="text-sm text-muted-foreground line-clamp-2">{entry.description}</p>
+                )}
+                {entry.author && (
+                  <p className="mt-auto pt-3 text-xs text-muted-foreground">by {entry.author}</p>
+                )}
+              </div>
             </Link>
           </article>
         ))}

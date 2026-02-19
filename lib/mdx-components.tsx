@@ -11,6 +11,7 @@ import { LocalInstallHub } from '@/components/LocalInstallHub'
 import { QuickStartHub } from '@/components/QuickStartHub'
 import { FeaturesHub } from '@/components/FeaturesHub'
 import Carousel from '@/components/carousel/Carousel'
+import { TrackedLink, TrackedAnchor } from '@/components/TrackedLink'
 import type { ReactNode } from 'react'
 
 function mapCalloutType(type?: string): 'info' | 'warn' | 'error' {
@@ -136,7 +137,7 @@ function CardCompat({
 }) {
   const content = (
     <div className="flex flex-col gap-2">
-      {icon && <div className="text-2xl">{icon}</div>}
+      {icon && <div className="[&>svg]:h-6 [&>svg]:w-6">{icon}</div>}
       {title && <h3 className="font-semibold text-fd-foreground">{title}</h3>}
       {children && <div className="text-sm text-fd-muted-foreground">{children}</div>}
     </div>
@@ -144,8 +145,9 @@ function CardCompat({
 
   if (href) {
     return (
-      <a
+      <TrackedLink
         href={href}
+        title={title}
         className="group block rounded-xl border border-fd-border bg-fd-card p-5 transition-all hover:border-fd-primary/30 hover:bg-fd-accent hover:shadow-sm"
         {...props}
       >
@@ -155,7 +157,7 @@ function CardCompat({
             &rarr;
           </span>
         )}
-      </a>
+      </TrackedLink>
     )
   }
 
@@ -165,7 +167,7 @@ function CardCompat({
     </div>
   )
 }
-;(CardsCompat as any).Card = CardCompat
+const CardsWithCard = Object.assign(CardsCompat, { Card: CardCompat })
 
 function FileTreeCompat({ children, ...props }: { children?: ReactNode; [key: string]: any }) {
   return <Files {...props}>{children}</Files>
@@ -190,11 +192,9 @@ function FileCompat({
     />
   )
 }
-;(FileTreeCompat as any).File = FileCompat
-;(FileTreeCompat as any).Folder = Folder
+const FileTreeWithChildren = Object.assign(FileTreeCompat, { File: FileCompat, Folder })
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-function ImgCompat({ image, ...props }: { image?: boolean; [key: string]: any }) {
+function ImgCompat({ image: _, ...props }: { image?: boolean; [key: string]: any }) {
   const src = typeof props.src === 'string' ? props.src : ''
   const isExternal = src.startsWith('http://') || src.startsWith('https://')
   if (isExternal) {
@@ -209,15 +209,16 @@ function ImgCompat({ image, ...props }: { image?: boolean; [key: string]: any })
 
 export const mdxComponents = {
   ...defaultMdxComponents,
+  a: TrackedAnchor,
   img: ImgCompat,
   Callout: CalloutCompat,
   Steps,
   Step,
   Tab: TabCompat,
   Tabs: TabsCompat,
-  Cards: CardsCompat,
+  Cards: CardsWithCard,
   Card: CardCompat,
-  FileTree: FileTreeCompat,
+  FileTree: FileTreeWithChildren,
   File: FileCompat,
   Folder,
   Files,
