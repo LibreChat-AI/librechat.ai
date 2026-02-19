@@ -11,7 +11,7 @@ import { LocalInstallHub } from '@/components/LocalInstallHub'
 import { QuickStartHub } from '@/components/QuickStartHub'
 import { FeaturesHub } from '@/components/FeaturesHub'
 import Carousel from '@/components/carousel/Carousel'
-import { TrackedLink } from '@/components/TrackedLink'
+import { TrackedLink, TrackedAnchor } from '@/components/TrackedLink'
 import type { ReactNode } from 'react'
 
 function mapCalloutType(type?: string): 'info' | 'warn' | 'error' {
@@ -211,6 +211,7 @@ function ImgCompat({ image, ...props }: { image?: boolean; [key: string]: any })
 
 export const mdxComponents = {
   ...defaultMdxComponents,
+  a: TrackedAnchor,
   img: ImgCompat,
   Callout: CalloutCompat,
   Steps,

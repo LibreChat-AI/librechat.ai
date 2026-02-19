@@ -64,7 +64,11 @@ export default async function BlogPostPage(props: PageProps) {
         )}
       </header>
 
-      {post.toc && post.toc.length > 0 && <InlineTOC items={post.toc} />}
+      {post.toc && post.toc.length > 0 && (
+        <div className="mb-8">
+          <InlineTOC items={post.toc} />
+        </div>
+      )}
 
       <div className="prose prose-neutral dark:prose-invert max-w-none">
         <MDX components={mdxComponents} />
