@@ -78,7 +78,7 @@ export function Callout({
           {title ? (
             <span className={styles['title-text']}>{title}</span>
           ) : (
-            <span className={styles['title-spacer']} style={{ flexGrow: 1 }}></span>
+            <span className={styles['title-spacer']} style={{ flexGrow: 1 }} />
           )}
           {collapsible && <span className={styles.arrow}>{isCollapsed ? '▷' : '▽'}</span>}
         </div>

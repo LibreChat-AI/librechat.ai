@@ -58,14 +58,9 @@ const nonPermanentRedirects = [
   ['/docs/user_guides/rag_api', '/docs/features/rag_api'],
   ['/docs/user_guides/plugins', '/docs/features/agents'],
   ['/docs/features/plugins', '/docs/features/agents'],
+  ['/toolkit/yaml_checker', '/toolkit/yaml-checker'],
+  ['/toolkit/creds_generator', '/toolkit/creds-generator'],
 ];
-
-/**
- * Nextra compatibility shims - redirect nextra imports to local stubs
- * so the existing pages/ directory can build during the Fumadocs migration.
- * These will be removed once all pages/ content is migrated to app/.
- */
-const nextraShims = resolve(process.cwd(), 'lib/nextra-shims');
 
 /** @type {import('next').NextConfig} */
 const config = {
@@ -75,15 +70,6 @@ const config = {
   turbopack: {},
   pageExtensions: ['mdx', 'md', 'jsx', 'js', 'tsx', 'ts'],
   webpack(webpackConfig, options) {
-    // Nextra compatibility: redirect nextra imports to local shims
-    webpackConfig.resolve.alias = {
-      ...webpackConfig.resolve.alias,
-      'nextra/context': resolve(nextraShims, 'context.tsx'),
-      'nextra/components': resolve(nextraShims, 'components.tsx'),
-      nextra: resolve(nextraShims, 'index.ts'),
-      'nextra-theme-docs': resolve(nextraShims, 'theme-docs.tsx'),
-    };
-
     /**
      * Fumadocs MDX loader: only applied to content/ directory files.
      * These are processed by fumadocs-mdx for the app/ router docs.
@@ -104,35 +90,22 @@ const config = {
     });
 
     /**
-     * Basic MDX loader for pages/ directory and components/ directory files.
-     * Provides minimal MDX compilation so existing pages/ content
-     * can compile during the migration period.
-     * Uses a custom providerImportSource that provides the same
-     * components Nextra used to auto-inject (Callout, Steps, etc.).
+     * MDX loader for components/ directory files.
+     * These are MDX files imported directly as React components
+     * (e.g. changelog content, repeated sections).
      */
     webpackConfig.module.rules.push({
       test: /\.mdx?$/,
-      include: [resolve(process.cwd(), 'pages'), resolve(process.cwd(), 'components')],
+      include: [resolve(process.cwd(), 'components')],
       use: [
         options.defaultLoaders.babel,
         {
           loader: '@mdx-js/loader',
           options: {
-            providerImportSource: resolve(process.cwd(), 'lib/nextra-shims/mdx-components.tsx'),
+            providerImportSource: resolve(process.cwd(), 'lib/mdx-provider.ts'),
           },
         },
       ],
-    });
-
-    /**
-     * Replace Nextra _meta files with a dummy React component export
-     * so Next.js doesn't fail when encountering them as pages.
-     */
-    webpackConfig.module.rules.push({
-      test: /pages[\\/].*_meta\.(ts|js|tsx|jsx)$/,
-      use: {
-        loader: resolve(process.cwd(), 'lib/nextra-shims/meta-loader.cjs'),
-      },
     });
 
     return webpackConfig;
