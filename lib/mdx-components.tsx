@@ -135,7 +135,7 @@ function CardCompat({
 }) {
   const content = (
     <div className="flex flex-col gap-2">
-      {icon && <div className="text-2xl">{icon}</div>}
+      {icon && <div className="[&>svg]:h-6 [&>svg]:w-6">{icon}</div>}
       {title && <h3 className="font-semibold text-fd-foreground">{title}</h3>}
       {children && <div className="text-sm text-fd-muted-foreground">{children}</div>}
     </div>
