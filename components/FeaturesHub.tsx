@@ -38,9 +38,8 @@ const hero: Feature = {
   icon: Cable,
   title: 'Model Context Protocol',
   description:
-    'Connect AI models to any external tool or service through MCP — the open standard for AI tool integration. LibreChat is an official MCP client.',
+    'Connect AI models to any external tool or service through MCP — the open standard for AI tool integration',
   href: '/docs/features/mcp',
-  tag: 'Official MCP Client',
 }
 
 const highlights: Feature[] = [
