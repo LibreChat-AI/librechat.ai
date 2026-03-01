@@ -1,5 +1,15 @@
 import Link from 'next/link'
-import { Clock, CheckCircle2, ArrowRight, Plug, FileText, Map, MessageSquare } from 'lucide-react'
+import {
+  Clock,
+  CheckCircle2,
+  ArrowRight,
+  Plug,
+  FileText,
+  Map,
+  MessageSquare,
+  Sparkles,
+  BookOpen,
+} from 'lucide-react'
 import type { ComponentProps } from 'react'
 
 function DockerLogo(props: ComponentProps<'svg'>) {
@@ -211,6 +221,63 @@ export function QuickStartHub() {
             aria-hidden="true"
           />
         </Link>
+      </section>
+
+      {/* Explore */}
+      <section aria-labelledby="explore-heading">
+        <div className="flex items-center gap-3 mb-4">
+          <h2
+            id="explore-heading"
+            className="shrink-0 text-xs font-semibold uppercase tracking-widest text-fd-muted-foreground"
+          >
+            Explore
+          </h2>
+          <div className="h-px flex-1 bg-fd-border" aria-hidden="true" />
+        </div>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <Link
+            href="/docs/features"
+            className="group flex items-center gap-4 rounded-xl border border-fd-border px-5 py-4 transition-colors hover:border-fd-foreground/20 hover:bg-fd-accent"
+          >
+            <div className="shrink-0 rounded-md bg-fd-accent p-2 transition-colors group-hover:bg-fd-background">
+              <Sparkles
+                className="size-4 text-fd-muted-foreground transition-colors group-hover:text-fd-foreground"
+                aria-hidden="true"
+              />
+            </div>
+            <div className="min-w-0 flex-1">
+              <span className="text-sm font-medium text-fd-foreground">Features</span>
+              <p className="text-xs text-fd-muted-foreground">
+                Agents, MCP, web search, RAG, artifacts, image generation, and more
+              </p>
+            </div>
+            <ArrowRight
+              className="size-4 shrink-0 text-fd-muted-foreground/40 transition-all group-hover:translate-x-0.5 group-hover:text-fd-foreground"
+              aria-hidden="true"
+            />
+          </Link>
+          <Link
+            href="/docs/user_guides"
+            className="group flex items-center gap-4 rounded-xl border border-fd-border px-5 py-4 transition-colors hover:border-fd-foreground/20 hover:bg-fd-accent"
+          >
+            <div className="shrink-0 rounded-md bg-fd-accent p-2 transition-colors group-hover:bg-fd-background">
+              <BookOpen
+                className="size-4 text-fd-muted-foreground transition-colors group-hover:text-fd-foreground"
+                aria-hidden="true"
+              />
+            </div>
+            <div className="min-w-0 flex-1">
+              <span className="text-sm font-medium text-fd-foreground">User Guides</span>
+              <p className="text-xs text-fd-muted-foreground">
+                Learn how to use presets, AI providers, and navigate the interface
+              </p>
+            </div>
+            <ArrowRight
+              className="size-4 shrink-0 text-fd-muted-foreground/40 transition-all group-hover:translate-x-0.5 group-hover:text-fd-foreground"
+              aria-hidden="true"
+            />
+          </Link>
+        </div>
       </section>
 
       {/* Resources */}
