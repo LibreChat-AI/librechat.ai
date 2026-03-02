@@ -101,32 +101,32 @@ const menuItems: {
 const socialLinks = [
   {
     title: 'GitHub',
-    icon: <Github className="h-4 w-4" aria-hidden="true" />,
+    icon: <Github className="size-4" aria-hidden="true" />,
     href: 'https://github.librechat.ai/',
   },
   {
     title: 'Discord',
-    icon: <Discord className="h-4 w-4" aria-hidden="true" />,
+    icon: <Discord className="size-4" aria-hidden="true" />,
     href: 'https://discord.librechat.ai/',
   },
   {
     title: 'LinkedIn',
-    icon: <Linkedin className="h-4 w-4" aria-hidden="true" />,
+    icon: <Linkedin className="size-4" aria-hidden="true" />,
     href: 'https://linkedin.librechat.ai/',
   },
   {
     title: 'X',
-    icon: <X className="h-4 w-4" aria-hidden="true" />,
+    icon: <X className="size-4" aria-hidden="true" />,
     href: 'https://x.com/LibreChatAI',
   },
   {
     title: 'YouTube',
-    icon: <Youtube className="h-4 w-4" aria-hidden="true" />,
+    icon: <Youtube className="size-4" aria-hidden="true" />,
     href: 'https://www.youtube.com/@LibreChat',
   },
   {
     title: 'Email',
-    icon: <Mail className="h-4 w-4" aria-hidden="true" />,
+    icon: <Mail className="size-4" aria-hidden="true" />,
     href: 'mailto:contact@librechat.ai',
   },
 ]
@@ -162,7 +162,7 @@ const FooterMenu = () => {
               key={link.title}
               href={link.href}
               aria-label={link.title}
-              className="flex items-center justify-center h-9 w-9 rounded-full text-neutral-500 dark:text-neutral-300 transition-colors duration-200 hover:text-primary hover:bg-neutral-100 dark:hover:bg-neutral-800"
+              className="flex items-center justify-center size-9 rounded-full text-neutral-500 dark:text-neutral-300 transition-colors duration-200 hover:text-primary hover:bg-neutral-100 dark:hover:bg-neutral-800"
             >
               {link.icon}
             </Link>

@@ -162,6 +162,14 @@ const companies = [
     height: 'h-14',
     imgHeight: 56,
   },
+  {
+    name: 'Stripe',
+    logoLight: '/images/logos/Stripe wordmark - Slate.svg',
+    logoDark: '/images/logos/Stripe wordmark - White.svg',
+    isSvg: true,
+    height: 'h-10',
+    imgHeight: 40,
+  },
 ]
 
 /* ---------------------------------------------------------------------------

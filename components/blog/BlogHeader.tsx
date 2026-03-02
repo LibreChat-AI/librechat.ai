@@ -38,7 +38,7 @@ export const BlogHeader = () => {
         <div style={{ textAlign: 'right' }}>
           <Author authorid={authorid} />
         </div>
-        <br></br>
+        <br />
         {ogVideo ? (
           <Video src={ogVideo} gifStyle />
         ) : ogImage ? (
@@ -54,7 +54,7 @@ export const BlogHeader = () => {
             }
           />
         ) : null}
-        <div className="mt-6 md:mt-4"></div>
+        <div className="mt-6 md:mt-4" />
       </div>
     </div>
   )

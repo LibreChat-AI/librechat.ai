@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import Image from 'next/image'
 import { useRouter } from 'next/router'
 import type { Page, MdxFile } from 'nextra'
@@ -46,22 +46,18 @@ const BlogCard = ({
   return (
     <div className="bg-popover rounded-lg shadow-md overflow-hidden blog-card">
       <div
-        className="relative h-52 md:h-64 mb-1 overflow-hidden transform scale-100 transition-transform hover:scale-105 cursor-pointer"
+        className="relative h-52 md:h-64 mb-1 overflow-hidden scale-100 transition-transform hover:scale-105 cursor-pointer"
         onClick={handleCardClick}
         style={{ transformOrigin: 'bottom center' }}
       >
         {page.frontMatter?.ogVideo ? (
-          <Video
-            src={page.frontMatter.ogVideo}
-            gifStyle
-            className="object-cover w-full h-full mt-0"
-          />
+          <Video src={page.frontMatter.ogVideo} gifStyle className="object-cover size-full mt-0" />
         ) : page.frontMatter?.ogImage ? (
           <Image
             src={page.frontMatter.gif ?? page.frontMatter.ogImage}
             width={1200}
             height={675}
-            className="object-cover absolute top-0 left-0 w-full h-full"
+            className="object-cover absolute top-0 left-0 size-full"
             alt={page.frontMatter?.title ?? 'Blog post image'}
             unoptimized={
               page.frontMatter.gif !== undefined || page.frontMatter.ogImage?.endsWith('.gif')
@@ -74,7 +70,7 @@ const BlogCard = ({
           {page.frontMatter?.tags?.map((tag) => (
             <span
               key={tag}
-              className={`cursor-pointer text-xs py-1 px-2 bg-background/80 shadow-md rounded-md ml-1 mr-1 ${
+              className={`cursor-pointer text-xs py-1 px-2 bg-background/80 shadow-md rounded-md mx-1 ${
                 selectedTags.includes(tag) ? 'bg-gray-700/20' : ''
               }`}
               onClick={() => handleTagClick(tag)}
@@ -84,13 +80,13 @@ const BlogCard = ({
           ))}
         </div>
         {/* Modified title and description to be clickable */}
-        <div className="mb-2 ml-1 mr-1 cursor-pointer" onClick={handleCardClick}>
+        <div className="mb-2 mx-1 cursor-pointer" onClick={handleCardClick}>
           <h2 className="font-mono text-xl mb-2 font-bold">
             {page.meta?.title || page.frontMatter?.title || page.name}
           </h2>
           <div>{truncateDescription(page.frontMatter?.description || '')}</div>
         </div>
-        <div className="flex items-center justify-between absolute bottom-4 left-4 right-4">
+        <div className="flex items-center justify-between absolute bottom-4 inset-x-4">
           <Author authorid={page.frontMatter?.authorid} />
           <span className="text-sm opacity-60">{page.frontMatter?.date}</span>
         </div>

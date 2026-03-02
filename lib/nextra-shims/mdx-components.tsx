@@ -4,7 +4,6 @@
  * to automatically provide components that Nextra used to inject
  * via theme.config.tsx's `components` property.
  */
-import React from 'react'
 import type { ReactNode, ComponentType } from 'react'
 
 interface ChildrenProps {

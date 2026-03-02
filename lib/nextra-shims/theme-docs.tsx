@@ -3,7 +3,6 @@
  * Provides stub implementations so existing pages/ components
  * can resolve their imports during the migration to Fumadocs.
  */
-import React from 'react'
 import type { ReactNode } from 'react'
 
 interface ChildrenProps {

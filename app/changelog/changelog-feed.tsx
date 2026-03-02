@@ -46,7 +46,7 @@ export function ChangelogFeed({ entries }: { entries: ChangelogEntry[] }) {
 
       <section aria-label="Changelog entries" className="relative">
         {/* Timeline line */}
-        <div className="absolute left-[7px] top-2 bottom-2 w-px bg-border" aria-hidden="true" />
+        <div className="absolute left-[7px] inset-y-2 w-px bg-border" aria-hidden="true" />
 
         <ol className="space-y-6">
           {filtered.map((entry) => (

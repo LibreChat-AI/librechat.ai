@@ -6,7 +6,6 @@
  * Nextra's components use compound patterns (e.g., Cards.Card, Tabs.Tab,
  * FileTree.File) which are replicated here using Object.assign.
  */
-import React from 'react'
 import type { ReactNode } from 'react'
 
 interface ChildrenProps {
@@ -40,7 +39,7 @@ function CardComponent({
       className="nextra-card flex items-center gap-3 rounded-lg border border-gray-200 dark:border-gray-800 p-4 transition-colors hover:bg-gray-100 dark:hover:bg-gray-800/50"
       {...props}
     >
-      {icon && <span className="shrink-0 [&>svg]:h-6 [&>svg]:w-6">{icon}</span>}
+      {icon && <span className="shrink-0 [&>svg]:size-6">{icon}</span>}
       {title && <h3 className="m-0 text-base font-medium">{title}</h3>}
       {children}
     </div>
