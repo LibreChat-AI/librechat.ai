@@ -1,10 +1,11 @@
-import { Provider } from '@/components/provider'
+import Script from 'next/script'
 import { GeistSans } from 'geist/font/sans'
 import { GeistMono } from 'geist/font/mono'
 import { Analytics } from '@vercel/analytics/react'
 import { SpeedInsights } from '@vercel/speed-insights/next'
 import type { ReactNode } from 'react'
 import type { Metadata } from 'next'
+import { Provider } from '@/components/provider'
 import './global.css'
 
 export const metadata: Metadata = {
@@ -43,6 +44,33 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         <Provider>{children}</Provider>
         <Analytics />
         <SpeedInsights />
+        {process.env.NEXT_PUBLIC_SCARF_PIXEL_ID && (
+          <Script
+            id="scarf-pixel"
+            strategy="afterInteractive"
+            dangerouslySetInnerHTML={{
+              __html: `
+              (function () {
+                var PIXEL_ID = '${process.env.NEXT_PUBLIC_SCARF_PIXEL_ID}';
+                function sendScarfPing() {
+                  var img = new Image();
+                  img.referrerPolicy = 'no-referrer-when-downgrade';
+                  img.src = 'https://static.scarf.sh/a.png?x-pxid=' + PIXEL_ID;
+                }
+                var originalPushState = history.pushState;
+                history.pushState = function () {
+                  originalPushState.apply(this, arguments);
+                  window.dispatchEvent(new Event('scarf:locationchange'));
+                };
+                window.addEventListener('hashchange', sendScarfPing);
+                window.addEventListener('popstate', sendScarfPing);
+                window.addEventListener('scarf:locationchange', sendScarfPing);
+                sendScarfPing();
+              })();
+            `,
+            }}
+          />
+        )}
       </body>
     </html>
   )
