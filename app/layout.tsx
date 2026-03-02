@@ -1,11 +1,11 @@
-import { Provider } from '@/components/provider'
+import Script from 'next/script'
 import { GeistSans } from 'geist/font/sans'
 import { GeistMono } from 'geist/font/mono'
 import { Analytics } from '@vercel/analytics/react'
 import { SpeedInsights } from '@vercel/speed-insights/next'
-import Script from 'next/script'
 import type { ReactNode } from 'react'
 import type { Metadata } from 'next'
+import { Provider } from '@/components/provider'
 import './global.css'
 
 export const metadata: Metadata = {
