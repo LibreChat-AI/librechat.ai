@@ -31,12 +31,17 @@ const companies: Company[] = [
     logo: '/images/logos/DaimlerTruck_light.svg',
     logoDark: '/images/logos/DaimlerTruck_dark.svg',
   },
+  {
+    name: 'Stripe',
+    logo: '/images/logos/Stripe wordmark - Slate.svg',
+    logoDark: '/images/logos/Stripe wordmark - White.svg',
+  },
 ]
 
 /** Company logos section showcasing companies that use LibreChat. */
 export const Companies: React.FC = React.memo(() => {
   const logosToShow = useRef(
-    Array.from({ length: 8 }, (_, i) => companies[i % companies.length]),
+    Array.from({ length: 10 }, (_, i) => companies[i % companies.length]),
   ).current
 
   return (
