@@ -22,7 +22,7 @@ const HeroTitle = React.memo(() => (
       {HERO_TITLE.firstPart}{' '}
       <span className="relative inline-block text-foreground">
         {HERO_TITLE.highlight}
-        <div className="absolute -bottom-1 left-0 right-0">
+        <div className="absolute -bottom-1 inset-x-0">
           <div className="bg-gradient-to-r from-transparent via-muted-foreground to-transparent h-[2px] blur-sm" />
           <div className="bg-gradient-to-r from-transparent via-muted-foreground to-transparent h-px" />
         </div>

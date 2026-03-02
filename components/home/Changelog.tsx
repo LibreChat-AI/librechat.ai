@@ -49,8 +49,8 @@ export default function Changelog({ className }: { className?: string }) {
               <div className="w-px bg-secondary" />
             </div>
 
-            <div className="relative flex h-6 w-6 flex-none items-center justify-center bg-background">
-              <div className="h-1.5 w-1.5 rounded-full bg-secondary ring-1 ring-primary/80 opacity-60 group-hover:opacity-100" />
+            <div className="relative flex size-6 flex-none items-center justify-center bg-background">
+              <div className="size-1.5 rounded-full bg-secondary ring-1 ring-primary/80 opacity-60 group-hover:opacity-100" />
             </div>
             <p className="flex-auto py-0.5 text-sm leading-5 text-primary/70 opacity-80 group-hover:opacity-100">
               <span className="font-medium text-primary">{activityItem.title}</span>{' '}
@@ -75,12 +75,12 @@ export default function Changelog({ className }: { className?: string }) {
         role="button" // Added role for the link acting as a button
         aria-label="Read the full changelog" // Added aria-label for the link
       >
-        <div className="h-6 absolute left-0 top-0 flex w-6 justify-center">
+        <div className="size-6 absolute left-0 top-0 flex justify-center">
           <div className="w-px bg-secondary" />
         </div>
 
-        <div className="relative flex h-6 w-6 flex-none items-center justify-center bg-background">
-          <div className="h-1.5 w-1.5 rounded-full bg-secondary ring-1 ring-primary/80 opacity-60 group-hover:opacity-100" />
+        <div className="relative flex size-6 flex-none items-center justify-center bg-background">
+          <div className="size-1.5 rounded-full bg-secondary ring-1 ring-primary/80 opacity-60 group-hover:opacity-100" />
         </div>
         <p className="flex-auto py-0.5 text-sm leading-5 text-primary/60 opacity-80 group-hover:opacity-100">
           <span className="font-medium text-primary">Read the full changelog ...</span> {null}

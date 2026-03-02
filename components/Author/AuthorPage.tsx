@@ -29,7 +29,7 @@ const AuthorCard: React.FC<{ author: AuthorMetadata }> = ({ author }) => {
 
   return (
     <Link href={`/authors/${author.authorid}`}>
-      <div className="flex flex-col items-center gap-4 bg-gray-200 bg-opacity-20 rounded-lg p-6 h-full group">
+      <div className="flex flex-col items-center gap-4 bg-gray-200/20 rounded-lg p-6 h-full group">
         <div className="relative overflow-hidden rounded-full">
           <Image
             width={200}
@@ -41,7 +41,7 @@ const AuthorCard: React.FC<{ author: AuthorMetadata }> = ({ author }) => {
           />
         </div>
         <h2 className="font-bold text-xl">{author.name}</h2>
-        <p className="text-sm text-center text-gray-600 flex-grow">{author.subtitle}</p>
+        <p className="text-sm text-center text-gray-600 grow">{author.subtitle}</p>
         <div className="flex flex-wrap gap-4 justify-center mt-2">
           {isClient &&
             socialsEntries.map(([key, value]) => (
@@ -57,7 +57,7 @@ const AuthorCard: React.FC<{ author: AuthorMetadata }> = ({ author }) => {
               >
                 <SocialIcon
                   url={value}
-                  className="absolute inset-0 w-full h-full transform scale-100 transition-transform opacity-100 hover:scale-90"
+                  className="absolute inset-0 size-full scale-100 transition-transform opacity-100 hover:scale-90"
                   bgColor="#9B9B9B80"
                   fgColor="background"
                   style={{ width: '2em', height: '2em' }}

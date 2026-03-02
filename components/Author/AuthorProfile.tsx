@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { getPagesUnderRoute } from 'nextra/context'
 import { type Page } from 'nextra'
 import { SocialIcon } from 'react-social-icons'
@@ -38,18 +38,18 @@ const AuthorProfile: React.FC<AuthorProfileProps> = ({ authorId }) => {
     (a, b) => new Date(b.frontMatter.date).getTime() - new Date(a.frontMatter.date).getTime(),
   )
 
-  if (!author) {
-    return <div>Author not found!</div>
-  }
-
-  const socialsEntries = Object.entries(author.socials ?? {}).filter(([, value]) => !!value)
-
   // State to track whether the component is rendered on the client side
   const [isClient, setIsClient] = useState(false)
 
   useEffect(() => {
     setIsClient(true)
   }, [])
+
+  if (!author) {
+    return <div>Author not found!</div>
+  }
+
+  const socialsEntries = Object.entries(author.socials ?? {}).filter(([, value]) => !!value)
 
   return (
     <>
@@ -71,7 +71,7 @@ const AuthorProfile: React.FC<AuthorProfileProps> = ({ authorId }) => {
             height={512}
             src={author.ogImage}
             alt={author.name}
-            className="rounded-box w-[12rem] md:w-[16rem] h-[12rem] md:h-[16rem] rounded-square"
+            className="rounded-box size-[12rem] md:size-[16rem] rounded-square"
             style={{ borderRadius: '20px', objectFit: 'cover' }}
           />
 
@@ -90,7 +90,7 @@ const AuthorProfile: React.FC<AuthorProfileProps> = ({ authorId }) => {
                 >
                   <SocialIcon
                     url={value}
-                    className="absolute inset-0 w-full h-full transform scale-100 transition-transform opacity-100 hover:scale-90"
+                    className="absolute inset-0 size-full scale-100 transition-transform opacity-100 hover:scale-90"
                     bgColor="#9B9B9B80"
                     fgColor="background"
                     // fallback={{ path: 'M32 2 A30 30 0 0 1 62 32 A30 30 0 0 1 32 62 A30 30 0 0 1 2 32 A30 30 0 0 1 32 2 Z' }}
@@ -112,7 +112,7 @@ const AuthorProfile: React.FC<AuthorProfileProps> = ({ authorId }) => {
             />
           ))}
         </div>
-        <div style={{ marginTop: '75px' }}></div>
+        <div style={{ marginTop: '75px' }} />
         <div>
           <Cards num={3}>
             <Cards.Card title="Blog" href="/blog" icon={<Blog />} image>

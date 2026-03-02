@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import { useState } from 'react'
 import useCredentialsGenerator from './credentialsGenerator' // Adjust the path based on your project structure
 
 const CredsGenerator = () => {
@@ -42,7 +42,13 @@ const CredsGenerator = () => {
         <div>
           <p style={{ fontSize: '0.8rem', marginBottom: '5px', marginTop: '10px' }}>CREDS_KEY</p>
           <div className="input-container">
-            <input type="text" value={credentials?.CREDS_KEY || ''} placeholder="" readOnly aria-label="CREDS_KEY value" />
+            <input
+              type="text"
+              value={credentials?.CREDS_KEY || ''}
+              placeholder=""
+              readOnly
+              aria-label="CREDS_KEY value"
+            />
             <button
               className="copy-button"
               onClick={() => handleCopy(credentials?.CREDS_KEY)}
@@ -56,7 +62,13 @@ const CredsGenerator = () => {
         <div>
           <p style={{ fontSize: '0.8rem', marginBottom: '5px', marginTop: '10px' }}>CREDS_IV</p>
           <div className="input-container">
-            <input type="text" value={credentials?.CREDS_IV || ''} placeholder="" readOnly aria-label="CREDS_IV value" />
+            <input
+              type="text"
+              value={credentials?.CREDS_IV || ''}
+              placeholder=""
+              readOnly
+              aria-label="CREDS_IV value"
+            />
             <button
               className="copy-button"
               onClick={() => handleCopy(credentials?.CREDS_IV)}
@@ -70,7 +82,13 @@ const CredsGenerator = () => {
         <div>
           <p style={{ fontSize: '0.8rem', marginBottom: '5px', marginTop: '10px' }}>JWT_SECRET</p>
           <div className="input-container">
-            <input type="text" value={credentials?.JWT_SECRET || ''} placeholder="" readOnly aria-label="JWT_SECRET value" />
+            <input
+              type="text"
+              value={credentials?.JWT_SECRET || ''}
+              placeholder=""
+              readOnly
+              aria-label="JWT_SECRET value"
+            />
             <button
               className="copy-button"
               onClick={() => handleCopy(credentials?.JWT_SECRET)}
@@ -108,7 +126,13 @@ const CredsGenerator = () => {
             MEILI_MASTER_KEY
           </p>
           <div className="input-container">
-            <input type="text" value={credentials?.MEILI_KEY || ''} placeholder="" readOnly aria-label="MEILI_MASTER_KEY value" />
+            <input
+              type="text"
+              value={credentials?.MEILI_KEY || ''}
+              placeholder=""
+              readOnly
+              aria-label="MEILI_MASTER_KEY value"
+            />
             <button
               className="copy-button"
               onClick={() => handleCopy(credentials?.MEILI_KEY)}

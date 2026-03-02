@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react'
+import React, { useRef } from 'react'
 import Image from 'next/image'
 
 interface Company {
@@ -35,10 +35,9 @@ const companies: Company[] = [
 
 /** Company logos section showcasing companies that use LibreChat. */
 export const Companies: React.FC = React.memo(() => {
-  const logosToShow = useMemo(
-    () => Array.from({ length: 8 }, (_, i) => companies[i % companies.length]),
-    [],
-  )
+  const logosToShow = useRef(
+    Array.from({ length: 8 }, (_, i) => companies[i % companies.length]),
+  ).current
 
   return (
     <section className="py-20">
