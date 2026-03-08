@@ -636,12 +636,27 @@ The `mcpServers` configurations allow LibreChat to dynamically interact with var
 
 ## Building a Custom MCP SSE Server
 
-When implementing a custom MCP SSE server in Node.js/Express to use with LibreChat, **do not add `express.json()` middleware** to the same Express instance that handles MCP transport.
+When implementing a custom MCP SSE server in Node.js/Express to use with LibreChat, take care with `express.json()` middleware on the routes that handle MCP transport.
 
-<Callout type="warning" title="Critical: Do NOT use express.json() with MCP SSE transport">
-`express.json()` uses body-parser internally, which reads and drains the Node.js `IncomingMessage` request body stream. `SSEServerTransport.handlePostMessage()` in the `@modelcontextprotocol/sdk` also reads this same stream to parse MCP protocol messages.
+### Critical: Do Not Use express.json() With MCP SSE Transport
 
-If `express.json()` runs first (as middleware always does), the stream is already exhausted when the MCP SDK tries to read it — resulting in **HTTP 400 errors on every MCP `initialize` handshake**, which silently prevents all tools from loading in LibreChat.
+<Callout type="warning" title="express.json() and MCP SSE transport conflict">
+If `express.json()` is registered globally (or on the `/messages` route specifically) and runs
+before the MCP SDK handler, it will consume the request body stream — leaving it exhausted when
+`SSEServerTransport.handlePostMessage()` tries to read it. This causes **HTTP 400 "stream is not
+readable"** errors on every MCP `initialize` handshake, silently preventing all tools from loading.
+
+The safe pattern for Express apps that need JSON APIs alongside MCP SSE transport is to scope
+JSON parsing only to non-MCP routes:
+
+```typescript
+// ✅ Safe: JSON parsing scoped to /api routes only
+app.use('/api', express.json());
+
+// MCP routes — no body parser registered here
+app.get('/sse', handleSseConnection);
+app.post('/messages', handleMcpMessage); // MCP SDK reads raw stream
+```
 </Callout>
 
 ### Correct Pattern
@@ -679,17 +694,19 @@ app.listen(8932);
 ### Incorrect Pattern (causes HTTP 400 on all MCP calls)
 
 ```typescript
+// ❌ Incorrect: express.json() consumes the body stream
+// (transport = an existing SSEServerTransport instance)
 const app = express();
-app.use(express.json()); // ❌ This drains the request stream!
+app.use(express.json()); // drains IncomingMessage stream globally
 
 app.post("/messages", async (req, res) => {
   // SSEServerTransport.handlePostMessage() tries to read stream here
   // but stream is already empty — HTTP 400 "stream is not readable"
-  await transport.handlePostMessage(req, res);
+  await transport.handlePostMessage(req, res); // stream already exhausted → HTTP 400
 });
 ```
 
-### librechat.yaml configuration for a custom SSE server
+### librechat.yaml Configuration for a Custom SSE Server
 
 ```yaml filename="librechat.yaml"
 mcpServers:
