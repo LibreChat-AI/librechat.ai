@@ -634,6 +634,105 @@ The `mcpServers` configurations allow LibreChat to dynamically interact with var
   - OAuth2 flow is supported for secure authentication with MCP servers
   - Users will be prompted to authenticate via OAuth before the MCP server can be used
 
+## Building a Custom MCP SSE Server
+
+When implementing a custom MCP SSE server in Node.js/Express to use with LibreChat, **do not add `express.json()` middleware** to the same Express instance that handles MCP transport.
+
+<Callout type="warning" title="Critical: Do NOT use express.json() with MCP SSE transport">
+`express.json()` uses body-parser internally, which reads and drains the Node.js `IncomingMessage` request body stream. `SSEServerTransport.handlePostMessage()` in the `@modelcontextprotocol/sdk` also reads this same stream to parse MCP protocol messages.
+
+If `express.json()` runs first (as middleware always does), the stream is already exhausted when the MCP SDK tries to read it — resulting in **HTTP 400 errors on every MCP `initialize` handshake**, which silently prevents all tools from loading in LibreChat.
+</Callout>
+
+### Correct Pattern
+
+```typescript
+import express from "express";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+
+const app = express();
+// Do NOT add: app.use(express.json());
+// Do NOT add: app.use(bodyParser.json());
+
+const transports = new Map<string, SSEServerTransport>();
+
+app.get("/sse", async (req, res) => {
+  const transport = new SSEServerTransport("/messages", res);
+  transports.set(transport.sessionId, transport);
+  const server = buildMcpServer(); // your McpServer setup
+  await server.connect(transport);
+  res.on("close", () => transports.delete(transport.sessionId));
+});
+
+app.post("/messages", async (req, res) => {
+  const id = req.query.sessionId as string;
+  const transport = transports.get(id);
+  if (!transport) { res.status(404).json({ error: "Session not found" }); return; }
+  await transport.handlePostMessage(req, res); // reads raw stream internally
+});
+
+app.get("/health", (_req, res) => res.json({ status: "ok" }));
+app.listen(8932);
+```
+
+### Incorrect Pattern (causes HTTP 400 on all MCP calls)
+
+```typescript
+const app = express();
+app.use(express.json()); // ❌ This drains the request stream!
+
+app.post("/messages", async (req, res) => {
+  // SSEServerTransport.handlePostMessage() tries to read stream here
+  // but stream is already empty — HTTP 400 "stream is not readable"
+  await transport.handlePostMessage(req, res);
+});
+```
+
+### librechat.yaml configuration for a custom SSE server
+
+```yaml filename="librechat.yaml"
+mcpServers:
+  my-server:
+    type: sse
+    url: http://localhost:8932/sse
+    # Optional: pre-approve tools to skip confirmation dialogs
+    autoApprove:
+      - tool_name_1
+      - tool_name_2
+```
+
+---
+
+## Troubleshooting: Agent generates placeholder text instead of calling tools
+
+**Symptom:** When you ask the agent to use a tool (e.g. "check the weather"), instead of calling the tool it generates descriptive text like `[Fetching weather data...]` or `[Calling API...]` and stops.
+
+**Root cause:** The agent model "sees" the tool described in its system prompt but the tool is not wired into the agent's actual tool execution context. The model generates confirmatory text as a placeholder instead of making a real tool call.
+
+**Fix — Two required conditions:**
+
+**Condition 1: `autoApprove` in MCP server config**
+
+Without `autoApprove`, LibreChat shows a confirmation dialog before each tool call. In some agent configurations this dialog is never resolved, causing the agent to stall. Add the tool names to `autoApprove`:
+
+```yaml filename="librechat.yaml"
+mcpServers:
+  my-server:
+    type: sse
+    url: http://localhost:8932/sse
+    autoApprove:
+      - search_web
+      - get_weather
+      - list_files
+```
+
+**Condition 2: Tools must be available in the agent session**
+
+Ensure the MCP server is connected and tools are loading. Check the LibreChat logs for MCP initialization errors. If you see HTTP 400 errors on `/messages`, see the [express.json() warning](#critical-do-not-use-expressjson-with-mcp-sse-transport) above.
+
+---
+
 ## References
 
 - [Model Context Protocol (MCP) Documentation](https://github.com/modelcontextprotocol)
