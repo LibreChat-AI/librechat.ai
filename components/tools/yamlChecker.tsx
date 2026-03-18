@@ -1,10 +1,14 @@
-import React, { useState, useEffect, useRef } from 'react'
+'use client'
+
+import { useState, useEffect, useRef, useCallback } from 'react'
 import AceEditor, { IMarker } from 'react-ace'
 import 'ace-builds/src-noconflict/mode-yaml'
 import 'ace-builds/src-noconflict/theme-twilight'
+import 'ace-builds/src-noconflict/theme-chrome'
 import jsYaml from 'js-yaml'
+import { CheckCircle, XCircle, Trash2, Upload } from 'lucide-react'
 
-function YAMLChecker() {
+export default function YAMLValidator() {
   const [yaml, setYaml] = useState('')
   const [validationResult, setValidationResult] = useState<{
     valid: boolean
@@ -12,49 +16,55 @@ function YAMLChecker() {
     error?: string
   } | null>(null)
   const [errorLine, setErrorLine] = useState<number | null>(null)
-  const editorRef = useRef<any>(null)
+  const [isDark, setIsDark] = useState(false)
+  const [isDragging, setIsDragging] = useState(false)
+  const editorRef = useRef<AceEditor>(null)
 
-  const validateYAML = (yamlContent: string) => {
+  useEffect(() => {
+    const root = document.documentElement
+    setIsDark(root.classList.contains('dark'))
+    const observer = new MutationObserver(() => {
+      setIsDark(root.classList.contains('dark'))
+    })
+    observer.observe(root, { attributes: true, attributeFilter: ['class'] })
+    return () => observer.disconnect()
+  }, [])
+
+  const validateYAML = useCallback((yamlContent: string) => {
     try {
       const result = jsYaml.load(yamlContent)
-      setErrorLine(null) // No error
+      setErrorLine(null)
       return { valid: true, result: JSON.stringify(result, null, 2) }
-    } catch (error) {
-      let errorMessage = ''
-      const line = error.mark?.line
-      setErrorLine(line)
-      if (error.reason === 'bad indentation of a mapping entry') {
-        errorMessage = ` Incorrect indentation at line ${line + 1}. Each entry in YAML should be properly indented.`
-      } else {
-        errorMessage = ` ${error.reason} at line ${line + 1}`
-      }
+    } catch (error: unknown) {
+      const yamlError = error as { reason?: string; mark?: { line?: number } }
+      const line = yamlError.mark?.line
+      setErrorLine(line ?? null)
+      const errorMessage =
+        yamlError.reason === 'bad indentation of a mapping entry'
+          ? `Incorrect indentation at line ${(line ?? 0) + 1}. Each entry in YAML should be properly indented.`
+          : `${yamlError.reason} at line ${(line ?? 0) + 1}`
       return { valid: false, error: errorMessage }
     }
-  }
-
-  const handleYamlChange = (newYaml: string) => {
-    setYaml(newYaml)
-  }
+  }, [])
 
   const handleFileDrop = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault()
+    setIsDragging(false)
     const file = e.dataTransfer.files[0]
+    if (!file) return
     const reader = new FileReader()
-    reader.onload = () => {
-      const fileContent = reader.result as string
-      setYaml(fileContent)
-    }
+    reader.onload = () => setYaml(reader.result as string)
     reader.readAsText(file)
   }
 
   useEffect(() => {
     if (yaml.trim() === '') {
-      setValidationResult(null) // Clear validation result if YAML is empty
+      setValidationResult(null)
+      setErrorLine(null)
     } else {
-      const result = validateYAML(yaml)
-      setValidationResult(result)
+      setValidationResult(validateYAML(yaml))
     }
-  }, [yaml]) // Trigger validation whenever `yaml` changes
+  }, [yaml, validateYAML])
 
   const errorMarkers: IMarker[] =
     errorLine === null
@@ -66,65 +76,91 @@ function YAMLChecker() {
             startCol: 0,
             endCol: Number.MAX_VALUE,
             type: 'text',
-            className: 'error-marker', // Use className instead of style
+            className: 'ace-error-marker',
           },
         ]
 
-  const textAreaStyle = {
-    width: '100%',
-    minHeight: '50px',
-    padding: '10px',
-    border: '1px solid #ccc',
-    borderRadius: '5px',
-    fontSize: '1rem',
-    backgroundColor: validationResult
-      ? validationResult.valid
-        ? 'rgba(0,255,0,0.2)' // Green background for valid YAML
-        : 'rgba(255,0,0,0.2)' // Red background for invalid YAML
-      : 'transparent', // Transparent background by default
-  }
-
   return (
-    <div style={{ width: '100%', maxWidth: '800px', margin: '0 auto' }}>
-      <h2 style={{ textAlign: 'left', fontSize: '1.5rem', margin: '10px 0' }}>
-        YAML Validator (beta)
-      </h2>
+    <div className="space-y-4">
       <div
         onDrop={handleFileDrop}
-        onDragOver={(e) => e.preventDefault()}
-        style={{ width: '100%', marginBottom: '10px' }}
+        onDragOver={(e) => {
+          e.preventDefault()
+          setIsDragging(true)
+        }}
+        onDragLeave={() => setIsDragging(false)}
+        className={`relative overflow-hidden rounded-lg border transition-colors ${
+          isDragging ? 'border-fd-primary bg-fd-primary/5' : 'border-fd-border'
+        }`}
       >
+        {isDragging && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-fd-background/80 backdrop-blur-sm">
+            <div className="flex items-center gap-2 text-sm font-medium text-fd-primary">
+              <Upload className="size-5" aria-hidden="true" />
+              Drop YAML file here
+            </div>
+          </div>
+        )}
         <AceEditor
           mode="yaml"
-          theme="twilight"
-          onChange={handleYamlChange}
+          theme={isDark ? 'twilight' : 'chrome'}
+          onChange={setYaml}
           value={yaml}
           name="YAML_EDITOR"
           editorProps={{ $blockScrolling: true }}
           setOptions={{
             showLineNumbers: true,
             highlightActiveLine: false,
+            showPrintMargin: false,
+            tabSize: 2,
+            fontSize: 14,
           }}
           markers={errorMarkers}
-          style={{ width: '100%' }}
-          placeholder="Paste the content of the YAML file here or drop a file here..."
+          width="100%"
+          height="500px"
+          placeholder="Paste your librechat.yaml content here, or drag & drop a file..."
           ref={editorRef}
         />
       </div>
-      <textarea
-        readOnly
-        style={textAreaStyle}
-        placeholder="Validation Result will be displayed here"
-        value={
-          validationResult
-            ? validationResult.valid
-              ? 'YAML is valid!'
-              : validationResult.error || ''
-            : ''
+
+      <div className="flex items-start gap-3">
+        <div className="min-w-0 flex-1" role="status" aria-live="polite">
+          {validationResult === null ? (
+            <p className="rounded-lg border border-dashed border-fd-border px-4 py-3 text-sm text-fd-muted-foreground">
+              Validation results will appear here once you paste or drop YAML content.
+            </p>
+          ) : validationResult.valid ? (
+            <div className="flex items-center gap-2 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm font-medium text-emerald-600 dark:text-emerald-400">
+              <CheckCircle className="size-4 shrink-0" aria-hidden="true" />
+              YAML is valid!
+            </div>
+          ) : (
+            <div className="flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-600 dark:text-red-400">
+              <XCircle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+              <span>{validationResult.error}</span>
+            </div>
+          )}
+        </div>
+
+        {yaml.trim() !== '' && (
+          <button
+            onClick={() => setYaml('')}
+            className="flex shrink-0 items-center gap-1.5 rounded-lg border border-fd-border px-3 py-2.5 text-sm text-fd-muted-foreground transition-colors hover:bg-fd-accent hover:text-fd-foreground"
+            aria-label="Clear editor"
+          >
+            <Trash2 className="size-3.5" aria-hidden="true" />
+            Clear
+          </button>
+        )}
+      </div>
+
+      <style>{`
+        .ace-error-marker {
+          position: absolute;
+          background-color: rgba(255, 0, 0, 0.3);
+          z-index: 20;
         }
-      />
+      `}</style>
     </div>
   )
 }
-
-export default YAMLChecker
