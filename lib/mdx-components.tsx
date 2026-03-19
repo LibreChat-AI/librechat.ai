@@ -1,7 +1,7 @@
 import defaultMdxComponents from 'fumadocs-ui/mdx'
 import { Callout } from 'fumadocs-ui/components/callout'
 import { Step, Steps } from 'fumadocs-ui/components/steps'
-import { Tabs } from 'fumadocs-ui/components/tabs'
+import { Tabs, Tab } from 'fumadocs-ui/components/tabs'
 import { File as FumadocsFile, Folder, Files } from 'fumadocs-ui/components/files'
 import { Accordion, Accordions } from 'fumadocs-ui/components/accordion'
 import { OptionTable } from '@/components/table'
@@ -64,15 +64,22 @@ function CalloutCompat({
 }
 
 /**
- * Simple Tab/Tabs wrappers that render content directly.
- * The fumadocs-mdx compiler generates tab structures that may be incomplete
- * when the remarkCodeTab plugin isn't available. These wrappers render the
- * content as simple divs to avoid Radix UI context errors.
+ * Tab/Tabs wrappers for MDX content.
+ *
+ * When `items` are provided (explicit `<Tabs items={[...]}>`), we render the
+ * real fumadocs `<Tabs>` + `<Tab>` so that clicking tab triggers actually
+ * switches the visible content.
+ *
+ * `<Tabs.Tab>` is used in MDX as a compound component. When it lives inside a
+ * Tabs with `items`, it renders as the real fumadocs `<Tab>`. Otherwise it
+ * falls back to a plain `<div>` (e.g. for auto-generated code tabs from
+ * remarkCodeTab where the fumadocs context is not set up).
+ *
+ * We achieve this by mapping `Tabs` → `TabsCompat` and `Tabs.Tab` → `Tab`
+ * (the real fumadocs Tab). `TabsCompat` wraps children with the real
+ * `<Tabs>` when items exist. The fumadocs `<Tab>` auto-resolves its value
+ * from the parent context — no extra plumbing needed.
  */
-function TabCompat({ children, ...props }: { children?: ReactNode; [key: string]: any }) {
-  return <div {...props}>{children}</div>
-}
-
 function TabsCompat({
   children,
   items,
@@ -93,7 +100,13 @@ function TabsCompat({
   // Fallback: render children directly for auto-generated tab structures
   return <div {...props}>{children}</div>
 }
-;(TabsCompat as any).Tab = TabCompat
+
+/**
+ * Compound component pattern: MDX resolves `<Tabs.Tab>` → `TabsCompat.Tab`.
+ * We assign the real fumadocs `Tab` so it registers with the parent `<Tabs>`
+ * context and tab switching works.
+ */
+const TabsWithTab = Object.assign(TabsCompat, { Tab })
 
 function CardsCompat({
   children,
@@ -214,8 +227,10 @@ export const mdxComponents = {
   Callout: CalloutCompat,
   Steps,
   Step,
-  Tab: TabCompat,
-  Tabs: TabsCompat,
+  Tab: ({ children, ...props }: { children?: ReactNode; [key: string]: any }) => (
+    <div {...props}>{children}</div>
+  ),
+  Tabs: TabsWithTab,
   Cards: CardsWithCard,
   Card: CardCompat,
   FileTree: FileTreeWithChildren,
