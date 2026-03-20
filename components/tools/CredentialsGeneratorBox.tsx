@@ -1,215 +1,150 @@
-import { useState } from 'react'
-import useCredentialsGenerator from './credentialsGenerator' // Adjust the path based on your project structure
+'use client'
 
-const CredsGenerator = () => {
+import { useState, useCallback } from 'react'
+import { Copy, Check, RefreshCw, ClipboardList } from 'lucide-react'
+import useCredentialsGenerator from './credentialsGenerator'
+
+const CREDENTIAL_FIELDS = [
+  { key: 'CREDS_KEY', label: 'CREDS_KEY', hint: 'Encryption key for stored credentials' },
+  { key: 'CREDS_IV', label: 'CREDS_IV', hint: 'Initialization vector for encryption' },
+  { key: 'JWT_SECRET', label: 'JWT_SECRET', hint: 'Secret for signing access tokens' },
+  {
+    key: 'JWT_REFRESH_SECRET',
+    label: 'JWT_REFRESH_SECRET',
+    hint: 'Secret for signing refresh tokens',
+  },
+  { key: 'MEILI_KEY', label: 'MEILI_MASTER_KEY', hint: 'MeiliSearch master key' },
+] as const
+
+type CredentialKey = (typeof CREDENTIAL_FIELDS)[number]['key']
+type Credentials = Record<CredentialKey, string>
+
+export default function CredentialsGenerator() {
   const { generateCredentials } = useCredentialsGenerator()
-  const [credentials, setCredentials] = useState<{
-    CREDS_KEY: string
-    CREDS_IV: string
-    JWT_SECRET: string
-    JWT_REFRESH_SECRET: string
-    MEILI_KEY: string
-  } | null>(null)
-  const [copyEnabled, setCopyEnabled] = useState(false) // State to track whether copy is enabled
-  const [showTooltip, setShowTooltip] = useState(false) // State to track tooltip visibility
+  const [credentials, setCredentials] = useState<Credentials | null>(null)
+  const [copiedKey, setCopiedKey] = useState<string | null>(null)
+  const [generated, setGenerated] = useState(false)
 
   const handleGenerate = () => {
     try {
-      const newCredentials = generateCredentials()
-      setCredentials(newCredentials)
-      setCopyEnabled(true) // Enable copy after generating credentials
+      setCredentials(generateCredentials())
+      setGenerated(true)
+      setCopiedKey(null)
     } catch (error) {
-      console.error(error.message)
+      console.error((error as Error).message)
     }
   }
 
-  const handleCopy = (value) => {
-    navigator.clipboard
-      .writeText(value)
-      .then(() => {
-        setShowTooltip(true) // Show tooltip on successful copy
-        setTimeout(() => setShowTooltip(false), 2000) // Hide tooltip after 2 seconds
-      })
-      .catch((err) => console.error('Copy failed:', err))
-  }
+  const copyToClipboard = useCallback(async (text: string, key: string) => {
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopiedKey(key)
+      setTimeout(() => setCopiedKey(null), 2000)
+    } catch (err) {
+      console.error('Copy failed:', err)
+    }
+  }, [])
+
+  const handleCopyAll = useCallback(() => {
+    if (!credentials) return
+    const block = CREDENTIAL_FIELDS.map((f) => `${f.label}=${credentials[f.key]}`).join('\n')
+    copyToClipboard(block, 'all')
+  }, [credentials, copyToClipboard])
 
   return (
-    <div className="credentials-box">
-      <h2 style={{ textAlign: 'center', fontSize: '1.5rem', marginBottom: '15px' }}>
-        Generate Credentials
-      </h2>
-      <div className="credentials-container">
-        <div>
-          <p style={{ fontSize: '0.8rem', marginBottom: '5px', marginTop: '10px' }}>CREDS_KEY</p>
-          <div className="input-container">
-            <input
-              type="text"
-              value={credentials?.CREDS_KEY || ''}
-              placeholder=""
-              readOnly
-              aria-label="CREDS_KEY value"
-            />
-            <button
-              className="copy-button"
-              onClick={() => handleCopy(credentials?.CREDS_KEY)}
-              disabled={!copyEnabled}
-              aria-label="Copy CREDS_KEY"
-            >
-              Copy
-            </button>
-          </div>
-        </div>
-        <div>
-          <p style={{ fontSize: '0.8rem', marginBottom: '5px', marginTop: '10px' }}>CREDS_IV</p>
-          <div className="input-container">
-            <input
-              type="text"
-              value={credentials?.CREDS_IV || ''}
-              placeholder=""
-              readOnly
-              aria-label="CREDS_IV value"
-            />
-            <button
-              className="copy-button"
-              onClick={() => handleCopy(credentials?.CREDS_IV)}
-              disabled={!copyEnabled}
-              aria-label="Copy CREDS_IV"
-            >
-              Copy
-            </button>
-          </div>
-        </div>
-        <div>
-          <p style={{ fontSize: '0.8rem', marginBottom: '5px', marginTop: '10px' }}>JWT_SECRET</p>
-          <div className="input-container">
-            <input
-              type="text"
-              value={credentials?.JWT_SECRET || ''}
-              placeholder=""
-              readOnly
-              aria-label="JWT_SECRET value"
-            />
-            <button
-              className="copy-button"
-              onClick={() => handleCopy(credentials?.JWT_SECRET)}
-              disabled={!copyEnabled}
-              aria-label="Copy JWT_SECRET"
-            >
-              Copy
-            </button>
-          </div>
-        </div>
-        <div>
-          <p style={{ fontSize: '0.8rem', marginBottom: '5px', marginTop: '10px' }}>
-            JWT_REFRESH_SECRET
-          </p>
-          <div className="input-container">
-            <input
-              type="text"
-              value={credentials?.JWT_REFRESH_SECRET || ''}
-              placeholder=""
-              readOnly
-              aria-label="JWT_REFRESH_SECRET value"
-            />
-            <button
-              className="copy-button"
-              onClick={() => handleCopy(credentials?.JWT_REFRESH_SECRET)}
-              disabled={!copyEnabled}
-              aria-label="Copy JWT_REFRESH_SECRET"
-            >
-              Copy
-            </button>
-          </div>
-        </div>
-        <div>
-          <p style={{ fontSize: '0.8rem', marginBottom: '5px', marginTop: '10px' }}>
-            MEILI_MASTER_KEY
-          </p>
-          <div className="input-container">
-            <input
-              type="text"
-              value={credentials?.MEILI_KEY || ''}
-              placeholder=""
-              readOnly
-              aria-label="MEILI_MASTER_KEY value"
-            />
-            <button
-              className="copy-button"
-              onClick={() => handleCopy(credentials?.MEILI_KEY)}
-              disabled={!copyEnabled}
-              aria-label="Copy MEILI_MASTER_KEY"
-            >
-              Copy
-            </button>
-          </div>
-        </div>
-      </div>
-      {showTooltip && <div className="tooltip">Copied to Clipboard</div>}
+    <div className="space-y-6">
       <button
-        className="generate-button"
-        style={{ display: 'block', margin: '0 auto', marginTop: '15px' }}
         onClick={handleGenerate}
+        className="group flex w-full items-center justify-center gap-2 rounded-lg bg-fd-primary px-5 py-3 text-sm font-medium text-fd-primary-foreground transition-all hover:opacity-90 active:scale-[0.99]"
         aria-label="Generate new credentials"
       >
-        Generate
+        <RefreshCw
+          className={`size-4 transition-transform ${generated ? 'group-hover:rotate-180' : ''}`}
+          aria-hidden="true"
+        />
+        {generated ? 'Regenerate Credentials' : 'Generate Credentials'}
       </button>
-      <style jsx>{`
-        .credentials-box {
-          position: relative;
-          padding: 10px;
-          // border: 1px solid #ccc;
-          border-radius: 20px;
-          display: inline-block;
-          width: 100%;
-          margin: 0 auto;
-        }
-        .credentials-container {
-          margin-top: 10px;
-        }
-        .input-container {
-          display: flex;
-          align-items: center;
-        }
-        .input-container input {
-          width: calc(100% - 70px);
-          margin-right: 10px;
-          border: 1px solid #ccc;
-          border-radius: 5px;
-          padding: 5px;
-        }
-        .copy-button {
-          padding: 6px 12px; /* Adjust as needed */
-          background: rgb(30, 163, 128);
-          color: #fff;
-          border: none;
-          border-radius: 5px;
-          cursor: pointer;
-          width: auto;
-          font-size: 0.8rem; /* Adjusted size */
-        }
-        .generate-button {
-          padding: 6px 12px; /* Adjust as needed */
-          background: rgb(30, 163, 128);
-          color: #fff;
-          border: none;
-          border-radius: 5px;
-          cursor: pointer;
-          width: auto;
-          font-size: 1rem; /* Adjusted size */
-        }
-        .tooltip {
-          position: absolute;
-          top: 10px;
-          right: 10px;
-          background-color: rgba(30, 163, 128, 0.5);
-          color: #fff;
-          padding: 5px 10px;
-          border-radius: 5px;
-          z-index: 999; /* Ensure a higher z-index */
-        }
-      `}</style>
+
+      {credentials && (
+        <>
+          <div
+            className="grid grid-cols-1 gap-4 lg:grid-cols-2"
+            role="region"
+            aria-label="Generated credentials"
+          >
+            {CREDENTIAL_FIELDS.map((field) => {
+              const id = `cred-${field.key}`
+              const isCopied = copiedKey === field.key
+              return (
+                <div
+                  key={field.key}
+                  className="group/field rounded-lg border border-fd-border bg-fd-card p-4 transition-colors hover:border-fd-primary/20"
+                >
+                  <div className="mb-1 flex items-center justify-between">
+                    <label
+                      htmlFor={id}
+                      className="font-mono text-xs font-semibold text-fd-foreground"
+                    >
+                      {field.label}
+                    </label>
+                    <button
+                      onClick={() => copyToClipboard(credentials[field.key], field.key)}
+                      className="flex items-center gap-1 rounded px-2 py-1 text-xs text-fd-muted-foreground transition-colors hover:bg-fd-accent hover:text-fd-foreground"
+                      aria-label={`Copy ${field.label}`}
+                    >
+                      {isCopied ? (
+                        <>
+                          <Check className="size-3 text-emerald-500" aria-hidden="true" />
+                          <span className="text-emerald-500">Copied</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="size-3" aria-hidden="true" />
+                          <span>Copy</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                  <p className="mb-2 text-xs text-fd-muted-foreground">{field.hint}</p>
+                  <input
+                    id={id}
+                    readOnly
+                    value={credentials[field.key]}
+                    className="w-full truncate rounded border border-fd-border bg-fd-muted px-3 py-2 font-mono text-xs text-fd-foreground outline-none focus-visible:ring-2 focus-visible:ring-fd-ring"
+                    aria-label={`${field.label} value`}
+                  />
+                </div>
+              )
+            })}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3 border-t border-fd-border pt-4">
+            <button
+              onClick={handleCopyAll}
+              className="flex items-center gap-2 rounded-lg border border-fd-border bg-fd-secondary px-4 py-2 text-sm font-medium text-fd-secondary-foreground transition-colors hover:bg-fd-accent"
+              aria-label="Copy all credentials as .env block"
+            >
+              <ClipboardList className="size-4" aria-hidden="true" />
+              {copiedKey === 'all' ? 'Copied to clipboard!' : 'Copy All as .env'}
+            </button>
+            <span aria-live="polite" className="text-xs text-fd-muted-foreground">
+              {copiedKey === 'all' && 'All 5 credentials copied as KEY=value format'}
+            </span>
+          </div>
+        </>
+      )}
+
+      {!credentials && (
+        <div className="rounded-lg border border-dashed border-fd-border bg-fd-muted/50 px-6 py-12 text-center">
+          <p className="text-sm text-fd-muted-foreground">
+            Click the button above to generate secure random credentials for your{' '}
+            <code className="rounded bg-fd-muted px-1.5 py-0.5 font-mono text-xs text-fd-foreground">
+              .env
+            </code>{' '}
+            file.
+          </p>
+        </div>
+      )}
     </div>
   )
 }
-
-export default CredsGenerator

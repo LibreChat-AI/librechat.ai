@@ -12,6 +12,8 @@ import { QuickStartHub } from '@/components/QuickStartHub'
 import { FeaturesHub } from '@/components/FeaturesHub'
 import Carousel from '@/components/carousel/Carousel'
 import { TrackedLink, TrackedAnchor } from '@/components/TrackedLink'
+import { CredentialsGeneratorMDX } from '@/components/tools/CredentialsGeneratorMDX'
+import { YAMLValidatorMDX } from '@/components/tools/YAMLValidatorMDX'
 import type { ReactNode } from 'react'
 
 function mapCalloutType(type?: string): 'info' | 'warn' | 'error' {
@@ -251,4 +253,6 @@ export const mdxComponents = {
       {children}
     </button>
   ),
+  CredentialsGeneratorMDX,
+  YAMLValidatorMDX,
 }
