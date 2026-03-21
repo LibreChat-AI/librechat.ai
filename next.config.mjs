@@ -58,6 +58,7 @@ const nonPermanentRedirects = [
   ['/docs/user_guides/rag_api', '/docs/features/rag_api'],
   ['/docs/user_guides/plugins', '/docs/features/agents'],
   ['/docs/features/plugins', '/docs/features/agents'],
+  ['/docs/features/speech-to-text', '/docs/configuration/stt_tts'],
   ['/docs/configuration/librechat_yaml/setup', '/docs/configuration/librechat_yaml'],
   ['/toolkit/yaml_checker', '/toolkit/yaml-checker'],
   ['/toolkit/creds_generator', '/toolkit/creds-generator'],
