@@ -122,6 +122,7 @@ export function Feedback() {
           <form className="flex flex-col gap-3" onSubmit={submit}>
             <textarea
               autoFocus
+              aria-label="Additional feedback"
               value={message}
               onChange={(e) => setMessage(e.target.value)}
               className="resize-none rounded-lg border border-fd-border bg-fd-secondary p-3 text-sm text-fd-secondary-foreground placeholder:text-fd-muted-foreground focus-visible:outline-none"
