@@ -34,6 +34,11 @@ export const metadata: Metadata = {
 }
 
 export default function RootLayout({ children }: { children: ReactNode }) {
+  // Sanitize Scarf pixel ID: only allow alphanumeric chars, underscores, and hyphens
+  // to prevent XSS via dangerouslySetInnerHTML injection if the env var is compromised.
+  const rawScarfId = process.env.NEXT_PUBLIC_SCARF_PIXEL_ID ?? ''
+  const scarfPixelId = /^[\w-]+$/.test(rawScarfId) ? rawScarfId : ''
+
   return (
     <html
       lang="en"
@@ -44,14 +49,14 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         <Provider>{children}</Provider>
         <Analytics />
         <SpeedInsights />
-        {process.env.NEXT_PUBLIC_SCARF_PIXEL_ID && (
+        {scarfPixelId && (
           <Script
             id="scarf-pixel"
             strategy="afterInteractive"
             dangerouslySetInnerHTML={{
               __html: `
               (function () {
-                var PIXEL_ID = '${process.env.NEXT_PUBLIC_SCARF_PIXEL_ID}';
+                var PIXEL_ID = '${scarfPixelId}';
                 function sendScarfPing() {
                   var img = new Image();
                   img.referrerPolicy = 'no-referrer-when-downgrade';

@@ -7,6 +7,39 @@ interface FeedbackPayload {
 }
 
 const GITHUB_GRAPHQL = 'https://api.github.com/graphql'
+const MAX_MESSAGE_LENGTH = 2000
+const VALID_OPINIONS = new Set(['good', 'bad'])
+
+import { createRateLimiter } from '@/lib/rate-limit'
+
+const isRateLimited = createRateLimiter(3, 60_000)
+
+/**
+ * Validate and sanitize the feedback payload.
+ * Returns null if invalid, or the sanitized payload.
+ */
+function validatePayload(
+  raw: unknown,
+): { opinion: 'good' | 'bad'; message: string; url: string } | null {
+  if (!raw || typeof raw !== 'object') return null
+
+  const { opinion, message, url } = raw as Record<string, unknown>
+
+  // Opinion must be exactly 'good' or 'bad'
+  if (typeof opinion !== 'string' || !VALID_OPINIONS.has(opinion)) return null
+
+  // URL must be a relative docs path (no external URLs / open redirect)
+  if (typeof url !== 'string' || !url.startsWith('/') || url.includes('//')) return null
+
+  // Message is optional but must be a string with bounded length
+  const safeMessage = typeof message === 'string' ? message.slice(0, MAX_MESSAGE_LENGTH).trim() : ''
+
+  return {
+    opinion: opinion as 'good' | 'bad',
+    message: safeMessage,
+    url: url.slice(0, 500),
+  }
+}
 
 async function createGitHubDiscussion(payload: FeedbackPayload): Promise<void> {
   const token = process.env.GITHUB_FEEDBACK_TOKEN
@@ -86,8 +119,19 @@ async function postToDiscord(payload: FeedbackPayload): Promise<void> {
   }
 }
 
-export async function submitFeedback(payload: FeedbackPayload): Promise<{ success: boolean }> {
+export async function submitFeedback(raw: FeedbackPayload): Promise<{ success: boolean }> {
   try {
+    // Validate before rate limiting to avoid polluting the rate limit map with junk keys
+    const payload = validatePayload(raw)
+    if (!payload) {
+      return { success: false }
+    }
+
+    // Rate limit by validated URL to prevent spamming the same page
+    if (isRateLimited(payload.url)) {
+      return { success: false }
+    }
+
     await Promise.allSettled([createGitHubDiscussion(payload), postToDiscord(payload)])
     return { success: true }
   } catch (err) {
