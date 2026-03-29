@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import { getGitHubData } from '@/lib/github'
 import {
   Github,
   Star,
@@ -26,44 +27,6 @@ export const metadata: Metadata = {
   title: 'About LibreChat',
   description:
     'LibreChat is a free, open-source AI platform that brings together all your AI conversations in one unified, customizable interface.',
-}
-
-async function getGitHubData(): Promise<{
-  stars: number
-  forks: number
-  contributors: number
-}> {
-  try {
-    const [repoRes, contribRes] = await Promise.all([
-      fetch('https://api.github.com/repos/danny-avila/LibreChat', {
-        next: { revalidate: 3600 },
-      }),
-      fetch(
-        'https://api.github.com/repos/danny-avila/LibreChat/contributors?per_page=1&anon=true',
-        {
-          next: { revalidate: 3600 },
-        },
-      ),
-    ])
-
-    const repoData = repoRes.ok ? await repoRes.json() : {}
-    const stars = repoData.stargazers_count ?? 0
-    const forks = repoData.forks_count ?? 0
-
-    // GitHub returns total count in Link header for paginated responses
-    let contributors = 0
-    if (contribRes.ok) {
-      const linkHeader = contribRes.headers.get('link')
-      if (linkHeader) {
-        const match = linkHeader.match(/page=(\d+)>;\s*rel="last"/)
-        contributors = match ? parseInt(match[1], 10) : 0
-      }
-    }
-
-    return { stars, forks, contributors }
-  } catch {
-    return { stars: 0, forks: 0, contributors: 0 }
-  }
 }
 
 function formatNumber(num: number): string {

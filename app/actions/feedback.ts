@@ -75,6 +75,7 @@ async function createGitHubDiscussion(payload: FeedbackPayload): Promise<void> {
 
   const res = await fetch(GITHUB_GRAPHQL, {
     method: 'POST',
+    signal: AbortSignal.timeout(10_000),
     headers: {
       Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json',
@@ -109,6 +110,7 @@ async function postToDiscord(payload: FeedbackPayload): Promise<void> {
 
   const res = await fetch(webhookUrl, {
     method: 'POST',
+    signal: AbortSignal.timeout(10_000),
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ embeds: [embed] }),
   })

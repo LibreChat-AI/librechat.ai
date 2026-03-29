@@ -33,24 +33,20 @@ export async function POST(request: Request) {
 
     const normalized = normalizeEmail(email)
 
-    const { data: subscriber, error: fetchError } = await supabase
-      .from('subscribers')
-      .select('id, status')
-      .eq('email', normalized)
-      .single()
-
-    if (fetchError || !subscriber) {
-      return NextResponse.json({ message: 'Subscriber not found' }, { status: 404 })
-    }
-
-    const { error: updateError } = await supabase
+    // Single UPDATE — check affected row count instead of SELECT first
+    const { error: updateError, data } = await supabase
       .from('subscribers')
       .update({ status: 'unsubscribed' })
       .eq('email', normalized)
+      .select('id')
 
     if (updateError) {
       console.error('Unsubscription error:', updateError.message)
       return NextResponse.json({ message: 'Unsubscription failed' }, { status: 500 })
+    }
+
+    if (!data || data.length === 0) {
+      return NextResponse.json({ message: 'Subscriber not found' }, { status: 404 })
     }
 
     return NextResponse.json({ message: 'Unsubscription successful' }, { status: 200 })

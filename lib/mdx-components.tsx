@@ -4,13 +4,14 @@ import { Step, Steps } from 'fumadocs-ui/components/steps'
 import { Tabs, Tab } from 'fumadocs-ui/components/tabs'
 import { File as FumadocsFile, Folder, Files } from 'fumadocs-ui/components/files'
 import { Accordion, Accordions } from 'fumadocs-ui/components/accordion'
+import dynamic from 'next/dynamic'
 import { OptionTable } from '@/components/table'
 import { Frame } from '@/components/Frame'
 import { DocsHub } from '@/components/DocsHub'
 import { LocalInstallHub } from '@/components/LocalInstallHub'
 import { QuickStartHub } from '@/components/QuickStartHub'
 import { FeaturesHub } from '@/components/FeaturesHub'
-import Carousel from '@/components/carousel/Carousel'
+const Carousel = dynamic(() => import('@/components/carousel/Carousel'), { ssr: false })
 import { TrackedLink, TrackedAnchor } from '@/components/TrackedLink'
 import { CredentialsGeneratorMDX } from '@/components/tools/CredentialsGeneratorMDX'
 import { YAMLValidatorMDX } from '@/components/tools/YAMLValidatorMDX'
@@ -219,7 +220,7 @@ function ImgCompat({ image: _, ...props }: { image?: boolean; [key: string]: any
   const DefaultImg = defaultMdxComponents.img
   if (DefaultImg) return <DefaultImg {...props} />
   // eslint-disable-next-line @next/next/no-img-element
-  return <img {...props} />
+  return <img {...props} loading="lazy" />
 }
 
 export const mdxComponents = {

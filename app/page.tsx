@@ -35,35 +35,7 @@ export const metadata: Metadata = {
  * Data fetching (server-side, cached)
  * --------------------------------------------------------------------------- */
 
-async function getGitHubData(): Promise<{ stars: number; contributors: number }> {
-  try {
-    const [repoRes, contribRes] = await Promise.all([
-      fetch('https://api.github.com/repos/danny-avila/LibreChat', {
-        next: { revalidate: 3600 },
-      }),
-      fetch(
-        'https://api.github.com/repos/danny-avila/LibreChat/contributors?per_page=1&anon=true',
-        { next: { revalidate: 3600 } },
-      ),
-    ])
-
-    const repoData = repoRes.ok ? await repoRes.json() : {}
-    const stars = repoData.stargazers_count ?? 0
-
-    let contributors = 0
-    if (contribRes.ok) {
-      const linkHeader = contribRes.headers.get('link')
-      if (linkHeader) {
-        const match = linkHeader.match(/page=(\d+)>;\s*rel="last"/)
-        contributors = match ? parseInt(match[1], 10) : 0
-      }
-    }
-
-    return { stars, contributors }
-  } catch {
-    return { stars: 0, contributors: 0 }
-  }
-}
+import { getGitHubData } from '@/lib/github'
 
 const DOCKER_HUB_REPOS = [
   'librechat/librechat',
@@ -84,7 +56,8 @@ async function getDockerHubPulls(repo: string): Promise<number> {
     if (!res.ok) return 0
     const data = await res.json()
     return data.pull_count ?? 0
-  } catch {
+  } catch (error) {
+    console.error(`[Homepage] DockerHub fetch failed for ${repo}:`, error instanceof Error ? error.message : error)
     return 0
   }
 }
@@ -98,7 +71,8 @@ async function getGhcrDownloads(pkg: string): Promise<number> {
     const html = await res.text()
     const match = html.match(/Total downloads[\s\S]*?title="(\d+)"/)
     return match ? parseInt(match[1], 10) : 0
-  } catch {
+  } catch (error) {
+    console.error(`[Homepage] GHCR fetch failed for ${pkg}:`, error instanceof Error ? error.message : error)
     return 0
   }
 }

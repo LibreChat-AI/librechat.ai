@@ -33,35 +33,17 @@ export async function POST(request: Request) {
 
     const normalized = normalizeEmail(email)
 
-    // Check if already subscribed
-    const { data: existing } = await supabase
-      .from('subscribers')
-      .select('id, status')
-      .eq('email', normalized)
-      .single()
-
-    if (existing) {
-      if (existing.status === 'subscribed') {
-        return NextResponse.json({ message: 'Email already subscribed' }, { status: 409 })
-      }
-
-      // Re-subscribe if previously unsubscribed
-      await supabase.from('subscribers').update({ status: 'subscribed' }).eq('email', normalized)
-
-      return NextResponse.json({ message: 'Subscription successful' }, { status: 200 })
-    }
-
-    // Insert new subscriber
+    // Atomic upsert — single round trip, no race condition
     const { error } = await supabase
       .from('subscribers')
-      .insert({ email: normalized, status: 'subscribed' })
+      .upsert({ email: normalized, status: 'subscribed' }, { onConflict: 'email' })
 
     if (error) {
       console.error('Subscription error:', error.message)
       return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })
     }
 
-    return NextResponse.json({ message: 'Subscription successful' }, { status: 201 })
+    return NextResponse.json({ message: 'Subscription successful' }, { status: 200 })
   } catch {
     return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })
   }
