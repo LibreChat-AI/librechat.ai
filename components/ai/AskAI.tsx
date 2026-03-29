@@ -33,6 +33,7 @@ import { saveMessages, loadMessages, clearMessages } from './chat-store'
 /* -------------------------------------------------------------------------- */
 
 const PANEL_WIDTH = 420
+const MAX_SHARE_PAYLOAD = 50_000 // 50 KB — reject share URLs larger than this
 
 /* -------------------------------------------------------------------------- */
 /*  Helpers                                                                   */
@@ -267,7 +268,7 @@ function ChatInput({
 /*  Transport                                                                 */
 /* -------------------------------------------------------------------------- */
 
-// Mutable context — updated by the component before each send
+// Mutable context — updated synchronously by the component on every render
 const transportContext = { mode: 'search' as 'search' | 'page', pageUrl: '/' }
 
 const transport = new DefaultChatTransport({
@@ -293,6 +294,11 @@ export function AskAI() {
   const navigatedRef = useRef<Set<string>>(new Set())
   const isDocsPage = pathname?.startsWith('/docs') ?? false
 
+  // Update transport context synchronously on every render (not in an effect)
+  // so it's always current when sendMessage fires
+  transportContext.mode = mode
+  transportContext.pageUrl = pathname ?? '/'
+
   const [initialMessages] = useState(() => {
     if (typeof window === 'undefined') return undefined
     const stored = loadMessages()
@@ -307,12 +313,6 @@ export function AskAI() {
 
   const isLoading = status === 'streaming' || status === 'submitted'
   const starters = getStartersForPage(pathname ?? '/')
-
-  // Update transport context when mode/page changes
-  useEffect(() => {
-    transportContext.mode = mode
-    transportContext.pageUrl = pathname ?? '/'
-  }, [mode, pathname])
 
   // Persist messages to sessionStorage
   useEffect(() => {
@@ -387,6 +387,13 @@ export function AskAI() {
         }))
       const json = JSON.stringify(slim)
       const bytes = new TextEncoder().encode(json)
+
+      // Reject if payload is too large for a URL
+      if (bytes.length > MAX_SHARE_PAYLOAD) {
+        // Conversation too long to share via URL
+        return
+      }
+
       const binary = Array.from(bytes, (b) => String.fromCharCode(b)).join('')
       const encoded = btoa(binary)
       const url = `${window.location.origin}${pathname ?? '/'}#chat=${encoded}`
@@ -405,35 +412,42 @@ export function AskAI() {
     }
   }, [messages])
 
-  // Focus input on open
-  useEffect(() => {
-    if (open) {
-      setTimeout(() => document.querySelector<HTMLTextAreaElement>('[data-chat-input]')?.focus(), 100)
-    }
-  }, [open])
-
   // Load shared chat from URL hash
   useEffect(() => {
     const { hash } = window.location
     if (!hash.startsWith('#chat=')) return
     try {
       const encoded = hash.slice('#chat='.length)
+
+      // Reject oversized payloads
+      if (encoded.length > MAX_SHARE_PAYLOAD) return
+
       const binary = atob(encoded)
       const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0))
       const json = new TextDecoder().decode(bytes)
-      const shared = JSON.parse(json) as { role: string; parts: { type: string; text: string }[] }[]
-      if (Array.isArray(shared) && shared.length > 0) {
-        setMessages(
-          shared.map((m, i) => ({
-            id: `shared-${i}`,
-            role: m.role as 'user' | 'assistant',
-            parts: m.parts ?? [],
-          })) as Parameters<typeof setMessages>[0] extends (infer U)[] ? U[] : never,
-        )
-        setOpen(true)
-        // Clean hash from URL without navigation
-        history.replaceState(null, '', window.location.pathname + window.location.search)
-      }
+      const shared = JSON.parse(json) as unknown
+
+      // Validate structure: must be a non-empty array of user/assistant messages
+      if (!Array.isArray(shared) || shared.length === 0) return
+      const validated = shared.filter(
+        (m: unknown): m is { role: string; parts: { type: string; text: string }[] } =>
+          typeof m === 'object' &&
+          m !== null &&
+          'role' in m &&
+          (m.role === 'user' || m.role === 'assistant'),
+      )
+      if (validated.length === 0) return
+
+      setMessages(
+        validated.map((m, i) => ({
+          id: `shared-${i}`,
+          role: m.role as 'user' | 'assistant',
+          parts: m.parts ?? [],
+        })) as Parameters<typeof setMessages>[0] extends (infer U)[] ? U[] : never,
+      )
+      setOpen(true)
+      // Clean hash from URL without navigation
+      history.replaceState(null, '', window.location.pathname + window.location.search)
     } catch {
       // invalid hash, ignore
     }
@@ -465,6 +479,9 @@ export function AskAI() {
       >
         <LCIcon className="size-5" />
         Ask AI
+        <span className="rounded-full bg-fd-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-fd-primary">
+          Beta
+        </span>
       </button>
 
       {/* Panel */}
@@ -483,6 +500,9 @@ export function AskAI() {
               <div className="flex items-center gap-2 text-sm font-semibold text-fd-foreground">
                 <Sparkles className="size-4 text-fd-primary" />
                 Ask AI
+                <span className="rounded-full bg-fd-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-fd-primary">
+                  Beta
+                </span>
                 {isDocsPage && (
                   <span className="rounded bg-fd-secondary px-1.5 py-0.5 text-[10px] font-normal text-fd-muted-foreground">
                     {pathname?.split('/').pop()}

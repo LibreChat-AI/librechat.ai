@@ -2,6 +2,7 @@ import { createOpenRouter } from '@openrouter/ai-sdk-provider'
 import { streamText, tool, stepCountIs, convertToModelMessages } from 'ai'
 import { z } from 'zod'
 import { docsSource } from '@/lib/source'
+import { checkRateLimit } from '@/lib/ratelimit'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
@@ -18,39 +19,49 @@ async function getSearchIndex(): Promise<SearchDoc[]> {
   if (searchIndex) return searchIndex
 
   const pages = docsSource.getPages()
-  const docs: SearchDoc[] = []
+  const results = await Promise.all(
+    pages.map(async (page): Promise<SearchDoc | null> => {
+      try {
+        const filePath = join(process.cwd(), 'content/docs', page.file.path)
+        const raw = await readFile(filePath, 'utf-8')
+        const content = raw.replace(/^---[\s\S]*?---\n*/, '')
 
-  for (const page of pages) {
-    try {
-      const filePath = join(process.cwd(), 'content/docs', page.file.path)
-      const raw = await readFile(filePath, 'utf-8')
-      const content = raw.replace(/^---[\s\S]*?---\n*/, '')
+        return {
+          url: page.url,
+          title: page.data.title,
+          description: page.data.description ?? '',
+          content: content.slice(0, 3000),
+        }
+      } catch {
+        return null // Skip pages that can't be read
+      }
+    }),
+  )
 
-      docs.push({
-        url: page.url,
-        title: page.data.title,
-        description: page.data.description ?? '',
-        content: content.slice(0, 3000),
-      })
-    } catch {
-      // Skip pages that can't be read
-    }
-  }
-
-  searchIndex = docs
-  return docs
+  searchIndex = results.filter((d): d is SearchDoc => d !== null)
+  return searchIndex
 }
 
 /** Get a single page's full content for "this page" mode */
+const pageContentCache = new Map<string, string | null>()
+
 async function getPageContent(url: string): Promise<string | null> {
+  if (pageContentCache.has(url)) return pageContentCache.get(url)!
+
   try {
     const page = docsSource.getPages().find((p) => p.url === url)
-    if (!page) return null
+    if (!page) {
+      pageContentCache.set(url, null)
+      return null
+    }
 
     const filePath = join(process.cwd(), 'content/docs', page.file.path)
     const raw = await readFile(filePath, 'utf-8')
-    return raw.replace(/^---[\s\S]*?---\n*/, '').slice(0, 8000)
+    const content = raw.replace(/^---[\s\S]*?---\n*/, '').slice(0, 8000)
+    pageContentCache.set(url, content)
+    return content
   } catch {
+    pageContentCache.set(url, null)
     return null
   }
 }
@@ -135,6 +146,18 @@ const navigateTool = tool({
 })
 
 export async function POST(req: Request) {
+  // Rate limiting (skipped if Upstash env vars are not set)
+  const rl = await checkRateLimit(req)
+  if (!rl.allowed) {
+    return new Response(JSON.stringify({ error: 'Too many requests. Please try again shortly.' }), {
+      status: 429,
+      headers: {
+        'Content-Type': 'application/json',
+        'Retry-After': String(Math.ceil((rl.reset - Date.now()) / 1000)),
+      },
+    })
+  }
+
   const body = await req.json()
   const { messages } = body as { messages: unknown[] }
   const mode = req.headers.get('x-chat-mode') as 'search' | 'page' | null

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useRef, useEffect } from 'react'
 import { Check, Copy } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -10,6 +10,10 @@ import { cn } from '@/lib/utils'
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false)
   const timeout = useRef<ReturnType<typeof setTimeout>>()
+
+  useEffect(() => {
+    return () => clearTimeout(timeout.current)
+  }, [])
 
   const copy = useCallback(() => {
     void navigator.clipboard.writeText(text)
