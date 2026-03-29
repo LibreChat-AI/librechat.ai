@@ -2,7 +2,7 @@ const { createPreset } = require('fumadocs-ui/tailwind-plugin')
 
 /**
  * Tailwind CSS configuration for the LibreChat docs site.
- * Colors use CSS custom properties (HSL) defined in app/global.css and style.css.
+ * Colors use CSS custom properties (HSL) defined in app/global.css.
  * Fumadocs UI preset provides documentation-specific styling.
  * @type {import('tailwindcss').Config}
  */

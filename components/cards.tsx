@@ -1,10 +1,16 @@
-import cn from 'clsx'
+import { cn } from '@/lib/utils'
 
-export function TwoCards({ children, className }) {
+export function TwoCards({
+  children,
+  className,
+}: {
+  children: React.ReactNode
+  className?: string
+}) {
   return <div className={cn('flex flex-col md:flex-row gap-5', className)}>{children}</div>
 }
 
-export function Divider({ text }) {
+export function Divider({ text }: { text: string }) {
   return (
     <div className="hidden md:relative">
       <div className="absolute inset-0 flex flex-col items-center" aria-hidden="true">
@@ -19,7 +25,13 @@ export function Divider({ text }) {
   )
 }
 
-export function StartCard({ children, isOutline }) {
+export function StartCard({
+  children,
+  isOutline,
+}: {
+  children: React.ReactNode
+  isOutline?: boolean
+}) {
   return (
     <div
       className={cn(

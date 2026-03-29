@@ -184,12 +184,23 @@ export default tseslint.config(
     },
   },
 
-  // ── 9. Declaration files ───────────────────────────────────────────
+  // ── 9. E2E / test files ────────────────────────────────────────────
+  {
+    files: ['e2e/**/*.{ts,js}'],
+    languageOptions: {
+      globals: globals.node,
+    },
+    rules: {
+      '@typescript-eslint/no-unused-vars': 'warn',
+    },
+  },
+
+  // ── 10. Declaration files ──────────────────────────────────────────
   {
     files: ['**/*.d.ts'],
     rules: { 'no-var': 'off' },
   },
 
-  // ── 10. Prettier (must be last) ────────────────────────────────────
+  // ── 11. Prettier (must be last) ────────────────────────────────────
   eslintConfigPrettier,
 );

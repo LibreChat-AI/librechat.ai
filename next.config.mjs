@@ -66,8 +66,9 @@ const nonPermanentRedirects = [
 
 /** @type {import('next').NextConfig} */
 const config = {
+  poweredByHeader: false,
   typescript: {
-    ignoreBuildErrors: true,
+    ignoreBuildErrors: false,
   },
   turbopack: {},
   pageExtensions: ['mdx', 'md', 'jsx', 'js', 'tsx', 'ts'],

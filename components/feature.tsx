@@ -1,10 +1,11 @@
-import Image from 'next/image'
+import Image, { type StaticImageData } from 'next/image'
+import type { ReactNode } from 'react'
 
 export function Feature(props: {
-  src
+  src: string | StaticImageData
   imageAlt: string
   imagePosition: 'left' | 'right'
-  children
+  children: ReactNode
 }) {
   return (
     <div className="my-16 md:my-32 lg:grid lg:grid-cols-3 md:gap-10 md:items-center">

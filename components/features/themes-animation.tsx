@@ -1,4 +1,4 @@
-export function ThemesAnimation(props) {
+export function ThemesAnimation(props: React.SVGProps<SVGSVGElement>) {
   return (
     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="-50 0 268 250" {...props}>
       <circle

@@ -1,4 +1,4 @@
-import cn from 'clsx'
+import { cn } from '@/lib/utils'
 import Image from 'next/image'
 
 interface ScreenshotProps {

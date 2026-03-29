@@ -1,7 +1,7 @@
 'use client'
 
 import ArrowRight from '../svg/ArrowRight'
-import cn from 'clsx'
+import { cn } from '@/lib/utils'
 import { motion } from 'framer-motion'
 import Link from 'next/link'
 import type { ReactNode } from 'react'

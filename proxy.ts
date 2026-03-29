@@ -5,7 +5,7 @@ function isMarkdownPreferred(request: NextRequest): boolean {
   return accept.includes('text/markdown')
 }
 
-export default function proxy(request: NextRequest) {
+export default function proxy(request: NextRequest): NextResponse {
   if (isMarkdownPreferred(request)) {
     const { pathname } = request.nextUrl
 

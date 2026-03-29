@@ -8,8 +8,17 @@ import styles from './style.module.css'
 
 // TODO: Fix "showControls" and "showBullets" + theme detection and dynamic style (broke when moving to nextra v3)
 
-const Carousel = ({ children, ...props }) => {
-  const carouselRef = useRef(null)
+interface CarouselProps {
+  children: React.ReactNode
+  autoplay?: boolean
+  animationDuration?: string
+  showControls?: boolean
+  showBullets?: boolean
+  perView?: string
+}
+
+const Carousel = ({ children, ...props }: CarouselProps) => {
+  const carouselRef = useRef<HTMLDivElement>(null)
 
   const {
     autoplay = false,

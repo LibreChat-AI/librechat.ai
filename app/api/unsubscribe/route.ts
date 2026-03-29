@@ -1,25 +1,22 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
+import { getSupabaseClient, isValidEmail, normalizeEmail } from '@/lib/supabase'
+import { createRateLimiter, getClientIp } from '@/lib/rate-limit'
 
-function isValidEmail(email: string): boolean {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
-}
-
-function getSupabaseClient() {
-  const url = process.env.SUPABASE_URL
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY
-
-  if (!url || !key) {
-    return null
-  }
-
-  return createClient(url, key)
-}
+const isRateLimited = createRateLimiter(5, 60_000)
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json()
-    const { email } = body
+    const ip = getClientIp(request)
+    if (isRateLimited(ip)) {
+      return NextResponse.json({ message: 'Too many requests' }, { status: 429 })
+    }
+
+    const body: unknown = await request.json()
+    if (!body || typeof body !== 'object' || !('email' in body)) {
+      return NextResponse.json({ message: 'Invalid email format' }, { status: 400 })
+    }
+
+    const { email } = body as { email: unknown }
 
     if (!email || typeof email !== 'string' || !isValidEmail(email)) {
       return NextResponse.json({ message: 'Invalid email format' }, { status: 400 })
@@ -34,12 +31,12 @@ export async function POST(request: Request) {
       )
     }
 
-    const normalizedEmail = email.toLowerCase().trim()
+    const normalized = normalizeEmail(email)
 
     const { data: subscriber, error: fetchError } = await supabase
       .from('subscribers')
       .select('id, status')
-      .eq('email', normalizedEmail)
+      .eq('email', normalized)
       .single()
 
     if (fetchError || !subscriber) {
@@ -49,7 +46,7 @@ export async function POST(request: Request) {
     const { error: updateError } = await supabase
       .from('subscribers')
       .update({ status: 'unsubscribed' })
-      .eq('email', normalizedEmail)
+      .eq('email', normalized)
 
     if (updateError) {
       console.error('Unsubscription error:', updateError.message)
