@@ -289,6 +289,7 @@ export function AskAI() {
   const [mode, setMode] = useState<'search' | 'page'>('search')
   const [shareUrl, setShareUrl] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const shareTimeoutRef = useRef<ReturnType<typeof setTimeout>>()
   const router = useRouter()
   const pathname = usePathname()
   const navigatedRef = useRef<Set<string>>(new Set())
@@ -321,18 +322,16 @@ export function AskAI() {
     }
   }, [messages])
 
-  // Push page content when panel opens (desktop only)
+  // Offset page content when panel opens (desktop only)
   useEffect(() => {
     const mq = window.matchMedia('(min-width: 768px)')
     if (open && mq.matches) {
       document.body.style.marginRight = `${PANEL_WIDTH}px`
-      document.body.style.transition = 'margin-right 200ms ease'
     } else {
       document.body.style.marginRight = ''
     }
     return () => {
       document.body.style.marginRight = ''
-      document.body.style.transition = ''
     }
   }, [open])
 
@@ -374,6 +373,7 @@ export function AskAI() {
     setMessages([])
     clearMessages()
     setShareUrl(null)
+    clearTimeout(shareTimeoutRef.current)
   }, [setMessages])
 
   const handleShare = useCallback(async () => {
@@ -399,7 +399,8 @@ export function AskAI() {
       const url = `${window.location.origin}${pathname ?? '/'}#chat=${encoded}`
       await navigator.clipboard.writeText(url)
       setShareUrl(url)
-      setTimeout(() => setShareUrl(null), 3000)
+      clearTimeout(shareTimeoutRef.current)
+      shareTimeoutRef.current = setTimeout(() => setShareUrl(null), 3000)
     } catch {
       // ignore
     }
@@ -411,6 +412,11 @@ export function AskAI() {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight
     }
   }, [messages])
+
+  // Clean up share timeout on unmount
+  useEffect(() => {
+    return () => clearTimeout(shareTimeoutRef.current)
+  }, [])
 
   // Load shared chat from URL hash
   useEffect(() => {

@@ -11,12 +11,24 @@ interface SearchDoc {
   title: string
   description: string
   content: string
+  /** Pre-computed for search — avoids repeated .toLowerCase() per query */
+  _lowerTitle: string
+  _lowerDesc: string
+  _lowerContent: string
 }
 
+/* -------------------------------------------------------------------------- */
+/*  Search index — TTL-based cache                                            */
+/* -------------------------------------------------------------------------- */
+
 let searchIndex: SearchDoc[] | null = null
+let searchIndexBuiltAt = 0
+const SEARCH_INDEX_TTL = 5 * 60 * 1000 // 5 minutes
 
 async function getSearchIndex(): Promise<SearchDoc[]> {
-  if (searchIndex) return searchIndex
+  if (searchIndex && Date.now() - searchIndexBuiltAt < SEARCH_INDEX_TTL) {
+    return searchIndex
+  }
 
   const pages = docsSource.getPages()
   const results = await Promise.all(
@@ -24,13 +36,18 @@ async function getSearchIndex(): Promise<SearchDoc[]> {
       try {
         const filePath = join(process.cwd(), 'content/docs', page.file.path)
         const raw = await readFile(filePath, 'utf-8')
-        const content = raw.replace(/^---[\s\S]*?---\n*/, '')
+        const content = raw.replace(/^---[\s\S]*?---\n*/, '').slice(0, 3000)
+        const title = page.data.title
+        const description = page.data.description ?? ''
 
         return {
           url: page.url,
-          title: page.data.title,
-          description: page.data.description ?? '',
-          content: content.slice(0, 3000),
+          title,
+          description,
+          content,
+          _lowerTitle: title.toLowerCase(),
+          _lowerDesc: description.toLowerCase(),
+          _lowerContent: content.toLowerCase(),
         }
       } catch {
         return null // Skip pages that can't be read
@@ -39,17 +56,30 @@ async function getSearchIndex(): Promise<SearchDoc[]> {
   )
 
   searchIndex = results.filter((d): d is SearchDoc => d !== null)
+  searchIndexBuiltAt = Date.now()
   return searchIndex
 }
 
-/** Get a single page's full content for "this page" mode */
+/* -------------------------------------------------------------------------- */
+/*  Page content — LRU-capped cache + URL→page Map                           */
+/* -------------------------------------------------------------------------- */
+
+const PAGE_CACHE_MAX = 100
 const pageContentCache = new Map<string, string | null>()
+let pagesByUrl: Map<string, ReturnType<typeof docsSource.getPages>[number]> | null = null
+
+function getPageByUrl(url: string) {
+  if (!pagesByUrl) {
+    pagesByUrl = new Map(docsSource.getPages().map((p) => [p.url, p]))
+  }
+  return pagesByUrl.get(url) ?? null
+}
 
 async function getPageContent(url: string): Promise<string | null> {
   if (pageContentCache.has(url)) return pageContentCache.get(url)!
 
   try {
-    const page = docsSource.getPages().find((p) => p.url === url)
+    const page = getPageByUrl(url)
     if (!page) {
       pageContentCache.set(url, null)
       return null
@@ -58,6 +88,13 @@ async function getPageContent(url: string): Promise<string | null> {
     const filePath = join(process.cwd(), 'content/docs', page.file.path)
     const raw = await readFile(filePath, 'utf-8')
     const content = raw.replace(/^---[\s\S]*?---\n*/, '').slice(0, 8000)
+
+    // Evict oldest entry if at capacity
+    if (pageContentCache.size >= PAGE_CACHE_MAX) {
+      const oldest = pageContentCache.keys().next().value
+      if (oldest !== undefined) pageContentCache.delete(oldest)
+    }
+
     pageContentCache.set(url, content)
     return content
   } catch {
@@ -66,25 +103,33 @@ async function getPageContent(url: string): Promise<string | null> {
   }
 }
 
+/* -------------------------------------------------------------------------- */
+/*  Search — uses pre-computed lowercase fields                              */
+/* -------------------------------------------------------------------------- */
+
 function searchDocs(docs: SearchDoc[], query: string, limit: number): SearchDoc[] {
   const terms = query.toLowerCase().split(/\s+/).filter(Boolean)
 
-  return docs
-    .map((doc) => {
-      const text = `${doc.title} ${doc.description} ${doc.content}`.toLowerCase()
-      let score = 0
-      for (const term of terms) {
-        if (doc.title.toLowerCase().includes(term)) score += 10
-        if (doc.description.toLowerCase().includes(term)) score += 5
-        if (text.includes(term)) score += 1
-      }
-      return { doc, score }
-    })
-    .filter((r) => r.score > 0)
+  const scored: { doc: SearchDoc; score: number }[] = []
+  for (const doc of docs) {
+    let score = 0
+    for (const term of terms) {
+      if (doc._lowerTitle.includes(term)) score += 10
+      if (doc._lowerDesc.includes(term)) score += 5
+      if (doc._lowerContent.includes(term)) score += 1
+    }
+    if (score > 0) scored.push({ doc, score })
+  }
+
+  return scored
     .sort((a, b) => b.score - a.score)
     .slice(0, limit)
     .map((r) => r.doc)
 }
+
+/* -------------------------------------------------------------------------- */
+/*  LLM setup                                                                */
+/* -------------------------------------------------------------------------- */
 
 const openrouter = createOpenRouter({
   apiKey: process.env.OPENROUTER_API_KEY,
@@ -144,6 +189,10 @@ const navigateTool = tool({
     return { action: 'navigate', url, title }
   },
 })
+
+/* -------------------------------------------------------------------------- */
+/*  Route handler                                                             */
+/* -------------------------------------------------------------------------- */
 
 export async function POST(req: Request) {
   // Rate limiting (skipped if Upstash env vars are not set)
