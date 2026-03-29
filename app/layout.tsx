@@ -6,6 +6,7 @@ import { SpeedInsights } from '@vercel/speed-insights/next'
 import type { ReactNode } from 'react'
 import type { Metadata } from 'next'
 import { Provider } from '@/components/provider'
+import { AskAI } from '@/components/ai/AskAI'
 import './global.css'
 
 export const metadata: Metadata = {
@@ -42,6 +43,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
     >
       <body className="flex min-h-screen flex-col">
         <Provider>{children}</Provider>
+        <AskAI />
         <Analytics />
         <SpeedInsights />
         {process.env.NEXT_PUBLIC_SCARF_PIXEL_ID && (
