@@ -33,7 +33,10 @@ export default async function Page(props: PageProps) {
       <DocsDescription>{page.data.description}</DocsDescription>
       <div className="flex flex-row gap-2 items-center border-b pt-2 pb-6">
         <LLMCopyButton markdownUrl={`${page.url}.mdx`} />
-        <ViewOptions markdownUrl={`${page.url}.mdx`} />
+        <ViewOptions
+          markdownUrl={`${page.url}.mdx`}
+          githubUrl={`https://github.com/LibreChat-AI/librechat.ai/blob/main/content/docs/${page.file.path}`}
+        />
       </div>
       <DocsBody>
         <MDX components={mdxComponents} />
