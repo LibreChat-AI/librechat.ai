@@ -1,32 +1,53 @@
 /**
- * Generate AI conversation starters for each docs page.
+ * Generate AI conversation starters for each docs page — INCREMENTALLY.
  *
- * Run at build time: `npx tsx scripts/generate-starters.ts`
- * Costs ~$0.01 per run (single LLM call with all page metadata).
+ * Usage:  npx tsx scripts/generate-starters.ts
  *
- * Outputs: public/starters.json — { "/docs/path": ["Q1", "Q2", "Q3"] }
+ * How it works:
+ *   1. Reads every MDX file under content/docs/
+ *   2. Hashes each file's content (SHA-256)
+ *   3. Compares against the stored hashes in public/starters-hashes.json
+ *   4. Only sends CHANGED or NEW pages to the LLM — one call per batch
+ *   5. Merges results into the existing public/starters.json
+ *   6. Removes entries for deleted pages
  *
- * The generated file is committed to the repo so it's available at runtime
- * without any LLM calls. Re-run when docs structure changes significantly.
+ * Cost: ~$0.00 when nothing changed; a few cents for a handful of edits.
+ *       First run generates everything (~$0.01-0.02).
+ *
+ * The LLM receives actual page content (truncated to 2000 chars) so
+ * starters are accurate and specific to what the page teaches.
+ *
+ * Flags:
+ *   --force    Regenerate ALL pages (ignore hashes)
  */
 
 import { readFile, writeFile, readdir } from 'node:fs/promises'
 import { join, relative } from 'node:path'
+import { createHash } from 'node:crypto'
 
 const DOCS_DIR = join(process.cwd(), 'content/docs')
-const OUTPUT_PATH = join(process.cwd(), 'public/starters.json')
+const STARTERS_PATH = join(process.cwd(), 'public/starters.json')
+const HASHES_PATH = join(process.cwd(), 'public/starters-hashes.json')
 const MODEL = process.env.OPENROUTER_MODEL ?? 'openai/gpt-5.4-nano'
 const API_KEY = process.env.OPENROUTER_API_KEY
+const FORCE = process.argv.includes('--force')
+const BATCH_SIZE = 30 // pages per LLM call — balances cost vs. request count
 
 if (!API_KEY) {
   console.error('OPENROUTER_API_KEY is required. Set it in .env or pass it directly.')
   process.exit(1)
 }
 
-interface PageMeta {
+/* -------------------------------------------------------------------------- */
+/*  Helpers                                                                   */
+/* -------------------------------------------------------------------------- */
+
+interface PageInfo {
   url: string
   title: string
   description: string
+  content: string // first 2000 chars of body (after frontmatter)
+  hash: string // SHA-256 of the raw file
 }
 
 async function getMdxFiles(dir: string): Promise<string[]> {
@@ -34,22 +55,21 @@ async function getMdxFiles(dir: string): Promise<string[]> {
   const files: string[] = []
   for (const entry of entries) {
     const full = join(dir, entry.name)
-    if (entry.isDirectory()) {
-      files.push(...(await getMdxFiles(full)))
-    } else if (entry.name.endsWith('.mdx')) {
-      files.push(full)
-    }
+    if (entry.isDirectory()) files.push(...(await getMdxFiles(full)))
+    else if (entry.name.endsWith('.mdx')) files.push(full)
   }
   return files
 }
 
-function parseFrontmatter(raw: string): { title: string; description: string } {
-  const match = raw.match(/^---\n([\s\S]*?)\n---/)
-  if (!match) return { title: '', description: '' }
+function parseFrontmatter(raw: string): { title: string; description: string; body: string } {
+  const match = raw.match(/^---\n([\s\S]*?)\n---\n*([\s\S]*)$/)
+  if (!match) return { title: '', description: '', body: raw }
   const fm = match[1]
-  const title = fm.match(/^title:\s*(.+)$/m)?.[1]?.trim() ?? ''
-  const description = fm.match(/^description:\s*(.+)$/m)?.[1]?.trim() ?? ''
-  return { title, description }
+  return {
+    title: fm.match(/^title:\s*(.+)$/m)?.[1]?.trim() ?? '',
+    description: fm.match(/^description:\s*(.+)$/m)?.[1]?.trim() ?? '',
+    body: match[2],
+  }
 }
 
 function filePathToUrl(filePath: string): string {
@@ -60,44 +80,93 @@ function filePathToUrl(filePath: string): string {
   return `/docs${rel ? `/${rel}` : ''}`
 }
 
-async function collectPages(): Promise<PageMeta[]> {
+function sha256(data: string): string {
+  return createHash('sha256').update(data).digest('hex')
+}
+
+async function readJson<T>(path: string): Promise<T | null> {
+  try {
+    return JSON.parse(await readFile(path, 'utf-8')) as T
+  } catch {
+    return null
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Collect pages                                                             */
+/* -------------------------------------------------------------------------- */
+
+async function collectPages(): Promise<PageInfo[]> {
   const files = await getMdxFiles(DOCS_DIR)
-  const pages: PageMeta[] = []
+  const pages: PageInfo[] = []
 
   for (const file of files) {
     const raw = await readFile(file, 'utf-8')
-    const { title, description } = parseFrontmatter(raw)
+    const { title, description, body } = parseFrontmatter(raw)
     if (!title) continue
-    pages.push({ url: filePathToUrl(file), title, description })
+    pages.push({
+      url: filePathToUrl(file),
+      title,
+      description,
+      content: body.slice(0, 2000),
+      hash: sha256(raw),
+    })
   }
 
   return pages.sort((a, b) => a.url.localeCompare(b.url))
 }
 
-async function generateStarters(pages: PageMeta[]): Promise<Record<string, string[]>> {
-  // Build a compact manifest: one line per page
-  const manifest = pages
-    .map((p) => `${p.url} | ${p.title} | ${p.description}`)
+/* -------------------------------------------------------------------------- */
+/*  Diff against stored hashes                                                */
+/* -------------------------------------------------------------------------- */
+
+function findChangedPages(
+  pages: PageInfo[],
+  oldHashes: Record<string, string>,
+): { changed: PageInfo[]; removed: string[] } {
+  const changed: PageInfo[] = []
+  const currentUrls = new Set<string>()
+
+  for (const page of pages) {
+    currentUrls.add(page.url)
+    if (FORCE || oldHashes[page.url] !== page.hash) {
+      changed.push(page)
+    }
+  }
+
+  const removed = Object.keys(oldHashes).filter((url) => !currentUrls.has(url))
+  return { changed, removed }
+}
+
+/* -------------------------------------------------------------------------- */
+/*  LLM call — sends actual content for accuracy                             */
+/* -------------------------------------------------------------------------- */
+
+async function generateStartersForBatch(
+  pages: PageInfo[],
+): Promise<Record<string, string[]>> {
+  const entries = pages
+    .map(
+      (p) =>
+        `--- PAGE: ${p.url} ---\nTitle: ${p.title}\nDescription: ${p.description}\n\n${p.content}\n`,
+    )
     .join('\n')
 
-  const prompt = `You are generating conversation starter questions for a docs chatbot on the LibreChat documentation site.
+  const prompt = `You generate conversation starter questions for a docs chatbot.
 
-Below is a list of documentation pages (URL | Title | Description):
+Below are documentation pages with their actual content. For each page URL, generate exactly 3 short questions a user reading that page would ask.
 
-${manifest}
+Rules:
+- Questions must be SPECIFIC to the page content — reference actual features, config keys, commands, or concepts from the text
+- Sound natural and conversational (4-10 words)
+- Be actionable: "How do I...", "What does X do?", "Troubleshoot Y"
+- Don't repeat the page title as a question
 
-For each page URL, generate exactly 3 short, practical questions a user on that page would likely ask. Questions should:
-- Be specific to that page's topic (not generic)
-- Sound natural and conversational
-- Be actionable (how to do X, troubleshoot Y, configure Z)
-- Be 4-10 words long
+${entries}
 
-Also generate a "default" entry for users not on a specific docs page.
-
-Respond with ONLY valid JSON — no markdown, no explanation. Format:
+Respond with ONLY valid JSON. No markdown fences, no explanation.
 {
-  "/docs/path": ["Question 1?", "Question 2?", "Question 3?"],
-  "default": ["Question 1?", "Question 2?", "Question 3?"]
+  "/docs/path": ["Question 1?", "Question 2?", "Question 3?"]
 }`
 
   const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
@@ -110,7 +179,7 @@ Respond with ONLY valid JSON — no markdown, no explanation. Format:
       model: MODEL,
       messages: [{ role: 'user', content: prompt }],
       temperature: 0.7,
-      max_tokens: 16000,
+      max_tokens: 8000,
     }),
   })
 
@@ -121,18 +190,16 @@ Respond with ONLY valid JSON — no markdown, no explanation. Format:
 
   const data = (await res.json()) as {
     choices: { message: { content: string } }[]
-    usage?: { total_tokens: number; prompt_tokens: number; completion_tokens: number }
+    usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number }
   }
-
-  const content = data.choices[0]?.message?.content ?? ''
 
   if (data.usage) {
     console.log(
-      `Tokens: ${data.usage.prompt_tokens} in + ${data.usage.completion_tokens} out = ${data.usage.total_tokens} total`,
+      `  Batch tokens: ${data.usage.prompt_tokens} in + ${data.usage.completion_tokens} out = ${data.usage.total_tokens}`,
     )
   }
 
-  // Extract JSON from response (handle potential markdown wrapping)
+  const content = data.choices[0]?.message?.content ?? ''
   const jsonMatch = content.match(/\{[\s\S]*\}/)
   if (!jsonMatch) {
     throw new Error(`Failed to parse JSON from LLM response:\n${content.slice(0, 500)}`)
@@ -141,19 +208,72 @@ Respond with ONLY valid JSON — no markdown, no explanation. Format:
   return JSON.parse(jsonMatch[0]) as Record<string, string[]>
 }
 
+/* -------------------------------------------------------------------------- */
+/*  Main                                                                      */
+/* -------------------------------------------------------------------------- */
+
 async function main() {
   console.log('Collecting docs pages...')
   const pages = await collectPages()
   console.log(`Found ${pages.length} pages`)
 
-  console.log(`Generating starters with ${MODEL}...`)
-  const starters = await generateStarters(pages)
+  // Load existing data
+  const oldHashes = (await readJson<Record<string, string>>(HASHES_PATH)) ?? {}
+  const oldStarters = (await readJson<Record<string, string[]>>(STARTERS_PATH)) ?? {}
 
-  const count = Object.keys(starters).length
-  console.log(`Generated starters for ${count} pages`)
+  // Diff
+  const { changed, removed } = findChangedPages(pages, oldHashes)
 
-  await writeFile(OUTPUT_PATH, JSON.stringify(starters, null, 2) + '\n')
-  console.log(`Written to ${OUTPUT_PATH}`)
+  if (changed.length === 0 && removed.length === 0) {
+    console.log('No changes detected — starters are up to date.')
+    return
+  }
+
+  console.log(`${changed.length} changed/new, ${removed.length} removed`)
+
+  // Generate starters for changed pages in batches
+  const newStarters: Record<string, string[]> = { ...oldStarters }
+
+  for (let i = 0; i < changed.length; i += BATCH_SIZE) {
+    const batch = changed.slice(i, i + BATCH_SIZE)
+    console.log(`Generating batch ${Math.floor(i / BATCH_SIZE) + 1} (${batch.length} pages)...`)
+    const result = await generateStartersForBatch(batch)
+    Object.assign(newStarters, result)
+  }
+
+  // Remove deleted pages
+  for (const url of removed) {
+    delete newStarters[url]
+    console.log(`  Removed: ${url}`)
+  }
+
+  // Ensure default entry exists
+  if (!newStarters['default']) {
+    newStarters['default'] = [
+      'How do I get started with LibreChat?',
+      'What AI providers are supported?',
+      'How do I configure Docker?',
+    ]
+  }
+
+  // Build new hashes map
+  const newHashes: Record<string, string> = {}
+  for (const page of pages) {
+    newHashes[page.url] = page.hash
+  }
+
+  // Write outputs
+  // Sort keys for stable diffs
+  const sorted: Record<string, string[]> = {}
+  for (const key of Object.keys(newStarters).sort()) {
+    sorted[key] = newStarters[key]
+  }
+
+  await writeFile(STARTERS_PATH, JSON.stringify(sorted, null, 2) + '\n')
+  await writeFile(HASHES_PATH, JSON.stringify(newHashes, null, 2) + '\n')
+
+  const total = Object.keys(sorted).length
+  console.log(`\nDone — ${total} pages in ${STARTERS_PATH}`)
 }
 
 main().catch((err) => {
