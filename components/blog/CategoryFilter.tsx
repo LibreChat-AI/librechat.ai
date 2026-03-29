@@ -11,7 +11,7 @@ const categories = [
 
 export function CategoryFilter() {
   const searchParams = useSearchParams()
-  const current = searchParams.get('category') ?? ''
+  const current = searchParams?.get('category') ?? ''
 
   return (
     <nav aria-label="Filter by category">

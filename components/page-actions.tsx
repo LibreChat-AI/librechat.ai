@@ -92,10 +92,17 @@ type DropdownItem = {
   icon: JSX.Element
 }
 
-const LIBRECHAT_REPO = 'https://github.com/danny-avila/LibreChat'
+const DOCS_REPO = 'https://github.com/LibreChat-AI/librechat.ai'
 const LIBRECHAT_DEMO = 'https://chat.librechat.ai'
 
-export function ViewOptions({ markdownUrl }: { markdownUrl: string; githubUrl?: string }) {
+export function ViewOptions({
+  markdownUrl,
+  githubUrl,
+}: {
+  markdownUrl: string
+  githubUrl?: string
+}) {
+  const resolvedGithubUrl = githubUrl ?? DOCS_REPO
   const items = useMemo(() => {
     const fullMarkdownUrl =
       typeof window === 'undefined' ? 'loading' : new URL(markdownUrl, window.location.origin)
@@ -104,7 +111,7 @@ export function ViewOptions({ markdownUrl }: { markdownUrl: string; githubUrl?: 
     const projectItems: DropdownItem[] = [
       {
         title: 'Open in GitHub',
-        href: LIBRECHAT_REPO,
+        href: resolvedGithubUrl,
         icon: (
           <svg fill="currentColor" role="img" viewBox="0 0 24 24">
             <title>GitHub</title>
@@ -179,7 +186,7 @@ export function ViewOptions({ markdownUrl }: { markdownUrl: string; githubUrl?: 
     ]
 
     return { projectItems, aiItems, ideItems }
-  }, [markdownUrl])
+  }, [markdownUrl, resolvedGithubUrl])
 
   return (
     <Popover>

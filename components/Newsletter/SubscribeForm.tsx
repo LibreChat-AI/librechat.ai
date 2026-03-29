@@ -1,5 +1,5 @@
 import validator from 'validator'
-import { useState } from 'react'
+import { useState, type FormEvent } from 'react'
 import toast, { Toaster } from 'react-hot-toast'
 import style from './newsletterform.module.css'
 
@@ -9,7 +9,7 @@ const SubscribeForm = () => {
   const [email, setEmail] = useState('')
   const [isLoading, setIsLoading] = useState(false)
 
-  const handleSubmit = async (e) => {
+  const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault()
 
     if (!validator.isEmail(email)) {

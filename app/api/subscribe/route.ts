@@ -1,25 +1,22 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
+import { getSupabaseClient, isValidEmail, normalizeEmail } from '@/lib/supabase'
+import { createRateLimiter, getClientIp } from '@/lib/rate-limit'
 
-function isValidEmail(email: string): boolean {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
-}
-
-function getSupabaseClient() {
-  const url = process.env.SUPABASE_URL
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY
-
-  if (!url || !key) {
-    return null
-  }
-
-  return createClient(url, key)
-}
+const isRateLimited = createRateLimiter(5, 60_000)
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json()
-    const { email } = body
+    const ip = getClientIp(request)
+    if (isRateLimited(ip)) {
+      return NextResponse.json({ message: 'Too many requests' }, { status: 429 })
+    }
+
+    const body: unknown = await request.json()
+    if (!body || typeof body !== 'object' || !('email' in body)) {
+      return NextResponse.json({ message: 'Valid email is required' }, { status: 422 })
+    }
+
+    const { email } = body as { email: unknown }
 
     if (!email || typeof email !== 'string' || !isValidEmail(email)) {
       return NextResponse.json({ message: 'Valid email is required' }, { status: 422 })
@@ -28,20 +25,19 @@ export async function POST(request: Request) {
     const supabase = getSupabaseClient()
 
     if (!supabase) {
-      // Supabase is not configured; return a placeholder success response
       return NextResponse.json(
         { message: 'Subscription service is not configured' },
         { status: 503 },
       )
     }
 
-    const normalizedEmail = email.toLowerCase().trim()
+    const normalized = normalizeEmail(email)
 
     // Check if already subscribed
     const { data: existing } = await supabase
       .from('subscribers')
       .select('id, status')
-      .eq('email', normalizedEmail)
+      .eq('email', normalized)
       .single()
 
     if (existing) {
@@ -50,10 +46,7 @@ export async function POST(request: Request) {
       }
 
       // Re-subscribe if previously unsubscribed
-      await supabase
-        .from('subscribers')
-        .update({ status: 'subscribed' })
-        .eq('email', normalizedEmail)
+      await supabase.from('subscribers').update({ status: 'subscribed' }).eq('email', normalized)
 
       return NextResponse.json({ message: 'Subscription successful' }, { status: 200 })
     }
@@ -61,7 +54,7 @@ export async function POST(request: Request) {
     // Insert new subscriber
     const { error } = await supabase
       .from('subscribers')
-      .insert({ email: normalizedEmail, status: 'subscribed' })
+      .insert({ email: normalized, status: 'subscribed' })
 
     if (error) {
       console.error('Subscription error:', error.message)
