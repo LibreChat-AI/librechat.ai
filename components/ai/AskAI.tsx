@@ -27,6 +27,7 @@ import { useRouter, usePathname } from 'next/navigation'
 import { cn } from '@/lib/utils'
 import { ChatMarkdown } from './markdown'
 import { saveMessages, loadMessages, clearMessages } from './chat-store'
+import startersMap from '@/public/starters.json'
 
 /* -------------------------------------------------------------------------- */
 /*  Constants                                                                 */
@@ -60,31 +61,26 @@ function extractDocRefs(text: string): { title: string; url: string }[] {
   return refs
 }
 
+const defaultStarters = (startersMap as Record<string, string[]>)['default'] ?? [
+  'How do I get started?',
+  'Docker setup guide',
+  'How to enable MCP?',
+]
+
 function getStartersForPage(pathname: string): string[] {
-  const p = pathname.toLowerCase()
-  if (p.includes('/local/docker'))
-    return ['How do I update LibreChat?', 'Docker compose override setup', 'Fix port already in use']
-  if (p.includes('/configuration/azure'))
-    return ['Configure Azure API keys', 'Azure model deployment', 'Fix Azure auth errors']
-  if (p.includes('/features/agents'))
-    return ['How do I create an agent?', 'Agent tool configuration', 'Agent file handling']
-  if (p.includes('/features/mcp'))
-    return ['How to enable MCP?', 'MCP server configuration', 'Connect external tools via MCP']
-  if (p.includes('/configuration/librechat_yaml'))
-    return ['YAML config example', 'Add a custom endpoint', 'Configure model parameters']
-  if (p.includes('/configuration/authentication'))
-    return ['Set up OAuth login', 'Enable LDAP auth', 'Configure SSO with SAML']
-  if (p.includes('/features/web_search'))
-    return ['Enable web search', 'Configure Google search', 'Web search with agents']
-  if (p.includes('/quick_start'))
-    return ['Quickstart with Docker', 'Add my first AI provider', 'Configure custom endpoints']
-  if (p.includes('/remote'))
-    return ['Deploy on Railway', 'Nginx reverse proxy', 'Deploy on DigitalOcean']
-  if (p.includes('/features'))
-    return ['What features does LibreChat have?', 'How to use code interpreter?', 'Enable memory']
-  if (p.includes('/docs'))
-    return ['How do I get started?', 'Docker vs local install?', 'Configure an AI provider']
-  return ['How do I get started?', 'Docker setup guide', 'How to enable MCP?']
+  const map = startersMap as Record<string, string[]>
+
+  // Exact match first
+  if (map[pathname]) return map[pathname]
+
+  // Walk up the path: /docs/a/b/c → /docs/a/b → /docs/a → /docs
+  let p = pathname
+  while (p.includes('/')) {
+    p = p.substring(0, p.lastIndexOf('/'))
+    if (map[p]) return map[p]
+  }
+
+  return defaultStarters
 }
 
 /* -------------------------------------------------------------------------- */
