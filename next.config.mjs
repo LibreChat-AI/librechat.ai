@@ -180,6 +180,24 @@ const config = {
           },
         ],
       },
+      {
+        source: '/docs/:path*',
+        headers: [
+          {
+            key: 'Cache-Control',
+            value: 'public, s-maxage=86400, stale-while-revalidate=604800',
+          },
+        ],
+      },
+      {
+        source: '/(blog|changelog|authors|privacy|tos|cookie)(.*)',
+        headers: [
+          {
+            key: 'Cache-Control',
+            value: 'public, s-maxage=86400, stale-while-revalidate=604800',
+          },
+        ],
+      },
     ];
   },
   async rewrites() {
