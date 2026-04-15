@@ -142,9 +142,7 @@ function findChangedPages(
 /*  LLM call — sends actual content for accuracy                             */
 /* -------------------------------------------------------------------------- */
 
-async function generateStartersForBatch(
-  pages: PageInfo[],
-): Promise<Record<string, string[]>> {
+async function generateStartersForBatch(pages: PageInfo[]): Promise<Record<string, string[]>> {
   const entries = pages
     .map(
       (p) =>
@@ -248,13 +246,11 @@ async function main() {
   }
 
   // Ensure default entry exists
-  if (!newStarters['default']) {
-    newStarters['default'] = [
-      'How do I get started with LibreChat?',
-      'What AI providers are supported?',
-      'How do I configure Docker?',
-    ]
-  }
+  newStarters['default'] ||= [
+    'How do I get started with LibreChat?',
+    'What AI providers are supported?',
+    'How do I configure Docker?',
+  ]
 
   // Build new hashes map
   const newHashes: Record<string, string> = {}
