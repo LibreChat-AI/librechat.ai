@@ -37,7 +37,7 @@ async function getSearchIndex(): Promise<SearchDoc[]> {
         const filePath = join(process.cwd(), 'content/docs', page.file.path)
         const raw = await readFile(filePath, 'utf-8')
         const content = raw.replace(/^---[\s\S]*?---\n*/, '').slice(0, 3000)
-        const title = page.data.title
+        const { title } = page.data
         const description = page.data.description ?? ''
 
         return {
@@ -69,9 +69,7 @@ const pageContentCache = new Map<string, string | null>()
 let pagesByUrl: Map<string, ReturnType<typeof docsSource.getPages>[number]> | null = null
 
 function getPageByUrl(url: string) {
-  if (!pagesByUrl) {
-    pagesByUrl = new Map(docsSource.getPages().map((p) => [p.url, p]))
-  }
+  pagesByUrl ||= new Map(docsSource.getPages().map((p) => [p.url, p]))
   return pagesByUrl.get(url) ?? null
 }
 
@@ -213,9 +211,7 @@ export async function POST(req: Request) {
   const rawPageUrl = req.headers.get('x-chat-page')
   // Validate page URL: must be a relative docs path, no traversal
   const pageUrl =
-    rawPageUrl && rawPageUrl.startsWith('/docs/') && !rawPageUrl.includes('..')
-      ? rawPageUrl
-      : null
+    rawPageUrl && rawPageUrl.startsWith('/docs/') && !rawPageUrl.includes('..') ? rawPageUrl : null
 
   if (!process.env.OPENROUTER_API_KEY) {
     return new Response(JSON.stringify({ error: 'OPENROUTER_API_KEY is not configured' }), {
@@ -224,7 +220,9 @@ export async function POST(req: Request) {
     })
   }
 
-  const modelMessages = await convertToModelMessages(messages as Parameters<typeof convertToModelMessages>[0])
+  const modelMessages = await convertToModelMessages(
+    messages as Parameters<typeof convertToModelMessages>[0],
+  )
 
   // "This page" mode — no tools, page content as context
   if (mode === 'page' && pageUrl) {
