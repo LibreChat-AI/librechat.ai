@@ -40,6 +40,8 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   const rawScarfId = process.env.NEXT_PUBLIC_SCARF_PIXEL_ID ?? ''
   const scarfPixelId = /^[\w-]+$/.test(rawScarfId) ? rawScarfId : ''
 
+  const askAIEnabled = Boolean(process.env.OPENROUTER_API_KEY)
+
   return (
     <html
       lang="en"
@@ -48,7 +50,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
     >
       <body className="flex min-h-screen flex-col">
         <Provider>{children}</Provider>
-        <AskAILoader />
+        {askAIEnabled && <AskAILoader />}
         <Analytics />
         <SpeedInsights />
         {scarfPixelId && (
