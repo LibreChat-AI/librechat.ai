@@ -83,7 +83,7 @@ const menuItems: {
     heading: 'Legal',
     items: [
       {
-        name: 'Terms of services',
+        name: 'Terms of Service',
         href: '/tos',
       },
       {

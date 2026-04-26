@@ -1,8 +1,7 @@
 import Script from 'next/script'
 import { GeistSans } from 'geist/font/sans'
 import { GeistMono } from 'geist/font/mono'
-import { Analytics } from '@vercel/analytics/react'
-import { SpeedInsights } from '@vercel/speed-insights/next'
+import { CWVMonitor } from 'next-cwv-monitor/app-router'
 import type { ReactNode } from 'react'
 import type { Metadata } from 'next'
 import { Provider } from '@/components/provider'
@@ -40,6 +39,24 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   const rawScarfId = process.env.NEXT_PUBLIC_SCARF_PIXEL_ID ?? ''
   const scarfPixelId = /^[\w-]+$/.test(rawScarfId) ? rawScarfId : ''
 
+  const cwvProjectId = process.env.NEXT_PUBLIC_CWV_PROJECT_ID ?? ''
+  const cwvEndpointRaw = process.env.NEXT_PUBLIC_CWV_ENDPOINT ?? ''
+  const cwvEndpoint = (() => {
+    if (!cwvEndpointRaw) return ''
+    try {
+      const u = new URL(cwvEndpointRaw)
+      return u.protocol === 'https:' || u.protocol === 'http:' ? u.origin : ''
+    } catch {
+      return ''
+    }
+  })()
+  const cwvEnabled = /^[\w-]+$/.test(cwvProjectId) && cwvEndpoint !== ''
+  const cwvSampleRateRaw = Number(process.env.NEXT_PUBLIC_CWV_SAMPLE_RATE)
+  const cwvSampleRate =
+    Number.isFinite(cwvSampleRateRaw) && cwvSampleRateRaw >= 0 && cwvSampleRateRaw <= 1
+      ? cwvSampleRateRaw
+      : 1
+
   return (
     <html
       lang="en"
@@ -49,8 +66,15 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       <body className="flex min-h-screen flex-col">
         <Provider>{children}</Provider>
         <AskAILoader />
-        <Analytics />
-        <SpeedInsights />
+        <Script
+          defer
+          data-domain="librechat.ai"
+          src="https://analytics.librechat.ai/js/script.outbound-links.tagged-events.hash.js"
+          strategy="afterInteractive"
+        />
+        {cwvEnabled && (
+          <CWVMonitor projectId={cwvProjectId} endpoint={cwvEndpoint} sampleRate={cwvSampleRate} />
+        )}
         {scarfPixelId && (
           <Script
             id="scarf-pixel"
