@@ -29,10 +29,11 @@ export default function PrivacyPolicyPage() {
           <p>
             This Privacy Policy describes how the LibreChat documentation website (
             <Link href="https://librechat.ai">librechat.ai</Link>, the &ldquo;Site&rdquo;) handles
-            information about its visitors. We have designed the Site to operate without collecting
-            personal data, without setting cookies, and without sharing visitor information with
-            third-party advertising networks. The limited information we do process is used solely
-            to understand aggregate site usage and to maintain performance and reliability.
+            information about its visitors. We have designed the Site to operate without setting
+            cookies, without storing directly identifying visitor profiles, and without sharing
+            visitor information with third-party advertising networks. The limited information we
+            process is used solely to understand aggregate site usage and to maintain performance
+            and reliability.
           </p>
           <p>
             This policy applies to the documentation website only. It does not apply to the
@@ -64,7 +65,7 @@ export default function PrivacyPolicyPage() {
           <p>
             We operate a self-hosted instance of{' '}
             <Link href="https://plausible.io/data-policy">Plausible Analytics</Link> at{' '}
-            <code>analytics.librechat.ai</code>. Plausible is a privacy-focused alternative to
+            <code>plausible.librechat.ai</code>. Plausible is a privacy-focused alternative to
             traditional web analytics. Specifically, Plausible:
           </p>
           <ul>
@@ -73,10 +74,10 @@ export default function PrivacyPolicyPage() {
               <code>localStorage</code> or any other persistent client-side identifier.
             </li>
             <li>
-              Does <strong>not</strong> collect, retain, or log IP addresses. IP addresses are
-              processed transiently in memory only to derive an approximate country and to compute a
-              one-way, daily-rotating hash used for visitor de-duplication; the IP itself is then
-              discarded and never written to any database.
+              Does <strong>not</strong> retain or log IP addresses. IP addresses are processed
+              transiently in memory only to derive an approximate country and to compute a one-way,
+              daily-rotating hash used for visitor de-duplication; the IP itself is then discarded
+              and never written to any database.
             </li>
             <li>
               Does <strong>not</strong> create persistent profiles, does not track users across
@@ -111,10 +112,10 @@ export default function PrivacyPolicyPage() {
           <p>
             When enabled by the Site operators, we collect anonymous Core Web Vitals measurements
             using the open-source{' '}
-            <Link href="https://github.com/Blazity/next-cwv-monitor">next-cwv-monitor</Link> SDK and
-            forward them to a self-hosted ingestion endpoint. These measurements help us detect and
-            fix performance regressions (slow page loads, layout shifts, sluggish interactions).
-            Specifically:
+            <Link href="https://github.com/GoogleChrome/web-vitals">web-vitals</Link> library and a
+            small LibreChat client-side collector that forwards them to a self-hosted ingestion
+            endpoint. These measurements help us detect and fix performance regressions (slow page
+            loads, layout shifts, sluggish interactions). Specifically:
           </p>
           <ul>
             <li>
@@ -145,9 +146,9 @@ export default function PrivacyPolicyPage() {
             On certain pages, we may load a single transparent pixel from{' '}
             <Link href="https://about.scarf.sh/privacy">Scarf</Link> (<code>static.scarf.sh</code>)
             so that the LibreChat project can count anonymous package and documentation pulls. Scarf
-            does not set cookies, does not use <code>localStorage</code>, and provides only
-            aggregate counts to the project maintainers. The Scarf pixel is conditionally enabled
-            and does not capture personal data.
+            does not set cookies, does not use <code>localStorage</code>, and provides aggregate
+            counts to the project maintainers. The Scarf pixel is conditionally enabled and is not
+            used to identify individual visitors.
           </p>
 
           <h3>3.4 Server Logs</h3>
@@ -176,23 +177,20 @@ export default function PrivacyPolicyPage() {
           </p>
           <ul>
             <li>
-              <strong>Legitimate interests</strong> (Article 6(1)(f)) for the cookieless,
-              non-identifying analytics and performance measurements described above. Our legitimate
-              interest is to understand which pages of the documentation are useful, to identify
-              broken navigation paths, and to keep the Site fast and reliable. Because the data
-              cannot identify you and is not shared for advertising, we have determined that this
-              processing does not override your fundamental rights and freedoms.
-            </li>
-            <li>
-              <strong>Legal obligation</strong> (Article 6(1)(c)) for retaining short-lived security
-              logs as required by applicable law.
+              <strong>Legitimate interests</strong> (Article 6(1)(f)) for the cookieless analytics,
+              performance measurements, and short-lived operational logs described above. Our
+              legitimate interest is to understand which pages of the documentation are useful, to
+              identify broken navigation paths, to protect the Site from abuse, and to keep it fast
+              and reliable. Because the data is minimized and is not shared for advertising, we have
+              determined that this processing does not override your fundamental rights and
+              freedoms.
             </li>
           </ul>
           <p>
-            We do not rely on consent for any of the processing described above because the
-            techniques used do not require it under the ePrivacy Directive (no terminal-equipment
-            access by means of cookies or equivalent identifiers) and the data is not personal data
-            in any directly identifying sense.
+            We do not rely on consent for the cookieless analytics described above because they do
+            not use cookies or equivalent identifiers. To the extent any transient technical signals
+            are treated as personal data under applicable law, we rely on the legitimate interests
+            described above.
           </p>
 
           <h2>6. How Long We Keep Information</h2>
@@ -231,7 +229,7 @@ export default function PrivacyPolicyPage() {
             </li>
             <li>
               <strong>Self-hosted Plausible Analytics</strong> at{' '}
-              <code>analytics.librechat.ai</code>, operated by the LibreChat maintainers.
+              <code>plausible.librechat.ai</code>, operated by the LibreChat maintainers.
             </li>
             <li>
               <strong>Self-hosted Core Web Vitals ingestion</strong>, operated by the LibreChat
@@ -297,7 +295,7 @@ export default function PrivacyPolicyPage() {
             </li>
             <li>
               Using a content blocker or privacy-focused browser extension to block requests to{' '}
-              <code>analytics.librechat.ai</code> and the performance ingestion endpoint.
+              <code>plausible.librechat.ai</code> and the performance ingestion endpoint.
             </li>
             <li>Disabling JavaScript for this Site, in which case no analytics will be sent.</li>
           </ul>
@@ -322,10 +320,10 @@ export default function PrivacyPolicyPage() {
           <h2>13. Security</h2>
           <p>
             We apply industry-standard administrative, technical, and physical safeguards to the
-            limited data we process. The Site is served over HTTPS, sets strict transport-security
-            headers, applies a restrictive Content Security Policy, and is supported by automated
-            dependency monitoring. No internet transmission or electronic storage is perfectly
-            secure, but we work to reduce risk in line with reasonable industry practice.
+            limited data we process. The Site is served over HTTPS, uses security headers including
+            a Content Security Policy, and is supported by automated dependency monitoring. No
+            internet transmission or electronic storage is perfectly secure, but we work to reduce
+            risk in line with reasonable industry practice.
           </p>
 
           <h2>14. External Links</h2>

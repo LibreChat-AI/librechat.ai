@@ -63,7 +63,7 @@ export default function CookiePolicyPage() {
           <h3>3.1 Plausible Analytics</h3>
           <p>
             We host an instance of <Link href="https://plausible.io/data-policy">Plausible</Link> at{' '}
-            <code>analytics.librechat.ai</code>. Plausible:
+            <code>plausible.librechat.ai</code>. Plausible:
           </p>
           <ul>
             <li>
@@ -89,8 +89,8 @@ export default function CookiePolicyPage() {
           <p>
             When performance monitoring is enabled, we collect anonymous Web Vitals measurements
             using the open-source{' '}
-            <Link href="https://github.com/Blazity/next-cwv-monitor">next-cwv-monitor</Link> SDK.
-            This tool:
+            <Link href="https://github.com/GoogleChrome/web-vitals">web-vitals</Link> library and a
+            small LibreChat client-side collector. This tool:
           </p>
           <ul>
             <li>
@@ -161,7 +161,7 @@ export default function CookiePolicyPage() {
             </li>
             <li>
               Installing a content-blocking extension that blocks requests to{' '}
-              <code>analytics.librechat.ai</code> and any performance-monitoring endpoint we
+              <code>plausible.librechat.ai</code> and any performance-monitoring endpoint we
               configure.
             </li>
             <li>Disabling JavaScript, in which case no analytics or performance data is sent.</li>
