@@ -1,8 +1,16 @@
 'use client'
 
 import Link from 'next/link'
-import { track } from '@vercel/analytics'
 import type { ReactNode, AnchorHTMLAttributes } from 'react'
+
+declare global {
+  interface Window {
+    plausible?: (
+      event: string,
+      options?: { props?: Record<string, string | number | boolean> },
+    ) => void
+  }
+}
 
 function isExternalHref(href: string): boolean {
   return href.startsWith('http') || href.startsWith('mailto:')
@@ -20,9 +28,11 @@ export function TrackedLink({
   children: ReactNode
 }) {
   const handleClick = () => {
-    track('card_click', {
-      title: title ?? href,
-      href,
+    window.plausible?.('card_click', {
+      props: {
+        title: title ?? href,
+        href,
+      },
     })
   }
 
@@ -58,10 +68,12 @@ export function TrackedAnchor({
   const handleClick = () => {
     const label = typeof children === 'string' ? children : (props['aria-label'] ?? href)
 
-    track('link_click', {
-      href,
-      label: String(label).slice(0, 100),
-      external: isExternalHref(href),
+    window.plausible?.('link_click', {
+      props: {
+        href,
+        label: String(label).slice(0, 100),
+        external: isExternalHref(href),
+      },
     })
   }
 
