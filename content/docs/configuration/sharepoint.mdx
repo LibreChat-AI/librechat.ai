@@ -25,8 +25,9 @@ Before configuring SharePoint integration, ensure you have:
 
 1. **Azure Entra ID Authentication** configured and working
 2. **Token Reuse** enabled (`OPENID_REUSE_TOKENS=true`)
-3. **Admin access** to your Azure tenant for app permissions
-4. **HTTPS** enabled (required for production environments)
+3. **An exposed API scope** for LibreChat, such as `api://<client-id>/access_as_user`
+4. **Admin access** to your Azure tenant for app permissions
+5. **HTTPS** enabled (required for production environments)
 
 <Callout type="error" title="Critical Requirement">
 SharePoint integration will not function without `OPENID_REUSE_TOKENS=true` as it relies on the on-behalf-of token flow to access Microsoft Graph APIs.
@@ -40,7 +41,33 @@ SharePoint integration will not function without `OPENID_REUSE_TOKENS=true` as i
 2. Go to **API permissions** in the left menu
 3. Click **Add a permission**
 
-### Step 2: Add SharePoint Permissions
+### Step 2: Expose and Grant a LibreChat API Scope
+
+The on-behalf-of flow needs the initial OpenID access token to target your LibreChat app API, not Microsoft Graph. Expose an API scope so Azure can issue a token with LibreChat as the audience.
+
+1. Go to **Expose an API** in the left menu
+2. Set the **Application ID URI** to `api://<client-id>` if it is not already configured
+3. Click **Add a scope**
+4. Name the scope `access_as_user`
+5. Save the scope, then copy the full scope value:
+
+```text
+api://<client-id>/access_as_user
+```
+
+Then grant that scope to the app registration:
+
+1. Go back to **API permissions**
+2. Click **Add a permission**
+3. Select **APIs my organization uses**
+4. Search for and select your LibreChat app registration
+5. Choose **Delegated permissions**
+6. Select `access_as_user`
+7. Click **Add permissions**
+
+Use the full `api://<client-id>/access_as_user` scope value in `OPENID_SCOPE` later in this guide.
+
+### Step 3: Add SharePoint Permissions
 
 For the file picker interface:
 
@@ -50,7 +77,7 @@ For the file picker interface:
    - `AllSites.Read` - Read items in all site collections
 4. Click **Add permissions**
 
-### Step 3: Add Microsoft Graph Permissions
+### Step 4: Add Microsoft Graph Permissions
 
 For file downloads:
 
@@ -61,9 +88,9 @@ For file downloads:
    - `Files.Read.All` - Read all files that user can access
 5. Click **Add permissions**
 
-### Step 4: Grant Admin Consent
+### Step 5: Grant Admin Consent
 
-1. After adding both permissions, you'll see them listed
+1. After adding the permissions, you'll see them listed
 2. Click **Grant admin consent for [Your Organization]**
 3. Confirm the consent in the popup
 
@@ -73,12 +100,18 @@ Your permissions should look like this:
 |------------------------|------|-------------|---------|
 | Microsoft Graph - Files.Read.All | Delegated | Read all files that user can access | ✅ Granted |
 | SharePoint - AllSites.Read | Delegated | Read items in all site collections | ✅ Granted |
+| LibreChat - access_as_user | Delegated | Allow LibreChat to receive an OBO-compatible token | ✅ Granted |
 
 ## Environment Configuration
 
 Add the following environment variables to your `.env` file:
 
 ```bash filename=".env"
+# OpenID token reuse and OBO-compatible audience
+OPENID_REUSE_TOKENS=true
+OPENID_SCOPE=openid profile email offline_access api://<client-id>/access_as_user
+OPENID_ON_BEHALF_FLOW_FOR_USERINFO_REQUIRED=true
+
 # Enable SharePoint file picker
 ENABLE_SHAREPOINT_FILEPICKER=true
 
@@ -96,6 +129,14 @@ SHAREPOINT_PICKER_GRAPH_SCOPE=Files.Read.All
 
 <Callout type="warning" title="Tenant Name">
 Ensure you replace `contoso` in the examples above with your actual SharePoint tenant name. This must match your SharePoint URL exactly.
+</Callout>
+
+<Callout type="warning" title="OpenID Scope Audience">
+Replace `<client-id>` with your Azure app registration's Application (client) ID. The `api://<client-id>/access_as_user` scope gives Azure an app-specific audience for the OBO assertion. If `OPENID_SCOPE` only includes standard OpenID scopes, Azure may issue a Graph-audience access token that cannot be exchanged again for SharePoint or Graph access.
+</Callout>
+
+<Callout type="info" title="Userinfo Token Exchange">
+`OPENID_ON_BEHALF_FLOW_FOR_USERINFO_REQUIRED=true` lets LibreChat exchange the app-audience access token for a userinfo-compatible token before calling the OpenID userinfo endpoint. This is required for Azure Entra ID setups where the `OPENID_SCOPE` includes the LibreChat API scope above.
 </Callout>
 
 ## How It Works
@@ -183,7 +224,18 @@ When properly configured, users will see a new option in the file attachment men
 1. Verify SharePoint permissions are granted in Azure
 2. Ensure admin consent was provided
 3. Check that `SHAREPOINT_BASE_URL` matches your tenant exactly
-4. Confirm HTTPS is enabled in production
+4. Confirm `SHAREPOINT_PICKER_SHAREPOINT_SCOPE` uses the full tenant URL, such as `https://contoso.sharepoint.com/AllSites.Read`
+5. Confirm HTTPS is enabled in production
+
+#### File picker opens to a blank white page
+
+**Cause**: Azure may be rejecting the on-behalf-of exchange because the OpenID access token has the wrong audience, or because the userinfo token exchange is not enabled.
+
+**Solutions**:
+1. Confirm your Azure app registration has an exposed API scope, such as `api://<client-id>/access_as_user`
+2. Add that full scope to `OPENID_SCOPE`
+3. Set `OPENID_ON_BEHALF_FLOW_FOR_USERINFO_REQUIRED=true`
+4. Restart LibreChat and sign in again so Azure issues fresh OpenID tokens
 
 #### Downloads fail or timeout
 
