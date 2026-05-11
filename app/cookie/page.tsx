@@ -84,6 +84,18 @@ export default function CookiePolicyPage() {
             twenty-four hours and the IP address itself is never written to disk, which means the
             hash cannot be linked across days and cannot be reversed back to a person or a device.
           </p>
+          <p>
+            The Plausible script and its event endpoint are served from first-party paths on this
+            Site &mdash; <code>librechat.ai/js/</code> for the script and{' '}
+            <code>librechat.ai/api/e</code> for event ingestion &mdash; and proxied through a
+            Cloudflare Worker to our self-hosted Plausible instance at{' '}
+            <code>plausible.librechat.ai</code>. Some browser blocklists match on the word
+            &ldquo;plausible&rdquo; in a domain name and will block our self-hosted instance even
+            though it never sends data to a third party; serving the script and endpoint from{' '}
+            <code>librechat.ai</code> avoids this false positive. The proxy performs no additional
+            data collection. If you prefer to opt out, you can block <code>librechat.ai/api/e</code>{' '}
+            in your browser or disable JavaScript on this Site.
+          </p>
 
           <h3>3.2 Core Web Vitals Monitoring</h3>
           <p>
@@ -160,8 +172,9 @@ export default function CookiePolicyPage() {
               tracker-blocking features in your browser.
             </li>
             <li>
-              Installing a content-blocking extension that blocks requests to{' '}
-              <code>plausible.librechat.ai</code> and any performance-monitoring endpoint we
+              Installing a content-blocking extension or browser rule that blocks requests to the
+              first-party analytics paths <code>librechat.ai/js/</code> and{' '}
+              <code>librechat.ai/api/e</code>, as well as any performance-monitoring endpoint we
               configure.
             </li>
             <li>Disabling JavaScript, in which case no analytics or performance data is sent.</li>

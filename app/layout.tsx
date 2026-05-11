@@ -94,7 +94,8 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         <Script
           async
           id="plausible-script"
-          src="https://plausible.librechat.ai/js/pa-AxQn4zbc0KTWDDkxjlFGs.js"
+          src="/js/pa-AxQn4zbc0KTWDDkxjlFGs.js"
+          data-api="/api/e"
           strategy="afterInteractive"
         />
         {cwvEnabled && (

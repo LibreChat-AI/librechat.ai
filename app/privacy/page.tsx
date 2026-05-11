@@ -107,6 +107,19 @@ export default function PrivacyPolicyPage() {
             cannot use them to identify you, contact you, or correlate your visits to this Site with
             your activity on any other site.
           </p>
+          <p>
+            The Plausible script and event requests are served from first-party paths on{' '}
+            <code>librechat.ai</code> &mdash; specifically <code>librechat.ai/js/</code> for the
+            script and <code>librechat.ai/api/e</code> for event ingestion &mdash; and proxied
+            through a Cloudflare Worker that forwards them to our self-hosted Plausible instance at{' '}
+            <code>plausible.librechat.ai</code>. Some browser blocklists match on the word
+            &ldquo;plausible&rdquo; in a domain name and will block this self-hosted instance
+            despite the fact that it never shares data with a third party. Serving the script and
+            endpoint from <code>librechat.ai</code> directly avoids that false positive. No
+            additional data is collected as a result of this proxying; it is purely network-level
+            routing. You can opt out by blocking <code>librechat.ai/api/e</code> in your browser or
+            disabling JavaScript on this Site.
+          </p>
 
           <h3>3.2 Performance Monitoring &mdash; Core Web Vitals</h3>
           <p>
@@ -294,8 +307,9 @@ export default function PrivacyPolicyPage() {
               your browser; we will continue to honor these signals where practical.
             </li>
             <li>
-              Using a content blocker or privacy-focused browser extension to block requests to{' '}
-              <code>plausible.librechat.ai</code> and the performance ingestion endpoint.
+              Using a content blocker, browser rule, or privacy-focused extension to block requests
+              to the first-party analytics paths <code>librechat.ai/js/</code> and{' '}
+              <code>librechat.ai/api/e</code> &mdash; as well as the performance ingestion endpoint.
             </li>
             <li>Disabling JavaScript for this Site, in which case no analytics will be sent.</li>
           </ul>
