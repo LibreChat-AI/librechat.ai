@@ -75,6 +75,7 @@ import {
   Import,
   Share2,
   Clock,
+  CalendarClock,
   Zap,
   // Config & structure
   Variable,
@@ -156,6 +157,7 @@ const icons: Record<string, ReactElement> = {
   Import: <Import />,
   Share2: <Share2 />,
   Clock: <Clock />,
+  CalendarClock: <CalendarClock />,
   Zap: <Zap />,
   Variable: <Variable />,
   Code: <Code />,
