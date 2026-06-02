@@ -1,0 +1,165 @@
+---
+title: Perplexica
+icon: Search
+description: Configure Perplexica as a self-hosted AI-powered web search backend for LibreChat.
+---
+
+[Perplexica](https://github.com/ItzCrazyKns/Perplexica) is an open-source AI-powered search engine (15k+ GitHub stars) that provides cited, context-aware answers by combining web search with LLM reasoning. LibreChat can use Perplexica as a web search backend via the [Model Context Protocol (MCP)](/docs/features/mcp).
+
+## Prerequisites
+
+- Perplexica **v1.12.1 or later** (earlier versions used the deprecated `focusMode` parameter)
+- A running Perplexica instance (self-hosted or accessible via network)
+- A configured SearXNG instance (Perplexica's underlying search engine)
+
+## Deploy Perplexica
+
+Add Perplexica and SearXNG to your `docker-compose.yml`:
+
+```yaml
+services:
+  perplexica-backend:
+    image: itzcrazykns1337/perplexica-backend:main
+    environment:
+      - SEARXNG_API_URL=http://searxng:8080
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    ports:
+      - "3001:3001"
+    depends_on:
+      - searxng
+
+  searxng:
+    image: searxng/searxng:latest
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./searxng:/etc/searxng
+```
+
+<Callout type="warning" title="Mutable image tags">
+The example above uses mutable image tags (`main`, `latest`). For production deployments,
+pin to a specific version digest (e.g., `image@sha256:...`) to prevent unexpected updates,
+especially as these containers have access to your API keys.
+</Callout>
+
+After starting, the Perplexica backend API is available at `http://localhost:3001`.
+
+> **Note:** Port 3001 is the backend API used by LibreChat's MCP integration. If you also run
+> the full Perplexica stack including the Next.js frontend, it typically serves on port 3000.
+> Visit the Perplexica settings UI to configure your chat model and embedding model providers.
+
+## Configure LibreChat via MCP
+
+The recommended integration path is through LibreChat's [MCP support](/docs/features/mcp). Add the following to your `librechat.yaml`:
+
+```yaml
+mcpServers:
+  perplexica:
+    type: sse
+    url: http://perplexica-mcp:8932/sse   # adjust to your MCP server URL
+    autoApprove:
+      - perplexica_search
+```
+
+Agents with this MCP server attached will have access to a `perplexica_search` tool that queries Perplexica and returns cited answers.
+
+## API Reference
+
+<Callout type="warning">
+  `focusMode` was **removed in Perplexica v1.12.1**. Use `sources: ["web"]` instead. You may still see `focusMode` referenced in older blog posts or the Perplexica database migration files — these references apply only to the legacy schema and are not valid in the current API.
+</Callout>
+
+Perplexica exposes a single endpoint for queries:
+
+```
+POST /api/chat
+Content-Type: application/json
+```
+
+### Request body
+
+```json
+{
+  "message": {
+    "messageId": "msg-1",
+    "chatId": "chat-1",
+    "role": "user",
+    "content": "What is the latest news about AI?"
+  },
+  "chatModel": {
+    "providerId": "openai",
+    "key": "gpt-4o-mini"
+  },
+  "embeddingModel": {
+    "providerId": "ollama",
+    "key": "nomic-embed-text:latest"
+  },
+  "sources": ["web"],
+  "optimizationMode": "speed",
+  "history": []
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `message.content` | The search query |
+| `chatModel` | LLM used to synthesize the answer |
+| `embeddingModel` | Embedding model used for semantic ranking |
+| `sources` | `["web"]` for standard web search (replaces deprecated `focusMode`) |
+| `optimizationMode` | `"speed"` (default) or `"balanced"` |
+
+### Parsing the NDJSON response
+
+Perplexica streams its response as NDJSON (newline-delimited JSON). The answer is assembled incrementally via `updateBlock` events.
+
+> **Note:** The example below buffers the full NDJSON response with `response.text()` before
+> parsing. For typical queries this performs well; for very high-traffic deployments, consider
+> consuming `response.body` as a readable stream for lower memory usage.
+
+```typescript
+const response = await fetch(`${PERPLEXICA_URL}/api/chat`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    message: { messageId: `msg-${Date.now()}`, chatId: `chat-${Date.now()}`, role: "user", content: query },
+    chatModel: { providerId: chatProvider, key: chatModel },
+    embeddingModel: { providerId: embedProvider, key: embedModel },
+    sources: ["web"],
+    optimizationMode: "speed",
+    history: [],
+  }),
+});
+
+const rawText = await response.text();
+const blockValues = new Map<string, string>();
+
+for (const line of rawText.split("\n")) {
+  const trimmed = line.trim();
+  if (!trimmed) continue;
+  try {
+    const event = JSON.parse(trimmed);
+    if (event.type === "error") throw new Error(event.data ?? "Perplexica error");
+    if (event.type === "updateBlock" && Array.isArray(event.patch)) {
+      for (const patch of event.patch) {
+        if (patch.op === "replace" && patch.path === "/data") {
+          blockValues.set(event.blockId, String(patch.value ?? ""));
+        }
+      }
+    }
+  } catch {
+    continue;
+  }
+}
+
+const answer = Array.from(blockValues.values()).join("\n\n").trim();
+```
+
+## Troubleshooting
+
+| Issue | Solution |
+|-------|----------|
+| `focusMode is not a valid field` | Upgrade to Perplexica v1.12.1+ and use `sources: ["web"]` |
+| Empty response / no answer blocks | Verify SearXNG is running and reachable from the Perplexica container |
+| HTTP 500 from `/api/chat` | Check that `chatModel.providerId` is configured in Perplexica settings and the API key is valid |
+| Slow responses | Use `optimizationMode: "speed"` (default) rather than `"balanced"` |
+| Connection refused to MCP server | Ensure the MCP SSE server is running and the `url` in `librechat.yaml` is correct |
