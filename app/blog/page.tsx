@@ -1,7 +1,9 @@
 import Image from 'next/image'
 import Link from 'next/link'
+import { Pin } from 'lucide-react'
 import { getAuthorById } from '@/lib/authors'
 import { blog } from '@/lib/source'
+import { cn } from '@/lib/utils'
 import type { Metadata } from 'next'
 
 export const metadata: Metadata = {
@@ -20,6 +22,7 @@ interface FeedEntry {
   authorAvatar?: string
   ogImage?: string
   ogImagePosition?: string
+  featured?: boolean
 }
 
 const dateFormatter = new Intl.DateTimeFormat('en-US', {
@@ -51,10 +54,14 @@ export default function BlogPage() {
       authorAvatar: author?.avatar,
       ogImage: post.ogImage,
       ogImagePosition: post.ogImagePosition,
+      featured: post.featured,
     })
   }
 
-  entries.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+  entries.sort((a, b) => {
+    if (!!b.featured !== !!a.featured) return b.featured ? 1 : -1
+    return new Date(b.date).getTime() - new Date(a.date).getTime()
+  })
 
   return (
     <div>
@@ -67,18 +74,32 @@ export default function BlogPage() {
 
       <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
         {entries.map((entry) => (
-          <article key={entry.url}>
+          <article key={entry.url} className={cn(entry.featured && 'md:col-span-2')}>
             <Link
               href={entry.url}
-              className="group flex h-full flex-col rounded-lg border border-border overflow-hidden transition-colors hover:bg-muted"
+              className={cn(
+                'group flex h-full flex-col rounded-lg border border-border overflow-hidden transition-colors hover:bg-muted',
+                entry.featured && 'border-primary/40 ring-1 ring-primary/20',
+              )}
             >
-              <div className="relative h-48 w-full overflow-hidden bg-muted">
+              <div
+                className={cn(
+                  'relative w-full overflow-hidden bg-muted',
+                  entry.featured ? 'h-56 md:h-72' : 'h-48',
+                )}
+              >
+                {entry.featured && (
+                  <span className="absolute left-3 top-3 z-10 inline-flex items-center gap-1.5 rounded-full bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground shadow-sm">
+                    <Pin className="size-3" aria-hidden="true" />
+                    Pinned
+                  </span>
+                )}
                 {entry.ogImage ? (
                   <Image
                     src={entry.ogImage}
                     alt={entry.title}
                     fill
-                    sizes="(max-width: 768px) 100vw, 50vw"
+                    sizes={entry.featured ? '100vw' : '(max-width: 768px) 100vw, 50vw'}
                     className="object-cover transition-transform group-hover:scale-105"
                     style={
                       entry.ogImagePosition ? { objectPosition: entry.ogImagePosition } : undefined
