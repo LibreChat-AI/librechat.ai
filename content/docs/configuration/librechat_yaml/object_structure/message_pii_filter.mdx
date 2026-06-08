@@ -1,0 +1,80 @@
+---
+title: "Message PII Filter Object Structure"
+icon: ShieldAlert
+---
+
+## Overview
+
+The `messagePiiFilter` object lets operators reject chat messages whose text matches credential-shaped patterns before the request reaches OpenAI moderation, the model, or the database. The filter is opt-in: omit the section entirely to leave it inert.
+
+The middleware is mounted on the agent chat route ahead of `moderateText`. When a configured pattern matches the user's message, the request is refused with HTTP 400 and the error code `message_pii_filter_block`. Nothing is sent to the moderation endpoint, nothing is dispatched to the model, and nothing is persisted to MongoDB.
+
+Three starter patterns ship by default:
+
+  - `sk_prefix` — tokens beginning with `sk-` (OpenAI, Anthropic, Langfuse, etc.)
+  - `bearer_header` — `Bearer <token>` strings (case-insensitive)
+  - `api_key_header` — `api-key: <token>` headers (case-insensitive)
+
+Operators can pick a subset of the starters with `starterPatterns: [...]`, supply their own regex with `customPatterns`, or do both.
+
+## Example
+
+```yaml
+messagePiiFilter:
+  # Omit `starterPatterns` to enable all starters. Pass an explicit
+  # list to subset them. Pass `[]` to disable starters entirely.
+  starterPatterns: [sk_prefix, bearer_header, api_key_header]
+
+  # Operator-defined patterns. Each entry needs `id`, `label`, and a
+  # JavaScript-flavor `regex`. The regex is validated at config load
+  # time; an invalid pattern fails startup.
+  customPatterns:
+    - id: anthropic_api_key
+      label: Anthropic API key
+      regex: "sk-ant-[A-Za-z0-9_-]{20,}"
+```
+
+## Fields
+
+**Key:**
+<OptionTable
+  options={[
+    ['messagePiiFilter', 'Object', 'Configures credential-pattern matching for the chat endpoint. Omit to disable.', ''],
+  ]}
+/>
+
+**Subkeys:**
+<OptionTable
+  options={[
+    ['starterPatterns', 'Array of Strings', 'Optional subset of starter pattern ids to enable. Omit to enable all starters. Pass `[]` to disable starters entirely.', ''],
+    ['customPatterns', 'Array of Objects', 'Optional operator-defined patterns. Each entry needs `id`, `label`, and `regex`.', ''],
+  ]}
+/>
+
+**`customPatterns` entry:**
+<OptionTable
+  options={[
+    ['id', 'String', 'Stable identifier used in logs and error responses.', ''],
+    ['label', 'String', 'Human-readable label included in the rejection error message.', ''],
+    ['regex', 'String', 'JavaScript-flavor regex. The pattern is compiled with the `g` flag and validated at config load time.', ''],
+  ]}
+/>
+
+## Rejection response
+
+When the middleware rejects a request the chat endpoint returns:
+
+```json
+{
+  "error": "message_pii_filter_block",
+  "message": "Message contains a <pattern label>. Remove it and try again."
+}
+```
+
+The `<pattern label>` matches the `label` of the first matching pattern (starter labels are `sk- prefix token`, `Bearer token`, `api-key header`; custom labels are whatever the operator supplies).
+
+## Notes
+
+- The filter runs only on the agent chat route. Other endpoints (OpenAI-compatible, Responses, programmatic agent sessions) are not covered.
+- Pattern matching uses JavaScript regex semantics. Custom regex is rejected at config load time if `new RegExp(value, 'g')` throws.
+- The filter is independent of the moderation feature controlled by `OPENAI_MODERATION`. Both can run together; the PII filter executes first so credential-shaped text is never sent to the moderation service.
