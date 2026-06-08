@@ -5,9 +5,15 @@ icon: ShieldAlert
 
 ## Overview
 
-The `messagePiiFilter` object lets operators reject chat messages whose text matches credential-shaped patterns before the request reaches OpenAI moderation, the model, or the database. The filter is opt-in: omit the section entirely to leave it inert.
+The `messagePiiFilter` object lets operators reject user prompts whose text matches credential-shaped patterns before the request reaches OpenAI moderation, the model, or the database. The filter is opt-in: omit the section entirely to leave it inert.
 
-The middleware is mounted on the agent chat route ahead of `moderateText`. When a configured pattern matches the user's message, the request is refused with HTTP 400 and the error code `message_pii_filter_block`. Nothing is sent to the moderation endpoint, nothing is dispatched to the model, and nothing is persisted to MongoDB.
+The same set of patterns guards three entry points:
+
+  - The agent chat route (`/api/agents/chat`), where the filter is mounted as middleware ahead of `moderateText`.
+  - The OpenAI-compatible remote agents endpoint (`/api/agents/v1/chat/completions`), where the controller walks the incoming `messages` array.
+  - The Responses remote agents endpoint (`/api/agents/v1/responses`), where the controller walks the converted internal messages.
+
+When a configured pattern matches any user-role content, the request is refused with HTTP 400 and the error code `message_pii_filter_block`. Nothing is sent to the moderation endpoint, nothing is dispatched to the model, and nothing is persisted.
 
 Three starter patterns ship by default:
 
@@ -62,7 +68,9 @@ messagePiiFilter:
 
 ## Rejection response
 
-When the middleware rejects a request the chat endpoint returns:
+Each entry point returns a 400 in the shape it normally uses for invalid requests, with the `message_pii_filter_block` code.
+
+The chat route returns:
 
 ```json
 {
@@ -71,10 +79,25 @@ When the middleware rejects a request the chat endpoint returns:
 }
 ```
 
+The OpenAI-compatible endpoint returns its standard error envelope:
+
+```json
+{
+  "error": {
+    "type": "invalid_request_error",
+    "code": "message_pii_filter_block",
+    "message": "Message contains a <pattern label>. Remove it and try again.",
+    "param": null
+  }
+}
+```
+
+The Responses endpoint uses the same envelope with `"type": "invalid_request"`.
+
 The `<pattern label>` matches the `label` of the first matching pattern (starter labels are `sk- prefix token`, `Bearer token`, `api-key header`; custom labels are whatever the operator supplies).
 
 ## Notes
 
-- The filter runs only on the agent chat route. Other endpoints (OpenAI-compatible, Responses, programmatic agent sessions) are not covered.
-- Pattern matching uses JavaScript regex semantics. Custom regex is rejected at config load time if `new RegExp(value, 'g')` throws.
+- Pattern matching uses JavaScript regex semantics. `customPatterns` entries from `librechat.yaml` are validated at config load time; entries that arrive through the admin DB override path skip Zod validation, so an invalid pattern is logged and skipped at request time rather than crashing the chat.
+- Only user-role message content is scanned. Authorization headers, system prompts, and assistant turns are not inspected.
 - The filter is independent of the moderation feature controlled by `OPENAI_MODERATION`. Both can run together; the PII filter executes first so credential-shaped text is never sent to the moderation service.
