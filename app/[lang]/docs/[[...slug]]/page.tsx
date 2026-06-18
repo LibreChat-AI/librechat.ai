@@ -10,12 +10,12 @@ import { ogImageUrl } from '@/lib/og'
 import type { Metadata } from 'next'
 
 interface PageProps {
-  params: Promise<{ slug?: string[] }>
+  params: Promise<{ lang: string; slug?: string[] }>
 }
 
 export default async function Page(props: PageProps) {
   const params = await props.params
-  const page = docsSource.getPage(params.slug)
+  const page = docsSource.getPage(params.slug, params.lang)
   if (!page) notFound()
 
   const MDX = page.data.body
@@ -76,7 +76,7 @@ export async function generateStaticParams() {
 
 export async function generateMetadata(props: PageProps): Promise<Metadata> {
   const params = await props.params
-  const page = docsSource.getPage(params.slug)
+  const page = docsSource.getPage(params.slug, params.lang)
   if (!page) notFound()
 
   return {
