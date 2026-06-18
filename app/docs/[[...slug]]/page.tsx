@@ -6,6 +6,7 @@ import { LLMCopyButton, ViewOptions } from '@/components/page-actions'
 import { Feedback } from '@/components/Feedback'
 import { JsonLd } from '@/components/JsonLd'
 import { articleSchema, breadcrumbSchema } from '@/lib/structured-data'
+import { ogImageUrl } from '@/lib/og'
 import type { Metadata } from 'next'
 
 interface PageProps {
@@ -43,7 +44,7 @@ export default async function Page(props: PageProps) {
             headline: page.data.title,
             description: page.data.description,
             url: page.url,
-            image: '/images/socialcards/default-docs-image.png',
+            image: ogImageUrl({ title: page.data.title, type: 'docs' }),
             dateModified: lastModified,
           }),
           breadcrumbSchema([
@@ -87,7 +88,7 @@ export async function generateMetadata(props: PageProps): Promise<Metadata> {
       description: page.data.description,
       type: 'article',
       url: page.url,
-      images: ['/images/socialcards/default-docs-image.png'],
+      images: [ogImageUrl({ title: page.data.title, type: 'docs' })],
     },
   }
 }
