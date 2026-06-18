@@ -1,11 +1,29 @@
 import { ImageResponse } from 'next/og'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 /**
  * On-demand Open Graph image generator. Renders a 1200x630 branded social card
  * with the page title and section, so every shared link gets a unique preview.
  * Called via lib/og.ts `ogImageUrl()` from page metadata; CDN-cached by URL.
+ *
+ * Brand assets (Geist fonts + the LibreChat logo) are read from disk once at
+ * module load — no network fetch at render time, so cold starts can't fail.
+ * Colors mirror the neutral shadcn theme tokens in app/global.css (.dark).
  */
 export const runtime = 'nodejs'
+
+const FONTS_DIR = join(process.cwd(), 'lib/fonts')
+const geistRegular = readFileSync(join(FONTS_DIR, 'Geist-Regular.ttf'))
+const geistSemiBold = readFileSync(join(FONTS_DIR, 'Geist-SemiBold.ttf'))
+const logoSrc = `data:image/png;base64,${readFileSync(
+  join(process.cwd(), 'public/librechat.png'),
+).toString('base64')}`
+
+// app/global.css .dark tokens (hsl 0 0% L → hex), the site's neutral palette.
+const BACKGROUND = '#0a0a0a' // --background
+const FOREGROUND = '#fafafa' // --foreground
+const MUTED_FOREGROUND = '#8c8c8c' // --muted-foreground
 
 const TYPE_LABELS: Record<string, string> = {
   docs: 'Documentation',
@@ -34,30 +52,16 @@ export function GET(request: Request) {
         flexDirection: 'column',
         justifyContent: 'space-between',
         padding: '80px',
-        backgroundColor: '#0a0a0a',
-        backgroundImage:
-          'radial-gradient(circle at 18% 0%, rgba(99,102,241,0.22), transparent 45%), radial-gradient(circle at 100% 100%, rgba(56,189,248,0.16), transparent 45%)',
-        color: '#fafafa',
-        fontFamily: 'sans-serif',
+        backgroundColor: BACKGROUND,
+        color: FOREGROUND,
+        fontFamily: 'Geist',
       }}
     >
       {/* Brand */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            width: '64px',
-            height: '64px',
-            borderRadius: '16px',
-            background: 'linear-gradient(135deg, #6366f1, #38bdf8)',
-            fontSize: '40px',
-          }}
-        >
-          🪶
-        </div>
-        <div style={{ fontSize: '34px', fontWeight: 700, letterSpacing: '-0.02em' }}>LibreChat</div>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={logoSrc} width={64} height={64} alt="" />
+        <div style={{ fontSize: '34px', fontWeight: 600, letterSpacing: '-0.02em' }}>LibreChat</div>
       </div>
 
       {/* Title */}
@@ -65,7 +69,7 @@ export function GET(request: Request) {
         style={{
           display: 'flex',
           fontSize,
-          fontWeight: 700,
+          fontWeight: 600,
           lineHeight: 1.1,
           letterSpacing: '-0.03em',
           maxWidth: '1000px',
@@ -81,7 +85,7 @@ export function GET(request: Request) {
           alignItems: 'center',
           justifyContent: 'space-between',
           fontSize: '26px',
-          color: '#a1a1aa',
+          color: MUTED_FOREGROUND,
         }}
       >
         <div
@@ -89,7 +93,7 @@ export function GET(request: Request) {
             display: 'flex',
             textTransform: 'uppercase',
             letterSpacing: '0.12em',
-            fontWeight: 600,
+            fontWeight: 400,
           }}
         >
           {label}
@@ -97,6 +101,13 @@ export function GET(request: Request) {
         <div style={{ display: 'flex' }}>www.librechat.ai</div>
       </div>
     </div>,
-    { width: 1200, height: 630 },
+    {
+      width: 1200,
+      height: 630,
+      fonts: [
+        { name: 'Geist', data: geistRegular, weight: 400, style: 'normal' },
+        { name: 'Geist', data: geistSemiBold, weight: 600, style: 'normal' },
+      ],
+    },
   )
 }
