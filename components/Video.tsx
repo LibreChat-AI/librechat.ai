@@ -1,6 +1,13 @@
-import 'vidstack/styles/base.css'
+'use client'
+import '@vidstack/react/player/styles/base.css'
 import { cn } from '@/lib/utils'
-import { MediaPlayer, MediaOutlet, useMediaRemote, useMediaStore } from '@vidstack/react'
+import {
+  MediaPlayer,
+  MediaProvider,
+  useMediaRemote,
+  useMediaStore,
+  type MediaPlayerInstance,
+} from '@vidstack/react'
 import { Play } from 'lucide-react'
 import { useState, useRef } from 'react'
 
@@ -15,13 +22,14 @@ export const Video = ({
 }: {
   src: string
   poster?: string
-  aspectRatio?: number
+  /** Ratio in `width/height` form, e.g. `"16/9"`. */
+  aspectRatio?: string
   gifStyle?: boolean
   className?: string
   title?: string
 }) => {
   const [panelDismissed, setPanelDismissed] = useState(false)
-  const mediaPlayerRef = useRef(null)
+  const mediaPlayerRef = useRef<MediaPlayerInstance>(null)
   const remote = useMediaRemote(mediaPlayerRef)
   const { duration } = useMediaStore(mediaPlayerRef)
   const durationString = duration
@@ -33,11 +41,11 @@ export const Video = ({
       ref={mediaPlayerRef}
       src={src}
       controls={!gifStyle && panelDismissed}
-      autoplay={gifStyle}
+      autoPlay={gifStyle}
       muted={gifStyle}
       loop={gifStyle}
       load={gifStyle ? 'eager' : 'custom'}
-      playsinline={gifStyle}
+      playsInline={gifStyle}
       aspectRatio={aspectRatio}
       className={cn(
         'my-4 overflow-hidden shadow-lg ring-1 ring-slate-700 bg-cover object-cover',
@@ -83,7 +91,7 @@ export const Video = ({
           </div>
         </div>
       )}
-      <MediaOutlet />
+      <MediaProvider />
     </MediaPlayer>
   )
 }
