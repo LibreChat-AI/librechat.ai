@@ -3,6 +3,7 @@ import { I18nProvider } from 'fumadocs-ui/i18n'
 import { docsSource } from '@/lib/source'
 import { baseOptions } from '@/app/layout.config'
 import { i18n, LOCALE_NAMES } from '@/lib/i18n'
+import { VersionSwitcher } from '@/components/VersionSwitcher'
 import type { ReactNode } from 'react'
 
 export default async function Layout({
@@ -46,6 +47,7 @@ export default async function Layout({
           },
         ]}
         sidebar={{
+          banner: <VersionSwitcher />,
           defaultOpenLevel: 0,
         }}
       >
