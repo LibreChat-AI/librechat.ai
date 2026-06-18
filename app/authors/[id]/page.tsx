@@ -43,7 +43,7 @@ export default async function AuthorPage({ params }: AuthorPageProps) {
   }
 
   return (
-    <main className="mx-auto max-w-2xl px-4 py-16">
+    <main id="main-content" tabIndex={-1} className="mx-auto max-w-2xl px-4 py-16">
       <nav aria-label="Breadcrumb" className="mb-8">
         <Link
           href="/authors"

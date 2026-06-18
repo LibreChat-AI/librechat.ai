@@ -476,7 +476,7 @@ export default async function AboutPage() {
 
   return (
     <HomeLayout {...baseOptions}>
-      <main className="min-h-screen">
+      <main id="main-content" tabIndex={-1} className="min-h-screen">
         <HeroSection />
         <StatsSection stars={stars} forks={forks} contributors={contributors} />
         <ValuesSection />

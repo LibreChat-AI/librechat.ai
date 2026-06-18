@@ -15,7 +15,11 @@ export default function Error({
   }, [error])
 
   return (
-    <main className="flex min-h-[50vh] flex-col items-center justify-center gap-4 px-4">
+    <main
+      id="main-content"
+      tabIndex={-1}
+      className="flex min-h-[50vh] flex-col items-center justify-center gap-4 px-4"
+    >
       <h1 className="text-2xl font-bold">Something went wrong</h1>
       <p className="text-fd-muted-foreground">An unexpected error occurred.</p>
       <nav className="flex gap-3" aria-label="Error recovery options">
