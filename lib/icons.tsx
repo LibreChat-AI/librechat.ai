@@ -30,6 +30,8 @@ import {
   VultrIcon,
   XAIIcon,
 } from '../components/icons/providers'
+import MongoDBIcon from '../components/icons/mongodb'
+import RedisIcon from '../components/icons/redis'
 import {
   Rocket,
   Sparkles,
@@ -220,6 +222,9 @@ const icons: Record<string, ReactElement> = {
   VLLM: <VLLMIcon />,
   Vultr: <VultrIcon />,
   XAI: <XAIIcon />,
+  // Database brand icons
+  MongoDB: <MongoDBIcon />,
+  Redis: <RedisIcon />,
 }
 
 export function resolveIcon(icon: string | undefined): ReactElement | undefined {
