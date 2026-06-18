@@ -24,11 +24,14 @@ import DemoImageLight from '@/components/home/img/demo_light.png'
 import DemoImageMobileDark from '@/components/home/img/demo_mobile_dark.png'
 import DemoImageMobileLight from '@/components/home/img/demo_mobile_light.png'
 import FooterMenu from '@/components/FooterMenu'
+import { JsonLd } from '@/components/JsonLd'
+import { organizationSchema, websiteSchema, softwareApplicationSchema } from '@/lib/structured-data'
 
 export const metadata: Metadata = {
   title: 'LibreChat - The Open-Source AI Platform',
   description:
     'LibreChat brings together all your AI conversations in one unified, customizable interface.',
+  alternates: { canonical: '/' },
 }
 
 /* ---------------------------------------------------------------------------
@@ -542,6 +545,7 @@ export default async function HomePage() {
 
   return (
     <HomeLayout {...baseOptions} nav={{ ...baseOptions.nav, transparentMode: 'top' }}>
+      <JsonLd data={[organizationSchema, websiteSchema, softwareApplicationSchema]} />
       <main className="min-h-screen">
         <HeroSection stars={stars} />
         <TrustedBySection />
