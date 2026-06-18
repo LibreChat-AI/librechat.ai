@@ -18,6 +18,7 @@ export const Video = ({
   aspectRatio,
   className,
   gifStyle = false,
+  autoPlay = false,
   title,
   type,
 }: {
@@ -25,7 +26,10 @@ export const Video = ({
   poster?: string
   /** Ratio in `width/height` form, e.g. `"16/9"`. */
   aspectRatio?: string
+  /** Muted, looping, controls-free autoplay (ambient/gif-like). */
   gifStyle?: boolean
+  /** Muted autoplay that keeps player controls so motion can be paused, scrubbed, and replayed. */
+  autoPlay?: boolean
   className?: string
   title?: string
   /** Explicit MIME type, e.g. `"video/mp4"`. Needed for extensionless URLs. */
@@ -51,16 +55,21 @@ export const Video = ({
       : { src, type }
   ) as ComponentProps<typeof MediaPlayer>['src']
 
+  // gifStyle and autoPlay both start muted playback eagerly. gifStyle loops with
+  // no controls (ambient), while autoPlay keeps controls so users can pause,
+  // scrub, and replay.
+  const isAutoplay = gifStyle || autoPlay
+
   return (
     <MediaPlayer
       ref={mediaPlayerRef}
       src={source}
-      controls={!gifStyle && panelDismissed}
-      autoPlay={gifStyle}
-      muted={gifStyle}
+      controls={!gifStyle && (autoPlay || panelDismissed)}
+      autoPlay={isAutoplay}
+      muted={isAutoplay}
       loop={gifStyle}
-      load={gifStyle ? 'eager' : 'custom'}
-      playsInline={gifStyle}
+      load={isAutoplay ? 'eager' : 'custom'}
+      playsInline={isAutoplay}
       aspectRatio={aspectRatio}
       className={cn(
         'my-4 overflow-hidden shadow-lg ring-1 ring-slate-700 bg-cover object-cover',
@@ -70,7 +79,7 @@ export const Video = ({
       {gifStyle ? (
         // Capture mouse events, they broke scrolling on iOS
         <div className="absolute inset-0 z-10" />
-      ) : panelDismissed ? null : (
+      ) : autoPlay || panelDismissed ? null : (
         // Overlay with play button and poster image
         <div
           role="button"
