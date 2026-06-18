@@ -178,6 +178,7 @@ export default tseslint.config(
       'prettier.config.*',
       '.prettierrc.{js,cjs}',
       '**/*.cjs',
+      'scripts/**/*.{js,mjs}',
     ],
     languageOptions: {
       globals: globals.node,
