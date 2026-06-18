@@ -217,14 +217,12 @@ function ImgCompat({ image: _, ...props }: { image?: boolean; [key: string]: any
     // eslint-disable-next-line @next/next/no-img-element
     return <img {...props} loading="lazy" />
   }
-  // Click-to-zoom for docs screenshots. We pass a plain <img> as children so we
-  // don't hit next/image's required width/height on dimensionless MDX images.
-  return (
-    <ImageZoom {...(props as any)}>
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img {...props} loading="lazy" alt={typeof props.alt === 'string' ? props.alt : ''} />
-    </ImageZoom>
-  )
+  // Local images: remarkImage rewrites these to a Next static-import object
+  // (or a string) plus width/height, so let ImageZoom render them through
+  // Fumadocs' next/image wrapper. This adds click-to-zoom while correctly
+  // handling both src forms — passing a plain <img> here would stringify the
+  // static-import object into src="[object Object]".
+  return <ImageZoom {...(props as any)} />
 }
 
 export const mdxComponents = {
