@@ -287,7 +287,7 @@ export function AskAI() {
   const scrollRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const prevOpenRef = useRef(false)
-  const shareTimeoutRef = useRef<ReturnType<typeof setTimeout>>()
+  const shareTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const router = useRouter()
   const pathname = usePathname()
   const navigatedRef = useRef<Set<string>>(new Set())

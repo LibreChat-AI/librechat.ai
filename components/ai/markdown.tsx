@@ -9,7 +9,7 @@ import { cn } from '@/lib/utils'
 
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false)
-  const timeout = useRef<ReturnType<typeof setTimeout>>()
+  const timeout = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   useEffect(() => {
     return () => clearTimeout(timeout.current)
@@ -67,9 +67,13 @@ export function ChatMarkdown({ children }: { children: string }) {
             if (typeof node === 'string') {
               text += node
             } else if (Array.isArray(node)) {
-              for (const n of node) { extractText(n) }
+              for (const n of node) {
+                extractText(n)
+              }
             } else if (node && typeof node === 'object' && 'props' in node) {
-              extractText((node as React.ReactElement).props.children)
+              extractText(
+                (node as React.ReactElement<{ children?: React.ReactNode }>).props.children,
+              )
             }
           }
           extractText(c)
@@ -130,9 +134,7 @@ export function ChatMarkdown({ children }: { children: string }) {
             {c}
           </th>
         ),
-        td: ({ children: c }) => (
-          <td className="border border-fd-border px-2 py-1">{c}</td>
-        ),
+        td: ({ children: c }) => <td className="border border-fd-border px-2 py-1">{c}</td>,
       }}
     >
       {children}
