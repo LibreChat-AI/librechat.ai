@@ -1,6 +1,7 @@
 import Image from 'next/image'
 import Link from 'next/link'
 import { authors } from '@/lib/authors'
+import { ogImageUrl } from '@/lib/og'
 import type { Metadata } from 'next'
 
 export const metadata: Metadata = {
@@ -9,6 +10,7 @@ export const metadata: Metadata = {
   openGraph: {
     title: 'Authors | LibreChat',
     description: 'Get to know the talented people behind LibreChat.',
+    images: [ogImageUrl({ title: 'Authors' })],
   },
 }
 
