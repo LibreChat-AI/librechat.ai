@@ -2,6 +2,8 @@ import { notFound } from 'next/navigation'
 import Link from 'next/link'
 import { mdxComponents } from '@/lib/mdx-components'
 import { changelog } from '@/lib/source'
+import { JsonLd } from '@/components/JsonLd'
+import { articleSchema, breadcrumbSchema } from '@/lib/structured-data'
 import type { Metadata } from 'next'
 
 interface PageProps {
@@ -27,6 +29,22 @@ export default async function ChangelogDetailPage(props: PageProps) {
 
   return (
     <article className="mx-auto max-w-3xl">
+      <JsonLd
+        data={[
+          articleSchema({
+            type: 'Article',
+            headline: entry.title,
+            description: entry.description,
+            url: `/changelog/${params.slug}`,
+            image: (entry as any).ogImage ?? '/images/socialcards/default-changelog-image.png',
+            datePublished: new Date(date).toISOString(),
+          }),
+          breadcrumbSchema([
+            { name: 'Changelog', url: '/changelog' },
+            { name: entry.title, url: `/changelog/${params.slug}` },
+          ]),
+        ]}
+      />
       <header className="mb-8">
         <Link
           href="/changelog"
@@ -79,10 +97,12 @@ export async function generateMetadata(props: PageProps): Promise<Metadata> {
   return {
     title: entry.title,
     description: entry.description,
+    alternates: { canonical: `/changelog/${params.slug}` },
     openGraph: {
       title: entry.title,
       description: entry.description,
       type: 'article',
+      url: `/changelog/${params.slug}`,
       images: [ogImage],
     },
   }

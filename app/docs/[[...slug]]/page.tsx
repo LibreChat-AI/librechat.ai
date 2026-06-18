@@ -4,6 +4,8 @@ import { DocsPage, DocsBody, DocsTitle, DocsDescription } from 'fumadocs-ui/page
 import { notFound } from 'next/navigation'
 import { LLMCopyButton, ViewOptions } from '@/components/page-actions'
 import { Feedback } from '@/components/Feedback'
+import { JsonLd } from '@/components/JsonLd'
+import { articleSchema, breadcrumbSchema } from '@/lib/structured-data'
 import type { Metadata } from 'next'
 
 interface PageProps {
@@ -17,6 +19,11 @@ export default async function Page(props: PageProps) {
 
   const MDX = page.data.body
 
+  const lastModified =
+    page.data.lastModified instanceof Date
+      ? page.data.lastModified.toISOString()
+      : (page.data.lastModified as string | undefined)
+
   return (
     <DocsPage
       toc={page.data.toc}
@@ -29,6 +36,22 @@ export default async function Page(props: PageProps) {
         path: `content/docs/${page.file.path}`,
       }}
     >
+      <JsonLd
+        data={[
+          articleSchema({
+            type: 'TechArticle',
+            headline: page.data.title,
+            description: page.data.description,
+            url: page.url,
+            image: '/images/socialcards/default-docs-image.png',
+            dateModified: lastModified,
+          }),
+          breadcrumbSchema([
+            { name: 'Docs', url: '/docs' },
+            { name: page.data.title, url: page.url },
+          ]),
+        ]}
+      />
       <DocsTitle>{page.data.title}</DocsTitle>
       <DocsDescription>{page.data.description}</DocsDescription>
       <div className="flex flex-row gap-2 items-center border-b pt-2 pb-6">
@@ -58,10 +81,12 @@ export async function generateMetadata(props: PageProps): Promise<Metadata> {
   return {
     title: page.data.title,
     description: page.data.description,
+    alternates: { canonical: page.url },
     openGraph: {
       title: page.data.title,
       description: page.data.description,
       type: 'article',
+      url: page.url,
       images: ['/images/socialcards/default-docs-image.png'],
     },
   }

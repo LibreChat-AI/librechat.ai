@@ -4,6 +4,8 @@ import Link from 'next/link'
 import { InlineTOC } from 'fumadocs-ui/components/inline-toc'
 import { mdxComponents } from '@/lib/mdx-components'
 import { blog } from '@/lib/source'
+import { JsonLd } from '@/components/JsonLd'
+import { articleSchema, breadcrumbSchema } from '@/lib/structured-data'
 import type { Metadata } from 'next'
 
 interface PageProps {
@@ -29,6 +31,23 @@ export default async function BlogPostPage(props: PageProps) {
 
   return (
     <article className="mx-auto max-w-3xl">
+      <JsonLd
+        data={[
+          articleSchema({
+            type: 'BlogPosting',
+            headline: post.title,
+            description: post.description,
+            url: `/blog/${params.slug}`,
+            image: post.ogMetaImage ?? post.ogImage ?? '/images/socialcards/default-blog-image.png',
+            datePublished: new Date(date).toISOString(),
+            authorName: (post as any).author,
+          }),
+          breadcrumbSchema([
+            { name: 'Blog', url: '/blog' },
+            { name: post.title, url: `/blog/${params.slug}` },
+          ]),
+        ]}
+      />
       <header className="mb-8">
         <Link
           href="/blog"
@@ -89,14 +108,20 @@ export async function generateMetadata(props: PageProps): Promise<Metadata> {
   if (!post) notFound()
 
   const ogImage = post.ogMetaImage ?? post.ogImage ?? '/images/socialcards/default-blog-image.png'
+  const publishedTime =
+    typeof post.date === 'string' ? post.date : new Date(post.date).toISOString()
 
   return {
     title: post.title,
     description: post.description,
+    alternates: { canonical: `/blog/${params.slug}` },
     openGraph: {
       title: post.title,
       description: post.description,
       type: 'article',
+      url: `/blog/${params.slug}`,
+      publishedTime,
+      authors: (post as any).author ? [(post as any).author] : undefined,
       images: [ogImage],
     },
   }
