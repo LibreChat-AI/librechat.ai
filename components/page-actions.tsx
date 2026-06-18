@@ -1,5 +1,5 @@
 'use client'
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useMemo, useRef, useState, type JSX } from 'react'
 import { Check, ChevronDown, Copy, ExternalLinkIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -9,7 +9,7 @@ function useCopyButton(
   onCopy: () => Promise<void> | void,
 ): [checked: boolean, onClick: () => void] {
   const [checked, setChecked] = useState(false)
-  const timeoutRef = useRef<ReturnType<typeof setTimeout>>()
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   const onClick = useCallback(() => {
     void Promise.resolve(onCopy()).then(() => {

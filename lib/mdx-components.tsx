@@ -7,6 +7,7 @@ import { File as FumadocsFile, Folder, Files } from 'fumadocs-ui/components/file
 import { Accordion, Accordions } from 'fumadocs-ui/components/accordion'
 import { OptionTable } from '@/components/table'
 import { Frame } from '@/components/Frame'
+import { Video } from '@/components/Video'
 import { DocsHub } from '@/components/DocsHub'
 import { LocalInstallHub } from '@/components/LocalInstallHub'
 import { QuickStartHub } from '@/components/QuickStartHub'
@@ -248,6 +249,7 @@ export const mdxComponents = {
   OptionTable,
   CompatibilityMatrix,
   Frame,
+  Video,
   Carousel,
   DocsHub,
   QuickStartHub,
