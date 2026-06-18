@@ -6,6 +6,7 @@ import { mdxComponents } from '@/lib/mdx-components'
 import { blog } from '@/lib/source'
 import { JsonLd } from '@/components/JsonLd'
 import { articleSchema, breadcrumbSchema } from '@/lib/structured-data'
+import { ogImageUrl } from '@/lib/og'
 import type { Metadata } from 'next'
 
 interface PageProps {
@@ -38,7 +39,8 @@ export default async function BlogPostPage(props: PageProps) {
             headline: post.title,
             description: post.description,
             url: `/blog/${params.slug}`,
-            image: post.ogMetaImage ?? post.ogImage ?? '/images/socialcards/default-blog-image.png',
+            image:
+              post.ogMetaImage ?? post.ogImage ?? ogImageUrl({ title: post.title, type: 'blog' }),
             datePublished: new Date(date).toISOString(),
             authorName: (post as any).author,
           }),
@@ -107,7 +109,8 @@ export async function generateMetadata(props: PageProps): Promise<Metadata> {
   const post = findPost(params.slug)
   if (!post) notFound()
 
-  const ogImage = post.ogMetaImage ?? post.ogImage ?? '/images/socialcards/default-blog-image.png'
+  const ogImage =
+    post.ogMetaImage ?? post.ogImage ?? ogImageUrl({ title: post.title, type: 'blog' })
   const publishedTime =
     typeof post.date === 'string' ? post.date : new Date(post.date).toISOString()
 

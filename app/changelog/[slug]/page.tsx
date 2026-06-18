@@ -4,6 +4,7 @@ import { mdxComponents } from '@/lib/mdx-components'
 import { changelog } from '@/lib/source'
 import { JsonLd } from '@/components/JsonLd'
 import { articleSchema, breadcrumbSchema } from '@/lib/structured-data'
+import { ogImageUrl } from '@/lib/og'
 import type { Metadata } from 'next'
 
 interface PageProps {
@@ -36,7 +37,7 @@ export default async function ChangelogDetailPage(props: PageProps) {
             headline: entry.title,
             description: entry.description,
             url: `/changelog/${params.slug}`,
-            image: (entry as any).ogImage ?? '/images/socialcards/default-changelog-image.png',
+            image: (entry as any).ogImage ?? ogImageUrl({ title: entry.title, type: 'changelog' }),
             datePublished: new Date(date).toISOString(),
           }),
           breadcrumbSchema([
@@ -92,7 +93,7 @@ export async function generateMetadata(props: PageProps): Promise<Metadata> {
   const entry = findEntry(params.slug)
   if (!entry) notFound()
 
-  const ogImage = (entry as any).ogImage ?? '/images/socialcards/default-changelog-image.png'
+  const ogImage = (entry as any).ogImage ?? ogImageUrl({ title: entry.title, type: 'changelog' })
 
   return {
     title: entry.title,
