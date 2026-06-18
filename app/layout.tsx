@@ -6,6 +6,7 @@ import type { Metadata } from 'next'
 import { Provider } from '@/components/provider'
 import { AskAILoader } from '@/components/ai/AskAILoader'
 import { CoreWebVitalsMonitor } from '@/components/analytics/CoreWebVitalsMonitor'
+import { ogImageUrl } from '@/lib/og'
 import './global.css'
 
 const DEFAULT_CWV_ENDPOINT = ''
@@ -23,7 +24,7 @@ export const metadata: Metadata = {
     type: 'website',
     locale: 'en_US',
     siteName: 'LibreChat',
-    images: ['/images/socialcards/default-image.png'],
+    images: [ogImageUrl()],
   },
   twitter: {
     card: 'summary_large_image',
@@ -78,6 +79,9 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       suppressHydrationWarning
     >
       <body className="flex min-h-screen flex-col">
+        <a href="#main-content" className="skip-to-content">
+          Skip to main content
+        </a>
         <Provider>{children}</Provider>
         {askAIEnabled && <AskAILoader />}
         {/* Privacy-friendly analytics by Plausible */}

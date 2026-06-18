@@ -11,7 +11,7 @@ export const metadata: Metadata = {
 export default function UnsubscribePage() {
   return (
     <HomeLayout {...baseOptions}>
-      <main className="mx-auto max-w-xl px-4 py-16">
+      <main id="main-content" tabIndex={-1} className="mx-auto max-w-xl px-4 py-16">
         <UnsubscribeClient />
       </main>
     </HomeLayout>

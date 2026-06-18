@@ -1,4 +1,5 @@
 import defaultMdxComponents from 'fumadocs-ui/mdx'
+import { ImageZoom } from 'fumadocs-ui/components/image-zoom'
 import { Callout } from 'fumadocs-ui/components/callout'
 import { Step, Steps } from 'fumadocs-ui/components/steps'
 import { Tabs, Tab } from 'fumadocs-ui/components/tabs'
@@ -216,10 +217,12 @@ function ImgCompat({ image: _, ...props }: { image?: boolean; [key: string]: any
     // eslint-disable-next-line @next/next/no-img-element
     return <img {...props} loading="lazy" />
   }
-  const DefaultImg = defaultMdxComponents.img
-  if (DefaultImg) return <DefaultImg {...props} />
-  // eslint-disable-next-line @next/next/no-img-element
-  return <img {...props} />
+  // Local images: remarkImage rewrites these to a Next static-import object
+  // (or a string) plus width/height, so let ImageZoom render them through
+  // Fumadocs' next/image wrapper. This adds click-to-zoom while correctly
+  // handling both src forms — passing a plain <img> here would stringify the
+  // static-import object into src="[object Object]".
+  return <ImageZoom {...(props as any)} />
 }
 
 export const mdxComponents = {
