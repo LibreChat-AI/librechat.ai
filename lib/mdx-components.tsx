@@ -1,4 +1,5 @@
 import defaultMdxComponents from 'fumadocs-ui/mdx'
+import { ImageZoom } from 'fumadocs-ui/components/image-zoom'
 import { Callout } from 'fumadocs-ui/components/callout'
 import { Step, Steps } from 'fumadocs-ui/components/steps'
 import { Tabs, Tab } from 'fumadocs-ui/components/tabs'
@@ -216,10 +217,14 @@ function ImgCompat({ image: _, ...props }: { image?: boolean; [key: string]: any
     // eslint-disable-next-line @next/next/no-img-element
     return <img {...props} loading="lazy" />
   }
-  const DefaultImg = defaultMdxComponents.img
-  if (DefaultImg) return <DefaultImg {...props} />
-  // eslint-disable-next-line @next/next/no-img-element
-  return <img {...props} />
+  // Click-to-zoom for docs screenshots. We pass a plain <img> as children so we
+  // don't hit next/image's required width/height on dimensionless MDX images.
+  return (
+    <ImageZoom {...(props as any)}>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img {...props} loading="lazy" alt={typeof props.alt === 'string' ? props.alt : ''} />
+    </ImageZoom>
+  )
 }
 
 export const mdxComponents = {

@@ -33,6 +33,8 @@ export default function Layout({ children }: { children: ReactNode }) {
         defaultOpenLevel: 0,
       }}
     >
+      {/* Skip-link target at the start of the docs content region. */}
+      <div id="main-content" tabIndex={-1} />
       {children}
     </DocsLayout>
   )
