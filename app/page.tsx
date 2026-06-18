@@ -546,7 +546,7 @@ export default async function HomePage() {
   return (
     <HomeLayout {...baseOptions} nav={{ ...baseOptions.nav, transparentMode: 'top' }}>
       <JsonLd data={[organizationSchema, websiteSchema, softwareApplicationSchema]} />
-      <main className="min-h-screen">
+      <main id="main-content" tabIndex={-1} className="min-h-screen">
         <HeroSection stars={stars} />
         <TrustedBySection />
         <FeaturesSection />
