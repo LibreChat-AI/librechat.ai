@@ -29,6 +29,7 @@ export default async function Page(props: PageProps) {
     <DocsPage
       toc={page.data.toc}
       tableOfContent={{ style: 'clerk' }}
+      breadcrumb={{ enabled: true, includeRoot: { url: '/docs' }, includePage: true }}
       lastUpdate={page.data.lastModified}
       editOnGithub={{
         owner: 'LibreChat-AI',
