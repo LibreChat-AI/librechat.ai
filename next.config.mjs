@@ -1,18 +1,18 @@
-import { start } from 'fumadocs-mdx/next';
-import NextBundleAnalyzer from '@next/bundle-analyzer';
-import { resolve } from 'path';
+import { start } from 'fumadocs-mdx/next'
+import NextBundleAnalyzer from '@next/bundle-analyzer'
+import { resolve } from 'path'
 
 const withBundleAnalyzer = NextBundleAnalyzer({
   enabled: process.env.ANALYZE === 'true',
-});
+})
 
 /**
  * Start the Fumadocs MDX server which generates .source/ files
  * from content/ directory. This runs separately from the webpack loader.
  */
 if (process.env._FUMADOCS_MDX !== '1') {
-  process.env._FUMADOCS_MDX = '1';
-  void start(process.env.NODE_ENV === 'development', 'source.config.ts', '.source');
+  process.env._FUMADOCS_MDX = '1'
+  void start(process.env.NODE_ENV === 'development', 'source.config.ts', '.source')
 }
 
 /**
@@ -35,7 +35,7 @@ const cspHeader = `
   frame-ancestors 'none';
   upgrade-insecure-requests;
   block-all-mixed-content;
-`;
+`
 
 const nonPermanentRedirects = [
   ['/discord', 'https://discord.librechat.ai'],
@@ -62,13 +62,18 @@ const nonPermanentRedirects = [
   ['/docs/configuration/librechat_yaml/setup', '/docs/configuration/librechat_yaml'],
   ['/toolkit/yaml_checker', '/toolkit/yaml-checker'],
   ['/toolkit/creds_generator', '/toolkit/creds-generator'],
-];
+]
 
 /** @type {import('next').NextConfig} */
 const config = {
   poweredByHeader: false,
   typescript: {
     ignoreBuildErrors: false,
+  },
+  // Tree-shake large barrel-file packages so only the icons/animations actually
+  // used are bundled, instead of the entire module.
+  experimental: {
+    optimizePackageImports: ['lucide-react', 'framer-motion'],
   },
   turbopack: {},
   pageExtensions: ['mdx', 'md', 'jsx', 'js', 'tsx', 'ts'],
@@ -90,7 +95,7 @@ const config = {
           },
         },
       ],
-    });
+    })
 
     /**
      * MDX loader for components/ directory files.
@@ -109,9 +114,9 @@ const config = {
           },
         },
       ],
-    });
+    })
 
-    return webpackConfig;
+    return webpackConfig
   },
   transpilePackages: ['react-tweet', 'geist'],
   images: {
@@ -198,7 +203,7 @@ const config = {
           },
         ],
       },
-    ];
+    ]
   },
   async rewrites() {
     return [
@@ -206,7 +211,7 @@ const config = {
         source: '/docs/:path*.mdx',
         destination: '/llms.mdx/docs/:path*',
       },
-    ];
+    ]
   },
   redirects: async () => [
     ...nonPermanentRedirects.map(([source, destination]) => ({
@@ -215,6 +220,6 @@ const config = {
       permanent: false,
     })),
   ],
-};
+}
 
-export default withBundleAnalyzer(config);
+export default withBundleAnalyzer(config)
