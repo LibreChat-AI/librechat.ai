@@ -9,7 +9,7 @@ import {
   type MediaPlayerInstance,
 } from '@vidstack/react'
 import { Play } from 'lucide-react'
-import { useState, useRef } from 'react'
+import { useState, useRef, type ComponentProps } from 'react'
 
 /** Video embed component using vidstack. Supports poster overlays, gif-style autoplay, and lazy loading. */
 export const Video = ({
@@ -19,6 +19,7 @@ export const Video = ({
   className,
   gifStyle = false,
   title,
+  type,
 }: {
   src: string
   poster?: string
@@ -27,6 +28,8 @@ export const Video = ({
   gifStyle?: boolean
   className?: string
   title?: string
+  /** Explicit MIME type, e.g. `"video/mp4"`. Needed for extensionless URLs. */
+  type?: string
 }) => {
   const [panelDismissed, setPanelDismissed] = useState(false)
   const mediaPlayerRef = useRef<MediaPlayerInstance>(null)
@@ -36,10 +39,22 @@ export const Video = ({
     ? `${Math.floor(duration / 60)}:${Math.floor(duration % 60)} min`
     : null
 
+  // Vidstack infers the provider from a string src's file extension. Extensionless
+  // URLs (e.g. GitHub asset links) resolve no provider, so pass an explicit MIME
+  // type: honor an override, keep recognized extensions as plain strings, and
+  // default the rest to mp4.
+  const source = (
+    type === undefined
+      ? /\.(mp4|webm|ogg|ogv|mov|m4v|m3u8|mpd)(\?|#|$)/i.test(src)
+        ? src
+        : { src, type: 'video/mp4' }
+      : { src, type }
+  ) as ComponentProps<typeof MediaPlayer>['src']
+
   return (
     <MediaPlayer
       ref={mediaPlayerRef}
-      src={src}
+      src={source}
       controls={!gifStyle && panelDismissed}
       autoPlay={gifStyle}
       muted={gifStyle}
