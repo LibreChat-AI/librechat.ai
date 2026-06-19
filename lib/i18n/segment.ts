@@ -26,7 +26,7 @@ const TRANSLATABLE_TYPES = new Set(['paragraph', 'heading', 'table'])
 // ```yaml title="librechat.yaml") are NOT touched: this only runs on JSX open
 // tags, and the engine glossary still protects terms like Docker/MCP if they
 // appear here.
-const DISPLAY_PROP_RE = /(\b(?:title|label|summary|heading)\s*=\s*)(["'])([^"']*)\2/g
+const DISPLAY_PROP_RE = /(\b(?:title|label|summary|heading|alt)\s*=\s*)(["'])([^"']*)\2/g
 
 // Whitelisted props whose value is an expression array of string literals, e.g.
 // <Tabs items={['Welcome', 'Security Alert']}>. The individual labels are
@@ -36,6 +36,26 @@ const STRING_LITERAL_RE = /(["'])([^"']*)\1/g
 
 export function hashText(text: string): string {
   return createHash('sha256').update(`${PROMPT_VERSION}\n${text}`).digest('hex').slice(0, 16)
+}
+
+const EXPLICIT_ID_RE = /\s*\[#[^\]]+\]\s*$/
+
+/** Whether a block is an ATX heading (`# ...` through `###### ...`). */
+export function isHeading(text: string): boolean {
+  return /^#{1,6}\s/.test(text)
+}
+
+/** Whether a heading already carries an explicit `[#id]` (Fumadocs custom id). */
+export function headingHasExplicitId(text: string): boolean {
+  return EXPLICIT_ID_RE.test(text)
+}
+
+/** The slug source text of a heading: marker and any trailing `[#id]` removed. */
+export function headingText(text: string): string {
+  return text
+    .replace(/^#{1,6}\s+/, '')
+    .replace(EXPLICIT_ID_RE, '')
+    .trim()
 }
 
 /**
@@ -204,6 +224,9 @@ export function collectUrls(body: string): string[] {
 }
 
 const SEPARATOR = /^---(.+)---$/
+// A `pages` entry that is a Markdown link, e.g. "[Contributor Guidelines](url)".
+// The visible label is translated; the URL is preserved.
+const META_LINK = /^\[(.+)\]\((.+)\)$/
 
 export function extractMetaStrings(meta: unknown): string[] {
   const out: string[] = []
@@ -213,8 +236,13 @@ export function extractMetaStrings(meta: unknown): string[] {
     if (Array.isArray(m.pages)) {
       for (const p of m.pages) {
         if (typeof p === 'string') {
-          const match = p.match(SEPARATOR)
-          if (match) out.push(match[1].trim())
+          const sep = p.match(SEPARATOR)
+          if (sep) {
+            out.push(sep[1].trim())
+            continue
+          }
+          const link = p.match(META_LINK)
+          if (link) out.push(link[1])
         }
       }
     }
@@ -230,8 +258,10 @@ export function rebuildMeta(meta: unknown, translate: (original: string) => stri
   if (Array.isArray(m.pages)) {
     out.pages = m.pages.map((p) => {
       if (typeof p === 'string') {
-        const match = p.match(SEPARATOR)
-        if (match) return `---${translate(match[1].trim())}---`
+        const sep = p.match(SEPARATOR)
+        if (sep) return `---${translate(sep[1].trim())}---`
+        const link = p.match(META_LINK)
+        if (link) return `[${translate(link[1])}](${link[2]})`
       }
       return p
     })

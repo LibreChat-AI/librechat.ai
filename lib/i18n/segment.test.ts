@@ -63,6 +63,19 @@ Some body text.
     expect(verbatim).toContain('<Callout')
   })
 
+  it('translates alt text on an image tag while preserving src', () => {
+    const src = `<img src="/a.png" alt="search for a banana" />\n`
+    const segs = segmentMarkdown(src)
+    expect(reassemble(segs)).toBe(src)
+    const translatable = segs.filter((s) => s.kind === 'translatable').map((s) => s.text)
+    expect(translatable).toContain('search for a banana')
+    const verbatim = segs
+      .filter((s) => s.kind === 'verbatim')
+      .map((s) => s.text)
+      .join('')
+    expect(verbatim).toContain('src="/a.png"')
+  })
+
   it('translates string-literal labels inside a whitelisted expression array prop', () => {
     const src = `<Tabs items={['Welcome Message', 'Security Alert']}>
 
@@ -166,5 +179,17 @@ describe('meta json helpers', () => {
     expect(out.title).toBe('Werkzeug')
     expect(out.icon).toBe('Wrench')
     expect(out.pages).toEqual(['index', '---Bereitstellen---', 'local'])
+  })
+
+  it('extracts and translates Markdown link labels in pages, preserving the URL', () => {
+    const withLink = {
+      title: 'Dev',
+      pages: ['intro', '[Contributor Guidelines](https://x.test/c)', '---Section---'],
+    }
+    expect(extractMetaStrings(withLink)).toEqual(['Dev', 'Contributor Guidelines', 'Section'])
+    const out = rebuildMeta(withLink, (s) =>
+      s === 'Contributor Guidelines' ? 'Mitwirkende' : s === 'Section' ? 'Abschnitt' : s,
+    ) as typeof withLink
+    expect(out.pages).toEqual(['intro', '[Mitwirkende](https://x.test/c)', '---Abschnitt---'])
   })
 })
