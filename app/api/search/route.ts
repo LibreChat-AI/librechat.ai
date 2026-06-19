@@ -1,20 +1,21 @@
 import { docsSource } from '@/lib/source'
 import { createFromSource } from 'fumadocs-core/search/server'
+import { createTokenizer as createMandarinTokenizer } from '@orama/tokenizers/mandarin'
+import { createTokenizer as createJapaneseTokenizer } from '@orama/tokenizers/japanese'
 
 export const revalidate = false
 
-// Map each docs locale to an Orama-supported tokenizer language. Spanish,
-// French, and German are built in; Chinese and Japanese need @orama/tokenizers
-// (mandarin/japanese), so until those are wired up they fall back to english
-// tokenization. Without this the i18n loader makes Orama throw
-// LANGUAGE_NOT_SUPPORTED while building the zh/ja indexes.
+// Built-in Orama languages cover en/es/fr/de. Chinese and Japanese need the
+// dedicated @orama/tokenizers so the i18n loader can build their indexes.
+// The localeMap entry shape is Partial<AdvancedOptions>, which has a top-level
+// `tokenizer` field (not nested under `components`).
 export const { GET } = createFromSource(docsSource, undefined, {
   localeMap: {
     en: 'english',
     es: 'spanish',
     fr: 'french',
     de: 'german',
-    zh: 'english',
-    ja: 'english',
+    zh: { tokenizer: createMandarinTokenizer() },
+    ja: { tokenizer: createJapaneseTokenizer() },
   },
 })
