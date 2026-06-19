@@ -173,11 +173,18 @@ export function collectInlineCode(body: string): string[] {
   return out
 }
 
+// src/href destinations on HTML/JSX tags (e.g. <img src="...">, <a href="...">),
+// which are not Markdown link/image nodes. The backreferenced closing quote keeps
+// quotes of the other type inside the URL (common in badge URLs) from terminating
+// the match.
+const ATTR_URL_RE = /\b(?:src|href)\s*=\s*(["'])([\s\S]*?)\1/gi
+
 /**
- * Collect every link/image/definition destination URL anywhere in the body, in
- * document order. Used to verify the model did not rewrite or localize a link
- * target; link/image text rides inside translatable prose and is translated,
- * but the URL must survive verbatim.
+ * Collect every destination URL anywhere in the body, in document order:
+ * Markdown link/image/definition targets plus src/href attributes on HTML/JSX
+ * tags. Used to verify the model did not rewrite or localize a URL; link text and
+ * alt text ride inside translatable prose and are translated, but the destination
+ * must survive verbatim.
  */
 export function collectUrls(body: string): string[] {
   const tree = processor.parse(body) as unknown as MdNode & { url?: string }
@@ -192,6 +199,7 @@ export function collectUrls(body: string): string[] {
     if (node.children) for (const child of node.children) visit(child as MdNode & { url?: string })
   }
   visit(tree)
+  for (const m of body.matchAll(ATTR_URL_RE)) out.push(m[2])
   return out
 }
 
