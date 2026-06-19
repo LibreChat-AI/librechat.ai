@@ -63,6 +63,25 @@ Some body text.
     expect(verbatim).toContain('<Callout')
   })
 
+  it('translates string-literal labels inside a whitelisted expression array prop', () => {
+    const src = `<Tabs items={['Welcome Message', 'Security Alert']}>
+
+Body.
+
+</Tabs>
+`
+    const segs = segmentMarkdown(src)
+    expect(reassemble(segs)).toBe(src)
+    const translatable = segs.filter((s) => s.kind === 'translatable').map((s) => s.text)
+    expect(translatable).toContain('Welcome Message')
+    expect(translatable).toContain('Security Alert')
+    const verbatim = segs
+      .filter((s) => s.kind === 'verbatim')
+      .map((s) => s.text)
+      .join('')
+    expect(verbatim).toContain('items={[')
+  })
+
   it('does not translate a title info string on a fenced code block', () => {
     const src = '```yaml title="librechat.yaml"\nkey: value\n```\n'
     const segs = segmentMarkdown(src)

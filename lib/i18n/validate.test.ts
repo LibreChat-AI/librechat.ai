@@ -49,4 +49,22 @@ describe('validateTranslation', () => {
     expect(result.ok).toBe(false)
     expect(result.error).toMatch(/inline code/i)
   })
+
+  it('rejects a changed inline code identifier inside a frontmatter description', () => {
+    const src = `---\ntitle: T\ndescription: Guide for the \`.env\` file\n---\n\nBody.\n`
+    const bad = `---\ntitle: T\ndescription: Anleitung für die \`.umgebung\` Datei\n---\n\nKörper.\n`
+    const result = validateTranslation(src, bad)
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatch(/inline code/i)
+  })
+
+  it('rejects a rewritten link target, accepts translated link text', () => {
+    const src = `---\ntitle: T\ndescription: D\n---\n\nSee the [setup guide](/docs/setup).\n`
+    const good = `---\ntitle: T\ndescription: D\n---\n\nSiehe die [Einrichtungsanleitung](/docs/setup).\n`
+    const bad = `---\ntitle: T\ndescription: D\n---\n\nSiehe die [Einrichtungsanleitung](/de/docs/einrichtung).\n`
+    expect(validateTranslation(src, good).ok).toBe(true)
+    const result = validateTranslation(src, bad)
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatch(/link target/i)
+  })
 })

@@ -28,29 +28,49 @@ const TRANSLATABLE_TYPES = new Set(['paragraph', 'heading', 'table'])
 // appear here.
 const DISPLAY_PROP_RE = /(\b(?:title|label|summary|heading)\s*=\s*)(["'])([^"']*)\2/g
 
+// Whitelisted props whose value is an expression array of string literals, e.g.
+// <Tabs items={['Welcome', 'Security Alert']}>. The individual labels are
+// user-facing and should be translated while the array structure stays verbatim.
+const ARRAY_PROP_RE = /(\b(?:items|labels)\s*=\s*\{\s*\[)([\s\S]*?)(\]\s*\})/g
+const STRING_LITERAL_RE = /(["'])([^"']*)\1/g
+
 export function hashText(text: string): string {
   return createHash('sha256').update(`${PROMPT_VERSION}\n${text}`).digest('hex').slice(0, 16)
 }
 
 /**
  * Emit segments for a JSX open-tag span, splitting whitelisted display-prop
- * string values into translatable segments while keeping the rest verbatim.
+ * values (quoted scalars and string literals inside whitelisted expression
+ * arrays) into translatable segments while keeping the rest verbatim.
  * Reassembling the emitted segments yields the original span byte-for-byte.
  */
 function emitTagSpan(span: string, segments: Segment[]): void {
-  let last = 0
+  // Collect [start, end) ranges of translatable attribute values within the tag.
+  const ranges: Array<[number, number]> = []
   for (const m of span.matchAll(DISPLAY_PROP_RE)) {
-    const value = m[3]
-    const valueStart = (m.index ?? 0) + m[1].length + 1 // +1 for the opening quote
-    if (valueStart > last) {
-      segments.push({ kind: 'verbatim', text: span.slice(last, valueStart) })
+    const start = (m.index ?? 0) + m[1].length + 1 // +1 for the opening quote
+    ranges.push([start, start + m[3].length])
+  }
+  for (const m of span.matchAll(ARRAY_PROP_RE)) {
+    const innerOffset = (m.index ?? 0) + m[1].length
+    for (const lit of m[2].matchAll(STRING_LITERAL_RE)) {
+      const start = innerOffset + (lit.index ?? 0) + 1 // +1 for the opening quote
+      ranges.push([start, start + lit[2].length])
     }
+  }
+  ranges.sort((a, b) => a[0] - b[0])
+
+  let last = 0
+  for (const [start, end] of ranges) {
+    if (start < last) continue // ignore any overlap
+    if (start > last) segments.push({ kind: 'verbatim', text: span.slice(last, start) })
+    const value = span.slice(start, end)
     if (value && /\p{L}/u.test(value)) {
       segments.push({ kind: 'translatable', text: value, hash: hashText(value) })
     } else if (value) {
       segments.push({ kind: 'verbatim', text: value })
     }
-    last = valueStart + value.length
+    last = end
   }
   if (last < span.length) {
     segments.push({ kind: 'verbatim', text: span.slice(last) })
@@ -148,6 +168,28 @@ export function collectInlineCode(body: string): string[] {
     if (node.type === 'inlineCode' && typeof node.value === 'string') out.push(node.value)
     if (node.children)
       for (const child of node.children) visit(child as MdNode & { value?: string })
+  }
+  visit(tree)
+  return out
+}
+
+/**
+ * Collect every link/image/definition destination URL anywhere in the body, in
+ * document order. Used to verify the model did not rewrite or localize a link
+ * target; link/image text rides inside translatable prose and is translated,
+ * but the URL must survive verbatim.
+ */
+export function collectUrls(body: string): string[] {
+  const tree = processor.parse(body) as unknown as MdNode & { url?: string }
+  const out: string[] = []
+  const visit = (node: MdNode & { url?: string }) => {
+    if (
+      (node.type === 'link' || node.type === 'image' || node.type === 'definition') &&
+      typeof node.url === 'string'
+    ) {
+      out.push(node.url)
+    }
+    if (node.children) for (const child of node.children) visit(child as MdNode & { url?: string })
   }
   visit(tree)
   return out
