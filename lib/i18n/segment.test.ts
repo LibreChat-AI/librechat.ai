@@ -95,6 +95,20 @@ Some body text.
     expect(translatable).not.toContain('HOST=localhost')
   })
 
+  it('translates the description of a three-cell OptionTable row (no example column)', () => {
+    const src = `<OptionTable
+  options={[
+    ['KEY', 'string', 'Sets the key.'],
+  ]}
+/>
+`
+    const segs = segmentMarkdown(src)
+    expect(reassemble(segs)).toBe(src)
+    const translatable = segs.filter((s) => s.kind === 'translatable').map((s) => s.text)
+    expect(translatable).toContain('Sets the key.')
+    expect(translatable).not.toContain('KEY')
+  })
+
   it('translates string-literal labels inside a whitelisted expression array prop', () => {
     const src = `<Tabs items={['Welcome Message', 'Security Alert']}>
 

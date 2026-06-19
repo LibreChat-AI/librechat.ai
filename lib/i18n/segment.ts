@@ -34,14 +34,16 @@ const DISPLAY_PROP_RE = /(\b(?:title|label|summary|heading|alt)\s*=\s*)(["'])([^
 const ARRAY_PROP_RE = /(\b(?:items|labels)\s*=\s*\{\s*\[)([\s\S]*?)(\]\s*\})/g
 const STRING_LITERAL_RE = /(["'])([^"']*)\1/g
 
-// OptionTable's `options` prop is an array of [key, type, description, example]
-// tuples; only the 3rd cell (Description) is visible prose to translate. The row
-// regex requires a 4th element (the comma after the description), and the `d`
-// flag exposes the description literal's exact offset. Rows whose description is
-// JSX or otherwise not a simple string literal won't match and stay verbatim.
+// OptionTable's `options` prop is an array of [key, type, description] or
+// [key, type, description, example] tuples; only the 3rd cell (Description) is
+// visible prose to translate. Group 1 captures everything up to the description
+// so its offset can be derived without the `d` flag (which needs an es2022
+// target). The description may be followed by a comma (4-cell) or the closing
+// `]` (3-cell). Rows whose description is JSX or not a simple string literal
+// won't match and stay verbatim.
 const OPTIONS_PROP_RE = /(\boptions\s*=\s*\{\s*\[)([\s\S]*?)(\]\s*\})/g
 const OPTIONS_ROW_RE =
-  /\[\s*(?:'[^']*'|"[^"]*")\s*,\s*(?:'[^']*'|"[^"]*")\s*,\s*('[^']*'|"[^"]*")\s*,/dg
+  /(\[\s*(?:'[^']*'|"[^"]*")\s*,\s*(?:'[^']*'|"[^"]*")\s*,\s*)('[^']*'|"[^"]*")\s*(?:,|\])/g
 
 export function hashText(text: string): string {
   return createHash('sha256').update(`${PROMPT_VERSION}\n${text}`).digest('hex').slice(0, 16)
@@ -90,9 +92,10 @@ function emitTagSpan(span: string, segments: Segment[]): void {
   for (const m of span.matchAll(OPTIONS_PROP_RE)) {
     const innerOffset = (m.index ?? 0) + m[1].length
     for (const row of m[2].matchAll(OPTIONS_ROW_RE)) {
-      const span2 = row.indices?.[1] // [start, end] of the description literal incl. quotes
-      if (!span2) continue
-      ranges.push([innerOffset + span2[0] + 1, innerOffset + span2[1] - 1])
+      // row[1] is the prefix up to the description; row[2] is the quoted
+      // description. Skip the opening/closing quotes for the value range.
+      const descStart = innerOffset + (row.index ?? 0) + row[1].length + 1
+      ranges.push([descStart, descStart + row[2].length - 2])
     }
   }
   ranges.sort((a, b) => a[0] - b[0])
@@ -193,20 +196,18 @@ export function countCodeFences(body: string): number {
 }
 
 /**
- * Collect every inline code span (`like-this`) anywhere in the body, in document
- * order. Used to verify the model preserved identifiers (env vars, config keys,
- * template tokens) verbatim, since inline code rides along inside translatable
- * prose blocks rather than being its own verbatim segment.
+ * Collect every inline code span (`like-this`) anywhere in the text. Fenced code
+ * blocks are stripped first (they are verbatim and validated separately by
+ * count), then single-backtick spans are scanned from the RAW text rather than
+ * the Markdown AST. Raw scanning is deliberate: it also catches identifiers that
+ * ride inside JSX expression/attribute string literals (e.g. an OptionTable
+ * description like `docker-compose.override.yml`), which the AST does not expose
+ * as inlineCode nodes. Used to verify the model preserved those identifiers.
  */
 export function collectInlineCode(body: string): string[] {
-  const tree = processor.parse(body) as unknown as MdNode & { value?: string }
+  const withoutFences = body.replaceAll(/```[\s\S]*?```/g, '').replaceAll(/~~~[\s\S]*?~~~/g, '')
   const out: string[] = []
-  const visit = (node: MdNode & { value?: string }) => {
-    if (node.type === 'inlineCode' && typeof node.value === 'string') out.push(node.value)
-    if (node.children)
-      for (const child of node.children) visit(child as MdNode & { value?: string })
-  }
-  visit(tree)
+  for (const m of withoutFences.matchAll(/`([^`\n]+)`/g)) out.push(m[1])
   return out
 }
 

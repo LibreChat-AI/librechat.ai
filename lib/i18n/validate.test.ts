@@ -68,6 +68,14 @@ describe('validateTranslation', () => {
     expect(result.error).toMatch(/link target/i)
   })
 
+  it('rejects a changed code identifier inside a JSX expression string', () => {
+    const src = `---\ntitle: T\ndescription: D\n---\n\n<OptionTable options={[['K', 'string', 'Set in \`docker-compose.override.yml\`', 'ex']]} />\n`
+    const bad = `---\ntitle: T\ndescription: D\n---\n\n<OptionTable options={[['K', 'string', 'Setze in \`docker-compose.umgebung.yml\`', 'ex']]} />\n`
+    const result = validateTranslation(src, bad)
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatch(/inline code/i)
+  })
+
   it('rejects a rewritten src attribute URL on an HTML/JSX tag', () => {
     const src = `---\ntitle: T\ndescription: D\n---\n\n<img src="https://img.example.com/a.png?q=$.x%5B'en'%5D" alt="EN" />\n`
     const bad = `---\ntitle: T\ndescription: D\n---\n\n<img src="https://img.example.com/b.png?q=$.x%5B'de'%5D" alt="DE" />\n`
