@@ -24,15 +24,17 @@ export default async function Page(props: PageProps) {
 
   const slugPath = (params.slug ?? []).join('/')
   const englishHref = slugPath ? `/docs/${slugPath}` : '/docs'
-  const githubHref = `https://github.com/LibreChat-AI/librechat.ai/blob/main/content/docs/${page.file.path}`
 
-  // On localized pages page.file.path is the generated locale file (foo.de.mdx);
-  // strip the locale suffix so edit links point at the English source, which CI
-  // would otherwise overwrite on the next translation run.
+  // On localized pages page.file.path is the generated locale file (foo.de.mdx).
+  // Point all GitHub links at the English source instead: the locale file is
+  // regenerated from the source doc plus content/.i18n-cache on every run and is
+  // excluded from the workflow trigger, so edits made directly to it are silently
+  // overwritten. Fixing the source is the durable way to improve a translation.
   const localeSuffix = new RegExp(
     `\\.(${i18n.languages.filter((l) => l !== i18n.defaultLanguage).join('|')})\\.mdx$`,
   )
   const sourcePath = page.file.path.replace(localeSuffix, '.mdx')
+  const githubHref = `https://github.com/LibreChat-AI/librechat.ai/blob/main/content/docs/${sourcePath}`
 
   const lastModified =
     page.data.lastModified instanceof Date
@@ -79,10 +81,7 @@ export default async function Page(props: PageProps) {
           equals page.url, so this is unchanged there.
         */}
         <LLMCopyButton markdownUrl={`${englishHref}.mdx`} />
-        <ViewOptions
-          markdownUrl={`${englishHref}.mdx`}
-          githubUrl={`https://github.com/LibreChat-AI/librechat.ai/blob/main/content/docs/${sourcePath}`}
-        />
+        <ViewOptions markdownUrl={`${englishHref}.mdx`} githubUrl={githubHref} />
       </div>
       <DocsBody>
         {params.lang !== i18n.defaultLanguage && (
