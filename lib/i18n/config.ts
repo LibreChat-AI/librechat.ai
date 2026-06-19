@@ -11,8 +11,13 @@ export const TARGET_LOCALES = ['zh', 'es', 'fr', 'de', 'ja'] as const
  */
 export const PROMPT_VERSION = '1'
 
-/** Model id used for translation. Validate CJK quality before changing the default. */
-export const TRANSLATE_MODEL = process.env.OPENROUTER_TRANSLATE_MODEL ?? 'openai/gpt-5.4-nano'
+/**
+ * Model id used for translation. Validate CJK quality before changing the default.
+ * `||` (not `??`) so an empty string — which CI sets when the optional
+ * OPENROUTER_TRANSLATE_MODEL repo variable is unset — falls back to the default
+ * instead of becoming an invalid empty model id.
+ */
+export const TRANSLATE_MODEL = process.env.OPENROUTER_TRANSLATE_MODEL || 'openai/gpt-5.4-nano'
 
 /** Terms that must never be translated and must stay spelled exactly as written. */
 export const GLOSSARY = [
