@@ -157,6 +157,10 @@ export async function runTranslation(opts: RunOptions): Promise<RunStats> {
           const check = validateTranslation(source, output)
           if (!check.ok) {
             stats.skipped.push(`${rel} [${locale}]: ${check.error}`)
+            // Remove any previously-written locale file so the page falls back to
+            // fresh English instead of serving a stale translation that predates
+            // the source change. It is retried (uncached) on the next run.
+            await unlink(join(opts.contentDir, localePath(rel, locale, '.mdx'))).catch(() => {})
             return
           }
           await writeFile(join(opts.contentDir, localePath(rel, locale, '.mdx')), output)

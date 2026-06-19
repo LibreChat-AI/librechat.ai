@@ -93,6 +93,28 @@ describe('runTranslation', () => {
     expect(await readdir(dir)).toContain('page.de.mdx')
   })
 
+  it('removes a stale locale file when a re-translation fails validation', async () => {
+    await runTranslation({ contentDir: content, cacheDir: cache, locales: ['de'], model: stub })
+    expect(await readdir(content)).toContain('index.de.mdx')
+
+    // Source changes and the new translation fails validation (breaking stub).
+    const breaking: TranslateModel = {
+      generate: async ({ prompt }) => {
+        const text = prompt.split(/Translate the following[^\n]*:\n/).pop() ?? ''
+        return text.startsWith('#') ? `${text}\n\n\`\`\`\nx\n\`\`\`` : text
+      },
+    }
+    await writeFile(join(content, 'index.mdx'), `---\ntitle: Hello\n---\n\n# Changed Heading\n`)
+    const stats = await runTranslation({
+      contentDir: content,
+      cacheDir: cache,
+      locales: ['de'],
+      model: breaking,
+    })
+    expect(stats.skipped.length).toBeGreaterThan(0)
+    expect(await readdir(content)).not.toContain('index.de.mdx')
+  })
+
   it("does not persist a file's translations when it fails validation", async () => {
     // Stub that injects a stray code fence into heading translations, breaking the
     // output fence count so validateTranslation rejects the file.
