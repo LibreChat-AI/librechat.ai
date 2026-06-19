@@ -11,15 +11,9 @@ export type Segment =
 
 const processor = unified().use(remarkParse).use(remarkGfm).use(remarkMdx)
 
-const TRANSLATABLE_TYPES = new Set([
-  'paragraph',
-  'heading',
-  'list',
-  'blockquote',
-  'table',
-  'mdxJsxFlowElement',
-  'footnoteDefinition',
-])
+const CONTAINER_TYPES = new Set(['list', 'listItem', 'blockquote', 'footnoteDefinition'])
+
+const TRANSLATABLE_TYPES = new Set(['paragraph', 'heading', 'table', 'mdxJsxFlowElement'])
 
 export function hashText(text: string): string {
   return createHash('sha256').update(`${PROMPT_VERSION}\n${text}`).digest('hex').slice(0, 16)
@@ -27,37 +21,49 @@ export function hashText(text: string): string {
 
 interface MdNode {
   type: string
+  children?: MdNode[]
   position?: { start: { offset?: number }; end: { offset?: number } }
+}
+
+function walk(nodes: MdNode[], body: string, segments: Segment[], cursor: { value: number }): void {
+  for (const node of nodes) {
+    const start = node.position?.start.offset
+    const end = node.position?.end.offset
+    if (start === undefined || end === undefined) continue
+
+    if (start > cursor.value) {
+      segments.push({ kind: 'verbatim', text: body.slice(cursor.value, start) })
+    }
+    cursor.value = start
+
+    if (CONTAINER_TYPES.has(node.type) && node.children && node.children.length > 0) {
+      walk(node.children, body, segments, cursor)
+      if (end > cursor.value) {
+        segments.push({ kind: 'verbatim', text: body.slice(cursor.value, end) })
+      }
+      cursor.value = end
+    } else {
+      const raw = body.slice(start, end)
+      // Only translate blocks that contain actual letters (skips self-closing
+      // components, separators, etc.).
+      if (TRANSLATABLE_TYPES.has(node.type) && /\p{L}/u.test(raw)) {
+        segments.push({ kind: 'translatable', text: raw, hash: hashText(raw) })
+      } else {
+        segments.push({ kind: 'verbatim', text: raw })
+      }
+      cursor.value = end
+    }
+  }
 }
 
 /** Split MDX body (no frontmatter) into ordered segments, preserving all bytes. */
 export function segmentMarkdown(body: string): Segment[] {
   const tree = processor.parse(body) as unknown as { children: MdNode[] }
   const segments: Segment[] = []
-  let cursor = 0
-
-  for (const node of tree.children) {
-    const start = node.position?.start.offset
-    const end = node.position?.end.offset
-    if (start === undefined || end === undefined) continue
-
-    if (start > cursor) {
-      segments.push({ kind: 'verbatim', text: body.slice(cursor, start) })
-    }
-
-    const raw = body.slice(start, end)
-    // Only translate blocks that contain actual letters (skips self-closing
-    // components, separators, etc.).
-    if (TRANSLATABLE_TYPES.has(node.type) && /\p{L}/u.test(raw)) {
-      segments.push({ kind: 'translatable', text: raw, hash: hashText(raw) })
-    } else {
-      segments.push({ kind: 'verbatim', text: raw })
-    }
-    cursor = end
-  }
-
-  if (cursor < body.length) {
-    segments.push({ kind: 'verbatim', text: body.slice(cursor) })
+  const cursor = { value: 0 }
+  walk(tree.children, body, segments, cursor)
+  if (cursor.value < body.length) {
+    segments.push({ kind: 'verbatim', text: body.slice(cursor.value) })
   }
   return segments
 }

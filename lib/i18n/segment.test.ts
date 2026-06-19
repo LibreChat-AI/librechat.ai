@@ -42,6 +42,23 @@ describe('segmentMarkdown', () => {
     const segs = segmentMarkdown(SAMPLE).filter((s) => s.kind === 'translatable')
     expect(segs[0].kind === 'translatable' && segs[0].hash).toBe(hashText('# Hello world'))
   })
+
+  it('keeps fenced code nested inside a list item verbatim', () => {
+    const src = `1. First, run this:
+
+   \`\`\`bash
+   echo do-not-translate
+   \`\`\`
+
+2. Then continue.
+`
+    const segs = segmentMarkdown(src)
+    expect(reassemble(segs)).toBe(src)
+    const translatable = segs.filter((s) => s.kind === 'translatable').map((s) => s.text).join('\n')
+    const verbatim = segs.filter((s) => s.kind === 'verbatim').map((s) => s.text).join('\n')
+    expect(translatable).not.toContain('echo do-not-translate')
+    expect(verbatim).toContain('echo do-not-translate')
+  })
 })
 
 describe('countCodeFences', () => {
