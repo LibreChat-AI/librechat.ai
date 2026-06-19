@@ -26,6 +26,14 @@ export default async function Page(props: PageProps) {
   const englishHref = slugPath ? `/docs/${slugPath}` : '/docs'
   const githubHref = `https://github.com/LibreChat-AI/librechat.ai/blob/main/content/docs/${page.file.path}`
 
+  // On localized pages page.file.path is the generated locale file (foo.de.mdx);
+  // strip the locale suffix so edit links point at the English source, which CI
+  // would otherwise overwrite on the next translation run.
+  const localeSuffix = new RegExp(
+    `\\.(${i18n.languages.filter((l) => l !== i18n.defaultLanguage).join('|')})\\.mdx$`,
+  )
+  const sourcePath = page.file.path.replace(localeSuffix, '.mdx')
+
   const lastModified =
     page.data.lastModified instanceof Date
       ? page.data.lastModified.toISOString()
@@ -41,7 +49,7 @@ export default async function Page(props: PageProps) {
         owner: 'LibreChat-AI',
         repo: 'librechat.ai',
         sha: 'main',
-        path: `content/docs/${page.file.path}`,
+        path: `content/docs/${sourcePath}`,
       }}
     >
       <JsonLd
@@ -66,7 +74,7 @@ export default async function Page(props: PageProps) {
         <LLMCopyButton markdownUrl={`${page.url}.mdx`} />
         <ViewOptions
           markdownUrl={`${page.url}.mdx`}
-          githubUrl={`https://github.com/LibreChat-AI/librechat.ai/blob/main/content/docs/${page.file.path}`}
+          githubUrl={`https://github.com/LibreChat-AI/librechat.ai/blob/main/content/docs/${sourcePath}`}
         />
       </div>
       <DocsBody>
