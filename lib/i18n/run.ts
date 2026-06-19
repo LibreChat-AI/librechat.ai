@@ -2,7 +2,14 @@ import { readFile, writeFile, readdir, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import matter from 'gray-matter'
 import pLimit from 'p-limit'
-import { segmentMarkdown, reassemble, hashText, extractMetaStrings, rebuildMeta, type Segment } from './segment'
+import {
+  segmentMarkdown,
+  reassemble,
+  hashText,
+  extractMetaStrings,
+  rebuildMeta,
+  type Segment,
+} from './segment'
 import { validateTranslation } from './validate'
 import { translate, type TranslateModel } from './engine'
 import { TM } from './tm'
@@ -74,7 +81,11 @@ export async function runTranslation(opts: RunOptions): Promise<RunStats> {
     const tm = await TM.load(locale, opts.cacheDir)
     const limit = pLimit(FILE_CONCURRENCY)
 
-    const translateString = async (text: string, kind: 'block' | 'inline', context?: string): Promise<string> => {
+    const translateString = async (
+      text: string,
+      kind: 'block' | 'inline',
+      context?: string,
+    ): Promise<string> => {
       const hash = hashText(text)
       tm.markUsed(hash)
       const cached = opts.force ? undefined : tm.get(hash)
@@ -102,7 +113,10 @@ export async function runTranslation(opts: RunOptions): Promise<RunStats> {
             for (const s of extractMetaStrings(meta)) map.set(s, await translateString(s, 'inline'))
             if (opts.dryRun) return
             const out = rebuildMeta(meta, (s) => map.get(s) ?? s)
-            await writeFile(join(opts.contentDir, localePath(rel, locale, '.json')), `${JSON.stringify(out, null, 2)}\n`)
+            await writeFile(
+              join(opts.contentDir, localePath(rel, locale, '.json')),
+              `${JSON.stringify(out, null, 2)}\n`,
+            )
             return
           }
 
@@ -113,12 +127,16 @@ export async function runTranslation(opts: RunOptions): Promise<RunStats> {
           for (let i = 0; i < segs.length; i++) {
             const seg = segs[i]
             if (seg.kind === 'verbatim') outSegs.push({ text: seg.text })
-            else outSegs.push({ text: await translateString(seg.text, 'block', neighborContext(segs, i)) })
+            else
+              outSegs.push({
+                text: await translateString(seg.text, 'block', neighborContext(segs, i)),
+              })
           }
           const outData: Record<string, unknown> = { ...parsed.data }
           for (const key of ['title', 'description']) {
             const val = parsed.data[key]
-            if (typeof val === 'string' && /\p{L}/u.test(val)) outData[key] = await translateString(val, 'inline')
+            if (typeof val === 'string' && /\p{L}/u.test(val))
+              outData[key] = await translateString(val, 'inline')
           }
           if (opts.dryRun) {
             stats.files++
@@ -142,8 +160,7 @@ export async function runTranslation(opts: RunOptions): Promise<RunStats> {
       for (const f of all) {
         const name = f.split('/').at(-1) ?? ''
         const isThisLocale =
-          (f.endsWith(`.${locale}.mdx`) && LOCALE_RE.test(f)) ||
-          name === `meta.${locale}.json`
+          (f.endsWith(`.${locale}.mdx`) && LOCALE_RE.test(f)) || name === `meta.${locale}.json`
         if (!isThisLocale) continue
         const dir = f.slice(0, f.lastIndexOf('/') + 1)
         const baseRel = name.startsWith('meta.')

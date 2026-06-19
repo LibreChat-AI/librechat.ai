@@ -58,7 +58,9 @@ describe('meta json helpers', () => {
   })
 
   it('rebuilds with translations, preserving slugs and structure', () => {
-    const out = rebuildMeta(meta, (s) => (s === 'Toolkit' ? 'Werkzeug' : s === 'Deploy' ? 'Bereitstellen' : s)) as typeof meta
+    const out = rebuildMeta(meta, (s) =>
+      s === 'Toolkit' ? 'Werkzeug' : s === 'Deploy' ? 'Bereitstellen' : s,
+    ) as typeof meta
     expect(out.title).toBe('Werkzeug')
     expect(out.icon).toBe('Wrench')
     expect(out.pages).toEqual(['index', '---Bereitstellen---', 'local'])

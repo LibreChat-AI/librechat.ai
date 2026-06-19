@@ -55,4 +55,3 @@ export const MT_BANNER: Record<string, { notice: string; original: string; impro
     improve: 'この翻訳を改善する',
   },
 }
-

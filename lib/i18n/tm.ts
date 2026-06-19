@@ -55,6 +55,9 @@ export class TM {
     const sorted: Record<string, string> = {}
     for (const key of Object.keys(this.store).sort()) sorted[key] = this.store[key]
     await mkdir(this.baseDir, { recursive: true })
-    await writeFile(join(this.baseDir, `${this.locale}.json`), `${JSON.stringify(sorted, null, 2)}\n`)
+    await writeFile(
+      join(this.baseDir, `${this.locale}.json`),
+      `${JSON.stringify(sorted, null, 2)}\n`,
+    )
   }
 }

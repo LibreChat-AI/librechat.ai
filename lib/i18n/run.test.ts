@@ -17,16 +17,18 @@ beforeEach(async () => {
   content = join(base, 'docs')
   cache = join(base, 'cache')
   await mkdir(content, { recursive: true })
-  await writeFile(
-    join(content, 'index.mdx'),
-    `---\ntitle: Hello\n---\n\n# Hello\n\nA paragraph.\n`,
-  )
+  await writeFile(join(content, 'index.mdx'), `---\ntitle: Hello\n---\n\n# Hello\n\nA paragraph.\n`)
   await writeFile(join(content, 'meta.json'), JSON.stringify({ title: 'Docs', pages: ['index'] }))
 })
 
 describe('runTranslation', () => {
   it('writes a translated file and meta per locale and populates the cache', async () => {
-    const stats = await runTranslation({ contentDir: content, cacheDir: cache, locales: ['de'], model: stub })
+    const stats = await runTranslation({
+      contentDir: content,
+      cacheDir: cache,
+      locales: ['de'],
+      model: stub,
+    })
     expect(stats.translatedBlocks).toBeGreaterThan(0)
 
     const files = await readdir(content)
@@ -39,7 +41,12 @@ describe('runTranslation', () => {
 
   it('on a second run reuses the cache and translates zero blocks', async () => {
     await runTranslation({ contentDir: content, cacheDir: cache, locales: ['de'], model: stub })
-    const second = await runTranslation({ contentDir: content, cacheDir: cache, locales: ['de'], model: stub })
+    const second = await runTranslation({
+      contentDir: content,
+      cacheDir: cache,
+      locales: ['de'],
+      model: stub,
+    })
     expect(second.translatedBlocks).toBe(0)
     expect(second.cachedBlocks).toBeGreaterThan(0)
   })
@@ -50,7 +57,12 @@ describe('runTranslation', () => {
       join(content, 'index.mdx'),
       `---\ntitle: Hello\n---\n\n# Hello\n\nA changed paragraph.\n`,
     )
-    const after = await runTranslation({ contentDir: content, cacheDir: cache, locales: ['de'], model: stub })
+    const after = await runTranslation({
+      contentDir: content,
+      cacheDir: cache,
+      locales: ['de'],
+      model: stub,
+    })
     expect(after.translatedBlocks).toBe(1)
   })
 

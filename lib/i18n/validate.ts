@@ -1,7 +1,10 @@
 import matter from 'gray-matter'
 import { countCodeFences } from './segment'
 
-export function validateTranslation(source: string, output: string): { ok: boolean; error?: string } {
+export function validateTranslation(
+  source: string,
+  output: string,
+): { ok: boolean; error?: string } {
   let src: matter.GrayMatterFile<string>
   let out: matter.GrayMatterFile<string>
   try {
