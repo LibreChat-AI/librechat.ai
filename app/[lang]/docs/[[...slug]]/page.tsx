@@ -25,6 +25,14 @@ export default async function Page(props: PageProps) {
   const slugPath = (params.slug ?? []).join('/')
   const englishHref = slugPath ? `/docs/${slugPath}` : '/docs'
 
+  // Fumadocs 14.7.7 falls back to the English page for a non-default locale that
+  // has no foo.<locale>.mdx yet, so getPage alone can't tell a real translation
+  // from a fallback. A real translation's file path ends in `.<locale>.mdx`; a
+  // fallback ends in plain `.mdx`. Gate the banner (and the hreflang alternates
+  // below) on that so untranslated English fallbacks aren't treated as translated.
+  const isTranslated =
+    params.lang !== i18n.defaultLanguage && page.file.path.endsWith(`.${params.lang}.mdx`)
+
   // On localized pages page.file.path is the generated locale file (foo.de.mdx).
   // Point all GitHub links at the English source instead: the locale file is
   // regenerated from the source doc plus content/.i18n-cache on every run and is
@@ -84,7 +92,7 @@ export default async function Page(props: PageProps) {
         <ViewOptions markdownUrl={`${englishHref}.mdx`} githubUrl={githubHref} />
       </div>
       <DocsBody>
-        {params.lang !== i18n.defaultLanguage && (
+        {isTranslated && (
           <MachineTranslatedBanner
             locale={params.lang}
             englishHref={englishHref}
@@ -113,14 +121,17 @@ export async function generateMetadata(props: PageProps): Promise<Metadata> {
     alternates: {
       canonical: page.url,
       // Only advertise an hreflang alternate for locales that actually have a
-      // translated page. getPage returns undefined for a missing locale file (no
-      // fallback), so this avoids pointing crawlers at non-existent or
-      // English-fallback alternates for skipped / not-yet-translated pages.
+      // translated file. getPage falls back to the English page for a missing
+      // locale, so check the resolved file path ends in `.<locale>.mdx` instead
+      // of just truthiness, to avoid pointing crawlers at English-fallback
+      // alternates for skipped / not-yet-translated pages.
       languages: Object.fromEntries(
         i18n.languages
-          .filter(
-            (locale) => locale === i18n.defaultLanguage || docsSource.getPage(params.slug, locale),
-          )
+          .filter((locale) => {
+            if (locale === i18n.defaultLanguage) return true
+            const localePage = docsSource.getPage(params.slug, locale)
+            return localePage?.file.path.endsWith(`.${locale}.mdx`) ?? false
+          })
           .map((locale) => {
             const slugPath = (params.slug ?? []).join('/')
             const href =
