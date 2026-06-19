@@ -2,12 +2,16 @@ import { readFile, writeFile, readdir, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import matter from 'gray-matter'
 import pLimit from 'p-limit'
+import GithubSlugger from 'github-slugger'
 import {
   segmentMarkdown,
   reassemble,
   hashText,
   extractMetaStrings,
   rebuildMeta,
+  isHeading,
+  headingHasExplicitId,
+  headingText,
   type Segment,
 } from './segment'
 import { validateTranslation } from './validate'
@@ -134,14 +138,23 @@ export async function runTranslation(opts: RunOptions): Promise<RunStats> {
           const source = await readFile(abs, 'utf8')
           const parsed = matter(source)
           const segs = segmentMarkdown(parsed.content)
+          // Pin translated heading ids to the English slug so same-page #anchor
+          // links keep resolving (Fumadocs would otherwise regenerate the id from
+          // the translated text). Slug in document order to match its github-slugger.
+          const slugger = new GithubSlugger()
           const outSegs: { text: string }[] = []
           for (let i = 0; i < segs.length; i++) {
             const seg = segs[i]
-            if (seg.kind === 'verbatim') outSegs.push({ text: seg.text })
-            else
-              outSegs.push({
-                text: await translateString(staged, seg.text, 'block', neighborContext(segs, i)),
-              })
+            if (seg.kind === 'verbatim') {
+              outSegs.push({ text: seg.text })
+              continue
+            }
+            let text = await translateString(staged, seg.text, 'block', neighborContext(segs, i))
+            if (isHeading(seg.text) && !headingHasExplicitId(seg.text)) {
+              const id = slugger.slug(headingText(seg.text))
+              if (!headingHasExplicitId(text)) text = `${text} [#${id}]`
+            }
+            outSegs.push({ text })
           }
           const outData: Record<string, unknown> = { ...parsed.data }
           for (const key of ['title', 'description']) {

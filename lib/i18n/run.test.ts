@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { mkdtemp, mkdir, writeFile, readdir, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, readFile, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { runTranslation } from './run'
@@ -91,6 +91,17 @@ describe('runTranslation', () => {
     // Second full run: the source still exists, so the locale file must survive.
     await runTranslation({ contentDir: content, cacheDir: cache, locales: ['de'], model: stub })
     expect(await readdir(dir)).toContain('page.de.mdx')
+  })
+
+  it('pins translated heading ids to the English slug so same-page anchors resolve', async () => {
+    await writeFile(
+      join(content, 'index.mdx'),
+      `---\ntitle: Hello\n---\n\n## What is RAG\n\nSee [below](#what-is-rag).\n`,
+    )
+    await runTranslation({ contentDir: content, cacheDir: cache, locales: ['de'], model: stub })
+    const out = await readFile(join(content, 'index.de.mdx'), 'utf8')
+    expect(out).toContain('## What is RAG [#what-is-rag]')
+    expect(out).toContain('(#what-is-rag)')
   })
 
   it('removes a stale locale file when a re-translation fails validation', async () => {
