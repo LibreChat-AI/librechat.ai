@@ -61,14 +61,14 @@ Only pages listed in the `pages` array appear in the sidebar.
 
 ## Scripts
 
-| Command | Description |
-|---------|-------------|
-| `bun dev` | Start dev server on port 3333 (Turbopack) |
-| `bun run build` | Production build |
-| `bun start` | Start production server on port 3333 |
-| `bun run lint` | Run ESLint |
-| `bun run prettier` | Format code with Prettier |
-| `bun run analyze` | Analyze production bundle size |
+| Command            | Description                               |
+| ------------------ | ----------------------------------------- |
+| `bun dev`          | Start dev server on port 3333 (Turbopack) |
+| `bun run build`    | Production build                          |
+| `bun start`        | Start production server on port 3333      |
+| `bun run lint`     | Run ESLint                                |
+| `bun run prettier` | Format code with Prettier                 |
+| `bun run analyze`  | Analyze production bundle size            |
 
 ## License
 

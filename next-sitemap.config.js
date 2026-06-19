@@ -8,8 +8,8 @@ module.exports = {
   // Per-route freshness + priority so search engines crawl the home page and
   // docs more aggressively than legal/utility pages.
   transform: async (config, path) => {
-    let {changefreq} = config
-    let {priority} = config
+    let { changefreq } = config
+    let { priority } = config
 
     if (path === '/') {
       changefreq = 'daily'
