@@ -16,6 +16,14 @@ export const revalidate = false
 // `create({ components: { tokenizer } })`. A `components.tokenizer` shape (as in
 // Fumadocs' newer client-side oramaStaticClient docs example) is a different,
 // later API and is not how this server-side version consumes it.
+//
+// Version note: fumadocs-core 14.7.7 builds the index with Orama 2, while
+// @orama/tokenizers is on 3.x. They are kept on 3.x deliberately: pinning the
+// tokenizers to 2.x (the matched peer) makes the production build OOM because
+// v2 bundles its large CJK dictionary. The v3 tokenizer object is duck-compatible
+// here and the build succeeds; zh/ja tokenization is to be verified against real
+// translated content during the first backfill. The proper long-term fix is to
+// upgrade Fumadocs onto Orama 3.
 export const { GET } = createFromSource(docsSource, undefined, {
   localeMap: {
     en: 'english',
