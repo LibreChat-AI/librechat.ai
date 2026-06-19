@@ -76,6 +76,25 @@ Some body text.
     expect(verbatim).toContain('src="/a.png"')
   })
 
+  it('translates only the description cell of OptionTable tuples', () => {
+    const src = `<OptionTable
+  options={[
+    ['HOST', 'string', 'Specifies the host.', 'HOST=localhost'],
+    ['PORT', 'number', 'Specifies the port.', 'PORT=3080'],
+  ]}
+/>
+`
+    const segs = segmentMarkdown(src)
+    expect(reassemble(segs)).toBe(src)
+    const translatable = segs.filter((s) => s.kind === 'translatable').map((s) => s.text)
+    expect(translatable).toContain('Specifies the host.')
+    expect(translatable).toContain('Specifies the port.')
+    // Keys, types, and examples stay verbatim (not translated).
+    expect(translatable).not.toContain('HOST')
+    expect(translatable).not.toContain('string')
+    expect(translatable).not.toContain('HOST=localhost')
+  })
+
   it('translates string-literal labels inside a whitelisted expression array prop', () => {
     const src = `<Tabs items={['Welcome Message', 'Security Alert']}>
 

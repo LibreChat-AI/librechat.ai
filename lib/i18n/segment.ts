@@ -34,6 +34,15 @@ const DISPLAY_PROP_RE = /(\b(?:title|label|summary|heading|alt)\s*=\s*)(["'])([^
 const ARRAY_PROP_RE = /(\b(?:items|labels)\s*=\s*\{\s*\[)([\s\S]*?)(\]\s*\})/g
 const STRING_LITERAL_RE = /(["'])([^"']*)\1/g
 
+// OptionTable's `options` prop is an array of [key, type, description, example]
+// tuples; only the 3rd cell (Description) is visible prose to translate. The row
+// regex requires a 4th element (the comma after the description), and the `d`
+// flag exposes the description literal's exact offset. Rows whose description is
+// JSX or otherwise not a simple string literal won't match and stay verbatim.
+const OPTIONS_PROP_RE = /(\boptions\s*=\s*\{\s*\[)([\s\S]*?)(\]\s*\})/g
+const OPTIONS_ROW_RE =
+  /\[\s*(?:'[^']*'|"[^"]*")\s*,\s*(?:'[^']*'|"[^"]*")\s*,\s*('[^']*'|"[^"]*")\s*,/dg
+
 export function hashText(text: string): string {
   return createHash('sha256').update(`${PROMPT_VERSION}\n${text}`).digest('hex').slice(0, 16)
 }
@@ -76,6 +85,14 @@ function emitTagSpan(span: string, segments: Segment[]): void {
     for (const lit of m[2].matchAll(STRING_LITERAL_RE)) {
       const start = innerOffset + (lit.index ?? 0) + 1 // +1 for the opening quote
       ranges.push([start, start + lit[2].length])
+    }
+  }
+  for (const m of span.matchAll(OPTIONS_PROP_RE)) {
+    const innerOffset = (m.index ?? 0) + m[1].length
+    for (const row of m[2].matchAll(OPTIONS_ROW_RE)) {
+      const span2 = row.indices?.[1] // [start, end] of the description literal incl. quotes
+      if (!span2) continue
+      ranges.push([innerOffset + span2[0] + 1, innerOffset + span2[1] - 1])
     }
   }
   ranges.sort((a, b) => a[0] - b[0])
