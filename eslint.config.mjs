@@ -1,18 +1,18 @@
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { includeIgnoreFile } from '@eslint/compat';
-import js from '@eslint/js';
-import nextPlugin from '@next/eslint-plugin-next';
-import eslintConfigPrettier from 'eslint-config-prettier';
-import importPlugin from 'eslint-plugin-import';
-import react from 'eslint-plugin-react';
-import reactHooks from 'eslint-plugin-react-hooks';
-import tailwindcss from 'eslint-plugin-tailwindcss';
-import unicorn from 'eslint-plugin-unicorn';
-import globals from 'globals';
-import tseslint from 'typescript-eslint';
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { includeIgnoreFile } from '@eslint/compat'
+import js from '@eslint/js'
+import nextPlugin from '@next/eslint-plugin-next'
+import eslintConfigPrettier from 'eslint-config-prettier'
+import importPlugin from 'eslint-plugin-import'
+import react from 'eslint-plugin-react'
+import reactHooks from 'eslint-plugin-react-hooks'
+import tailwindcss from 'eslint-plugin-tailwindcss'
+import unicorn from 'eslint-plugin-unicorn'
+import globals from 'globals'
+import tseslint from 'typescript-eslint'
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 export default tseslint.config(
   // ── 1. Global ignores ──────────────────────────────────────────────
@@ -204,4 +204,4 @@ export default tseslint.config(
 
   // ── 11. Prettier (must be last) ────────────────────────────────────
   eslintConfigPrettier,
-);
+)

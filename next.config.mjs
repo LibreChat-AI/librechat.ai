@@ -85,7 +85,11 @@ const config = {
   // Next's tracing can miss them and the function 404s/500s on Vercel. Force
   // them into the serverless bundle for that route.
   outputFileTracingIncludes: {
-    '/api/og': ['./lib/fonts/Geist-Regular.ttf', './lib/fonts/Geist-SemiBold.ttf', './public/librechat.png'],
+    '/api/og': [
+      './lib/fonts/Geist-Regular.ttf',
+      './lib/fonts/Geist-SemiBold.ttf',
+      './public/librechat.png',
+    ],
   },
   typescript: {
     ignoreBuildErrors: false,

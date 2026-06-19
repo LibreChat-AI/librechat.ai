@@ -322,7 +322,7 @@ function HeroSection({ stars }: { stars: number }) {
           <Image
             src={DemoImageMobileLight}
             alt="LibreChat mobile interface in light mode"
-            className="mx-auto block max-w-sm rounded-xl border border-border shadow-sm dark:hidden"
+            className="mx-auto block w-full max-w-sm rounded-xl border border-border shadow-sm dark:hidden"
             priority
             sizes="(max-width: 640px) 90vw, 384px"
             placeholder="blur"
@@ -330,7 +330,7 @@ function HeroSection({ stars }: { stars: number }) {
           <Image
             src={DemoImageMobileDark}
             alt="LibreChat mobile interface in dark mode"
-            className="mx-auto hidden max-w-sm rounded-xl border border-border shadow-sm dark:block"
+            className="mx-auto hidden w-full max-w-sm rounded-xl border border-border shadow-sm dark:block"
             priority
             sizes="(max-width: 640px) 90vw, 384px"
             placeholder="blur"
