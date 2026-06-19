@@ -26,3 +26,33 @@ export const LOCALE_NAMES: Record<string, string> = {
   de: 'Deutsch',
   ja: '日本語',
 }
+
+/** Localized strings for the machine-translation notice banner. */
+export const MT_BANNER: Record<string, { notice: string; original: string; improve: string }> = {
+  zh: {
+    notice: '本页面由机器翻译，可能包含错误。',
+    original: '查看英文原文',
+    improve: '改进此翻译',
+  },
+  es: {
+    notice: 'Esta página fue traducida automáticamente y puede contener errores.',
+    original: 'Ver el original en inglés',
+    improve: 'Mejorar esta traducción',
+  },
+  fr: {
+    notice: 'Cette page a été traduite automatiquement et peut contenir des erreurs.',
+    original: "Voir l'original en anglais",
+    improve: 'Améliorer cette traduction',
+  },
+  de: {
+    notice: 'Diese Seite wurde maschinell übersetzt und kann Fehler enthalten.',
+    original: 'Englisches Original ansehen',
+    improve: 'Diese Übersetzung verbessern',
+  },
+  ja: {
+    notice: 'このページは機械翻訳されており、誤りが含まれている可能性があります。',
+    original: '英語の原文を表示',
+    improve: 'この翻訳を改善する',
+  },
+}
+
