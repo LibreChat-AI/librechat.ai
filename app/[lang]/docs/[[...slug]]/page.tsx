@@ -7,6 +7,8 @@ import { Feedback } from '@/components/Feedback'
 import { JsonLd } from '@/components/JsonLd'
 import { articleSchema, breadcrumbSchema } from '@/lib/structured-data'
 import { ogImageUrl } from '@/lib/og'
+import { MachineTranslatedBanner } from '@/components/MachineTranslatedBanner'
+import { i18n } from '@/lib/i18n'
 import type { Metadata } from 'next'
 
 interface PageProps {
@@ -19,6 +21,10 @@ export default async function Page(props: PageProps) {
   if (!page) notFound()
 
   const MDX = page.data.body
+
+  const slugPath = (params.slug ?? []).join('/')
+  const englishHref = slugPath ? `/docs/${slugPath}` : '/docs'
+  const githubHref = `https://github.com/LibreChat-AI/librechat.ai/blob/main/content/docs/${page.file.path}`
 
   const lastModified =
     page.data.lastModified instanceof Date
@@ -64,6 +70,13 @@ export default async function Page(props: PageProps) {
         />
       </div>
       <DocsBody>
+        {params.lang !== i18n.defaultLanguage && (
+          <MachineTranslatedBanner
+            locale={params.lang}
+            englishHref={englishHref}
+            githubHref={githubHref}
+          />
+        )}
         <MDX components={mdxComponents} />
       </DocsBody>
       <Feedback />
@@ -83,7 +96,23 @@ export async function generateMetadata(props: PageProps): Promise<Metadata> {
   return {
     title: page.data.title,
     description: page.data.description,
-    alternates: { canonical: page.url },
+    alternates: {
+      canonical: page.url,
+      languages: Object.fromEntries(
+        i18n.languages.map((locale) => {
+          const slugPath = (params.slug ?? []).join('/')
+          const href =
+            locale === i18n.defaultLanguage
+              ? slugPath
+                ? `/docs/${slugPath}`
+                : '/docs'
+              : slugPath
+                ? `/${locale}/docs/${slugPath}`
+                : `/${locale}/docs`
+          return [locale, href]
+        }),
+      ),
+    },
     openGraph: {
       title: page.data.title,
       description: page.data.description,
