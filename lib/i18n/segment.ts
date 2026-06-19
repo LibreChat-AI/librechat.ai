@@ -11,9 +11,20 @@ export type Segment =
 
 const processor = unified().use(remarkParse).use(remarkGfm).use(remarkMdx)
 
-const CONTAINER_TYPES = new Set(['list', 'listItem', 'blockquote', 'footnoteDefinition'])
+// Containers are recursed into so nested verbatim leaves (code, ESM, etc.) stay
+// verbatim while their prose is still translated. MDX JSX flow elements
+// (<Tabs>, <Steps>, <Callout>, ...) are containers too: docs routinely place
+// fenced shell/config commands inside them, and translating the element as one
+// block would send those commands to the model unchecked.
+const CONTAINER_TYPES = new Set([
+  'list',
+  'listItem',
+  'blockquote',
+  'footnoteDefinition',
+  'mdxJsxFlowElement',
+])
 
-const TRANSLATABLE_TYPES = new Set(['paragraph', 'heading', 'table', 'mdxJsxFlowElement'])
+const TRANSLATABLE_TYPES = new Set(['paragraph', 'heading', 'table'])
 
 export function hashText(text: string): string {
   return createHash('sha256').update(`${PROMPT_VERSION}\n${text}`).digest('hex').slice(0, 16)

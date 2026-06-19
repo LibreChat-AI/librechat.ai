@@ -43,6 +43,35 @@ describe('segmentMarkdown', () => {
     expect(segs[0].kind === 'translatable' && segs[0].hash).toBe(hashText('# Hello world'))
   })
 
+  it('keeps fenced code nested inside an MDX JSX component verbatim', () => {
+    const src = `<Tabs items={['Docker', 'Local']}>
+<Tabs.Tab>
+
+Run the stack:
+
+\`\`\`bash
+docker compose up -d
+\`\`\`
+
+</Tabs.Tab>
+</Tabs>
+`
+    const segs = segmentMarkdown(src)
+    expect(reassemble(segs)).toBe(src)
+    const translatable = segs
+      .filter((s) => s.kind === 'translatable')
+      .map((s) => s.text)
+      .join('\n')
+    const verbatim = segs
+      .filter((s) => s.kind === 'verbatim')
+      .map((s) => s.text)
+      .join('\n')
+    expect(translatable).not.toContain('docker compose up -d')
+    expect(verbatim).toContain('docker compose up -d')
+    // Prose inside the component is still translated.
+    expect(translatable).toContain('Run the stack:')
+  })
+
   it('keeps fenced code nested inside a list item verbatim', () => {
     const src = `1. First, run this:
 
