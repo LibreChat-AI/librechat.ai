@@ -43,6 +43,37 @@ describe('segmentMarkdown', () => {
     expect(segs[0].kind === 'translatable' && segs[0].hash).toBe(hashText('# Hello world'))
   })
 
+  it('translates whitelisted display props on JSX components but preserves structural props', () => {
+    const src = `<Callout type="warning" title="Developer Preview">
+
+Some body text.
+
+</Callout>
+`
+    const segs = segmentMarkdown(src)
+    expect(reassemble(segs)).toBe(src)
+    const translatable = segs.filter((s) => s.kind === 'translatable').map((s) => s.text)
+    expect(translatable).toContain('Developer Preview')
+    expect(translatable).toContain('Some body text.')
+    const verbatim = segs
+      .filter((s) => s.kind === 'verbatim')
+      .map((s) => s.text)
+      .join('')
+    expect(verbatim).toContain('type="warning"')
+    expect(verbatim).toContain('<Callout')
+  })
+
+  it('does not translate a title info string on a fenced code block', () => {
+    const src = '```yaml title="librechat.yaml"\nkey: value\n```\n'
+    const segs = segmentMarkdown(src)
+    expect(reassemble(segs)).toBe(src)
+    const translatable = segs
+      .filter((s) => s.kind === 'translatable')
+      .map((s) => s.text)
+      .join('')
+    expect(translatable).not.toContain('librechat.yaml')
+  })
+
   it('keeps fenced code nested inside an MDX JSX component verbatim', () => {
     const src = `<Tabs items={['Docker', 'Local']}>
 <Tabs.Tab>

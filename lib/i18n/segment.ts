@@ -13,21 +13,48 @@ const processor = unified().use(remarkParse).use(remarkGfm).use(remarkMdx)
 
 // Containers are recursed into so nested verbatim leaves (code, ESM, etc.) stay
 // verbatim while their prose is still translated. MDX JSX flow elements
-// (<Tabs>, <Steps>, <Callout>, ...) are containers too: docs routinely place
-// fenced shell/config commands inside them, and translating the element as one
-// block would send those commands to the model unchecked.
-const CONTAINER_TYPES = new Set([
-  'list',
-  'listItem',
-  'blockquote',
-  'footnoteDefinition',
-  'mdxJsxFlowElement',
-])
+// (<Tabs>, <Steps>, <Callout>, ...) get their own branch in walk(): docs
+// routinely place fenced shell/config commands inside them (which must stay
+// verbatim) while also putting user-facing copy in display attributes like
+// title= (which should be translated).
+const CONTAINER_TYPES = new Set(['list', 'listItem', 'blockquote', 'footnoteDefinition'])
 
 const TRANSLATABLE_TYPES = new Set(['paragraph', 'heading', 'table'])
 
+// Attributes on JSX components that render as visible copy and should be
+// translated. Structural/expression props and code-fence info strings (e.g.
+// ```yaml title="librechat.yaml") are NOT touched: this only runs on JSX open
+// tags, and the engine glossary still protects terms like Docker/MCP if they
+// appear here.
+const DISPLAY_PROP_RE = /(\b(?:title|label|summary|heading)\s*=\s*)(["'])([^"']*)\2/g
+
 export function hashText(text: string): string {
   return createHash('sha256').update(`${PROMPT_VERSION}\n${text}`).digest('hex').slice(0, 16)
+}
+
+/**
+ * Emit segments for a JSX open-tag span, splitting whitelisted display-prop
+ * string values into translatable segments while keeping the rest verbatim.
+ * Reassembling the emitted segments yields the original span byte-for-byte.
+ */
+function emitTagSpan(span: string, segments: Segment[]): void {
+  let last = 0
+  for (const m of span.matchAll(DISPLAY_PROP_RE)) {
+    const value = m[3]
+    const valueStart = (m.index ?? 0) + m[1].length + 1 // +1 for the opening quote
+    if (valueStart > last) {
+      segments.push({ kind: 'verbatim', text: span.slice(last, valueStart) })
+    }
+    if (value && /\p{L}/u.test(value)) {
+      segments.push({ kind: 'translatable', text: value, hash: hashText(value) })
+    } else if (value) {
+      segments.push({ kind: 'verbatim', text: value })
+    }
+    last = valueStart + value.length
+  }
+  if (last < span.length) {
+    segments.push({ kind: 'verbatim', text: span.slice(last) })
+  }
 }
 
 interface MdNode {
@@ -46,6 +73,26 @@ function walk(nodes: MdNode[], body: string, segments: Segment[], cursor: { valu
       segments.push({ kind: 'verbatim', text: body.slice(cursor.value, start) })
     }
     cursor.value = start
+
+    if (node.type === 'mdxJsxFlowElement') {
+      // Open tag runs from the element start to its first child (or to the end
+      // for childless/self-closing elements). Split display props out of it,
+      // then recurse so nested code/prose are handled normally.
+      const childOffsets = (node.children ?? [])
+        .map((c) => c.position?.start.offset)
+        .filter((o): o is number => o !== undefined)
+      const openEnd = childOffsets.length > 0 ? Math.min(...childOffsets) : end
+      emitTagSpan(body.slice(start, openEnd), segments)
+      cursor.value = openEnd
+      if (node.children && node.children.length > 0) {
+        walk(node.children, body, segments, cursor)
+        if (end > cursor.value) {
+          segments.push({ kind: 'verbatim', text: body.slice(cursor.value, end) })
+        }
+        cursor.value = end
+      }
+      continue
+    }
 
     if (CONTAINER_TYPES.has(node.type) && node.children && node.children.length > 0) {
       walk(node.children, body, segments, cursor)
