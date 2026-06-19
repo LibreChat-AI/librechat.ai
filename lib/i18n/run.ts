@@ -81,7 +81,10 @@ export async function runTranslation(opts: RunOptions): Promise<RunStats> {
     const tm = await TM.load(locale, opts.cacheDir)
     const limit = pLimit(FILE_CONCURRENCY)
 
+    // `staged` holds a single file's new translations; they are committed to the
+    // TM only after that file validates, so a broken page is never cached.
     const translateString = async (
+      staged: Map<string, string>,
       text: string,
       kind: 'block' | 'inline',
       context?: string,
@@ -93,12 +96,17 @@ export async function runTranslation(opts: RunOptions): Promise<RunStats> {
         stats.cachedBlocks++
         return cached
       }
+      const pending = staged.get(hash)
+      if (pending !== undefined) {
+        stats.cachedBlocks++
+        return pending
+      }
       if (opts.dryRun) {
         stats.translatedBlocks++
         return text
       }
       const result = await translate({ text, locale, kind, context, model: opts.model })
-      tm.set(hash, result)
+      staged.set(hash, result)
       stats.translatedBlocks++
       return result
     }
@@ -107,16 +115,18 @@ export async function runTranslation(opts: RunOptions): Promise<RunStats> {
       filtered.map((rel) =>
         limit(async () => {
           const abs = join(opts.contentDir, rel)
+          const staged = new Map<string, string>()
           if (rel.endsWith('meta.json')) {
             const meta = JSON.parse(await readFile(abs, 'utf8'))
             const map = new Map<string, string>()
-            for (const s of extractMetaStrings(meta)) map.set(s, await translateString(s, 'inline'))
+            for (const s of extractMetaStrings(meta)) map.set(s, await translateString(staged, s, 'inline'))
             if (opts.dryRun) return
             const out = rebuildMeta(meta, (s) => map.get(s) ?? s)
             await writeFile(
               join(opts.contentDir, localePath(rel, locale, '.json')),
               `${JSON.stringify(out, null, 2)}\n`,
             )
+            for (const [h, v] of staged) tm.set(h, v)
             return
           }
 
@@ -129,14 +139,14 @@ export async function runTranslation(opts: RunOptions): Promise<RunStats> {
             if (seg.kind === 'verbatim') outSegs.push({ text: seg.text })
             else
               outSegs.push({
-                text: await translateString(seg.text, 'block', neighborContext(segs, i)),
+                text: await translateString(staged, seg.text, 'block', neighborContext(segs, i)),
               })
           }
           const outData: Record<string, unknown> = { ...parsed.data }
           for (const key of ['title', 'description']) {
             const val = parsed.data[key]
             if (typeof val === 'string' && /\p{L}/u.test(val))
-              outData[key] = await translateString(val, 'inline')
+              outData[key] = await translateString(staged, val, 'inline')
           }
           if (opts.dryRun) {
             stats.files++
@@ -149,6 +159,7 @@ export async function runTranslation(opts: RunOptions): Promise<RunStats> {
             return
           }
           await writeFile(join(opts.contentDir, localePath(rel, locale, '.mdx')), output)
+          for (const [h, v] of staged) tm.set(h, v)
           stats.files++
         }),
       ),

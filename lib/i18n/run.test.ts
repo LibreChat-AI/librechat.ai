@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { runTranslation } from './run'
 import type { TranslateModel } from './engine'
+import { TM } from './tm'
+import { hashText } from './segment'
 
 // Stub model: echoes the source block back unchanged (valid MDX), no network call.
 const stub: TranslateModel = {
@@ -89,5 +91,22 @@ describe('runTranslation', () => {
     // Second full run: the source still exists, so the locale file must survive.
     await runTranslation({ contentDir: content, cacheDir: cache, locales: ['de'], model: stub })
     expect(await readdir(dir)).toContain('page.de.mdx')
+  })
+
+  it("does not persist a file's translations when it fails validation", async () => {
+    // Stub that injects a stray code fence into heading translations, breaking the
+    // output fence count so validateTranslation rejects the file.
+    const breaking: TranslateModel = {
+      generate: async ({ prompt }) => {
+        const text = prompt.split(/Translate the following[^\n]*:\n/).pop() ?? ''
+        return text.startsWith('#') ? `${text}\n\n\`\`\`\nx\n\`\`\`` : text
+      },
+    }
+    await writeFile(join(content, 'index.mdx'), `---\ntitle: Hello\n---\n\n# Head\n`)
+    const stats = await runTranslation({ contentDir: content, cacheDir: cache, locales: ['de'], model: breaking })
+    expect(stats.skipped.length).toBeGreaterThan(0)
+    expect(await readdir(content)).not.toContain('index.de.mdx')
+    const tm = await TM.load('de', cache)
+    expect(tm.get(hashText('# Head'))).toBeUndefined()
   })
 })
