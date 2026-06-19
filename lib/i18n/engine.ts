@@ -24,7 +24,7 @@ export function buildSystemPrompt(localeName: string, kind: 'block' | 'inline'):
     '',
     'Rules:',
     `- Translate prose, headings, list and table text, link text, and alt text into ${localeName}.`,
-    '- Preserve EXACTLY, untranslated: code (fenced and inline), JSX/MDX tags and all their props/attributes, import/export statements, URLs and file paths, anchor ids, and HTML attributes.',
+    '- Preserve EXACTLY, untranslated: code (fenced and inline), JSX/MDX tags and all their props/attributes, import/export statements, URLs and file paths, anchor ids, frontmatter keys, and HTML attributes.',
     '- Preserve all Markdown/MDX syntax and structure: same headings levels, same list markers, same number of code blocks, same components.',
     kind === 'inline'
       ? '- This is a short inline string (a title or label). Return a single line with no surrounding Markdown.'
@@ -35,7 +35,7 @@ export function buildSystemPrompt(localeName: string, kind: 'block' | 'inline'):
 }
 
 export function stripWrappingFence(s: string): string {
-  const match = s.match(/^\s*```[a-zA-Z]*\n([\s\S]*?)\n```\s*$/)
+  const match = s.match(/^\s*```[a-zA-Z0-9]*\n([\s\S]*?)\n```\s*$/)
   return match ? match[1] : s
 }
 

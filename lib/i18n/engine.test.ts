@@ -19,4 +19,17 @@ describe('engine', () => {
     const out = await translate({ text: '# Hello', locale: 'de', kind: 'block', model: echo })
     expect(out).toBe('# Hello')
   })
+
+  it('translate passes a non-empty system prompt naming the target language', async () => {
+    let captured: { system: string; prompt: string } | undefined
+    const capturing: TranslateModel = {
+      generate: async (input) => {
+        captured = input
+        return input.prompt
+      },
+    }
+    await translate({ text: '# Hello', locale: 'de', kind: 'block', model: capturing })
+    expect(captured?.system).toBeTruthy()
+    expect(captured?.system).toContain(buildSystemPrompt('Deutsch', 'block'))
+  })
 })
