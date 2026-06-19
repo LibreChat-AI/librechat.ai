@@ -76,6 +76,80 @@ describe('validateTranslation', () => {
     expect(result.error).toMatch(/inline code/i)
   })
 
+  // One fixture exercising every token class the guard must protect, with a
+  // clean translation that passes and one corruption per class that must fail.
+  describe('comprehensive token preservation', () => {
+    const SOURCE = [
+      '---',
+      'title: Config',
+      'description: The `.env` file guide',
+      '---',
+      '',
+      '# Setting up',
+      '',
+      'Set the `PORT` var and read the [setup guide](/docs/setup).',
+      '',
+      '```bash',
+      'echo hi',
+      '```',
+      '',
+      '<img src="https://img.test/a.png" alt="diagram" />',
+      '',
+      "<OptionTable options={[['HOST', 'string', 'Host, see `docker-compose.yml`.', 'x']]} />",
+      '',
+    ].join('\n')
+
+    const GOOD = [
+      '---',
+      'title: Konfiguration',
+      'description: Die `.env` Datei-Anleitung',
+      '---',
+      '',
+      '# Einrichtung',
+      '',
+      'Setze die `PORT` Variable und lies die [Einrichtungsanleitung](/docs/setup).',
+      '',
+      '```bash',
+      'echo hi',
+      '```',
+      '',
+      '<img src="https://img.test/a.png" alt="Diagramm" />',
+      '',
+      "<OptionTable options={[['HOST', 'string', 'Host, siehe `docker-compose.yml`.', 'x']]} />",
+      '',
+    ].join('\n')
+
+    it('accepts a translation that preserves every token class', () => {
+      expect(validateTranslation(SOURCE, GOOD).ok).toBe(true)
+    })
+
+    const cases: Array<[string, string, RegExp]> = [
+      ['inline code in frontmatter', GOOD.replace('`.env`', '`.umgebung`'), /inline code/i],
+      ['inline code in prose', GOOD.replace('`PORT`', '`ANSCHLUSS`'), /inline code/i],
+      ['markdown link target', GOOD.replace('/docs/setup', '/de/docs/x'), /link target/i],
+      ['img src url', GOOD.replace('img.test/a.png', 'img.test/b.png'), /link target/i],
+      [
+        'code inside an OptionTable description',
+        GOOD.replace('docker-compose.yml', 'docker-compose.umgebung.yml'),
+        /inline code/i,
+      ],
+      ['dropped fenced block', GOOD.replace('```bash\necho hi\n```\n', ''), /code block/i],
+      [
+        'dropped frontmatter key',
+        GOOD.replace('description: Die `.env` Datei-Anleitung\n', ''),
+        /frontmatter/i,
+      ],
+    ]
+
+    for (const [name, bad, pattern] of cases) {
+      it(`rejects: ${name}`, () => {
+        const result = validateTranslation(SOURCE, bad)
+        expect(result.ok).toBe(false)
+        expect(result.error).toMatch(pattern)
+      })
+    }
+  })
+
   it('rejects a rewritten src attribute URL on an HTML/JSX tag', () => {
     const src = `---\ntitle: T\ndescription: D\n---\n\n<img src="https://img.example.com/a.png?q=$.x%5B'en'%5D" alt="EN" />\n`
     const bad = `---\ntitle: T\ndescription: D\n---\n\n<img src="https://img.example.com/b.png?q=$.x%5B'de'%5D" alt="DE" />\n`

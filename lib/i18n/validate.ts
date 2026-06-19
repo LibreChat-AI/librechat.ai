@@ -2,9 +2,9 @@ import matter from 'gray-matter'
 import { countCodeFences, collectInlineCode, collectUrls } from './segment'
 
 /**
- * Body content plus translatable frontmatter values (title/description), so code
- * spans and link targets inside frontmatter are checked too — those values are
- * sent to the model as inline text just like prose.
+ * Body content plus translatable frontmatter values (title/description), so
+ * tokens inside frontmatter are checked too — those values are sent to the model
+ * as inline text just like prose.
  */
 function corpus(file: matter.GrayMatterFile<string>): string {
   const parts = [file.content]
@@ -13,6 +13,33 @@ function corpus(file: matter.GrayMatterFile<string>): string {
     if (typeof value === 'string') parts.push(value)
   }
   return parts.join('\n\n')
+}
+
+/**
+ * The complete set of token classes that must survive translation byte-for-byte,
+ * each as a sorted multiset over the corpus. Translation may reword and reorder
+ * prose, but must not add, drop, or alter any of these. This is the single place
+ * that defines "what the model is not allowed to touch":
+ *
+ * - `inline code`: every `backtick span`, scanned from raw text (after stripping
+ *   fenced blocks) so identifiers inside JSX expression/attribute strings and
+ *   frontmatter are covered, not just Markdown AST nodes.
+ * - `link target`: every Markdown link/image/definition destination plus every
+ *   src/href attribute URL on an HTML/JSX tag.
+ *
+ * Fenced code blocks are preserved structurally (verbatim segments) and only
+ * count-checked here; JSX tags/structural props and heading ids are likewise
+ * handled in segmentation, not by this guard.
+ */
+function preservedTokens(text: string): Record<string, string[]> {
+  return {
+    'inline code': collectInlineCode(text).sort(),
+    'link target': collectUrls(text).sort(),
+  }
+}
+
+function sameMultiset(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((value, i) => value === b[i])
 }
 
 export function validateTranslation(
@@ -38,47 +65,29 @@ export function validateTranslation(
     return { ok: false, error: `frontmatter keys changed: [${srcKeys}] -> [${outKeys}]` }
   }
 
-  const srcCorpus = corpus(src)
-  const outCorpus = corpus(out)
-
   let srcFences: number
   let outFences: number
-  let srcInline: string[]
-  let outInline: string[]
-  let srcUrls: string[]
-  let outUrls: string[]
+  let srcTokens: Record<string, string[]>
+  let outTokens: Record<string, string[]>
   try {
     srcFences = countCodeFences(src.content)
     outFences = countCodeFences(out.content)
-    srcInline = collectInlineCode(srcCorpus).sort()
-    outInline = collectInlineCode(outCorpus).sort()
-    srcUrls = collectUrls(srcCorpus).sort()
-    outUrls = collectUrls(outCorpus).sort()
+    srcTokens = preservedTokens(corpus(src))
+    outTokens = preservedTokens(corpus(out))
   } catch (e) {
     return { ok: false, error: `output is not parseable MDX: ${(e as Error).message}` }
   }
+
   if (srcFences !== outFences) {
     return { ok: false, error: `code block count changed: ${srcFences} -> ${outFences}` }
   }
 
-  // Inline identifiers (env vars, config keys, template tokens) must survive
-  // verbatim; reject if the model localized, dropped, or added one.
-  if (
-    srcInline.length !== outInline.length ||
-    srcInline.some((value, i) => value !== outInline[i])
-  ) {
-    return {
-      ok: false,
-      error: `inline code changed: [${srcInline.join(', ')}] -> [${outInline.join(', ')}]`,
-    }
-  }
-
-  // Link/image destinations must survive verbatim; reject if a URL was rewritten,
-  // localized, dropped, or added.
-  if (srcUrls.length !== outUrls.length || srcUrls.some((value, i) => value !== outUrls[i])) {
-    return {
-      ok: false,
-      error: `link target changed: [${srcUrls.join(', ')}] -> [${outUrls.join(', ')}]`,
+  for (const label of Object.keys(srcTokens)) {
+    if (!sameMultiset(srcTokens[label], outTokens[label])) {
+      return {
+        ok: false,
+        error: `${label} changed: [${srcTokens[label].join(', ')}] -> [${outTokens[label].join(', ')}]`,
+      }
     }
   }
 
