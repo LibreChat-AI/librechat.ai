@@ -113,19 +113,27 @@ export async function generateMetadata(props: PageProps): Promise<Metadata> {
     description: page.data.description,
     alternates: {
       canonical: page.url,
+      // Only advertise an hreflang alternate for locales that actually have a
+      // translated page. getPage returns undefined for a missing locale file (no
+      // fallback), so this avoids pointing crawlers at non-existent or
+      // English-fallback alternates for skipped / not-yet-translated pages.
       languages: Object.fromEntries(
-        i18n.languages.map((locale) => {
-          const slugPath = (params.slug ?? []).join('/')
-          const href =
-            locale === i18n.defaultLanguage
-              ? slugPath
-                ? `/docs/${slugPath}`
-                : '/docs'
-              : slugPath
-                ? `/${locale}/docs/${slugPath}`
-                : `/${locale}/docs`
-          return [locale, href]
-        }),
+        i18n.languages
+          .filter(
+            (locale) => locale === i18n.defaultLanguage || docsSource.getPage(params.slug, locale),
+          )
+          .map((locale) => {
+            const slugPath = (params.slug ?? []).join('/')
+            const href =
+              locale === i18n.defaultLanguage
+                ? slugPath
+                  ? `/docs/${slugPath}`
+                  : '/docs'
+                : slugPath
+                  ? `/${locale}/docs/${slugPath}`
+                  : `/${locale}/docs`
+            return [locale, href]
+          }),
       ),
     },
     openGraph: {
