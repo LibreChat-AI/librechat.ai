@@ -1,6 +1,7 @@
 import { start } from 'fumadocs-mdx/next'
 import NextBundleAnalyzer from '@next/bundle-analyzer'
 import { resolve } from 'path'
+import { computeOgVersion } from './lib/og-version.mjs'
 
 const withBundleAnalyzer = NextBundleAnalyzer({
   enabled: process.env.ANALYZE === 'true',
@@ -64,9 +65,28 @@ const nonPermanentRedirects = [
   ['/toolkit/creds_generator', '/toolkit/creds-generator'],
 ]
 
+/**
+ * Build-time content fingerprint of the Open Graph cards. Inlined into the
+ * bundle so lib/og.ts can append it as `?v=` to every social-card URL without
+ * any runtime filesystem reads. A card change yields a new hash -> a new URL
+ * -> a cache-miss at every layer (Cloudflare edge + scraper image proxies),
+ * which is what makes updated cards show up without a manual purge/re-scrape.
+ */
+const OG_VERSION = computeOgVersion()
+
 /** @type {import('next').NextConfig} */
 const config = {
   poweredByHeader: false,
+  env: {
+    OG_VERSION,
+  },
+  // The OG renderer (app/api/og/route.tsx) reads the logo + fonts from disk at
+  // runtime via process.cwd(). Those paths aren't statically analyzable, so
+  // Next's tracing can miss them and the function 404s/500s on Vercel. Force
+  // them into the serverless bundle for that route.
+  outputFileTracingIncludes: {
+    '/api/og': ['./lib/fonts/Geist-Regular.ttf', './lib/fonts/Geist-SemiBold.ttf', './public/librechat.png'],
+  },
   typescript: {
     ignoreBuildErrors: false,
   },
