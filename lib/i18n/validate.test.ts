@@ -39,4 +39,14 @@ describe('validateTranslation', () => {
     expect(result.ok).toBe(false)
     expect(result.error).toMatch(/parseable|parse/i)
   })
+
+  it('accepts translated prose that preserves inline code, rejects a changed identifier', () => {
+    const src = `---\ntitle: T\ndescription: D\n---\n\nSet the \`PORT\` variable before start.\n`
+    const good = `---\ntitle: T\ndescription: D\n---\n\nSetze die Variable \`PORT\` vor dem Start.\n`
+    const bad = `---\ntitle: T\ndescription: D\n---\n\nSetze die Variable \`ANSCHLUSS\` vor dem Start.\n`
+    expect(validateTranslation(src, good).ok).toBe(true)
+    const result = validateTranslation(src, bad)
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatch(/inline code/i)
+  })
 })

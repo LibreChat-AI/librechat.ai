@@ -1,5 +1,5 @@
 import matter from 'gray-matter'
-import { countCodeFences } from './segment'
+import { countCodeFences, collectInlineCode } from './segment'
 
 export function validateTranslation(
   source: string,
@@ -26,14 +26,30 @@ export function validateTranslation(
 
   let srcFences: number
   let outFences: number
+  let srcInline: string[]
+  let outInline: string[]
   try {
     srcFences = countCodeFences(src.content)
     outFences = countCodeFences(out.content)
+    srcInline = collectInlineCode(src.content).sort()
+    outInline = collectInlineCode(out.content).sort()
   } catch (e) {
     return { ok: false, error: `output is not parseable MDX: ${(e as Error).message}` }
   }
   if (srcFences !== outFences) {
     return { ok: false, error: `code block count changed: ${srcFences} -> ${outFences}` }
+  }
+
+  // Inline identifiers (env vars, config keys, template tokens) must survive
+  // verbatim; reject if the model localized, dropped, or added one.
+  if (
+    srcInline.length !== outInline.length ||
+    srcInline.some((value, i) => value !== outInline[i])
+  ) {
+    return {
+      ok: false,
+      error: `inline code changed: [${srcInline.join(', ')}] -> [${outInline.join(', ')}]`,
+    }
   }
 
   return { ok: true }

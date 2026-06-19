@@ -135,6 +135,24 @@ export function countCodeFences(body: string): number {
   return tree.children.filter((n) => n.type === 'code').length
 }
 
+/**
+ * Collect every inline code span (`like-this`) anywhere in the body, in document
+ * order. Used to verify the model preserved identifiers (env vars, config keys,
+ * template tokens) verbatim, since inline code rides along inside translatable
+ * prose blocks rather than being its own verbatim segment.
+ */
+export function collectInlineCode(body: string): string[] {
+  const tree = processor.parse(body) as unknown as MdNode & { value?: string }
+  const out: string[] = []
+  const visit = (node: MdNode & { value?: string }) => {
+    if (node.type === 'inlineCode' && typeof node.value === 'string') out.push(node.value)
+    if (node.children)
+      for (const child of node.children) visit(child as MdNode & { value?: string })
+  }
+  visit(tree)
+  return out
+}
+
 const SEPARATOR = /^---(.+)---$/
 
 export function extractMetaStrings(meta: unknown): string[] {
