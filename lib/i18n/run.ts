@@ -6,6 +6,7 @@ import { segmentMarkdown, reassemble, hashText, extractMetaStrings, rebuildMeta,
 import { validateTranslation } from './validate'
 import { translate, type TranslateModel } from './engine'
 import { TM } from './tm'
+import { TARGET_LOCALES } from './config'
 
 export interface RunOptions {
   contentDir: string
@@ -25,8 +26,9 @@ export interface RunStats {
 }
 
 const FILE_CONCURRENCY = 6
-const LOCALE_RE = /\.(zh|es|fr|de|ja)\.mdx$/
-const META_LOCALE_RE = /^meta\.(zh|es|fr|de|ja)\.json$/
+const LOCALE_ALT = TARGET_LOCALES.join('|')
+const LOCALE_RE = new RegExp(`\\.(${LOCALE_ALT})\\.mdx$`)
+const META_LOCALE_RE = new RegExp(`^meta\\.(${LOCALE_ALT})\\.json$`)
 
 /** Recursively list files under dir, returning paths relative to dir. */
 async function walk(dir: string, base = dir): Promise<string[]> {
@@ -143,9 +145,10 @@ export async function runTranslation(opts: RunOptions): Promise<RunStats> {
           (f.endsWith(`.${locale}.mdx`) && LOCALE_RE.test(f)) ||
           name === `meta.${locale}.json`
         if (!isThisLocale) continue
+        const dir = f.slice(0, f.lastIndexOf('/') + 1)
         const baseRel = name.startsWith('meta.')
-          ? f.replace(`meta.${locale}.json`, 'meta.json')
-          : f.replace(`.${locale}.mdx`, '.mdx')
+          ? `${dir}meta.json`
+          : `${dir}${name.replace(`.${locale}.mdx`, '.mdx')}`
         if (!sourceSet.has(baseRel)) await unlink(join(opts.contentDir, f))
       }
       tm.prune()

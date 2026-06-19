@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { mkdtemp, mkdir, writeFile, readFile, readdir } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, readFile, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { runTranslation } from './run'
@@ -52,5 +52,30 @@ describe('runTranslation', () => {
     )
     const after = await runTranslation({ contentDir: content, cacheDir: cache, locales: ['de'], model: stub })
     expect(after.translatedBlocks).toBe(1)
+  })
+
+  it('removes an orphaned locale file in a subdirectory', async () => {
+    await mkdir(join(content, 'sub'), { recursive: true })
+    await writeFile(join(content, 'sub', 'page.mdx'), `---\ntitle: Page\n---\n\n# Page\n\nText.\n`)
+    await runTranslation({ contentDir: content, cacheDir: cache, locales: ['de'], model: stub })
+    expect(await readdir(join(content, 'sub'))).toContain('page.de.mdx')
+
+    await rm(join(content, 'sub', 'page.mdx'))
+    await runTranslation({ contentDir: content, cacheDir: cache, locales: ['de'], model: stub })
+    expect(await readdir(join(content, 'sub'))).not.toContain('page.de.mdx')
+  })
+
+  // Guards the first-occurrence `f.replace` bug: a directory name containing the
+  // locale token would corrupt baseRel and wrongly delete a live (non-orphan) file.
+  it('keeps a live locale file when a parent dir name contains the locale token', async () => {
+    const dir = join(content, 'a.de.mdx-dir')
+    await mkdir(dir, { recursive: true })
+    await writeFile(join(dir, 'page.mdx'), `---\ntitle: Page\n---\n\n# Page\n\nText.\n`)
+    await runTranslation({ contentDir: content, cacheDir: cache, locales: ['de'], model: stub })
+    expect(await readdir(dir)).toContain('page.de.mdx')
+
+    // Second full run: the source still exists, so the locale file must survive.
+    await runTranslation({ contentDir: content, cacheDir: cache, locales: ['de'], model: stub })
+    expect(await readdir(dir)).toContain('page.de.mdx')
   })
 })
