@@ -5,8 +5,10 @@ import { join } from 'node:path'
 import { runTranslation } from './run'
 import type { TranslateModel } from './engine'
 
-// Stub model: wraps text in <<>> so we can assert it ran without a network call.
-const stub: TranslateModel = { generate: async ({ prompt }) => `<<${prompt.split('\n').slice(1).join('\n')}>>` }
+// Stub model: echoes the source block back unchanged (valid MDX), no network call.
+const stub: TranslateModel = {
+  generate: async ({ prompt }) => prompt.split(/Translate the following[^\n]*:\n/).pop() ?? '',
+}
 
 let content: string
 let cache: string

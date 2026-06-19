@@ -26,9 +26,8 @@ export function validateTranslation(source: string, output: string): { ok: boole
   try {
     srcFences = countCodeFences(src.content)
     outFences = countCodeFences(out.content)
-  } catch {
-    // If MDX parsing fails (e.g. malformed output), skip the code-fence check.
-    return { ok: true }
+  } catch (e) {
+    return { ok: false, error: `output is not parseable MDX: ${(e as Error).message}` }
   }
   if (srcFences !== outFences) {
     return { ok: false, error: `code block count changed: ${srcFences} -> ${outFences}` }

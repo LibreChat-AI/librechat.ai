@@ -32,4 +32,11 @@ describe('validateTranslation', () => {
     expect(result.ok).toBe(false)
     expect(result.error).toMatch(/code/i)
   })
+
+  it('rejects output that is not parseable MDX', () => {
+    const out = `---\ntitle: Hallo\ndescription: Eine Seite\n---\n\n<<not valid mdx<<\n`
+    const result = validateTranslation(SOURCE, out)
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatch(/parseable|parse/i)
+  })
 })
