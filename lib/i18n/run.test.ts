@@ -103,7 +103,12 @@ describe('runTranslation', () => {
       },
     }
     await writeFile(join(content, 'index.mdx'), `---\ntitle: Hello\n---\n\n# Head\n`)
-    const stats = await runTranslation({ contentDir: content, cacheDir: cache, locales: ['de'], model: breaking })
+    const stats = await runTranslation({
+      contentDir: content,
+      cacheDir: cache,
+      locales: ['de'],
+      model: breaking,
+    })
     expect(stats.skipped.length).toBeGreaterThan(0)
     expect(await readdir(content)).not.toContain('index.de.mdx')
     const tm = await TM.load('de', cache)

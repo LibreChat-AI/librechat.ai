@@ -119,7 +119,8 @@ export async function runTranslation(opts: RunOptions): Promise<RunStats> {
           if (rel.endsWith('meta.json')) {
             const meta = JSON.parse(await readFile(abs, 'utf8'))
             const map = new Map<string, string>()
-            for (const s of extractMetaStrings(meta)) map.set(s, await translateString(staged, s, 'inline'))
+            for (const s of extractMetaStrings(meta))
+              map.set(s, await translateString(staged, s, 'inline'))
             if (opts.dryRun) return
             const out = rebuildMeta(meta, (s) => map.get(s) ?? s)
             await writeFile(

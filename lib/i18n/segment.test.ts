@@ -54,8 +54,14 @@ describe('segmentMarkdown', () => {
 `
     const segs = segmentMarkdown(src)
     expect(reassemble(segs)).toBe(src)
-    const translatable = segs.filter((s) => s.kind === 'translatable').map((s) => s.text).join('\n')
-    const verbatim = segs.filter((s) => s.kind === 'verbatim').map((s) => s.text).join('\n')
+    const translatable = segs
+      .filter((s) => s.kind === 'translatable')
+      .map((s) => s.text)
+      .join('\n')
+    const verbatim = segs
+      .filter((s) => s.kind === 'verbatim')
+      .map((s) => s.text)
+      .join('\n')
     expect(translatable).not.toContain('echo do-not-translate')
     expect(verbatim).toContain('echo do-not-translate')
   })
