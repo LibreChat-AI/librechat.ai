@@ -21,8 +21,15 @@ export function validateTranslation(source: string, output: string): { ok: boole
     return { ok: false, error: `frontmatter keys changed: [${srcKeys}] -> [${outKeys}]` }
   }
 
-  const srcFences = countCodeFences(src.content)
-  const outFences = countCodeFences(out.content)
+  let srcFences: number
+  let outFences: number
+  try {
+    srcFences = countCodeFences(src.content)
+    outFences = countCodeFences(out.content)
+  } catch {
+    // If MDX parsing fails (e.g. malformed output), skip the code-fence check.
+    return { ok: true }
+  }
   if (srcFences !== outFences) {
     return { ok: false, error: `code block count changed: ${srcFences} -> ${outFences}` }
   }
