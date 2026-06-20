@@ -18,8 +18,8 @@ export default function proxy(request: NextRequest, event: NextFetchEvent) {
     return NextResponse.rewrite(new URL(`/llms.mdx/docs${rest}`, request.nextUrl))
   }
 
-  // Leave the raw `.mdx` route to next.config rewrites; don't localize it.
-  if (pathname.endsWith('.mdx')) return NextResponse.next()
+  // Leave raw markdown routes to next.config rewrites; don't localize them.
+  if (pathname.endsWith('.md') || pathname.endsWith('.mdx')) return NextResponse.next()
 
   // Locale detection + default-locale rewriting for the docs.
   return i18nMiddleware(request, event)
