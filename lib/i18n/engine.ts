@@ -1,6 +1,6 @@
 import { generateText } from 'ai'
 import { createOpenRouter } from '@openrouter/ai-sdk-provider'
-import { GLOSSARY, TRANSLATE_MODEL } from './config'
+import { GLOSSARY, TRANSLATE_MODEL, TRANSLATE_PROVIDER, TRANSLATE_SERVICE_TIER } from './config'
 import { LOCALE_NAMES } from '../i18n'
 
 export interface TranslateModel {
@@ -9,7 +9,13 @@ export interface TranslateModel {
 
 export function createOpenRouterModel(): TranslateModel {
   const openrouter = createOpenRouter({ apiKey: process.env.OPENROUTER_API_KEY })
-  const model = openrouter.chat(TRANSLATE_MODEL)
+  // Pin the provider via OpenRouter's routing preferences; `service_tier` is not a
+  // typed setting, so pass it through `extraBody` (merged verbatim into the request
+  // body and forwarded to the upstream provider).
+  const model = openrouter.chat(TRANSLATE_MODEL, {
+    provider: { only: [TRANSLATE_PROVIDER] },
+    extraBody: { service_tier: TRANSLATE_SERVICE_TIER },
+  })
   return {
     async generate({ system, prompt }) {
       const { text } = await generateText({ model, system, prompt, temperature: 0.2 })
