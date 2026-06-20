@@ -1,7 +1,7 @@
 import { docsSource } from '@/lib/source'
 import { mdxComponents } from '@/lib/mdx-components'
 import { DocsPage, DocsBody, DocsTitle, DocsDescription } from 'fumadocs-ui/page'
-import { notFound } from 'next/navigation'
+import { notFound, redirect } from 'next/navigation'
 import { LLMCopyButton, ViewOptions } from '@/components/page-actions'
 import { Feedback } from '@/components/Feedback'
 import { JsonLd } from '@/components/JsonLd'
@@ -19,19 +19,22 @@ export default async function Page(props: PageProps) {
   const params = await props.params
   const page = docsSource.getPage(params.slug, params.lang)
   if (!page) notFound()
-  // generateStaticParams omits non-default locales without a translated file, but
-  // dynamicParams defaults to true, so a direct /<locale>/docs/foo would otherwise
-  // render on-demand. getPage falls back to the English file, so 404 a non-default
-  // locale that resolves to a non-`.<locale>.mdx` file rather than serving
-  // duplicate English at a localized URL.
-  if (params.lang !== i18n.defaultLanguage && !page.file.path.endsWith(`.${params.lang}.mdx`)) {
-    notFound()
-  }
-
-  const MDX = page.data.body
 
   const slugPath = (params.slug ?? []).join('/')
   const englishHref = slugPath ? `/docs/${slugPath}` : '/docs'
+
+  // generateStaticParams omits non-default locales without a translated file, but
+  // dynamicParams defaults to true, and the Fumadocs sidebar still emits
+  // /<locale>/docs/* links for untranslated slugs (its node url uses the locale
+  // even when the file resolves to the English fallback). Redirect such URLs to the
+  // English page: no duplicate English content at a localized URL, and the sidebar
+  // links resolve instead of 404ing. A real translation (path ends .<locale>.mdx)
+  // renders normally.
+  if (params.lang !== i18n.defaultLanguage && !page.file.path.endsWith(`.${params.lang}.mdx`)) {
+    redirect(englishHref)
+  }
+
+  const MDX = page.data.body
 
   // Fumadocs 14.7.7 falls back to the English page for a non-default locale that
   // has no foo.<locale>.mdx yet, so getPage alone can't tell a real translation
@@ -130,10 +133,11 @@ export async function generateMetadata(props: PageProps): Promise<Metadata> {
   const params = await props.params
   const page = docsSource.getPage(params.slug, params.lang)
   if (!page) notFound()
-  // Match Page(): a non-default locale resolving to an English fallback is not a
-  // real page, so don't emit metadata for a duplicate-English localized URL.
+  // Match Page(): a non-default locale resolving to an English fallback redirects
+  // to the English page, so don't emit metadata for a URL that won't render here.
   if (params.lang !== i18n.defaultLanguage && !page.file.path.endsWith(`.${params.lang}.mdx`)) {
-    notFound()
+    const slugPath = (params.slug ?? []).join('/')
+    redirect(slugPath ? `/docs/${slugPath}` : '/docs')
   }
 
   return {
