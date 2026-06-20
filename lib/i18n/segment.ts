@@ -84,15 +84,29 @@ export function headingText(text: string): string {
     .trim()
 }
 
-// A single code-identifier token: a config/API name like `enforce`,
-// `addedEndpoints`, `conversation_starters`, `iconURL`, or `librechat.yaml`. The
-// lowercase/underscore start distinguishes these from Title-Case or bold prose
-// headings (Overview, **Top-level Fields**), which should be translated.
-const IDENTIFIER_RE = /^[a-z_$][\w$.]*$/
+// A heading whose text is a single bare code token: a config/API name, env var,
+// file name, or header such as `enforce`, `addedEndpoints`, `.env`,
+// `AZURE_AI_SEARCH_API_KEY`, `Content-Security-Policy`, or `OAuth2`. Two shapes
+// qualify, and both must be a single whitespace-free token:
+//   1. A lowercase/underscore-led identifier (camelCase, snake_case, dotted) —
+//      these read as plain words but the lowercase start marks them as code
+//      (prose headings are Title-Case: Overview, System Options).
+//   2. Any token built only from identifier and separator characters
+//      (letters, digits and `_ . - = : / + %`) that is NOT a plain alphabetic
+//      word — this catches Title-Case headers and ALL_CAPS env vars.
+// Plain words (Overview), emphasised prose (`**Overview**`, which carries `*`),
+// and multi-word headings are all translated. The second shape requires at least
+// one letter so pure numbers/punctuation never qualify. Backtick-wrapped code
+// headings (`` `apiKey` ``) are left to the inline-code validation guard.
+const LOWER_IDENTIFIER_RE = /^[a-z_$][\w$.]*$/
+const CODE_TOKEN_RE = /^(?=[\w.=:/+%-]*[A-Za-z])[\w.=:/+%-]+$/
+const PLAIN_WORD_RE = /^[A-Za-z]+$/
 
 /** Whether a heading is a bare code identifier that should stay verbatim. */
 export function isIdentifierHeading(text: string): boolean {
-  return isHeading(text) && IDENTIFIER_RE.test(headingText(text))
+  if (!isHeading(text)) return false
+  const t = headingText(text)
+  return LOWER_IDENTIFIER_RE.test(t) || (CODE_TOKEN_RE.test(t) && !PLAIN_WORD_RE.test(t))
 }
 
 /**

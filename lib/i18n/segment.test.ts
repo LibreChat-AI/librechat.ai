@@ -69,6 +69,44 @@ Body three.
     expect(verbatim).toContain('### addedEndpoints')
   })
 
+  it('keeps header, env-var, and file-name headings verbatim while translating prose', () => {
+    const src = `## Content-Security-Policy
+
+Body one.
+
+### AZURE_AI_SEARCH_API_KEY
+
+Body two.
+
+### .env
+
+Body three.
+
+## **Overview**
+
+Body four.
+
+## Self-Hosting the Sandpack Bundler
+
+Body five.
+`
+    const segs = segmentMarkdown(src)
+    expect(reassemble(segs)).toBe(src)
+    const translatable = segs.filter((s) => s.kind === 'translatable').map((s) => s.text)
+    const verbatim = segs
+      .filter((s) => s.kind === 'verbatim')
+      .map((s) => s.text)
+      .join('')
+    // Code-like single tokens stay verbatim.
+    expect(verbatim).toContain('## Content-Security-Policy')
+    expect(verbatim).toContain('### AZURE_AI_SEARCH_API_KEY')
+    expect(verbatim).toContain('### .env')
+    // Emphasised and multi-word prose headings are still translated.
+    expect(translatable).toContain('## **Overview**')
+    expect(translatable).toContain('## Self-Hosting the Sandpack Bundler')
+    expect(verbatim).not.toContain('## **Overview**')
+  })
+
   it('translates whitelisted display props on JSX components but preserves structural props', () => {
     const src = `<Callout type="warning" title="Developer Preview">
 
