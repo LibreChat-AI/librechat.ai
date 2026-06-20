@@ -108,6 +108,20 @@ export function GET(request: Request) {
         { name: 'Geist', data: geistRegular, weight: 400, style: 'normal' },
         { name: 'Geist', data: geistSemiBold, weight: 600, style: 'normal' },
       ],
+      // Cards are content-addressed: callers append a `?v=` fingerprint
+      // (lib/og.ts) that changes whenever the art changes, so a given URL's
+      // bytes never change. Cache them hard at every layer.
+      //
+      // NB Cloudflare: for this to hold at the edge, the zone must respect
+      // origin cache headers for these responses (Cache Rule -> "Respect
+      // origin" / Browser Cache TTL -> "Respect Existing Headers"). The legacy
+      // unversioned /images/socialcards/*.png was served stale for ~15 days
+      // because Cloudflare ignored its `max-age=0, must-revalidate` and applied
+      // its own long edge TTL. Versioned URLs sidestep that, but the zone
+      // setting should still respect origin so unversioned assets revalidate.
+      headers: {
+        'Cache-Control': 'public, max-age=31536000, s-maxage=31536000, immutable',
+      },
     },
   )
 }

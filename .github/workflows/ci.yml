@@ -1,27 +1,52 @@
 name: CI
 
-# Lint, unit tests, and a full type-check on every PR and push to main. The
-# type-check generates Fumadocs' .source types first (so @/.source resolves),
-# which is what catches issues a bare `next build` grep can miss.
 on:
   pull_request:
   push:
-    branches: [main]
+    branches:
+      - main
+  workflow_dispatch:
+
+# Cancel superseded runs on the same ref.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  NEXT_TELEMETRY_DISABLED: 1
 
 jobs:
-  check:
+  quality:
+    name: Format, types, lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - uses: pnpm/action-setup@v4
+        name: Install pnpm
 
-      - uses: actions/setup-node@v4
+      - name: Install Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: pnpm
 
-      - run: pnpm install --frozen-lockfile
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # .source is gitignored and only generated when Next/Fumadocs starts, so
+      # generate it before typecheck/lint resolve the @/.source import.
+      - name: Generate Fumadocs source
+        run: pnpm exec fumadocs-mdx
+
+      - name: Check formatting
+        run: pnpm lint:prettier
+
+      - name: Typecheck
+        run: pnpm typecheck
 
       - name: Lint
         run: pnpm lint
@@ -29,7 +54,37 @@ jobs:
       - name: Unit tests
         run: pnpm test
 
-      - name: Type-check
-        run: |
-          npx fumadocs-mdx
-          pnpm exec tsc --noEmit
+  e2e:
+    name: End-to-end tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        name: Install pnpm
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright browsers
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Build
+        run: pnpm build
+
+      - name: Run Playwright tests
+        run: pnpm exec playwright test
+
+      - name: Upload Playwright report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 14
