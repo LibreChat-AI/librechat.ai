@@ -39,6 +39,7 @@ test.describe('Toolkit — YAML validator', () => {
     await setYamlEditorValue(page, 'name: test\n  bad_indent: value\n wrong: yes')
 
     await expect(page.getByRole('status').filter({ hasText: /line/i })).toBeVisible()
+    await expect(page.locator('.ace-error-marker')).toBeVisible()
   })
 })
 

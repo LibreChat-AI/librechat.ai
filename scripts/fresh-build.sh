@@ -42,12 +42,13 @@ for arg in "$@"; do
 done
 
 check_node_version() {
-  local required="18.18"
+  local required="20.19.0"
   local current
   current="$(node -v 2>/dev/null | sed 's/^v//')" || fail "Node.js is not installed"
   local req_major req_minor cur_major cur_minor
   req_major="${required%%.*}"
   req_minor="${required#*.}"
+  req_minor="${req_minor%%.*}"
   cur_major="${current%%.*}"
   cur_minor="${current#*.}"
   cur_minor="${cur_minor%%.*}"
