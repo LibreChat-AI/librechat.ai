@@ -43,6 +43,32 @@ describe('segmentMarkdown', () => {
     expect(segs[0].kind === 'translatable' && segs[0].hash).toBe(hashText('# Hello world'))
   })
 
+  it('keeps bare identifier headings verbatim but translates prose headings', () => {
+    const src = `### enforce
+
+Body one.
+
+### addedEndpoints
+
+Body two.
+
+## Overview
+
+Body three.
+`
+    const segs = segmentMarkdown(src)
+    expect(reassemble(segs)).toBe(src)
+    const translatable = segs.filter((s) => s.kind === 'translatable').map((s) => s.text)
+    const verbatim = segs
+      .filter((s) => s.kind === 'verbatim')
+      .map((s) => s.text)
+      .join('')
+    expect(translatable).toContain('## Overview')
+    expect(translatable).not.toContain('### enforce')
+    expect(verbatim).toContain('### enforce')
+    expect(verbatim).toContain('### addedEndpoints')
+  })
+
   it('translates whitelisted display props on JSX components but preserves structural props', () => {
     const src = `<Callout type="warning" title="Developer Preview">
 

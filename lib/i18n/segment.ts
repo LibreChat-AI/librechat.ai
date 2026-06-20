@@ -84,6 +84,17 @@ export function headingText(text: string): string {
     .trim()
 }
 
+// A single code-identifier token: a config/API name like `enforce`,
+// `addedEndpoints`, `conversation_starters`, `iconURL`, or `librechat.yaml`. The
+// lowercase/underscore start distinguishes these from Title-Case or bold prose
+// headings (Overview, **Top-level Fields**), which should be translated.
+const IDENTIFIER_RE = /^[a-z_$][\w$.]*$/
+
+/** Whether a heading is a bare code identifier that should stay verbatim. */
+export function isIdentifierHeading(text: string): boolean {
+  return isHeading(text) && IDENTIFIER_RE.test(headingText(text))
+}
+
 /**
  * Decode JS string escapes (\\', \\", \\\\) in a value extracted from a quoted JS
  * string literal, so the model translates clean text rather than escape syntax.
@@ -204,9 +215,14 @@ function walk(nodes: MdNode[], body: string, segments: Segment[], cursor: { valu
       cursor.value = end
     } else {
       const raw = body.slice(start, end)
-      // Only translate blocks that contain actual letters (skips self-closing
-      // components, separators, etc.).
-      if (TRANSLATABLE_TYPES.has(node.type) && /\p{L}/u.test(raw)) {
+      // Translate blocks with actual letters (skips self-closing components,
+      // separators, etc.), except headings that are a bare code identifier (a
+      // config/API name like `### enforce`), which must stay verbatim.
+      const translatable =
+        TRANSLATABLE_TYPES.has(node.type) &&
+        /\p{L}/u.test(raw) &&
+        !(node.type === 'heading' && isIdentifierHeading(raw))
+      if (translatable) {
         segments.push({ kind: 'translatable', text: raw, hash: hashText(raw) })
       } else {
         segments.push({ kind: 'verbatim', text: raw })
