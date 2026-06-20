@@ -10,25 +10,25 @@ The official documentation site for [LibreChat](https://github.com/danny-avila/L
 - **Docs Engine:** Fumadocs (fumadocs-mdx + fumadocs-ui)
 - **Styling:** Tailwind CSS
 - **Icons:** Lucide React
-- **Package Manager:** Bun
+- **Package Manager:** pnpm
 
 ## Local Development
 
-**Prerequisites:** [Bun](https://bun.sh/) 1.0+
+**Prerequisites:** Node.js 20.19+ and [pnpm](https://pnpm.io/) 9.5.0+
 
 1. Clone the repository
 2. Copy `.env.template` to `.env.local` and fill in any optional values
 3. Install dependencies:
    ```bash
-   bun i
+   pnpm install
    ```
-4. Start the dev server (uses Turbopack):
+4. Start the dev server:
    ```bash
-   bun dev
+   pnpm dev
    ```
 5. Open [http://localhost:3333](http://localhost:3333)
 
-**Note:** Always run `bun run build` before opening a PR to catch build errors early.
+**Note:** Always run `pnpm build` before opening a PR to catch build errors early.
 
 ## Project Structure
 
@@ -39,9 +39,8 @@ content/
   blog/           # Blog posts (MDX)
   changelog/      # Changelog entries (MDX)
 components/       # React components (home, UI, icons, etc.)
-lib/              # Utilities, icons, MDX components, Nextra shims
+lib/              # Utilities, icons, MDX components, content sources
 public/           # Static assets
-pages/            # Legacy pages (migrating to app/)
 source.config.ts  # Fumadocs content collections config
 ```
 
@@ -61,14 +60,14 @@ Only pages listed in the `pages` array appear in the sidebar.
 
 ## Scripts
 
-| Command            | Description                               |
-| ------------------ | ----------------------------------------- |
-| `bun dev`          | Start dev server on port 3333 (Turbopack) |
-| `bun run build`    | Production build                          |
-| `bun start`        | Start production server on port 3333      |
-| `bun run lint`     | Run ESLint                                |
-| `bun run prettier` | Format code with Prettier                 |
-| `bun run analyze`  | Analyze production bundle size            |
+| Command         | Description                          |
+| --------------- | ------------------------------------ |
+| `pnpm dev`      | Start dev server on port 3333        |
+| `pnpm build`    | Production build                     |
+| `pnpm start`    | Start production server on port 3333 |
+| `pnpm lint`     | Run ESLint                           |
+| `pnpm prettier` | Format code with Prettier            |
+| `pnpm analyze`  | Analyze production bundle size       |
 
 ## License
 
