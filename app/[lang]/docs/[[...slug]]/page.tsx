@@ -19,6 +19,14 @@ export default async function Page(props: PageProps) {
   const params = await props.params
   const page = docsSource.getPage(params.slug, params.lang)
   if (!page) notFound()
+  // generateStaticParams omits non-default locales without a translated file, but
+  // dynamicParams defaults to true, so a direct /<locale>/docs/foo would otherwise
+  // render on-demand. getPage falls back to the English file, so 404 a non-default
+  // locale that resolves to a non-`.<locale>.mdx` file rather than serving
+  // duplicate English at a localized URL.
+  if (params.lang !== i18n.defaultLanguage && !page.file.path.endsWith(`.${params.lang}.mdx`)) {
+    notFound()
+  }
 
   const MDX = page.data.body
 
@@ -122,6 +130,11 @@ export async function generateMetadata(props: PageProps): Promise<Metadata> {
   const params = await props.params
   const page = docsSource.getPage(params.slug, params.lang)
   if (!page) notFound()
+  // Match Page(): a non-default locale resolving to an English fallback is not a
+  // real page, so don't emit metadata for a duplicate-English localized URL.
+  if (params.lang !== i18n.defaultLanguage && !page.file.path.endsWith(`.${params.lang}.mdx`)) {
+    notFound()
+  }
 
   return {
     title: page.data.title,
