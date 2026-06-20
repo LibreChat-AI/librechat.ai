@@ -7,7 +7,10 @@ import { PROMPT_VERSION } from './config'
 
 export type Segment =
   | { kind: 'verbatim'; text: string }
-  | { kind: 'translatable'; text: string; hash: string }
+  // `jsQuote` is set when the value was extracted from a quoted JS/JSX string
+  // literal (the enclosing quote char). The orchestrator unescapes it before
+  // translation and re-escapes the result for that quote before reinserting it.
+  | { kind: 'translatable'; text: string; hash: string; jsQuote?: string }
 
 const processor = unified().use(remarkParse).use(remarkGfm).use(remarkMdx)
 
@@ -82,6 +85,24 @@ export function headingText(text: string): string {
 }
 
 /**
+ * Decode JS string escapes (\\', \\", \\\\) in a value extracted from a quoted JS
+ * string literal, so the model translates clean text rather than escape syntax.
+ */
+export function unescapeJsString(value: string): string {
+  return value.replaceAll(/\\(.)/g, '$1')
+}
+
+/**
+ * Re-escape a translated value for reinsertion inside a `quote`-delimited JS
+ * string. Backslashes are escaped first, then the enclosing quote — so a natural
+ * apostrophe in (e.g.) a French translation inside a single-quoted OptionTable
+ * row becomes `\\'` instead of breaking the generated MDX.
+ */
+export function escapeJsString(value: string, quote: string): string {
+  return value.replaceAll('\\', '\\\\').replaceAll(quote, `\\${quote}`)
+}
+
+/**
  * Emit segments for a JSX open-tag span, splitting whitelisted display-prop
  * values (quoted scalars and string literals inside whitelisted expression
  * arrays) into translatable segments while keeping the rest verbatim.
@@ -120,7 +141,14 @@ function emitTagSpan(span: string, segments: Segment[]): void {
     if (start > last) segments.push({ kind: 'verbatim', text: span.slice(last, start) })
     const value = span.slice(start, end)
     if (value && /\p{L}/u.test(value)) {
-      segments.push({ kind: 'translatable', text: value, hash: hashText(value) })
+      // Every range here is a JS string value, so the char just before it is the
+      // enclosing quote — record it so the orchestrator can re-escape correctly.
+      segments.push({
+        kind: 'translatable',
+        text: value,
+        hash: hashText(value),
+        jsQuote: span[start - 1],
+      })
     } else if (value) {
       segments.push({ kind: 'verbatim', text: value })
     }
@@ -231,12 +259,21 @@ export function collectInlineCode(body: string): string[] {
 // the match.
 const ATTR_URL_RE = /\b(?:src|href)\s*=\s*(["'])([\s\S]*?)\1/gi
 
+// Markdown link/image destination, scanned from raw text: [text](url) / ![alt](url).
+// This catches links embedded in JSX string props (e.g. an OptionTable description
+// like 'see [params](#default-parameters)'), which the AST exposes only as opaque
+// expression text. The first token after `](` is the destination (a title or `)`
+// ends it).
+const MD_LINK_URL_RE = /\]\(\s*([^)\s]+)/g
+
 /**
- * Collect every destination URL anywhere in the body, in document order:
- * Markdown link/image/definition targets plus src/href attributes on HTML/JSX
- * tags. Used to verify the model did not rewrite or localize a URL; link text and
- * alt text ride inside translatable prose and are translated, but the destination
- * must survive verbatim.
+ * Collect every destination URL anywhere in the body, in document order: Markdown
+ * link/image/definition targets (AST) plus src/href attributes and raw Markdown
+ * link destinations (so links inside JSX string props are covered too). Used to
+ * verify the model did not rewrite or localize a URL; link text and alt text ride
+ * inside translatable prose and are translated, but the destination must survive
+ * verbatim. Body links are caught by both the AST walk and the raw scan, which is
+ * harmless: the duplication is identical in source and output.
  */
 export function collectUrls(body: string): string[] {
   const tree = processor.parse(body) as unknown as MdNode & { url?: string }
@@ -251,7 +288,9 @@ export function collectUrls(body: string): string[] {
     if (node.children) for (const child of node.children) visit(child as MdNode & { url?: string })
   }
   visit(tree)
-  for (const m of body.matchAll(ATTR_URL_RE)) out.push(m[2])
+  const withoutFences = body.replaceAll(/```[\s\S]*?```/g, '').replaceAll(/~~~[\s\S]*?~~~/g, '')
+  for (const m of withoutFences.matchAll(ATTR_URL_RE)) out.push(m[2])
+  for (const m of withoutFences.matchAll(MD_LINK_URL_RE)) out.push(m[1])
   return out
 }
 

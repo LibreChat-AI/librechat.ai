@@ -104,6 +104,31 @@ describe('runTranslation', () => {
     expect(out).toContain('(#what-is-rag)')
   })
 
+  it('escapes an apostrophe a translation adds inside a single-quoted JSX string', async () => {
+    // Simulates a French-style translation that introduces an apostrophe into a
+    // single-quoted OptionTable description. Without escaping the generated MDX is
+    // unparseable and the page would be skipped/deleted.
+    const apostrophe: TranslateModel = {
+      generate: async ({ prompt }) => {
+        const text = prompt.split(/Translate the following[^\n]*:\n/).pop() ?? ''
+        return text.includes('Detect') ? "Detecte l'utilisateur." : text
+      },
+    }
+    await writeFile(
+      join(content, 'index.mdx'),
+      `---\ntitle: Hello\n---\n\n<OptionTable options={[['k', 'string', 'Detect the user.', 'auto']]} />\n`,
+    )
+    const stats = await runTranslation({
+      contentDir: content,
+      cacheDir: cache,
+      locales: ['de'],
+      model: apostrophe,
+    })
+    expect(stats.skipped).toEqual([])
+    const out = await readFile(join(content, 'index.de.mdx'), 'utf8')
+    expect(out).toContain("l\\'utilisateur")
+  })
+
   it('removes a stale locale file when a re-translation fails validation', async () => {
     await runTranslation({ contentDir: content, cacheDir: cache, locales: ['de'], model: stub })
     expect(await readdir(content)).toContain('index.de.mdx')

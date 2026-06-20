@@ -68,6 +68,14 @@ describe('validateTranslation', () => {
     expect(result.error).toMatch(/link target/i)
   })
 
+  it('rejects a rewritten Markdown link target inside a JSX expression string', () => {
+    const src = `---\ntitle: T\ndescription: D\n---\n\n<OptionTable options={[['k', 'string', 'See [params](#default-parameters).', 'x']]} />\n`
+    const bad = `---\ntitle: T\ndescription: D\n---\n\n<OptionTable options={[['k', 'string', 'Siehe [Parameter](#geanderte-parameter).', 'x']]} />\n`
+    const result = validateTranslation(src, bad)
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatch(/link target/i)
+  })
+
   it('rejects a changed code identifier inside a JSX expression string', () => {
     const src = `---\ntitle: T\ndescription: D\n---\n\n<OptionTable options={[['K', 'string', 'Set in \`docker-compose.override.yml\`', 'ex']]} />\n`
     const bad = `---\ntitle: T\ndescription: D\n---\n\n<OptionTable options={[['K', 'string', 'Setze in \`docker-compose.umgebung.yml\`', 'ex']]} />\n`

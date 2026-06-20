@@ -12,6 +12,8 @@ import {
   isHeading,
   headingHasExplicitId,
   headingText,
+  unescapeJsString,
+  escapeJsString,
   type Segment,
 } from './segment'
 import { validateTranslation } from './validate'
@@ -147,6 +149,15 @@ export async function runTranslation(opts: RunOptions): Promise<RunStats> {
             const seg = segs[i]
             if (seg.kind === 'verbatim') {
               outSegs.push({ text: seg.text })
+              continue
+            }
+            // Values from quoted JS/JSX string literals: translate the unescaped
+            // text, then re-escape for the enclosing quote so a natural apostrophe
+            // in the translation can't break the generated MDX.
+            if (seg.jsQuote) {
+              const clean = unescapeJsString(seg.text)
+              const t = await translateString(staged, clean, 'inline', neighborContext(segs, i))
+              outSegs.push({ text: escapeJsString(t, seg.jsQuote) })
               continue
             }
             let text = await translateString(staged, seg.text, 'block', neighborContext(segs, i))
