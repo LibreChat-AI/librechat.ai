@@ -109,6 +109,35 @@ Some body text.
     expect(translatable).not.toContain('KEY')
   })
 
+  it('translates an OptionTable description containing an escaped quote', () => {
+    const src = `<OptionTable
+  options={[
+    ['lang', 'string', 'Detect the user\\'s language.', 'auto'],
+  ]}
+/>
+`
+    const segs = segmentMarkdown(src)
+    expect(reassemble(segs)).toBe(src)
+    const translatable = segs
+      .filter((s) => s.kind === 'translatable')
+      .map((s) => s.text)
+      .join('|')
+    expect(translatable).toContain('Detect the user')
+  })
+
+  it('translates a display prop value that contains an apostrophe', () => {
+    const src = `<Callout title="Don't forget this">
+
+Body.
+
+</Callout>
+`
+    const segs = segmentMarkdown(src)
+    expect(reassemble(segs)).toBe(src)
+    const translatable = segs.filter((s) => s.kind === 'translatable').map((s) => s.text)
+    expect(translatable).toContain("Don't forget this")
+  })
+
   it('translates string-literal labels inside a whitelisted expression array prop', () => {
     const src = `<Tabs items={['Welcome Message', 'Security Alert']}>
 

@@ -21,29 +21,41 @@ const CONTAINER_TYPES = new Set(['list', 'listItem', 'blockquote', 'footnoteDefi
 
 const TRANSLATABLE_TYPES = new Set(['paragraph', 'heading', 'table'])
 
+// A JS string literal (single- or double-quoted) with escape handling, so values
+// containing the other quote type or an escaped quote (e.g. 'the user\'s host')
+// match correctly. The whole literal including its quotes is matched; callers
+// strip the surrounding quotes to get the value. Used as the building block for
+// every prop matcher below so the escape handling lives in one place.
+const JS_STRING = String.raw`(?:'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")`
+
 // Attributes on JSX components that render as visible copy and should be
 // translated. Structural/expression props and code-fence info strings (e.g.
 // ```yaml title="librechat.yaml") are NOT touched: this only runs on JSX open
 // tags, and the engine glossary still protects terms like Docker/MCP if they
-// appear here.
-const DISPLAY_PROP_RE = /(\b(?:title|label|summary|heading|alt)\s*=\s*)(["'])([^"']*)\2/g
+// appear here. Group 2 is the quoted value.
+const DISPLAY_PROP_RE = new RegExp(
+  String.raw`(\b(?:title|label|summary|heading|alt)\s*=\s*)(${JS_STRING})`,
+  'g',
+)
 
 // Whitelisted props whose value is an expression array of string literals, e.g.
 // <Tabs items={['Welcome', 'Security Alert']}>. The individual labels are
 // user-facing and should be translated while the array structure stays verbatim.
 const ARRAY_PROP_RE = /(\b(?:items|labels)\s*=\s*\{\s*\[)([\s\S]*?)(\]\s*\})/g
-const STRING_LITERAL_RE = /(["'])([^"']*)\1/g
+const STRING_LITERAL_RE = new RegExp(JS_STRING, 'g')
 
 // OptionTable's `options` prop is an array of [key, type, description] or
 // [key, type, description, example] tuples; only the 3rd cell (Description) is
 // visible prose to translate. Group 1 captures everything up to the description
 // so its offset can be derived without the `d` flag (which needs an es2022
-// target). The description may be followed by a comma (4-cell) or the closing
-// `]` (3-cell). Rows whose description is JSX or not a simple string literal
-// won't match and stay verbatim.
+// target). Group 2 is the quoted description, which may be followed by a comma
+// (4-cell) or the closing `]` (3-cell). Rows whose description is JSX or not a
+// string literal won't match and stay verbatim.
 const OPTIONS_PROP_RE = /(\boptions\s*=\s*\{\s*\[)([\s\S]*?)(\]\s*\})/g
-const OPTIONS_ROW_RE =
-  /(\[\s*(?:'[^']*'|"[^"]*")\s*,\s*(?:'[^']*'|"[^"]*")\s*,\s*)('[^']*'|"[^"]*")\s*(?:,|\])/g
+const OPTIONS_ROW_RE = new RegExp(
+  String.raw`(\[\s*${JS_STRING}\s*,\s*${JS_STRING}\s*,\s*)(${JS_STRING})\s*(?:,|\])`,
+  'g',
+)
 
 export function hashText(text: string): string {
   return createHash('sha256').update(`${PROMPT_VERSION}\n${text}`).digest('hex').slice(0, 16)
@@ -79,14 +91,16 @@ function emitTagSpan(span: string, segments: Segment[]): void {
   // Collect [start, end) ranges of translatable attribute values within the tag.
   const ranges: Array<[number, number]> = []
   for (const m of span.matchAll(DISPLAY_PROP_RE)) {
-    const start = (m.index ?? 0) + m[1].length + 1 // +1 for the opening quote
-    ranges.push([start, start + m[3].length])
+    // m[2] is the quoted value; skip its opening/closing quotes.
+    const start = (m.index ?? 0) + m[1].length + 1
+    ranges.push([start, start + m[2].length - 2])
   }
   for (const m of span.matchAll(ARRAY_PROP_RE)) {
     const innerOffset = (m.index ?? 0) + m[1].length
     for (const lit of m[2].matchAll(STRING_LITERAL_RE)) {
-      const start = innerOffset + (lit.index ?? 0) + 1 // +1 for the opening quote
-      ranges.push([start, start + lit[2].length])
+      // lit[0] is the whole quoted literal; skip its opening/closing quotes.
+      const start = innerOffset + (lit.index ?? 0) + 1
+      ranges.push([start, start + lit[0].length - 2])
     }
   }
   for (const m of span.matchAll(OPTIONS_PROP_RE)) {
