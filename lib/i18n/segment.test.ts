@@ -9,6 +9,7 @@ import {
   unescapeJsString,
   escapeJsString,
   collectBlockStructure,
+  collectInlineCode,
 } from './segment'
 
 const SAMPLE = `import { Callout } from 'x'
@@ -331,6 +332,28 @@ describe('countCodeFences', () => {
 2. Step two.
 `
     expect(countCodeFences(src)).toBe(1)
+  })
+})
+
+describe('collectInlineCode fence handling', () => {
+  it('does not strip past an inline triple-backtick to the next real fence', () => {
+    // An inline ``` (mid-line, e.g. documenting the key chord) must not be treated
+    // as a fenced-block opener — an unanchored stripper would remove everything up
+    // to the next real fence, hiding `ctrl` from validation.
+    const src = [
+      'Press ``` to toggle.',
+      '',
+      'Then use `ctrl` to confirm.',
+      '',
+      '```bash',
+      'echo hi',
+      '```',
+      '',
+    ].join('\n')
+    const codes = collectInlineCode(src)
+    expect(codes).toContain('ctrl')
+    // The real fenced block is still stripped (its content is not inline code).
+    expect(codes).not.toContain('echo hi')
   })
 })
 

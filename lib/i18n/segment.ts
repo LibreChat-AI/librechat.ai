@@ -281,13 +281,28 @@ export function countCodeFences(body: string): number {
   return count
 }
 
+// Remove fenced code blocks before scanning raw text for inline tokens. Anchored
+// to the start of a line (a fence opens and closes at the beginning of a line,
+// allowing up to 3 spaces of indentation) so a triple-backtick run that appears
+// INLINE in a paragraph — e.g. documenting the ``` key chord — is not mistaken for
+// a block boundary. An unanchored matcher would treat that inline run as a fence
+// start and strip everything up to the next real fence, hiding the inline
+// code/links/placeholders in that span from validation. Under-stripping a fence
+// indented past 3 spaces (inside a list) is harmless: its content is verbatim and
+// therefore identical across source and translation, so it can't cause a mismatch.
+function stripFencedBlocks(body: string): string {
+  return body
+    .replaceAll(/^ {0,3}```[^\n]*\n[\s\S]*?\n {0,3}```[^\n]*$/gm, '')
+    .replaceAll(/^ {0,3}~~~[^\n]*\n[\s\S]*?\n {0,3}~~~[^\n]*$/gm, '')
+}
+
 // A GFM table delimiter row (e.g. `|---|:--:|`) and blockquote `>` markers are
 // pure structure with no translatable text, so a faithful translation must leave
 // them intact. We compare them as multisets in validation: dropping the delimiter
 // row collapses a table, dropping a `>` ejects lines from a blockquote — neither
 // is otherwise visible to the inline-code / link / placeholder guards.
 export function collectBlockStructure(body: string): { tables: string[]; quotes: string[] } {
-  const withoutFences = body.replaceAll(/```[\s\S]*?```/g, '').replaceAll(/~~~[\s\S]*?~~~/g, '')
+  const withoutFences = stripFencedBlocks(body)
   const tables: string[] = []
   const quotes: string[] = []
   for (const raw of withoutFences.split('\n')) {
@@ -314,7 +329,7 @@ export function collectBlockStructure(body: string): { tables: string[]; quotes:
  * as inlineCode nodes. Used to verify the model preserved those identifiers.
  */
 export function collectInlineCode(body: string): string[] {
-  const withoutFences = body.replaceAll(/```[\s\S]*?```/g, '').replaceAll(/~~~[\s\S]*?~~~/g, '')
+  const withoutFences = stripFencedBlocks(body)
   const out: string[] = []
   for (const m of withoutFences.matchAll(/`([^`\n]+)`/g)) out.push(m[1])
   return out
@@ -362,7 +377,7 @@ export function collectUrls(body: string): string[] {
     if (node.children) for (const child of node.children) visit(child as MdNode & { url?: string })
   }
   visit(tree)
-  const withoutFences = body.replaceAll(/```[\s\S]*?```/g, '').replaceAll(/~~~[\s\S]*?~~~/g, '')
+  const withoutFences = stripFencedBlocks(body)
   for (const m of withoutFences.matchAll(ATTR_URL_RE)) out.push(m[2])
   for (const m of withoutFences.matchAll(MD_LINK_URL_RE)) out.push(m[1])
   for (const m of withoutFences.matchAll(BARE_URL_RE)) out.push(m[0].replace(/[.,;:!?]+$/, ''))
@@ -390,7 +405,7 @@ const PLACEHOLDER_RE = /\$\{[^{}\n]+\}|\{\{[^{}\n]+\}\}|\{\s*[A-Za-z_$][\w.$]*\s
  * translatable text; backticked placeholders are already covered as inline code.
  */
 export function collectPlaceholders(body: string): string[] {
-  const withoutFences = body.replaceAll(/```[\s\S]*?```/g, '').replaceAll(/~~~[\s\S]*?~~~/g, '')
+  const withoutFences = stripFencedBlocks(body)
   const out: string[] = []
   for (const m of withoutFences.matchAll(PLACEHOLDER_RE)) out.push(m[0])
   return out
