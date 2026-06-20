@@ -110,21 +110,27 @@ export function isIdentifierHeading(text: string): boolean {
 }
 
 /**
- * Decode JS string escapes (\\', \\", \\\\) in a value extracted from a quoted JS
- * string literal, so the model translates clean text rather than escape syntax.
+ * Decode the escaped enclosing quote (`\'` in a single-quoted literal, `\"` in a
+ * double-quoted one) of a value extracted from a quoted JS string literal, so the
+ * model translates a natural apostrophe/quote rather than escape syntax. Every
+ * other escape (`\\`, `\n`, `\t`, `\uXXXX`, ...) is left byte-for-byte intact and
+ * matched atomically, so escapeJsString restores it exactly; decoding `\\` here
+ * would be irreversible since a re-escape could not tell a literal backslash from
+ * the lead byte of a `\n` sequence.
  */
-export function unescapeJsString(value: string): string {
-  return value.replaceAll(/\\(.)/g, '$1')
+export function unescapeJsString(value: string, quote: string): string {
+  return value.replaceAll(/\\[\s\S]/g, (m) => (m[1] === quote ? quote : m))
 }
 
 /**
  * Re-escape a translated value for reinsertion inside a `quote`-delimited JS
- * string. Backslashes are escaped first, then the enclosing quote — so a natural
- * apostrophe in (e.g.) a French translation inside a single-quoted OptionTable
- * row becomes `\\'` instead of breaking the generated MDX.
+ * string: a bare enclosing quote (e.g. an apostrophe a French translation adds
+ * inside a single-quoted OptionTable row) becomes `\'`, so it cannot break the
+ * generated MDX. Existing escape sequences are matched atomically and preserved
+ * verbatim, so a literal `\\` or `\n` is neither doubled nor stripped.
  */
 export function escapeJsString(value: string, quote: string): string {
-  return value.replaceAll('\\', '\\\\').replaceAll(quote, `\\${quote}`)
+  return value.replaceAll(/\\[\s\S]|[\s\S]/g, (m) => (m === quote ? `\\${quote}` : m))
 }
 
 /**

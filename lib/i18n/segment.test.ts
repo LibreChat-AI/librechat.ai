@@ -6,6 +6,8 @@ import {
   countCodeFences,
   extractMetaStrings,
   rebuildMeta,
+  unescapeJsString,
+  escapeJsString,
 } from './segment'
 
 const SAMPLE = `import { Callout } from 'x'
@@ -282,6 +284,34 @@ docker compose up -d
       .join('\n')
     expect(translatable).not.toContain('echo do-not-translate')
     expect(verbatim).toContain('echo do-not-translate')
+  })
+})
+
+describe('JS string escape round-trip', () => {
+  const Q = "'"
+
+  it('preserves non-quote escapes through a translate round-trip', () => {
+    // A model that returns the cleaned text unchanged must yield the original
+    // source byte-for-byte. Covers single (\n) and doubled (\\n) backslashes,
+    // tabs, and a literal backslash.
+    for (const src of [
+      String.raw`User: {input}\nAI: {output}`,
+      String.raw`User: {input}\\nAI: {output}`,
+      String.raw`col1\tcol2`,
+      String.raw`a\\b path`,
+    ]) {
+      expect(escapeJsString(unescapeJsString(src, Q), Q)).toBe(src)
+    }
+  })
+
+  it('decodes the escaped enclosing quote for the model and re-escapes apostrophes', () => {
+    expect(unescapeJsString("Detect the user\\'s host", Q)).toBe("Detect the user's host")
+    // A non-enclosing escaped quote is left intact.
+    expect(unescapeJsString('say \\"hi\\"', Q)).toBe('say \\"hi\\"')
+    // A bare apostrophe a translation introduces is escaped for the quote.
+    expect(escapeJsString("Detecte l'utilisateur", Q)).toBe("Detecte l\\'utilisateur")
+    // An already-escaped apostrophe is not doubled.
+    expect(escapeJsString("l\\'utilisateur", Q)).toBe("l\\'utilisateur")
   })
 })
 

@@ -155,7 +155,7 @@ export async function runTranslation(opts: RunOptions): Promise<RunStats> {
             // text, then re-escape for the enclosing quote so a natural apostrophe
             // in the translation can't break the generated MDX.
             if (seg.jsQuote) {
-              const clean = unescapeJsString(seg.text)
+              const clean = unescapeJsString(seg.text, seg.jsQuote)
               const t = await translateString(staged, clean, 'inline', neighborContext(segs, i))
               outSegs.push({ text: escapeJsString(t, seg.jsQuote) })
               continue

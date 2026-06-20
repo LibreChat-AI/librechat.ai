@@ -154,6 +154,26 @@ describe('runTranslation', () => {
     expect(out).toContain("l\\'utilisateur")
   })
 
+  it('preserves a backslash escape inside a single-quoted OptionTable description', async () => {
+    // The description carries a single-backslash \n (a documented template
+    // separator). It must survive the unescape/translate/re-escape round-trip
+    // rather than collapsing to a bare "n".
+    await writeFile(
+      join(content, 'index.mdx'),
+      `---\ntitle: Hello\n---\n\n<OptionTable options={[['k', 'string', 'Use the User: {input}\\nAI: {output} format.', 'x']]} />\n`,
+    )
+    const stats = await runTranslation({
+      contentDir: content,
+      cacheDir: cache,
+      locales: ['de'],
+      model: stub,
+    })
+    expect(stats.skipped).toEqual([])
+    const out = await readFile(join(content, 'index.de.mdx'), 'utf8')
+    expect(out).toContain('User: {input}\\nAI: {output}')
+    expect(out).not.toContain('{input}nAI')
+  })
+
   it('removes a stale locale file when a re-translation fails validation', async () => {
     await runTranslation({ contentDir: content, cacheDir: cache, locales: ['de'], model: stub })
     expect(await readdir(content)).toContain('index.de.mdx')
