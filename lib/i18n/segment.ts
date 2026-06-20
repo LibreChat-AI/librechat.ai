@@ -296,6 +296,13 @@ const ATTR_URL_RE = /\b(?:src|href)\s*=\s*(["'])([\s\S]*?)\1/gi
 // ends it).
 const MD_LINK_URL_RE = /\]\(\s*([^)\s]+)/g
 
+// A bare http(s) URL not wrapped in Markdown link syntax or an attribute, e.g. a
+// `Get your key from https://serper.dev/api-key` OptionTable description. The AST
+// autolinks bare URLs only in plain prose, never inside JSX expression strings, so
+// scan the raw (fence-stripped) text. Trailing sentence punctuation is trimmed (see
+// the collector) so reworded prose around an unchanged URL is not read as a change.
+const BARE_URL_RE = /\bhttps?:\/\/[^\s<>()[\]"'`]+/gi
+
 /**
  * Collect every destination URL anywhere in the body, in document order: Markdown
  * link/image/definition targets (AST) plus src/href attributes and raw Markdown
@@ -321,6 +328,7 @@ export function collectUrls(body: string): string[] {
   const withoutFences = body.replaceAll(/```[\s\S]*?```/g, '').replaceAll(/~~~[\s\S]*?~~~/g, '')
   for (const m of withoutFences.matchAll(ATTR_URL_RE)) out.push(m[2])
   for (const m of withoutFences.matchAll(MD_LINK_URL_RE)) out.push(m[1])
+  for (const m of withoutFences.matchAll(BARE_URL_RE)) out.push(m[0].replace(/[.,;:!?]+$/, ''))
   return out
 }
 

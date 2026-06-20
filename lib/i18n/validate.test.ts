@@ -158,6 +158,26 @@ describe('validateTranslation', () => {
     }
   })
 
+  it('rejects a rewritten bare URL inside a JSX expression string', () => {
+    const src = `---\ntitle: T\ndescription: D\n---\n\n<OptionTable options={[['KEY', 'string', 'Get your key from https://serper.dev/api-key', '# KEY=']]} />\n`
+    const bad = `---\ntitle: T\ndescription: D\n---\n\n<OptionTable options={[['KEY', 'string', 'Hol deinen Schlüssel von https://serper.de/api-schluessel', '# KEY=']]} />\n`
+    const result = validateTranslation(src, bad)
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatch(/link target/i)
+  })
+
+  it('accepts a translated JSX description that preserves a bare URL', () => {
+    const src = `---\ntitle: T\ndescription: D\n---\n\n<OptionTable options={[['KEY', 'string', 'Get your key from https://serper.dev/api-key', '# KEY=']]} />\n`
+    const good = `---\ntitle: T\ndescription: D\n---\n\n<OptionTable options={[['KEY', 'string', 'Hol deinen Schlüssel von https://serper.dev/api-key', '# KEY=']]} />\n`
+    expect(validateTranslation(src, good).ok).toBe(true)
+  })
+
+  it('ignores trailing sentence punctuation when prose around a bare URL is reworded', () => {
+    const src = `---\ntitle: T\ndescription: D\n---\n\nGet your key from https://serper.dev/api-key.\n`
+    const good = `---\ntitle: T\ndescription: D\n---\n\nHol deinen Schlüssel von https://serper.dev/api-key!\n`
+    expect(validateTranslation(src, good).ok).toBe(true)
+  })
+
   it('rejects a rewritten src attribute URL on an HTML/JSX tag', () => {
     const src = `---\ntitle: T\ndescription: D\n---\n\n<img src="https://img.example.com/a.png?q=$.x%5B'en'%5D" alt="EN" />\n`
     const bad = `---\ntitle: T\ndescription: D\n---\n\n<img src="https://img.example.com/b.png?q=$.x%5B'de'%5D" alt="DE" />\n`
