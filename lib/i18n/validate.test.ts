@@ -158,6 +158,40 @@ describe('validateTranslation', () => {
     }
   })
 
+  it('rejects a localized template placeholder, accepts a translation that keeps it', () => {
+    const src = `---\ntitle: T\ndescription: D\n---\n\n<OptionTable options={[['titlePromptTemplate', 'string', 'Must include {input} and {output} placeholders.', 'x']]} />\n`
+    const good = `---\ntitle: T\ndescription: D\n---\n\n<OptionTable options={[['titlePromptTemplate', 'string', 'Muss die Platzhalter {input} und {output} enthalten.', 'x']]} />\n`
+    const bad = `---\ntitle: T\ndescription: D\n---\n\n<OptionTable options={[['titlePromptTemplate', 'string', 'Muss die Platzhalter {Eingabe} und {Ausgabe} enthalten.', 'x']]} />\n`
+    expect(validateTranslation(src, good).ok).toBe(true)
+    const result = validateTranslation(src, bad)
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatch(/template placeholder/i)
+  })
+
+  it('rejects a localized ${env} interpolation in prose', () => {
+    const src = `---\ntitle: T\ndescription: D\n---\n\nSet the value to \${OPENROUTER_KEY} before start.\n`
+    const bad = `---\ntitle: T\ndescription: D\n---\n\nSetze den Wert auf \${OPENROUTER_SCHLUESSEL} vor dem Start.\n`
+    const result = validateTranslation(src, bad)
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatch(/template placeholder/i)
+  })
+
+  it('rejects a localized {{handlebars}} user variable', () => {
+    const src = `---\ntitle: T\ndescription: D\n---\n\nThe value of {{LIBRECHAT_USER_ID}} is injected.\n`
+    const bad = `---\ntitle: T\ndescription: D\n---\n\nDer Wert von {{LIBRECHAT_BENUTZER_ID}} wird eingefügt.\n`
+    const result = validateTranslation(src, bad)
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatch(/template placeholder/i)
+  })
+
+  it('does not flag a JSX style object as a placeholder change when prose is reworded', () => {
+    // The {{...}} style object is verbatim, so it must stay identical and the
+    // translation of surrounding prose must still validate.
+    const src = `---\ntitle: T\ndescription: D\n---\n\n<div style={{ borderRadius: '10px' }}>\n\nSome text here.\n\n</div>\n`
+    const good = `---\ntitle: T\ndescription: D\n---\n\n<div style={{ borderRadius: '10px' }}>\n\nEtwas Text hier.\n\n</div>\n`
+    expect(validateTranslation(src, good).ok).toBe(true)
+  })
+
   it('rejects a rewritten bare URL inside a JSX expression string', () => {
     const src = `---\ntitle: T\ndescription: D\n---\n\n<OptionTable options={[['KEY', 'string', 'Get your key from https://serper.dev/api-key', '# KEY=']]} />\n`
     const bad = `---\ntitle: T\ndescription: D\n---\n\n<OptionTable options={[['KEY', 'string', 'Hol deinen Schlüssel von https://serper.de/api-schluessel', '# KEY=']]} />\n`

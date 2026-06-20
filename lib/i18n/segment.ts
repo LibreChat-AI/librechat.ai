@@ -332,6 +332,33 @@ export function collectUrls(body: string): string[] {
   return out
 }
 
+// Template placeholders that must survive translation byte-for-byte. They appear
+// bare (outside backticks) in OptionTable descriptions and prose, e.g. a
+// titlePromptTemplate `"User: {input}\nAI: {output}"`, an MCP env value
+// `${SOME_API_KEY}`, or a LibreChat user variable `{{LIBRECHAT_USER_ID}}`;
+// localizing a placeholder name yields an invalid template. Three forms, tried in
+// order so the longer ones win and the inner braces are not re-matched:
+//   - `${name}`  JS template-literal / env interpolation
+//   - `{{name}}` mustache/handlebars (LibreChat user vars, MCP templating, also
+//     matches JSX `style={{...}}` objects, which are verbatim and thus symmetric)
+//   - `{name}`   single-brace identifier placeholder. The body is restricted to an
+//     identifier so JSX expression arrays/objects whose inner strings are
+//     translated (`items={['Welcome']}`) are never captured.
+const PLACEHOLDER_RE = /\$\{[^{}\n]+\}|\{\{[^{}\n]+\}\}|\{\s*[A-Za-z_$][\w.$]*\s*\}/g
+
+/**
+ * Collect every bare template placeholder in the body, in document order. Fenced
+ * code is stripped first (verbatim and count-checked separately). Used to verify
+ * the model did not translate or rewrite a placeholder name inside otherwise
+ * translatable text; backticked placeholders are already covered as inline code.
+ */
+export function collectPlaceholders(body: string): string[] {
+  const withoutFences = body.replaceAll(/```[\s\S]*?```/g, '').replaceAll(/~~~[\s\S]*?~~~/g, '')
+  const out: string[] = []
+  for (const m of withoutFences.matchAll(PLACEHOLDER_RE)) out.push(m[0])
+  return out
+}
+
 const SEPARATOR = /^---(.+)---$/
 // A `pages` entry that is a Markdown link, e.g. "[Contributor Guidelines](url)".
 // The visible label is translated; the URL is preserved.

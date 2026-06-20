@@ -1,5 +1,5 @@
 import matter from 'gray-matter'
-import { countCodeFences, collectInlineCode, collectUrls } from './segment'
+import { countCodeFences, collectInlineCode, collectUrls, collectPlaceholders } from './segment'
 
 /**
  * Body content plus translatable frontmatter values (title/description), so
@@ -26,6 +26,9 @@ function corpus(file: matter.GrayMatterFile<string>): string {
  *   frontmatter are covered, not just Markdown AST nodes.
  * - `link target`: every Markdown link/image/definition destination plus every
  *   src/href attribute URL on an HTML/JSX tag.
+ * - `template placeholder`: every bare `{name}`, `{{name}}`, or `${name}` token,
+ *   so a placeholder name (e.g. a prompt template `{input}`/`{output}` or an env
+ *   var `${API_KEY}`) is not localized into an invalid template.
  *
  * Fenced code blocks are preserved structurally (verbatim segments) and only
  * count-checked here; JSX tags/structural props and heading ids are likewise
@@ -35,6 +38,7 @@ function preservedTokens(text: string): Record<string, string[]> {
   return {
     'inline code': collectInlineCode(text).sort(),
     'link target': collectUrls(text).sort(),
+    'template placeholder': collectPlaceholders(text).sort(),
   }
 }
 
