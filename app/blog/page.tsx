@@ -42,9 +42,9 @@ export default function BlogPage() {
       date: iso,
       dateFormatted: dateFormatter.format(new Date(iso + 'T00:00:00Z')),
       url: `/blog/${getSlug(post._file.path)}`,
-      author: (post as any).author,
+      author: post.author,
       ogImage: post.ogImage,
-      ogImagePosition: (post as any).ogImagePosition,
+      ogImagePosition: post.ogImagePosition,
     })
   }
 
