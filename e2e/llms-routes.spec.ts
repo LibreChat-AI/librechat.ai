@@ -48,4 +48,18 @@ test.describe('LLM markdown routes', () => {
       '# Custom Config (https://www.librechat.ai/docs/configuration/librechat_yaml)',
     )
   })
+
+  test('serves .md URLs even when the client also negotiates for markdown', async ({ request }) => {
+    // The .md suffix bypass must win over Accept-based negotiation, otherwise the
+    // slug keeps its .md suffix and the page lookup 404s.
+    const response = await request.get('/docs/configuration/librechat_yaml.md', {
+      headers: { Accept: 'text/markdown' },
+    })
+
+    expect(response.ok()).toBe(true)
+    expect(response.headers()['content-type']).toContain('text/markdown')
+    await expect(response.text()).resolves.toContain(
+      '# Custom Config (https://www.librechat.ai/docs/configuration/librechat_yaml)',
+    )
+  })
 })
