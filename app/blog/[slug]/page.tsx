@@ -42,7 +42,7 @@ export default async function BlogPostPage(props: PageProps) {
             image:
               post.ogMetaImage ?? post.ogImage ?? ogImageUrl({ title: post.title, type: 'blog' }),
             datePublished: new Date(date).toISOString(),
-            authorName: (post as any).author,
+            authorName: post.author,
           }),
           breadcrumbSchema([
             { name: 'Blog', url: '/blog' },
@@ -71,7 +71,7 @@ export default async function BlogPostPage(props: PageProps) {
               day: 'numeric',
             })}
           </time>
-          {(post as any).author && <span>by {(post as any).author}</span>}
+          {post.author && <span>by {post.author}</span>}
         </div>
         {post.ogImage && (
           <Image
@@ -124,7 +124,7 @@ export async function generateMetadata(props: PageProps): Promise<Metadata> {
       type: 'article',
       url: `/blog/${params.slug}`,
       publishedTime,
-      authors: (post as any).author ? [(post as any).author] : undefined,
+      authors: post.author ? [post.author] : undefined,
       images: [ogImage],
     },
   }
