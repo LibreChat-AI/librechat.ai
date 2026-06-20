@@ -232,6 +232,10 @@ const config = {
   async rewrites() {
     return [
       {
+        source: '/docs/:path*.md',
+        destination: '/llms.mdx/docs/:path*',
+      },
+      {
         source: '/docs/:path*.mdx',
         destination: '/llms.mdx/docs/:path*',
       },

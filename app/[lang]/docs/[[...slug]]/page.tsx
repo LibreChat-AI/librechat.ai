@@ -82,14 +82,14 @@ export default async function Page(props: PageProps) {
       <DocsDescription>{page.data.description}</DocsDescription>
       <div className="flex flex-row gap-2 items-center border-b pt-2 pb-6">
         {/*
-          Raw Markdown is only served for the English /docs/*.mdx route (see the
-          next.config rewrite + proxy passthrough); a localized /<locale>/docs/*.mdx
+          Raw Markdown is only served for the English /docs/*.md route (see the
+          next.config rewrite + proxy passthrough); a localized /<locale>/docs/*.md
           URL would 404. Point these at the English source so Copy Markdown / Open
           in LibreChat work on translated pages too. For English pages englishHref
           equals page.url, so this is unchanged there.
         */}
-        <LLMCopyButton markdownUrl={`${englishHref}.mdx`} />
-        <ViewOptions markdownUrl={`${englishHref}.mdx`} githubUrl={githubHref} />
+        <LLMCopyButton markdownUrl={`${englishHref}.md`} />
+        <ViewOptions markdownUrl={`${englishHref}.md`} githubUrl={githubHref} />
       </div>
       <DocsBody>
         {isTranslated && (

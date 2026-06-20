@@ -1,4 +1,4 @@
-import { getLLMText } from '@/lib/get-llm-text'
+import { getLLMText, MARKDOWN_RESPONSE_HEADERS } from '@/lib/get-llm-text'
 import { docsSource } from '@/lib/source'
 import { i18n } from '@/lib/i18n'
 import { notFound } from 'next/navigation'
@@ -11,9 +11,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ slug?: 
   if (!page) notFound()
 
   return new Response(await getLLMText(page), {
-    headers: {
-      'Content-Type': 'text/markdown',
-    },
+    headers: MARKDOWN_RESPONSE_HEADERS,
   })
 }
 

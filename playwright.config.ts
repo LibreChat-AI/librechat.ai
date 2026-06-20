@@ -1,6 +1,7 @@
 import { defineConfig, devices } from '@playwright/test'
 
 const isCI = !!process.env.CI
+const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? 'http://localhost:3333'
 
 export default defineConfig({
   testDir: './e2e',
@@ -13,7 +14,7 @@ export default defineConfig({
   timeout: 60_000,
   expect: { timeout: 10_000 },
   use: {
-    baseURL: 'http://localhost:3333',
+    baseURL,
     trace: 'on-first-retry',
     navigationTimeout: 30_000,
     actionTimeout: 15_000,
@@ -26,11 +27,13 @@ export default defineConfig({
     },
   ],
 
-  webServer: {
-    // Production build in CI for deterministic, pre-compiled pages; dev server locally.
-    command: isCI ? 'pnpm start' : 'pnpm dev',
-    url: 'http://localhost:3333',
-    reuseExistingServer: !isCI,
-    timeout: 180_000,
-  },
+  webServer: process.env.PLAYWRIGHT_BASE_URL
+    ? undefined
+    : {
+        // Production build in CI for deterministic, pre-compiled pages; dev server locally.
+        command: isCI ? 'pnpm start' : 'pnpm dev',
+        url: baseURL,
+        reuseExistingServer: !isCI,
+        timeout: 180_000,
+      },
 })
