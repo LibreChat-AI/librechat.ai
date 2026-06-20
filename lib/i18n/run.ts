@@ -163,7 +163,11 @@ export async function runTranslation(opts: RunOptions): Promise<RunStats> {
             let text = await translateString(staged, seg.text, 'block', neighborContext(segs, i))
             if (isHeading(seg.text) && !headingHasExplicitId(seg.text)) {
               const id = slugger.slug(headingText(seg.text))
-              if (!headingHasExplicitId(text)) text = `${text} [#${id}]`
+              // Trim any trailing whitespace the model added before appending the
+              // id, so `[#id]` terminates the heading line. Fumadocs only attaches
+              // a custom id when it ends the heading text; a trailing newline would
+              // push it onto the next line and silently drop the anchor.
+              if (!headingHasExplicitId(text)) text = `${text.replace(/\s+$/, '')} [#${id}]`
             }
             outSegs.push({ text })
           }

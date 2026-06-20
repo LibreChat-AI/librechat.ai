@@ -104,6 +104,31 @@ describe('runTranslation', () => {
     expect(out).toContain('(#what-is-rag)')
   })
 
+  it('attaches the heading id even when the model appends a trailing newline', async () => {
+    // Real models can emit a trailing newline after a heading block. The id must
+    // still terminate the heading line, not land on the next line where Fumadocs
+    // would ignore it and the same-page anchor would break.
+    const trailingNewline: TranslateModel = {
+      generate: async ({ prompt }) => {
+        const text = prompt.split(/Translate the following[^\n]*:\n/).pop() ?? ''
+        return text.startsWith('#') ? `${text}\n` : text
+      },
+    }
+    await writeFile(
+      join(content, 'index.mdx'),
+      `---\ntitle: Hello\n---\n\n## What is RAG\n\nSee [below](#what-is-rag).\n`,
+    )
+    await runTranslation({
+      contentDir: content,
+      cacheDir: cache,
+      locales: ['de'],
+      model: trailingNewline,
+    })
+    const out = await readFile(join(content, 'index.de.mdx'), 'utf8')
+    expect(out).toContain('## What is RAG [#what-is-rag]')
+    expect(out).not.toMatch(/## What is RAG\n\s*\[#what-is-rag\]/)
+  })
+
   it('escapes an apostrophe a translation adds inside a single-quoted JSX string', async () => {
     // Simulates a French-style translation that introduces an apostrophe into a
     // single-quoted OptionTable description. Without escaping the generated MDX is
