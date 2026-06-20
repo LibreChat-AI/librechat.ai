@@ -1,12 +1,14 @@
 'use client'
 
-import { useState, useEffect, useRef, useCallback } from 'react'
-import AceEditor, { IMarker } from 'react-ace'
-import 'ace-builds/src-noconflict/mode-yaml'
-import 'ace-builds/src-noconflict/theme-twilight'
-import 'ace-builds/src-noconflict/theme-chrome'
+import { useState, useEffect, useCallback } from 'react'
+import dynamic from 'next/dynamic'
 import jsYaml from 'js-yaml'
 import { CheckCircle, XCircle, Trash2, Upload } from 'lucide-react'
+
+const YamlAceEditor = dynamic(() => import('./YamlAceEditor'), {
+  ssr: false,
+  loading: () => <div className="h-[500px] animate-pulse rounded-lg bg-fd-muted" />,
+})
 
 export default function YAMLValidator() {
   const [yaml, setYaml] = useState('')
@@ -18,7 +20,6 @@ export default function YAMLValidator() {
   const [errorLine, setErrorLine] = useState<number | null>(null)
   const [isDark, setIsDark] = useState(false)
   const [isDragging, setIsDragging] = useState(false)
-  const editorRef = useRef<AceEditor>(null)
 
   useEffect(() => {
     const root = document.documentElement
@@ -66,7 +67,7 @@ export default function YAMLValidator() {
     }
   }, [yaml, validateYAML])
 
-  const errorMarkers: IMarker[] =
+  const errorMarkers =
     errorLine === null
       ? []
       : [
@@ -75,7 +76,7 @@ export default function YAMLValidator() {
             endRow: errorLine,
             startCol: 0,
             endCol: Number.MAX_VALUE,
-            type: 'text',
+            type: 'text' as const,
             className: 'ace-error-marker',
           },
         ]
@@ -101,25 +102,12 @@ export default function YAMLValidator() {
             </div>
           </div>
         )}
-        <AceEditor
-          mode="yaml"
-          theme={isDark ? 'twilight' : 'chrome'}
-          onChange={setYaml}
+        <YamlAceEditor
           value={yaml}
-          name="YAML_EDITOR"
-          editorProps={{ $blockScrolling: true }}
-          setOptions={{
-            showLineNumbers: true,
-            highlightActiveLine: false,
-            showPrintMargin: false,
-            tabSize: 2,
-            fontSize: 14,
-          }}
+          theme={isDark ? 'twilight' : 'chrome'}
           markers={errorMarkers}
-          width="100%"
-          height="500px"
+          onChange={setYaml}
           placeholder="Paste your librechat.yaml content here, or drag & drop a file..."
-          ref={editorRef}
         />
       </div>
 
