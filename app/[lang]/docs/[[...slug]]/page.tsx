@@ -107,7 +107,15 @@ export default async function Page(props: PageProps) {
 }
 
 export async function generateStaticParams() {
-  return docsSource.generateParams()
+  // Fumadocs emits one param set per page for EVERY language even when no
+  // localized file exists (getPage falls back to English). Materializing those
+  // would publish hundreds of duplicate-English pages at /<locale>/docs/* and
+  // list them in the sitemap. Keep the default language plus only locales that
+  // have a real translated file on disk (same discriminator as the hreflang gate).
+  return docsSource.generateParams().filter((p) => {
+    if (p.lang === i18n.defaultLanguage) return true
+    return docsSource.getPage(p.slug, p.lang)?.file.path.endsWith(`.${p.lang}.mdx`) ?? false
+  })
 }
 
 export async function generateMetadata(props: PageProps): Promise<Metadata> {
