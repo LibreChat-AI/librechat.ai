@@ -36,7 +36,12 @@ export function buildSystemPrompt(localeName: string, kind: 'block' | 'inline'):
 
 export function stripWrappingFence(s: string): string {
   const match = s.match(/^\s*```[a-zA-Z0-9]*\n([\s\S]*?)\n```\s*$/)
-  return match ? match[1] : s
+  if (!match) return s
+  // If the captured body still contains a fence, the regex spanned two or more
+  // real code blocks (the model returned fenced content, not a wrapper). Leave it
+  // untouched rather than corrupting the interior block.
+  if (match[1].includes('```')) return s
+  return match[1]
 }
 
 export async function translate(opts: {

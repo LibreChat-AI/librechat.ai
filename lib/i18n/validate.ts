@@ -1,5 +1,11 @@
 import matter from 'gray-matter'
-import { countCodeFences, collectInlineCode, collectUrls, collectPlaceholders } from './segment'
+import {
+  countCodeFences,
+  collectInlineCode,
+  collectUrls,
+  collectPlaceholders,
+  collectBlockStructure,
+} from './segment'
 
 /**
  * Body content plus translatable frontmatter values (title/description), so
@@ -29,16 +35,22 @@ function corpus(file: matter.GrayMatterFile<string>): string {
  * - `template placeholder`: every bare `{name}`, `{{name}}`, or `${name}` token,
  *   so a placeholder name (e.g. a prompt template `{input}`/`{output}` or an env
  *   var `${API_KEY}`) is not localized into an invalid template.
+ * - `table structure` / `blockquote marker`: GFM table delimiter rows and `>`
+ *   markers, so a translation can't silently collapse a table or eject lines from
+ *   a blockquote (the table/blockquote text rides inside one translatable block).
  *
  * Fenced code blocks are preserved structurally (verbatim segments) and only
  * count-checked here; JSX tags/structural props and heading ids are likewise
  * handled in segmentation, not by this guard.
  */
 function preservedTokens(text: string): Record<string, string[]> {
+  const structure = collectBlockStructure(text)
   return {
     'inline code': collectInlineCode(text).sort(),
     'link target': collectUrls(text).sort(),
     'template placeholder': collectPlaceholders(text).sort(),
+    'table structure': structure.tables.sort(),
+    'blockquote marker': structure.quotes.sort(),
   }
 }
 

@@ -1,4 +1,4 @@
-import { readFile, writeFile, mkdir } from 'node:fs/promises'
+import { readFile, writeFile, mkdir, rename } from 'node:fs/promises'
 import { join } from 'node:path'
 
 const DEFAULT_BASE = join(process.cwd(), 'content/.i18n-cache')
@@ -15,10 +15,24 @@ export class TM {
   ) {}
 
   static async load(locale: string, baseDir: string = DEFAULT_BASE): Promise<TM> {
+    let raw: string
     try {
-      const raw = await readFile(join(baseDir, `${locale}.json`), 'utf8')
-      return new TM(locale, baseDir, JSON.parse(raw) as Record<string, string>)
+      raw = await readFile(join(baseDir, `${locale}.json`), 'utf8')
     } catch {
+      return new TM(locale, baseDir, {}) // No cache yet — start fresh.
+    }
+    try {
+      const parsed: unknown = JSON.parse(raw)
+      // A corrupt/half-written or non-object cache must not crash get()/prune();
+      // discard it and re-translate rather than operating on bad data.
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error('cache is not a JSON object')
+      }
+      return new TM(locale, baseDir, parsed as Record<string, string>)
+    } catch (e) {
+      console.warn(
+        `[i18n] ignoring corrupt translation cache ${locale}.json: ${(e as Error).message}`,
+      )
       return new TM(locale, baseDir, {})
     }
   }
@@ -55,9 +69,11 @@ export class TM {
     const sorted: Record<string, string> = {}
     for (const key of Object.keys(this.store).sort()) sorted[key] = this.store[key]
     await mkdir(this.baseDir, { recursive: true })
-    await writeFile(
-      join(this.baseDir, `${this.locale}.json`),
-      `${JSON.stringify(sorted, null, 2)}\n`,
-    )
+    // Write-then-rename so an interrupted run (Ctrl-C, OOM, CI timeout) can never
+    // leave a half-written JSON file that the next load would have to discard.
+    const file = join(this.baseDir, `${this.locale}.json`)
+    const tmp = `${file}.tmp`
+    await writeFile(tmp, `${JSON.stringify(sorted, null, 2)}\n`)
+    await rename(tmp, file)
   }
 }

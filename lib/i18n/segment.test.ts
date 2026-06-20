@@ -8,6 +8,7 @@ import {
   rebuildMeta,
   unescapeJsString,
   escapeJsString,
+  collectBlockStructure,
 } from './segment'
 
 const SAMPLE = `import { Callout } from 'x'
@@ -318,6 +319,32 @@ describe('JS string escape round-trip', () => {
 describe('countCodeFences', () => {
   it('counts fenced code blocks', () => {
     expect(countCodeFences(SAMPLE)).toBe(1)
+  })
+
+  it('counts fenced blocks nested in a list item or blockquote', () => {
+    const src = `1. Step one:
+
+   \`\`\`bash
+   echo hi
+   \`\`\`
+
+2. Step two.
+`
+    expect(countCodeFences(src)).toBe(1)
+  })
+})
+
+describe('collectBlockStructure', () => {
+  it('collects table delimiter rows (normalized) and blockquote markers', () => {
+    const src = `| A | B |\n|:---|---:|\n| x | y |\n\n> quote one\n> quote two\n`
+    const { tables, quotes } = collectBlockStructure(src)
+    expect(tables).toEqual(['|:-|-:|'])
+    expect(quotes).toEqual(['>', '>'])
+  })
+
+  it('ignores thematic breaks and prose pipes', () => {
+    const src = `---\n\nUse a | b choice.\n`
+    expect(collectBlockStructure(src).tables).toEqual([])
   })
 })
 

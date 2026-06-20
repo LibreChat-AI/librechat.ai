@@ -269,8 +269,39 @@ export function reassemble(segments: { text: string }[]): string {
 }
 
 export function countCodeFences(body: string): number {
-  const tree = processor.parse(body) as unknown as { children: MdNode[] }
-  return tree.children.filter((n) => n.type === 'code').length
+  const tree = processor.parse(body) as unknown as MdNode
+  // Visit the whole tree, not just top-level children: a fenced block nested in a
+  // list item or blockquote is still a `code` node and must be counted.
+  let count = 0
+  const visit = (node: MdNode) => {
+    if (node.type === 'code') count++
+    if (node.children) for (const child of node.children) visit(child)
+  }
+  visit(tree)
+  return count
+}
+
+// A GFM table delimiter row (e.g. `|---|:--:|`) and blockquote `>` markers are
+// pure structure with no translatable text, so a faithful translation must leave
+// them intact. We compare them as multisets in validation: dropping the delimiter
+// row collapses a table, dropping a `>` ejects lines from a blockquote — neither
+// is otherwise visible to the inline-code / link / placeholder guards.
+export function collectBlockStructure(body: string): { tables: string[]; quotes: string[] } {
+  const withoutFences = body.replaceAll(/```[\s\S]*?```/g, '').replaceAll(/~~~[\s\S]*?~~~/g, '')
+  const tables: string[] = []
+  const quotes: string[] = []
+  for (const raw of withoutFences.split('\n')) {
+    const line = raw.trim()
+    // Delimiter row: only spaces, pipes, colons, dashes, with at least one of each
+    // of `|` and `-`. Normalize dash runs so a benign `---` vs `----` width change
+    // isn't flagged; column count and alignment colons are what must survive.
+    if (line.includes('|') && line.includes('-') && /^[\s|:-]+$/.test(line)) {
+      tables.push(line.replaceAll(/\s/g, '').replaceAll(/-+/g, '-'))
+    }
+    const q = raw.match(/^\s*(>+)/)
+    if (q) quotes.push(q[1])
+  }
+  return { tables, quotes }
 }
 
 /**

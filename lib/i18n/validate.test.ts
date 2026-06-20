@@ -212,6 +212,26 @@ describe('validateTranslation', () => {
     expect(validateTranslation(src, good).ok).toBe(true)
   })
 
+  it('accepts a faithfully translated table but rejects a dropped delimiter row', () => {
+    const src = `---\ntitle: T\ndescription: D\n---\n\n| Name | Description |\n|------|-------------|\n| host | The server host |\n`
+    const good = `---\ntitle: T\ndescription: D\n---\n\n| Name | Beschreibung |\n|------|-------------|\n| host | Der Server-Host |\n`
+    const bad = `---\ntitle: T\ndescription: D\n---\n\nName: Beschreibung\nhost: Der Server-Host\n`
+    expect(validateTranslation(src, good).ok).toBe(true)
+    const result = validateTranslation(src, bad)
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatch(/table structure/i)
+  })
+
+  it('accepts a faithfully translated blockquote but rejects dropped > markers', () => {
+    const src = `---\ntitle: T\ndescription: D\n---\n\n> **Note:** first line\n> second line\n> third line\n`
+    const good = `---\ntitle: T\ndescription: D\n---\n\n> **Hinweis:** erste Zeile\n> zweite Zeile\n> dritte Zeile\n`
+    const bad = `---\ntitle: T\ndescription: D\n---\n\n> **Hinweis:** erste Zeile\nzweite Zeile\ndritte Zeile\n`
+    expect(validateTranslation(src, good).ok).toBe(true)
+    const result = validateTranslation(src, bad)
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatch(/blockquote marker/i)
+  })
+
   it('rejects a rewritten src attribute URL on an HTML/JSX tag', () => {
     const src = `---\ntitle: T\ndescription: D\n---\n\n<img src="https://img.example.com/a.png?q=$.x%5B'en'%5D" alt="EN" />\n`
     const bad = `---\ntitle: T\ndescription: D\n---\n\n<img src="https://img.example.com/b.png?q=$.x%5B'de'%5D" alt="DE" />\n`

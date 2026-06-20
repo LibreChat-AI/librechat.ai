@@ -15,6 +15,13 @@ describe('engine', () => {
     expect(stripWrappingFence('hello')).toBe('hello')
   })
 
+  it('stripWrappingFence leaves a body containing real interior fences intact', () => {
+    // Two genuine code blocks: the regex would otherwise span them and drop the
+    // middle fence/prose. Must be returned unchanged.
+    const s = '```js\na\n```\n\nprose\n\n```js\nb\n```'
+    expect(stripWrappingFence(s)).toBe(s)
+  })
+
   it('translate passes the block to the model and returns its cleaned output', async () => {
     const out = await translate({ text: '# Hello', locale: 'de', kind: 'block', model: echo })
     expect(out).toBe('# Hello')

@@ -174,6 +174,41 @@ describe('runTranslation', () => {
     expect(out).not.toContain('{input}nAI')
   })
 
+  it('skips a file on empty model output without aborting the run or caching it', async () => {
+    const emptyStub: TranslateModel = {
+      generate: async ({ prompt }) => {
+        const text = prompt.split(/Translate the following[^\n]*:\n/).pop() ?? ''
+        return text.includes('A paragraph') ? '' : text
+      },
+    }
+    // index.mdx (from beforeEach) contains "A paragraph." and will fail; ok.mdx must
+    // still translate, proving one bad file does not abort the whole locale run.
+    await writeFile(join(content, 'ok.mdx'), `---\ntitle: Ok\n---\n\n# Ok\n\nFine text.\n`)
+    const stats = await runTranslation({
+      contentDir: content,
+      cacheDir: cache,
+      locales: ['de'],
+      model: emptyStub,
+    })
+    expect(stats.skipped.some((s) => s.includes('index.mdx'))).toBe(true)
+    const files = await readdir(content)
+    expect(files).toContain('ok.de.mdx')
+    expect(files).not.toContain('index.de.mdx')
+    const tm = await TM.load('de', cache)
+    expect(tm.get(hashText('A paragraph.'))).toBeUndefined()
+  })
+
+  it('pins a colliding verbatim identifier heading to the English suffixed slug', async () => {
+    await writeFile(
+      join(content, 'index.mdx'),
+      `---\ntitle: Hello\n---\n\n## Endpoints\n\nProse.\n\n### endpoints\n\nMore.\n`,
+    )
+    await runTranslation({ contentDir: content, cacheDir: cache, locales: ['de'], model: stub })
+    const out = await readFile(join(content, 'index.de.mdx'), 'utf8')
+    expect(out).toContain('## Endpoints [#endpoints]')
+    expect(out).toContain('### endpoints [#endpoints-1]')
+  })
+
   it('removes a stale locale file when a re-translation fails validation', async () => {
     await runTranslation({ contentDir: content, cacheDir: cache, locales: ['de'], model: stub })
     expect(await readdir(content)).toContain('index.de.mdx')

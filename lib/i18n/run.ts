@@ -112,6 +112,11 @@ export async function runTranslation(opts: RunOptions): Promise<RunStats> {
         return text
       }
       const result = await translate({ text, locale, kind, context, model: opts.model })
+      // A model that returns nothing (refusal / reasoning-only finish) must not be
+      // cached or written as an empty block — treat it as a failure for this file.
+      if (result.trim() === '' && text.trim() !== '') {
+        throw new Error(`empty model output for a ${kind} block`)
+      }
       staged.set(hash, result)
       stats.translatedBlocks++
       return result
@@ -122,78 +127,104 @@ export async function runTranslation(opts: RunOptions): Promise<RunStats> {
         limit(async () => {
           const abs = join(opts.contentDir, rel)
           const staged = new Map<string, string>()
-          if (rel.endsWith('meta.json')) {
-            const meta = JSON.parse(await readFile(abs, 'utf8'))
-            const map = new Map<string, string>()
-            for (const s of extractMetaStrings(meta))
-              map.set(s, await translateString(staged, s, 'inline'))
-            if (opts.dryRun) return
-            const out = rebuildMeta(meta, (s) => map.get(s) ?? s)
-            await writeFile(
-              join(opts.contentDir, localePath(rel, locale, '.json')),
-              `${JSON.stringify(out, null, 2)}\n`,
-            )
-            for (const [h, v] of staged) tm.set(h, v)
-            return
-          }
+          try {
+            if (rel.endsWith('meta.json')) {
+              const meta = JSON.parse(await readFile(abs, 'utf8'))
+              const map = new Map<string, string>()
+              for (const s of extractMetaStrings(meta))
+                map.set(s, await translateString(staged, s, 'inline'))
+              if (opts.dryRun) return
+              const out = rebuildMeta(meta, (s) => map.get(s) ?? s)
+              await writeFile(
+                join(opts.contentDir, localePath(rel, locale, '.json')),
+                `${JSON.stringify(out, null, 2)}\n`,
+              )
+              for (const [h, v] of staged) tm.set(h, v)
+              return
+            }
 
-          const source = await readFile(abs, 'utf8')
-          const parsed = matter(source)
-          const segs = segmentMarkdown(parsed.content)
-          // Pin translated heading ids to the English slug so same-page #anchor
-          // links keep resolving (Fumadocs would otherwise regenerate the id from
-          // the translated text). Slug in document order to match its github-slugger.
-          const slugger = new GithubSlugger()
-          const outSegs: { text: string }[] = []
-          for (let i = 0; i < segs.length; i++) {
-            const seg = segs[i]
-            if (seg.kind === 'verbatim') {
-              outSegs.push({ text: seg.text })
-              continue
+            const source = await readFile(abs, 'utf8')
+            const parsed = matter(source)
+            const segs = segmentMarkdown(parsed.content)
+            // Pin translated heading ids to the English slug so same-page #anchor
+            // links keep resolving (Fumadocs would otherwise regenerate the id from
+            // the translated text). Slug in document order to match its github-slugger.
+            const slugger = new GithubSlugger()
+            const naiveSlug = (s: string) => new GithubSlugger().slug(s)
+            const outSegs: { text: string }[] = []
+            for (let i = 0; i < segs.length; i++) {
+              const seg = segs[i]
+              if (seg.kind === 'verbatim') {
+                // Advance the slugger over verbatim (identifier/code) headings too,
+                // in document order, so the suffixes it assigns to pinned headings
+                // match Fumadocs on the English page. Pin a verbatim heading only
+                // when it actually collides: otherwise its natural slug already
+                // equals English, and pinning every identifier heading adds noise.
+                if (isHeading(seg.text) && !headingHasExplicitId(seg.text)) {
+                  const base = headingText(seg.text)
+                  const id = slugger.slug(base)
+                  outSegs.push({
+                    text:
+                      id === naiveSlug(base)
+                        ? seg.text
+                        : `${seg.text.replace(/\s+$/, '')} [#${id}]`,
+                  })
+                } else {
+                  outSegs.push({ text: seg.text })
+                }
+                continue
+              }
+              // Values from quoted JS/JSX string literals: translate the unescaped
+              // text, then re-escape for the enclosing quote so a natural apostrophe
+              // in the translation can't break the generated MDX.
+              if (seg.jsQuote) {
+                const clean = unescapeJsString(seg.text, seg.jsQuote)
+                const t = await translateString(staged, clean, 'inline', neighborContext(segs, i))
+                outSegs.push({ text: escapeJsString(t, seg.jsQuote) })
+                continue
+              }
+              let text = await translateString(staged, seg.text, 'block', neighborContext(segs, i))
+              if (isHeading(seg.text) && !headingHasExplicitId(seg.text)) {
+                const id = slugger.slug(headingText(seg.text))
+                // Trim any trailing whitespace the model added before appending the
+                // id, so `[#id]` terminates the heading line. Fumadocs only attaches
+                // a custom id when it ends the heading text; a trailing newline would
+                // push it onto the next line and silently drop the anchor.
+                if (!headingHasExplicitId(text)) text = `${text.replace(/\s+$/, '')} [#${id}]`
+              }
+              outSegs.push({ text })
             }
-            // Values from quoted JS/JSX string literals: translate the unescaped
-            // text, then re-escape for the enclosing quote so a natural apostrophe
-            // in the translation can't break the generated MDX.
-            if (seg.jsQuote) {
-              const clean = unescapeJsString(seg.text, seg.jsQuote)
-              const t = await translateString(staged, clean, 'inline', neighborContext(segs, i))
-              outSegs.push({ text: escapeJsString(t, seg.jsQuote) })
-              continue
+            const outData: Record<string, unknown> = { ...parsed.data }
+            for (const key of ['title', 'description']) {
+              const val = parsed.data[key]
+              if (typeof val === 'string' && /\p{L}/u.test(val))
+                outData[key] = await translateString(staged, val, 'inline')
             }
-            let text = await translateString(staged, seg.text, 'block', neighborContext(segs, i))
-            if (isHeading(seg.text) && !headingHasExplicitId(seg.text)) {
-              const id = slugger.slug(headingText(seg.text))
-              // Trim any trailing whitespace the model added before appending the
-              // id, so `[#id]` terminates the heading line. Fumadocs only attaches
-              // a custom id when it ends the heading text; a trailing newline would
-              // push it onto the next line and silently drop the anchor.
-              if (!headingHasExplicitId(text)) text = `${text.replace(/\s+$/, '')} [#${id}]`
+            if (opts.dryRun) {
+              stats.files++
+              return
             }
-            outSegs.push({ text })
-          }
-          const outData: Record<string, unknown> = { ...parsed.data }
-          for (const key of ['title', 'description']) {
-            const val = parsed.data[key]
-            if (typeof val === 'string' && /\p{L}/u.test(val))
-              outData[key] = await translateString(staged, val, 'inline')
-          }
-          if (opts.dryRun) {
+            const output = matter.stringify(reassemble(outSegs), outData)
+            const check = validateTranslation(source, output)
+            if (!check.ok) {
+              stats.skipped.push(`${rel} [${locale}]: ${check.error}`)
+              // Remove any previously-written locale file so the page falls back to
+              // fresh English instead of serving a stale translation that predates
+              // the source change. It is retried (uncached) on the next run.
+              await unlink(join(opts.contentDir, localePath(rel, locale, '.mdx'))).catch(() => {})
+              return
+            }
+            await writeFile(join(opts.contentDir, localePath(rel, locale, '.mdx')), output)
+            for (const [h, v] of staged) tm.set(h, v)
             stats.files++
-            return
+          } catch (e) {
+            // One malformed file (MDX our parser rejects, empty model output, an I/O
+            // error) must not reject Promise.all and abort the whole locale run.
+            // Skip it and drop any stale locale output so the page serves English.
+            stats.skipped.push(`${rel} [${locale}]: ${(e as Error).message}`)
+            const ext = rel.endsWith('meta.json') ? '.json' : '.mdx'
+            await unlink(join(opts.contentDir, localePath(rel, locale, ext))).catch(() => {})
           }
-          const output = matter.stringify(reassemble(outSegs), outData)
-          const check = validateTranslation(source, output)
-          if (!check.ok) {
-            stats.skipped.push(`${rel} [${locale}]: ${check.error}`)
-            // Remove any previously-written locale file so the page falls back to
-            // fresh English instead of serving a stale translation that predates
-            // the source change. It is retried (uncached) on the next run.
-            await unlink(join(opts.contentDir, localePath(rel, locale, '.mdx'))).catch(() => {})
-            return
-          }
-          await writeFile(join(opts.contentDir, localePath(rel, locale, '.mdx')), output)
-          for (const [h, v] of staged) tm.set(h, v)
-          stats.files++
         }),
       ),
     )
