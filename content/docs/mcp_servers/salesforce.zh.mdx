@@ -1,0 +1,294 @@
+---
+title: Salesforce MCP
+icon: Salesforce
+description: 在 LibreChat 中通过外部客户端应用和用户级 OAuth 配置 Salesforce 托管的 MCP 服务器。
+---
+
+Salesforce 托管的 MCP 服务器允许 LibreChat 用户通过基于每个用户的 OAuth 连接到 Salesforce。
+每个工具调用都将在经过身份验证的 Salesforce 用户权限下运行，包括字段级安全性、对象权限和共享规则。
+
+<Callout type="warning" title="使用外部客户端应用">
+  Salesforce 托管的 MCP 服务器需要一个外部客户端应用程序 (External Client App)。经典的 Salesforce 连接应用程序 (Connected Apps) 不支持托管 MCP 身份验证。
+</Callout>
+
+## 您将配置的内容 [#what-you-will-configure]
+
+本指南从只读的 SObject 服务器开始，因为这是最安全的首次连接方式。在此连接成功后，您可以切换到更广泛的 Salesforce 服务器。
+
+| 服务器 | 访问级别 | 生产环境 URL | 沙盒或测试环境 URL |
+| ----------------- | ---------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| SObject Reads | 读取、查询、搜索、关系 | `https://api.salesforce.com/platform/mcp/v1/platform/sobject-reads`     | `https://api.salesforce.com/platform/mcp/v1/sandbox/platform/sobject-reads`     |
+| SObject Mutations | 读取、创建、更新，无删除 | `https://api.salesforce.com/platform/mcp/v1/platform/sobject-mutations` | `https://api.salesforce.com/platform/mcp/v1/sandbox/platform/sobject-mutations` |
+| SObject Deletes | 以删除为核心的工作流 | `https://api.salesforce.com/platform/mcp/v1/platform/sobject-deletes`   | `https://api.salesforce.com/platform/mcp/v1/sandbox/platform/sobject-deletes`   |
+| SObject All | 完全创建、读取、更新、删除 | `https://api.salesforce.com/platform/mcp/v1/platform/sobject-all`       | `https://api.salesforce.com/platform/mcp/v1/sandbox/platform/sobject-all`       |
+
+<Callout type="info" title="OAuth 回调路径">
+  LibreChat 的 MCP OAuth 回调路径为 `BASE_URL/api/mcp/SERVER_NAME/oauth/callback`。
+  `SERVER_NAME` 是 `librechat.yaml` 中 `mcpServers` 下的键。以下示例使用了 `salesforce`，因此本地回调地址为 `http://localhost:3080/api/mcp/salesforce/oauth/callback`。
+</Callout>
+
+## 先决条件 [#prerequisites]
+
+- 一个支持 Hosted MCP 服务器和 API 访问的 Salesforce 组织。
+- 系统管理员权限，或创建 External Client Apps 并启用 MCP 服务器所需的等效权限。
+- 一个正在运行的 LibreChat 实例，且已挂载或以其他方式加载了 `librechat.yaml`。
+- 用户用于打开 LibreChat 的公共基础 URL，例如用于本地开发的 `http://localhost:3080` 或用于生产环境的 `https://chat.example.com`。
+
+如果您还没有 Salesforce 组织，请从 [developer.salesforce.com/signup](https://developer.salesforce.com/signup) 创建一个免费的 Developer Edition 组织，通过电子邮件验证账户，然后登录 [login.salesforce.com](https://login.salesforce.com)。如果本指南中的 Salesforce 设置菜单在组织中不可见，请使用启用了 Hosted MCP servers 的受支持生产环境、沙盒或试用组织。
+
+## 设置 [#setup]
+
+<Steps>
+  <Step>
+
+### 激活 Salesforce MCP 服务器 [#activate-the-salesforce-mcp-server]
+
+在 Salesforce 中，打开 **Setup**。
+
+1. 在 **Quick Find** 中，搜索 `MCP Servers`。
+2. 在 **API Catalog** 下打开 **MCP Servers**。
+3. 启用您想要使用的服务器。对于首次设置，请启用 `platform/sobject-reads`。
+4. 等待最多 2 分钟，直到服务器变为活动状态。
+
+如果您计划使用全权访问示例，请改为启用 `platform/sobject-all`。
+
+  </Step>
+  <Step>
+
+### 创建外部客户端应用 [#create-an-external-client-app]
+
+在 Salesforce 设置中：
+
+1. 在 **Quick Find** 中，搜索 `External Client App Manager`。
+2. 点击 **New External Client App**。
+3. 填写基本的应用信息。请使用清晰的名称，例如 `LibreChat Salesforce MCP`。
+4. 展开 **API (Enable OAuth Settings)** 并启用 OAuth。
+5. 添加 LibreChat 回调 URL。
+
+对于本地开发：
+
+```text
+http://localhost:3080/api/mcp/salesforce/oauth/callback
+```
+
+对于生产环境，请将基础 URL 替换为您公开的 LibreChat URL：
+
+```text
+https://chat.example.com/api/mcp/salesforce/oauth/callback
+```
+
+  </Step>
+  <Step>
+
+### 配置 OAuth 作用域和安全性 [#configure-oauth-scopes-and-security]
+
+在 External Client App OAuth 设置中，添加以下 scope：
+
+```text
+mcp_api
+refresh_token
+```
+
+对于托管的 MCP 服务器，请勿使用标准的 Salesforce `api` 范围。MCP 服务器需要 `mcp_api` 范围。
+
+在 External Client App 安全设置中：
+
+- 选择 **为指定用户签发基于 JSON Web Token (JWT) 的访问令牌**。
+- 选择 **Require Proof Key for Code Exchange (PKCE) extension for Supported Authorization Flows**。
+- 在本指南的基础设置中，请保持 **Require Secret for Web Server Flow** 为禁用状态。
+- 在本指南的基本设置中，请保持 **Require Secret for Refresh Token Flow** 为禁用状态。
+
+点击 **Create**，然后打开应用设置并复制 **Consumer Key**。Salesforce 表示，一个新的 External Client App 可能需要最多 30 分钟才能生效。
+
+<Callout type="info" title="可选的客户端密钥">
+  LibreChat 可以在服务器端存储客户端密钥。如果您的 Salesforce 管理员启用了 **Require Secret for Web Server Flow**，请同时生成一个客户端密钥，并包含本指南后续部分中展示的可选 `client_secret` 字段。
+</Callout>
+
+  </Step>
+  <Step>
+
+### 将 Salesforce 客户端 ID 添加到 `.env` [#add-the-salesforce-client-id-to-env]
+
+将 External Client App 消费者密钥添加到您的 LibreChat `.env` 文件中：
+
+```bash filename=".env"
+SALESFORCE_MCP_CLIENT_ID=your-salesforce-consumer-key
+```
+
+如果您启用了 **Require Secret for Web Server Flow**，请同时添加：
+
+```bash filename=".env"
+SALESFORCE_MCP_CLIENT_SECRET=your-salesforce-client-secret
+```
+
+  </Step>
+  <Step>
+
+### 将 Salesforce MCP 添加到 `librechat.yaml` [#add-salesforce-mcp-to-librechatyaml]
+
+此示例为生产环境或 Developer Edition 组织配置了只读 SObject 服务器：
+
+```yaml filename="librechat.yaml"
+mcpServers:
+  salesforce:
+    type: streamable-http
+    url: 'https://api.salesforce.com/platform/mcp/v1/platform/sobject-reads'
+    timeout: 90000
+    initTimeout: 150000
+    requiresOAuth: true
+    startup: false
+    oauth:
+      authorization_url: 'https://login.salesforce.com/services/oauth2/authorize'
+      token_url: 'https://login.salesforce.com/services/oauth2/token'
+      client_id: '${SALESFORCE_MCP_CLIENT_ID}'
+      scope: 'mcp_api refresh_token'
+      redirect_uri: 'http://localhost:3080/api/mcp/salesforce/oauth/callback'
+```
+
+对于沙盒或临时组织，请使用沙盒 MCP URL 和 Salesforce 沙盒 OAuth endpoint：
+
+```yaml filename="librechat.yaml"
+mcpServers:
+  salesforce:
+    type: streamable-http
+    url: 'https://api.salesforce.com/platform/mcp/v1/sandbox/platform/sobject-reads'
+    timeout: 90000
+    initTimeout: 150000
+    requiresOAuth: true
+    startup: false
+    oauth:
+      authorization_url: 'https://test.salesforce.com/services/oauth2/authorize'
+      token_url: 'https://test.salesforce.com/services/oauth2/token'
+      client_id: '${SALESFORCE_MCP_CLIENT_ID}'
+      scope: 'mcp_api refresh_token'
+      redirect_uri: 'http://localhost:3080/api/mcp/salesforce/oauth/callback'
+```
+
+如果您的外部客户端应用需要客户端密钥，请在 `oauth` 中添加以下字段：
+
+```yaml filename="librechat.yaml"
+oauth:
+  client_secret: '${SALESFORCE_MCP_CLIENT_SECRET}'
+  token_exchange_method: default_post
+  token_endpoint_auth_methods_supported: ['client_secret_post']
+```
+
+如果 LibreChat 部署在公共 URL 上，请更新 `redirect_uri` 以匹配在 Salesforce 中注册的确切回调 URL。
+
+<Callout type="info" title="严格的 MCP 域允许列表">
+  如果您的 `librechat.yaml` 也配置了 `mcpSettings.allowedDomains`，请添加 `api.salesforce.com`。
+  如果您使用 Salesforce 沙盒 OAuth endpoint，并且您的策略也适用于 OAuth 主机，请同时允许 `test.salesforce.com` 或您的沙盒 My Domain 主机。
+</Callout>
+
+  </Step>
+  <Step>
+
+### 如有需要，切换至完整的 Salesforce 访问权限 [#switch-to-full-salesforce-access-if-needed]
+
+在只读服务器正常工作后，您可以通过更改 `url` 切换到另一个已激活的 Salesforce 服务器。
+
+若要在生产环境或 Developer Edition 组织中获得完整的 SObject 访问权限：
+
+```yaml filename="librechat.yaml"
+url: 'https://api.salesforce.com/platform/mcp/v1/platform/sobject-all'
+```
+
+若要在沙盒或暂存组织中获得完整的 SObject 访问权限：
+
+```yaml filename="librechat.yaml"
+url: 'https://api.salesforce.com/platform/mcp/v1/sandbox/platform/sobject-all'
+```
+
+仅向应被允许通过助手创建、更新或删除 Salesforce 记录的用户公开具有变更或删除能力的服务器。
+
+  </Step>
+  <Step>
+
+### 重启 LibreChat [#restart-librechat]
+
+重启 LibreChat 以便重新加载 `.env` 和 `librechat.yaml`。
+
+| 部署 | 命令 |
+| ---------- | ------------------------------------ |
+| Docker     | `docker compose up -d`               |
+| Local      | 停止服务器，然后重新启动 |
+
+要确认服务器已在 Docker 中加载，请检查 API 日志：
+
+```bash
+docker logs LibreChat --tail 200 | grep MCP
+```
+
+  </Step>
+  <Step>
+
+### 在 LibreChat 中连接 Salesforce [#connect-salesforce-in-librechat]
+
+打开 LibreChat，然后打开 **MCP Settings** 或聊天输入框中的 **MCP Servers** 下拉菜单。
+
+1. 点击 Salesforce 服务器的 **Connect**。
+2. 完成 Salesforce OAuth 流程。
+3. 请检查所请求的 `mcp_api` 和 `refresh_token` 作用域。
+4. 在 OAuth 成功页面关闭后返回 LibreChat。
+
+在 OAuth 验证成功且 MCP 连接初始化后，Salesforce 工具即可在聊天和 Agent Builder 中使用。
+
+  </Step>
+</Steps>
+
+## 测试 [#testing]
+
+尝试与您启用的服务器相匹配的提示词：
+
+| 服务器 | 提示词 |
+| ------------------ | -------------------------------------------------------------------------------- |
+| Any SObject server | "Who am I in Salesforce?" |
+| SObject Reads | "Show me my five most recently viewed accounts." |
+| SObject Reads | "Find open cases related to Acme Corp and summarize them." |
+| SObject Mutations | "Create a follow-up task for this account. Ask me before saving anything." |
+| SObject All | "Update this opportunity stage to Closed Won after confirming the exact record." |
+
+为了进行更底层的完整性检查，请使用 Postman 或 MCP Inspector 测试同一个 Salesforce 服务器。如果这些工具可以正常工作但 LibreChat 不行，请对比 LibreChat 的回调 URL、OAuth 范围 (scopes) 和服务器 URL 与正常工作的客户端是否一致。
+
+## 故障排除 [#troubleshooting]
+
+| 症状 | 检查项 |
+| :--- | :--- |
+| Salesforce 提示 `redirect_uri_mismatch` | 外部客户端应用 (External Client App) 的回调 URL 必须与 `librechat.yaml` 中的 `redirect_uri` 完全一致，包括协议、主机名、端口、服务器名称和路径。 |
+| Salesforce 登录历史显示 `Invalid Code Verifier` | PKCE 状态与回调不匹配。避免同时启动多个 OAuth 流程。在多副本部署中，请确保 LibreChat 使用共享的 OAuth 流程存储（如 Redis），以便授权和回调请求可以安全地落在不同的副本上。 |
+| Salesforce 返回 `JWT Token is required` | 调用服务器时未携带 Salesforce MCP 访问令牌。请从 LibreChat 完成 OAuth，确认 `requiresOAuth: true`，并确认用户已授权该外部客户端应用。 |
+| Salesforce 返回 `Invalid token` | 确认外部客户端应用使用了 `mcp_api`，签发了基于 JWT 的访问令牌，并启用了 PKCE。同时确认 MCP URL 和 OAuth 端点指向相同的组织类型（生产环境或沙盒环境）。 |
+| Salesforce 返回 `Server definition not found for: sobject-all` | 服务器未激活、仍在同步中，或者 URL 使用了错误的生产环境/沙盒环境路径。请在 Salesforce 设置中启用服务器并等待最多 2 分钟。 |
+| 令牌刷新因范围 (scope) 相关错误失败 | 使用 `mcp_api refresh_token` 作为配置的范围。不要将常规的 Salesforce `api` 范围用于托管 MCP。 |
+| LibreChat 显示 Salesforce 但没有工具 | 从 LibreChat UI 连接服务器。启用 OAuth 的远程服务器会在用户完成身份验证且服务器初始化后公开工具。 |
+| MCP 请求被 LibreChat 域策略阻止 | 如果配置了 `mcpSettings.allowedDomains`，请允许 `api.salesforce.com` 以及您的部署所使用的任何 Salesforce OAuth 主机。 |
+
+## 安全注意事项 [#security-notes]
+
+- 除非用户确实需要写入或删除权限，否则请从 `platform/sobject-reads` 开始。
+- Salesforce 会强制执行已认证用户的权限，但助手仍然可以提议广泛的操作。请仔细审查写入和删除操作。
+- 使用 Salesforce 权限集和外部客户端应用程序策略来限制谁可以授权 MCP 客户端。
+- 将 Salesforce 记录视为不可信输入。记录中可能包含试图影响助手的间接提示词注入攻击。
+- 对于具有多个 LibreChat API 副本的生产环境部署，请使用共享存储来保存 OAuth 流程状态，以确保 PKCE 回调在各副本之间持久有效。
+
+## 相关页面 [#related-pages]
+
+<Cards num={3}>
+  <Cards.Card title="MCP" href="/docs/features/mcp" arrow>
+    了解 MCP 服务器在 LibreChat 中是如何工作的。
+  </Cards.Card>
+  <Cards.Card
+    title="MCP 服务器对象结构"
+    href="/docs/configuration/librechat_yaml/object_structure/mcp_servers"
+    arrow
+  >
+    查看每一个可用的 `mcpServers` 配置字段。
+  </Cards.Card>
+  <Cards.Card
+    title="Salesforce 托管的 MCP 服务器"
+    href="https://developer.salesforce.com/docs/platform/hosted-mcp-servers/guide/hosted-mcp-servers-overview.html"
+    arrow
+  >
+    阅读 Salesforce 官方的 Hosted MCP 设置文档。
+  </Cards.Card>
+</Cards>
