@@ -1,0 +1,124 @@
+---
+title: 可恢复流
+icon: Zap
+description: 在连接中断后恢复进行中的 AI 响应，在不同标签页和设备间同步同一对话，并保持跨扩展实例的流式传输。
+---
+
+可恢复流（Resumable streams）允许正在进行的 AI 响应在连接中断后得以留存。如果网络断开、浏览器刷新，或者您切换了标签页或设备，LibreChat 会重构已经流式传输的内容，并从中断处继续。同样的机制还能保持同一对话的多个查看者处于同步状态。
+
+## 你将获得什么 [#what-you-get]
+
+- **不会丢失任何回复。** 网络中断、浏览器刷新和服务器重启都不会导致流式传输的内容丢失。
+- **标签页保持同步。** 在两个浏览器标签页中打开同一个对话，两者都会实时接收相同的更新。
+- **在不同设备间无缝切换。** 在桌面端开始生成，并在手机上查看结果。
+- **后台生成。** 开始一段长回复，切换到其他标签页或应用，当你返回时，完整的回复已经生成完毕。
+- **共享对话。** 每个查看共享聊天的人都会同时看到内容流式传输。
+
+## 工作原理 [#how-it-works]
+
+当你发送一条消息时，LibreChat 会创建一个生成作业，记录每一个流式传输的增量。如果连接中断：
+
+1. 客户端检测到断开连接。
+2. 在重新连接时，服务器会根据作业记录的增量（deltas）重建迄今为止已流式传输的内容。
+3. 缺失的内容会在一次同步事件中交付。
+4. 流式传输将从当前位置继续。
+
+此过程自动运行，无需用户进行任何操作。
+
+## 部署模式 [#deployment-modes]
+
+LibreChat 附带了两个用于可恢复流的后端。
+
+### 单实例模式 (默认) [#single-instance-mode-default]
+
+将流状态存储在内存中，并使用 Node.js `EventEmitter` 进行发布/订阅。这是默认设置，无需任何配置。它适用于本地开发、单服务器部署以及 Docker Compose 设置。
+
+### Redis 模式 (生产环境) [#redis-mode-production]
+
+使用 Redis Streams 和 Pub/Sub，以便在多个实例间共享流状态。适用于水平扩展、负载均衡或高可用性部署，包括 Kubernetes 集群。通过 Redis，在一个实例上开始的生成任务可以在另一个实例上恢复，从而在滚动更新和自动扩缩容期间保持活动流的持续运行。
+
+<Callout type="info" title="单实例？你可能不需要 Redis">
+内存模式处理单个 LibreChat 实例的所有内容。一旦你在负载均衡器后运行多个实例，Redis 就变得至关重要。对于单实例部署，Redis 在缓存和会话存储方面仍然很有用，只是并非专门用于可恢复流。
+</Callout>
+
+## 配置 [#configuration]
+
+### 启用 Redis Streams [#enable-redis-streams]
+
+设置 `USE_REDIS=true` 会使可恢复流自动使用 Redis。使用 `USE_REDIS_STREAMS` 可以显式控制此功能。
+
+```bash filename=".env"
+USE_REDIS=true
+REDIS_URI=redis://localhost:6379
+# Resumable streams use Redis automatically when USE_REDIS=true.
+# Set USE_REDIS_STREAMS to control it explicitly:
+USE_REDIS_STREAMS=true
+```
+
+### Redis 集群 [#redis-cluster]
+
+对于 Redis Cluster，请启用集群模式并在 `REDIS_URI` 中列出节点。
+
+```bash filename=".env"
+USE_REDIS_STREAMS=true
+USE_REDIS_CLUSTER=true
+REDIS_URI=redis://node1:7001,redis://node2:7002,redis://node3:7003
+```
+
+LibreChat 使用带哈希标签的键，以便多键操作落在同一个集群槽位上。
+
+## 重构的内容 [#what-gets-reconstructed]
+
+在重新连接时，LibreChat 会聚合记录的增量事件以重建：
+
+- 消息内容（文本、工具调用、引用）
+- 智能体运行步骤与中间推理
+- 元数据和状态信息
+
+存储机制取决于部署模式：
+
+| 组件 | 存储机制 |
+|-----------|-------------------|
+| Chunks | Redis Streams (`XADD`/`XRANGE`) |
+| 作业元数据 | Redis Hash 结构 |
+| 实时事件 | Redis Pub/Sub 通道 |
+| 过期 | 作业完成后自动 TTL |
+
+LibreChat 应用了一些优化措施来降低成本：
+
+- **内存优先恢复。** 重新连接到同一实例时会从本地缓存读取，从而避免了 Redis 的往返开销。
+- **访问时清理。** 过期的作业条目会在查询期间被移除，已完成的流会自动过期。
+- **垃圾回收存储。** 内存模式使用 `WeakRef` 存储流式图（stream graphs），因此它们会在对话结束后被回收。
+
+## 测试 [#testing]
+
+要确认该功能是否正常工作，请与任何模型开始一次流式对话，然后尝试以下操作之一：
+
+- **标签页。** 在第二个标签页中打开同一个对话；两者应该会同步。
+- **断开连接。** 暂时断开网络，然后重新连接。
+- **导航。** 在生成过程中离开页面，然后再返回。
+
+每种情况都应生成完整的响应，且不得遗漏任何内容。
+
+## 故障排除 [#troubleshooting]
+
+**流无法恢复。** 请确认 Redis 可达，并确保已设置 `USE_REDIS_STREAMS`。
+
+```bash
+docker exec -it librechat-redis redis-cli ping
+# Expected: PONG
+
+echo $USE_REDIS_STREAMS
+```
+
+**内容出现重复。** 这通常意味着客户端版本不匹配。请更新至最新版本的 LibreChat。
+
+**单实例模式下内存占用过高。** 已完成的流会被垃圾回收。如果内存占用依然很高，请检查是否存在从未完成的超长运行流，或是在出错后未进行清理的流。
+
+## 相关文档 [#related-documentation]
+
+- [Redis 配置](/docs/configuration/redis)：设置用于缓存和水平扩展的 Redis
+- [Agents](/docs/features/agents)：具备工具使用能力的 AI 智能体
+- [Docker 部署](/docs/local/docker)：基于容器的部署
+
+有关实现细节，请参阅 [PR #10926](https://github.com/danny-avila/LibreChat/pull/10926)。

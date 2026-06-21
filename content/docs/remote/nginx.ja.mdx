@@ -1,0 +1,178 @@
+---
+title: NGINX
+icon: Nginx
+description: Nginxをリバースプロキシとして使用し、HTTPSでLibreChatデプロイメントを保護するためのステップバイステップガイド
+---
+
+このガイドでは、HTTPS用のSSL/TLS証明書を使用してLibreChatのデプロイメントを保護し、Nginxをリバースプロキシとして設定し、ドメインを構成するための基本的な手順を説明します。
+
+## 前提条件 [#prerequisites]
+
+1. クラウドサーバー（例：AWS、Google Cloud、Azure、Digital Ocean）。
+2. 登録済みのドメイン名。
+3. クラウドサーバーへのターミナルアクセス。
+4. LibreChatをホスト上で直接実行する場合は、Node.js `v24.16.0` および npm `v11.16.0` が必要です。
+
+## 初期設定 [#initial-setup]
+
+### ドメインをサーバーに向ける [#pointing-your-domain-to-your-server]
+
+証明書を取得する前に、ドメインをクラウドサーバーのIPアドレスに向けてください。DNSレコードが世界中に反映されるまで時間がかかる場合があるため、この手順はSSL証明書の設定に先立って行うべき基本的なステップです。
+
+1. ドメイン登録業者のコントロールパネルにログインします。
+2. DNS設定に移動します。
+3. ドメインをクラウドサーバーのIPアドレスに向ける `A record` を作成します。
+4. DNSの変更が世界中に反映されるまで待ちます（ドメインにpingを送信して確認できます: `ping your_domain.com`）。
+
+## SSL/TLS証明書の取得 [#obtain-an-ssltls-certificate]
+
+LibreChat アプリケーションを HTTPS で保護するには、SSL/TLS 証明書が必要です。Let's Encrypt では無料の証明書を提供しています：
+
+1. Certbotをインストールする:
+    - Ubuntuの場合: `sudo apt-get install certbot python3-certbot-nginx`
+    - CentOSの場合: `sudo yum install certbot python2-certbot-nginx`
+
+2. 証明書を取得する:
+    - `sudo certbot --nginx` を実行して、Nginx用の証明書を自動的に取得およびインストールします。
+    - 画面上の指示に従ってください。Certbotが情報を要求し、検証プロセスを完了させます。
+    - 成功すると、Certbotは証明書ファイルを保存します。
+
+## Nginxをリバースプロキシとして設定する [#set-up-nginx-as-a-reverse-proxy]
+
+Nginxはリバースプロキシとして機能し、クライアントからのリクエストをLibreChatアプリケーションに転送します。デプロイには2つの選択肢があります：
+
+### オプション A: `deploy-compose.yml` Docker Compose を使用する（推奨） [#option-a-using-the-deploy-composeyml-docker-compose-recommended]
+
+`deploy-compose.yml` ファイルには Nginx コンテナが含まれており、Nginx の設定には `client/nginx.conf` ファイルを使用します。しかし、`sudo certbot --nginx` は証明書をホスト側の設定に抽出するため、その証明書を Docker コンテナに複製する必要があります。
+
+1. `client/nginx.conf` を、ご自身のドメインと証明書のパスに合わせて更新してください。
+2. `deploy-compose.yml` の `client` セクションを更新し、ホストから証明書ファイルをマウントするようにします：
+
+```yaml
+client:
+  # ...
+  volumes:
+    - ./client/nginx.conf:/etc/nginx/conf.d/default.conf
+    - /etc/letsencrypt/live/<your-domain>:/etc/letsencrypt/live/<your-domain>
+    - /etc/letsencrypt/archive/<your-domain>:/etc/letsencrypt/archive/<your-domain>
+    - /etc/letsencrypt/options-ssl-nginx.conf:/etc/letsencrypt/options-ssl-nginx.conf
+    - /etc/letsencrypt/ssl-dhparams.pem:/etc/letsencrypt/ssl-dhparams.pem
+```
+
+3. 実行中のインスタンスを停止する: `npm run stop:deployed`
+4. 変更を新しいGitブランチにコミットします。
+5. デプロイ済みインスタンスをリベースする: `npm run rebase:deployed`
+
+### Option B: Dockerを使用しないホストベースのデプロイメント [#option-b-host-based-deployment-without-docker]
+
+Dockerを使用していない場合は、ホスト上で直接Nginxをインストールおよび設定することができます：
+
+1. Nginxのインストール:
+    - Ubuntu: `sudo apt-get install nginx`
+    - CentOS: `sudo yum install nginx`
+
+2. Nginxの起動: `sudo systemctl start nginx`
+
+3. Nginx設定ファイルを開きます: `sudo nano /etc/nginx/sites-available/default`
+
+4. ファイルの内容を以下に置き換えてください。その際、`your_domain.com` をご自身のドメインに、`app_port` をアプリケーションのポート番号に置き換えるようにしてください。
+
+```nginx filename="/etc/nginx/sites-available/default"
+server {
+    listen 80;
+    server_name your_domain.com;
+
+    location / {
+        proxy_pass http://localhost:app_port;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+    }
+}
+```
+
+5. Nginxの設定を確認します: `sudo nginx -t`
+6. Nginxをリロードする: `sudo systemctl reload nginx`
+
+## アプリケーションの実行 [#run-the-application]
+
+1. アプリケーションのディレクトリに移動します：
+
+```bash filename="Replace 'LibreChat' with your actual application directory.
+cd LibreChat
+```
+
+2. Docker Composeを使用してアプリケーションを起動します：
+
+```bash filename="Start your application"
+sudo docker compose -f ./deploy-compose.yml up -d
+```
+
+## nginx を使用している場合の証明書の更新 [#renewing-certificates-when-using-nginx]
+
+上記の推奨されるオプションAを使用してnginxをセットアップした場合、以下の手順で証明書を更新してください：
+
+1. アプリケーションのディレクトリに移動します
+```bash filename="Replace 'LibreChat' with your actual application directory.
+cd LibreChat
+```
+
+2. 実行中のDockerコンテナを停止する
+
+```bash filename="Stop your application"
+sudo docker compose -f ./deploy-compose.yml down -d
+```
+
+3. 証明書を更新する
+
+```bash
+sudo certbot renew
+```
+
+4. アプリケーションを再起動してください
+
+```bash filename="Start your application"
+sudo docker compose -f ./deploy-compose.yml up -d
+```
+
+注: certbot がホストの nginx を再起動する場合があります。その際は `sudo pkill nginx` で停止できます。
+
+## Web Application Firewall [#web-application-firewall]
+
+Nginxは、OWASP Core Rule Set (CRS) を活用することで、Webアプリケーションファイアウォール (WAF) として機能するように構成できます。OWASP CRSは、一般的なWebアプリケーションの脆弱性や攻撃から保護するための堅牢なルールセットを提供します。NginxでOWASP CRSを使用することで、保護層が追加され、LibreChatデプロイメントのセキュリティを強化できます。
+
+1. OWASP CRSをインストールする:
+
+    - Ubuntu: `sudo apt-get install nginx-modsecurity-crs`
+
+2. NginxでModSecurityを有効にする:
+    - Nginx設定ファイル（例: `/etc/nginx/nginx.conf`）を開きます。
+    - `http` ブロック内に以下の行を追加してください：
+
+      ```yaml filename="nginx.conf"
+      modsecurity on;
+      modsecurity_rules_file /usr/share/nginx/modsecurity-crs/nginx-modsecurity.conf;
+      ```
+
+3. OWASP CRSの設定:
+    - OWASP CRSパッケージには通常、設定ファイル（例: `/etc/nginx/modsecurity.d/nginx-modsecurity.conf`）が含まれており、要件に基づいてさまざまな設定やルールセットを調整できます。
+
+4. Nginxをリロード:
+    - `sudo systemctl reload nginx`
+
+Nginx設定でOWASP CRSを有効にすることで、プロジェクトが提供する包括的なルールセットを活用し、SQLインジェクション、クロスサイトスクリプティング（XSS）、リモートファイルインクルージョンなど、さまざまなWebアプリケーションの脆弱性や攻撃を検知・緩和することができます。
+
+## 静的ファイルのキャッシュと圧縮 [#static-file-caching-and-compression]
+
+LibreChatは現在、静的ファイルのキャッシュと圧縮をネイティブでサポートしています。NGINXを使用して圧縮を処理している場合は、冗長な処理を避けるためにLibreChat側の圧縮を無効にする必要があります。これを行うには、LibreChatの設定で `DISABLE_COMPRESSION` 環境変数を `true` に設定してください。
+
+```.env
+# .env file
+DISABLE_COMPRESSION=true
+```
+
+これにより、LibreChatが静的ファイルを圧縮するのを防ぎ、NGINXがより効率的に圧縮を処理できるようになります。
+
+LibreChatにおける静的ファイルの取り扱いやキャッシュオプションの詳細については、[Static File Handling](/docs/configuration/dotenv#static-file-handling)のドキュメントを参照してください。
