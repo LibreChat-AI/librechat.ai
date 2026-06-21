@@ -3,7 +3,7 @@ import { DocsI18nProvider } from '@/components/DocsI18nProvider'
 import { docsSource } from '@/lib/source'
 import { getAvailableLocalesBySlug } from '@/lib/doc-locales'
 import { baseOptions } from '@/app/layout.config'
-import { i18n } from '@/lib/i18n'
+import { i18n, localizedDocsHref } from '@/lib/i18n'
 import { getUI } from '@/lib/ui-i18n'
 import { VersionSwitcher } from '@/components/VersionSwitcher'
 import type { ReactNode } from 'react'
@@ -18,7 +18,7 @@ export default async function Layout({
   const { lang } = await params
   const tree = docsSource.pageTree[lang] ?? docsSource.pageTree[i18n.defaultLanguage]
   const t = getUI(lang)
-  const docsHref = lang === i18n.defaultLanguage ? '/docs' : `/${lang}/docs`
+  const docsHref = localizedDocsHref('/docs', lang)
 
   return (
     <DocsI18nProvider locale={lang} availableLocales={getAvailableLocalesBySlug()}>

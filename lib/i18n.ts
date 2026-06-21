@@ -17,6 +17,22 @@ export const i18n: I18nConfig = {
   hideLocale: 'default-locale',
 }
 
+/**
+ * Prefix an internal `/docs` path with the active locale so links from
+ * localized surfaces (landing page CTAs, navbar, footer) keep the reader in
+ * their language instead of dropping them onto the prefix-less English docs.
+ *
+ * Only `/docs` paths are localized; the docs route redirects a localized URL to
+ * its English source when no translation exists, so a localized href is always
+ * safe. The default language, external links, and non-docs internal paths
+ * (`/blog`, `/changelog`, …) — which have no locale routes — are returned as-is.
+ */
+export function localizedDocsHref(href: string, lang: string): string {
+  if (lang === i18n.defaultLanguage) return href
+  if (href !== '/docs' && !href.startsWith('/docs/')) return href
+  return `/${lang}${href}`
+}
+
 /** Human-readable names shown in the language switcher. */
 export const LOCALE_NAMES: Record<string, string> = {
   en: 'English',

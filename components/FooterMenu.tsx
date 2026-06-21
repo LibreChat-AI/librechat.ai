@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { Github, Linkedin, Youtube, Mail } from 'lucide-react'
 import Discord from './icons/discord'
 import X from './icons/x'
+import { localizedDocsHref } from '@/lib/i18n'
 import { getUI, type UIStrings } from '@/lib/ui-i18n'
 
 type HeadingKey = keyof UIStrings['footer']['headings']
@@ -108,7 +109,10 @@ const FooterMenu = ({ lang }: { lang?: string }) => {
             <ul className="flex flex-col gap-2">
               {menu.items.map((item) => (
                 <li key={item.key}>
-                  <Link href={item.href} className="text-sm leading-tight hover:text-primary/80">
+                  <Link
+                    href={localizedDocsHref(item.href, lang ?? 'en')}
+                    className="text-sm leading-tight hover:text-primary/80"
+                  >
                     {t.items[item.key]}
                   </Link>
                 </li>

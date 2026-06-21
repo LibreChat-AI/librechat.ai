@@ -27,7 +27,7 @@ import FooterMenu from '@/components/FooterMenu'
 import { JsonLd } from '@/components/JsonLd'
 import { HomeI18nProvider } from '@/components/HomeI18nProvider'
 import { organizationSchema, websiteSchema, softwareApplicationSchema } from '@/lib/structured-data'
-import { i18n } from '@/lib/i18n'
+import { localizedDocsHref } from '@/lib/i18n'
 import { getUI, fmt, type UIStrings } from '@/lib/ui-i18n'
 
 type HomeStrings = UIStrings['home']
@@ -195,7 +195,7 @@ const features: { icon: LucideIcon; key: FeatureKey; href: string }[] = [
  * Hero Section
  * --------------------------------------------------------------------------- */
 
-function HeroSection({ stars, t }: { stars: number; t: HomeStrings }) {
+function HeroSection({ stars, t, lang }: { stars: number; t: HomeStrings; lang: string }) {
   return (
     <section className="px-4 pb-24 pt-16 sm:px-6 md:pt-24 lg:px-8 lg:pt-32">
       <div className="mx-auto max-w-4xl text-center">
@@ -235,7 +235,7 @@ function HeroSection({ stars, t }: { stars: number; t: HomeStrings }) {
           aria-label={t.primaryActionsAria}
         >
           <Link
-            href="/docs"
+            href={localizedDocsHref('/docs', lang)}
             className="inline-flex items-center rounded-lg bg-primary px-6 py-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
             aria-label={t.getStartedAria}
           >
@@ -345,7 +345,7 @@ function TrustedBySection({ t }: { t: HomeStrings }) {
  * Features Section
  * --------------------------------------------------------------------------- */
 
-function FeaturesSection({ t }: { t: HomeStrings }) {
+function FeaturesSection({ t, lang }: { t: HomeStrings; lang: string }) {
   return (
     <section className="px-4 py-24 sm:px-6 lg:px-8">
       <div className="mx-auto max-w-6xl">
@@ -363,7 +363,7 @@ function FeaturesSection({ t }: { t: HomeStrings }) {
             return (
               <article key={feature.key}>
                 <Link
-                  href={feature.href}
+                  href={localizedDocsHref(feature.href, lang)}
                   className="group flex h-full flex-col rounded-xl border border-border bg-card p-6 transition-colors hover:bg-muted"
                 >
                   <Icon
@@ -468,7 +468,7 @@ function CommunitySection({
  * CTA Section
  * --------------------------------------------------------------------------- */
 
-function CTASection({ t }: { t: HomeStrings }) {
+function CTASection({ t, lang }: { t: HomeStrings; lang: string }) {
   return (
     <section className="px-4 py-24 sm:px-6 lg:px-8">
       <div className="mx-auto max-w-3xl text-center">
@@ -478,7 +478,7 @@ function CTASection({ t }: { t: HomeStrings }) {
         <p className="mt-4 text-lg text-muted-foreground">{t.ctaSubtitle}</p>
         <div className="mt-10">
           <Link
-            href="/docs"
+            href={localizedDocsHref('/docs', lang)}
             className="inline-flex items-center rounded-lg bg-primary px-8 py-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
             aria-label={t.quickstartAria}
           >
@@ -501,9 +501,8 @@ export async function HomePageContent({ lang }: { lang: string }) {
 
   const ui = getUI(lang)
   const t = ui.home
-  const docsHref = lang === i18n.defaultLanguage ? '/docs' : `/${lang}/docs`
   const navLinks = [
-    { text: ui.nav.docs, url: docsHref, active: 'nested-url' as const },
+    { text: ui.nav.docs, url: localizedDocsHref('/docs', lang), active: 'nested-url' as const },
     { text: ui.nav.blog, url: '/blog' },
     { text: ui.nav.changelog, url: '/changelog' },
   ]
@@ -518,11 +517,11 @@ export async function HomePageContent({ lang }: { lang: string }) {
       >
         <JsonLd data={[organizationSchema, websiteSchema, softwareApplicationSchema]} />
         <main id="main-content" tabIndex={-1} className="min-h-screen">
-          <HeroSection stars={stars} t={t} />
+          <HeroSection stars={stars} t={t} lang={lang} />
           <TrustedBySection t={t} />
-          <FeaturesSection t={t} />
+          <FeaturesSection t={t} lang={lang} />
           <CommunitySection stars={stars} pulls={pulls} contributors={contributors} t={t} />
-          <CTASection t={t} />
+          <CTASection t={t} lang={lang} />
         </main>
         <div className="border-t border-border px-4 py-16 sm:px-6 lg:px-8">
           <div className="mx-auto max-w-6xl">
