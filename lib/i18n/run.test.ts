@@ -209,6 +209,34 @@ describe('runTranslation', () => {
     expect(out).toContain('### endpoints [#endpoints-1]')
   })
 
+  it('keeps the existing translation when a re-translation throws (transient failure)', async () => {
+    // First run succeeds and writes index.de.mdx.
+    await runTranslation({ contentDir: content, cacheDir: cache, locales: ['de'], model: stub })
+    const before = await readFile(join(content, 'index.de.mdx'), 'utf8')
+
+    // Source changes and the model now throws (provider/network error). The
+    // existing translation must survive — deleting it would commit a provider blip
+    // as data loss. (A successful-but-broken translation is handled separately.)
+    const throwing: TranslateModel = {
+      generate: async () => {
+        throw new Error('simulated provider error')
+      },
+    }
+    await writeFile(
+      join(content, 'index.mdx'),
+      `---\ntitle: Hello\n---\n\n# Hello\n\nChanged text.\n`,
+    )
+    const stats = await runTranslation({
+      contentDir: content,
+      cacheDir: cache,
+      locales: ['de'],
+      model: throwing,
+    })
+    expect(stats.skipped.length).toBeGreaterThan(0)
+    expect(await readdir(content)).toContain('index.de.mdx')
+    expect(await readFile(join(content, 'index.de.mdx'), 'utf8')).toBe(before)
+  })
+
   it('removes a stale locale file when a re-translation fails validation', async () => {
     await runTranslation({ contentDir: content, cacheDir: cache, locales: ['de'], model: stub })
     expect(await readdir(content)).toContain('index.de.mdx')

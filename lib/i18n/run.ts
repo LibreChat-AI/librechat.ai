@@ -218,12 +218,15 @@ export async function runTranslation(opts: RunOptions): Promise<RunStats> {
             for (const [h, v] of staged) tm.set(h, v)
             stats.files++
           } catch (e) {
-            // One malformed file (MDX our parser rejects, empty model output, an I/O
-            // error) must not reject Promise.all and abort the whole locale run.
-            // Skip it and drop any stale locale output so the page serves English.
+            // A transient failure (a provider/network error, an empty model
+            // response, an I/O error, or an uncached block under --force / after a
+            // prompt-version bump) must not reject Promise.all and abort the whole
+            // locale run — but it must also NOT delete the existing translation, or
+            // a provider blip would be committed as data loss. Keep the previous
+            // locale file and retry next run. A successful-but-structurally-broken
+            // translation is removed deliberately by the validateTranslation path
+            // above; this exception path means we simply could not translate.
             stats.skipped.push(`${rel} [${locale}]: ${(e as Error).message}`)
-            const ext = rel.endsWith('meta.json') ? '.json' : '.mdx'
-            await unlink(join(opts.contentDir, localePath(rel, locale, ext))).catch(() => {})
           }
         }),
       ),
