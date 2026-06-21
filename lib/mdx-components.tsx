@@ -221,7 +221,7 @@ function ImgCompat({ image: _, ...props }: { image?: boolean; [key: string]: any
     // plain <img> but still wrap it in ImageZoom (via children) so click-to-zoom
     // works the same as for local images.
     return (
-      <ImageZoom src={src}>
+      <ImageZoom src={src} alt={props.alt ?? ''}>
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img {...props} loading="lazy" />
       </ImageZoom>

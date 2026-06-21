@@ -11,7 +11,7 @@ import { ImageZoom } from 'fumadocs-ui/components/image-zoom'
  */
 function ZoomableImg({ src, alt }: { src: string; alt: string }) {
   return (
-    <ImageZoom src={src}>
+    <ImageZoom src={src} alt={alt}>
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img src={src} alt={alt} loading="lazy" className="rounded-lg" />
     </ImageZoom>
