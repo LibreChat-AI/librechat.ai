@@ -84,6 +84,38 @@ export function headingText(text: string): string {
     .trim()
 }
 
+interface FlatNode {
+  type?: string
+  value?: unknown
+  children?: FlatNode[]
+}
+
+/** Concatenate a node's rendered text, mirroring Fumadocs' flattenNode exactly. */
+function flattenNode(node: FlatNode): string {
+  if (node.children) return node.children.map(flattenNode).join('')
+  if (typeof node.value === 'string') return node.value
+  return ''
+}
+
+/**
+ * The text Fumadocs actually slugs for a heading id: the heading's RENDERED text,
+ * not its raw Markdown. github-slugger already strips emphasis/backticks, but a
+ * link's URL would otherwise leak into the slug (`[label](https://x)` must slug to
+ * `label`, not include the host/path). Parse the heading and flatten it the way
+ * Fumadocs' remark-heading does so a pinned `[#id]` matches the English anchor.
+ */
+export function headingSlugText(text: string): string {
+  const tree = processor.parse(text.replace(EXPLICIT_ID_RE, '')) as unknown as {
+    children: FlatNode[]
+  }
+  const heading = tree.children.find((n) => n.type === 'heading')
+  if (heading) return flattenNode(heading).trim()
+  return text
+    .replace(/^#{1,6}\s+/, '')
+    .replace(EXPLICIT_ID_RE, '')
+    .trim()
+}
+
 // A heading whose text is a single bare code token: a config/API name, env var,
 // file name, or header such as `enforce`, `addedEndpoints`, `.env`,
 // `AZURE_AI_SEARCH_API_KEY`, `Content-Security-Policy`, or `OAuth2`. Two shapes

@@ -10,6 +10,7 @@ import {
   escapeJsString,
   collectBlockStructure,
   collectInlineCode,
+  headingSlugText,
 } from './segment'
 
 const SAMPLE = `import { Callout } from 'x'
@@ -332,6 +333,16 @@ describe('countCodeFences', () => {
 2. Step two.
 `
     expect(countCodeFences(src)).toBe(1)
+  })
+})
+
+describe('headingSlugText', () => {
+  it('uses the rendered heading text (no link URL or markup) for slugging', () => {
+    // A link's URL must not leak into the slug — only its visible label counts.
+    expect(headingSlugText('## [Setup guide](https://x.test/a/b)')).toBe('Setup guide')
+    expect(headingSlugText('## **Bold** and `code` heading')).toBe('Bold and code heading')
+    expect(headingSlugText('### Plain heading')).toBe('Plain heading')
+    expect(headingSlugText('## Heading [#explicit-id]')).toBe('Heading')
   })
 })
 

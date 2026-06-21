@@ -129,6 +129,17 @@ describe('runTranslation', () => {
     expect(out).not.toMatch(/## What is RAG\n\s*\[#what-is-rag\]/)
   })
 
+  it('derives a linked heading id from the rendered text, not the URL', async () => {
+    await writeFile(
+      join(content, 'index.mdx'),
+      `---\ntitle: Hello\n---\n\n## See [the readme](https://github.com/x/y)\n\nBody.\n`,
+    )
+    await runTranslation({ contentDir: content, cacheDir: cache, locales: ['de'], model: stub })
+    const out = await readFile(join(content, 'index.de.mdx'), 'utf8')
+    // Slug from the visible text "See the readme", with no pieces of the URL.
+    expect(out).toContain('## See [the readme](https://github.com/x/y) [#see-the-readme]')
+  })
+
   it('escapes an apostrophe a translation adds inside a single-quoted JSX string', async () => {
     // Simulates a French-style translation that introduces an apostrophe into a
     // single-quoted OptionTable description. Without escaping the generated MDX is

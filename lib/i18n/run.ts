@@ -11,7 +11,7 @@ import {
   rebuildMeta,
   isHeading,
   headingHasExplicitId,
-  headingText,
+  headingSlugText,
   unescapeJsString,
   escapeJsString,
   type Segment,
@@ -161,7 +161,7 @@ export async function runTranslation(opts: RunOptions): Promise<RunStats> {
                 // when it actually collides: otherwise its natural slug already
                 // equals English, and pinning every identifier heading adds noise.
                 if (isHeading(seg.text) && !headingHasExplicitId(seg.text)) {
-                  const base = headingText(seg.text)
+                  const base = headingSlugText(seg.text)
                   const id = slugger.slug(base)
                   outSegs.push({
                     text:
@@ -185,7 +185,7 @@ export async function runTranslation(opts: RunOptions): Promise<RunStats> {
               }
               let text = await translateString(staged, seg.text, 'block', neighborContext(segs, i))
               if (isHeading(seg.text) && !headingHasExplicitId(seg.text)) {
-                const id = slugger.slug(headingText(seg.text))
+                const id = slugger.slug(headingSlugText(seg.text))
                 // Trim any trailing whitespace the model added before appending the
                 // id, so `[#id]` terminates the heading line. Fumadocs only attaches
                 // a custom id when it ends the heading text; a trailing newline would
