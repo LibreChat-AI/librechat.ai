@@ -1,8 +1,9 @@
 import { DocsLayout } from 'fumadocs-ui/layouts/docs'
-import { I18nProvider } from 'fumadocs-ui/i18n'
+import { DocsI18nProvider } from '@/components/DocsI18nProvider'
 import { docsSource } from '@/lib/source'
+import { getAvailableLocalesBySlug } from '@/lib/doc-locales'
 import { baseOptions } from '@/app/layout.config'
-import { i18n, LOCALE_NAMES } from '@/lib/i18n'
+import { i18n } from '@/lib/i18n'
 import { VersionSwitcher } from '@/components/VersionSwitcher'
 import type { ReactNode } from 'react'
 
@@ -17,10 +18,7 @@ export default async function Layout({
   const tree = docsSource.pageTree[lang] ?? docsSource.pageTree[i18n.defaultLanguage]
 
   return (
-    <I18nProvider
-      locale={lang}
-      locales={i18n.languages.map((locale) => ({ locale, name: LOCALE_NAMES[locale] ?? locale }))}
-    >
+    <DocsI18nProvider locale={lang} availableLocales={getAvailableLocalesBySlug()}>
       <DocsLayout
         tree={tree}
         i18n
@@ -55,6 +53,6 @@ export default async function Layout({
         <div id="main-content" tabIndex={-1} />
         {children}
       </DocsLayout>
-    </I18nProvider>
+    </DocsI18nProvider>
   )
 }

@@ -135,6 +135,13 @@ function searchDocs(docs: SearchDoc[], query: string, limit: number): SearchDoc[
 
 const openrouter = createOpenRouter({
   apiKey: process.env.OPENROUTER_API_KEY,
+  // OpenRouter app-attribution headers: HTTP-Referer (site URL) and X-Title
+  // (app name) attribute this traffic to LibreChat on openrouter.ai's app
+  // rankings. https://openrouter.ai/docs/api-reference/overview#headers
+  headers: {
+    'HTTP-Referer': 'https://www.librechat.ai',
+    'X-Title': 'LibreChat',
+  },
 })
 
 const systemPrompt = `You are the LibreChat docs assistant. You help users find answers in the LibreChat documentation.
