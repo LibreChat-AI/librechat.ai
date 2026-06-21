@@ -87,6 +87,7 @@ import {
   Github,
   Chrome,
   // Features
+  FolderKanban,
   Puzzle,
   Palette,
   Image,
@@ -111,6 +112,7 @@ import {
   // Tools
   CloudSun,
   Sigma,
+  Calculator,
   Paintbrush,
   Mic,
   Coins,
@@ -176,6 +178,7 @@ const icons: Record<string, ReactElement> = {
   MessageCircle: <MessageCircle />,
   Github: <Github />,
   Chrome: <Chrome />,
+  FolderKanban: <FolderKanban />,
   Puzzle: <Puzzle />,
   Palette: <Palette />,
   Image: <Image />,
@@ -198,6 +201,7 @@ const icons: Record<string, ReactElement> = {
   Table: <Table />,
   CloudSun: <CloudSun />,
   Sigma: <Sigma />,
+  Calculator: <Calculator />,
   Paintbrush: <Paintbrush />,
   Mic: <Mic />,
   Coins: <Coins />,
