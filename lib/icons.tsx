@@ -110,6 +110,7 @@ import {
   // Tools
   CloudSun,
   Sigma,
+  Calculator,
   Paintbrush,
   Mic,
   Coins,
@@ -196,6 +197,7 @@ const icons: Record<string, ReactElement> = {
   LayoutDashboard: <LayoutDashboard />,
   CloudSun: <CloudSun />,
   Sigma: <Sigma />,
+  Calculator: <Calculator />,
   Paintbrush: <Paintbrush />,
   Mic: <Mic />,
   Coins: <Coins />,
