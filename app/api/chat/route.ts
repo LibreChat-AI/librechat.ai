@@ -2,6 +2,7 @@ import { createOpenRouter } from '@openrouter/ai-sdk-provider'
 import { streamText, tool, stepCountIs, convertToModelMessages } from 'ai'
 import { z } from 'zod'
 import { docsSource } from '@/lib/source'
+import { i18n } from '@/lib/i18n'
 import { checkRateLimit } from '@/lib/ratelimit'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -30,7 +31,10 @@ async function getSearchIndex(): Promise<SearchDoc[]> {
     return searchIndex
   }
 
-  const pages = docsSource.getPages()
+  // Default language only. getPages() already defaults to i18n.defaultLanguage,
+  // but pass it explicitly so generated *.<locale>.mdx translations are never
+  // ingested into the English search index or its context.
+  const pages = docsSource.getPages(i18n.defaultLanguage)
   const results = await Promise.all(
     pages.map(async (page): Promise<SearchDoc | null> => {
       try {
@@ -69,7 +73,7 @@ const pageContentCache = new Map<string, string | null>()
 let pagesByUrl: Map<string, ReturnType<typeof docsSource.getPages>[number]> | null = null
 
 function getPageByUrl(url: string) {
-  pagesByUrl ||= new Map(docsSource.getPages().map((p) => [p.url, p]))
+  pagesByUrl ||= new Map(docsSource.getPages(i18n.defaultLanguage).map((p) => [p.url, p]))
   return pagesByUrl.get(url) ?? null
 }
 
