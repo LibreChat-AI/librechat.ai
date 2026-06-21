@@ -96,6 +96,10 @@ const OG_VERSION = computeOgVersion()
 const SHARED_CDN_CACHE = 'public, s-maxage=86400, stale-while-revalidate=604800'
 const cdnCacheHeaders = [
   '/docs/:path*',
+  // Localized docs (/<locale>/docs/...). Without this they match no cache rule,
+  // so Cloudflare never edge-caches them and every language switch is a full
+  // origin round-trip — including the 307 that untranslated pages redirect with.
+  '/(zh|es|fr|de|ja)/docs/:path*',
   '/(blog|changelog|authors|privacy|tos|cookie)(.*)',
 ].flatMap((source) => [
   {
