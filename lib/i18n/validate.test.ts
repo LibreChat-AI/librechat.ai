@@ -168,6 +168,16 @@ describe('validateTranslation', () => {
     expect(result.error).toMatch(/template placeholder/i)
   })
 
+  it('rejects a translation that swaps two placeholder positions', () => {
+    const src = `---\ntitle: T\ndescription: D\n---\n\n<OptionTable options={[['k', 'string', 'Format User: {input} AI: {output}', 'x']]} />\n`
+    // Same placeholder multiset { {input}, {output} } but their positions swapped,
+    // which documents an invalid prompt template.
+    const bad = `---\ntitle: T\ndescription: D\n---\n\n<OptionTable options={[['k', 'string', 'Format User: {output} AI: {input}', 'x']]} />\n`
+    const result = validateTranslation(src, bad)
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatch(/template placeholder/i)
+  })
+
   it('rejects a localized ${env} interpolation in prose', () => {
     const src = `---\ntitle: T\ndescription: D\n---\n\nSet the value to \${OPENROUTER_KEY} before start.\n`
     const bad = `---\ntitle: T\ndescription: D\n---\n\nSetze den Wert auf \${OPENROUTER_SCHLUESSEL} vor dem Start.\n`

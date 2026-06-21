@@ -45,18 +45,19 @@ function corpus(file: matter.GrayMatterFile<string>): string {
  * count-checked here; JSX tags/structural props and heading ids are likewise
  * handled in segmentation, not by this guard.
  *
- * `link target` and `heading level` are intentionally NOT sorted: they are compared
- * in document order so a translation that swaps two link destinations between their
- * labels, or swaps two heading depths (same multiset, wrong hierarchy/anchors), is
- * rejected. The other classes are sorted, tolerating benign reordering since
- * position is not load-bearing for them.
+ * `link target`, `heading level`, and `template placeholder` are intentionally NOT
+ * sorted: they are compared in document order so a translation that swaps two link
+ * destinations between their labels, swaps two heading depths, or swaps two
+ * placeholder positions (e.g. `User: {input}\nAI: {output}` → `User: {output}\nAI:
+ * {input}`) — same multiset, broken meaning — is rejected. The other classes are
+ * sorted, tolerating benign reordering since position is not load-bearing for them.
  */
 function preservedTokens(text: string): Record<string, string[]> {
   const structure = collectBlockStructure(text)
   return {
     'inline code': collectInlineCode(text).sort(),
     'link target': collectUrls(text),
-    'template placeholder': collectPlaceholders(text).sort(),
+    'template placeholder': collectPlaceholders(text),
     'table structure': structure.tables.sort(),
     'blockquote marker': structure.quotes.sort(),
     'heading level': structure.headings,
