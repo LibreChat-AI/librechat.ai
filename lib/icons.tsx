@@ -107,6 +107,7 @@ import {
   Blocks,
   Layers,
   LayoutDashboard,
+  Table,
   // Tools
   CloudSun,
   Sigma,
@@ -194,6 +195,7 @@ const icons: Record<string, ReactElement> = {
   Blocks: <Blocks />,
   Layers: <Layers />,
   LayoutDashboard: <LayoutDashboard />,
+  Table: <Table />,
   CloudSun: <CloudSun />,
   Sigma: <Sigma />,
   Paintbrush: <Paintbrush />,

@@ -1,16 +1,16 @@
-import { docsSource } from '@/lib/source'
-import { getLLMText, MARKDOWN_RESPONSE_HEADERS } from '@/lib/get-llm-text'
-import { i18n } from '@/lib/i18n'
+import { getOrderedDocsPages, getLLMText, MARKDOWN_RESPONSE_HEADERS } from '@/lib/get-llm-text'
 
 export const revalidate = false
 
-export async function GET() {
-  // getPages() already defaults to the default language, but pass it explicitly
-  // so generated *.<locale>.mdx pages can never leak into the English export.
-  const scan = docsSource.getPages(i18n.defaultLanguage).map(getLLMText)
-  const scanned = await Promise.all(scan)
+const HEADER = `# LibreChat Documentation
 
-  return new Response(scanned.join('\n\n'), {
+> Full text of the LibreChat documentation for language models and coding agents. Pages follow the docs navigation order: start with deployment and configuration, then features and tools, and finish with the contributing guides.`
+
+export async function GET() {
+  const pages = getOrderedDocsPages()
+  const scanned = await Promise.all(pages.map(getLLMText))
+
+  return new Response([HEADER, ...scanned].join('\n\n'), {
     headers: MARKDOWN_RESPONSE_HEADERS,
   })
 }
