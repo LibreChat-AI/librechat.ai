@@ -1,0 +1,363 @@
+---
+title: MongoDB認証
+icon: MongoDB
+description: docker-compose.override.yml ファイルを使用して Docker 上の MongoDB で認証を設定する
+---
+
+このガイドでは、`docker-compose.override.yml` ファイルを使用して MongoDB の明示的な認証を有効にする方法を説明します。
+
+オーバーライドファイルの詳細については、以下を参照してください: [Docker Compose Override](/docs/configuration/docker_override)
+
+**注記:**
+
+- デフォルトの設定では外部ポートへのアクセスをブロックすることで安全性が確保されていますが、アクセス認証を追加することでさらにセキュリティを強化できます。
+- MongoDBの開発者自身が指摘しているように、MongoDBにおける認証はかなり複雑です。ここでは、ほとんどのケース、特にLibreChatの既存の設定において十分な、シンプルなアプローチを採用します。Dockerでのmongodb認証の仕組みについて詳しくは、こちらをご覧ください: https://hub.docker.com/_/mongo/
+- このガイドでは、ターミナルベースのセットアップ手順のみに焦点を当てています。
+- ここで説明されている手順は、Docker Desktop環境や、Dockerを使用しないローカルのMongoDB、その他のコンテナセットアップにも適用できる可能性がありますが、それらのシナリオに固有の詳細は提供されていません。
+
+**基本的なステップは3つあります：**
+
+- mongodbコンテナ内に管理者ユーザーを作成します
+- 認証を有効にし、LibreChat用に「readWrite」ユーザーを作成します。
+- 新しく作成したユーザーで MONGO_URI を設定します
+
+## TL;DR [#tldr]
+
+これらは、手早く実行したい場合や参照用として必要なすべてのコマンドです：
+
+<Callout type="abstract" title="TL;DR - すべてのコマンド" emoji='💻' collapsible>
+
+```bash filename="Shut down container initially"
+docker compose down
+```
+
+```bash filename="Start MongoDB container"
+docker compose up -d mongodb
+```
+
+```bash filename="Open MongoDB shell on 'chat-mongodb' container"
+docker exec -it chat-mongodb mongosh
+```
+
+```bash filename="Switch to admin database"
+use admin
+```
+
+```bash filename="Create new admin user"
+db.createUser({ user: "adminUser", pwd: "securePassword", roles: ["userAdminAnyDatabase", "readWriteAnyDatabase"] })
+```
+
+```bash filename="Exit MongoDB shell"
+exit
+```
+
+```bash filename="Shut down container after setup"
+docker compose down
+```
+
+```bash filename="Restart MongoDB container with authentication"
+docker compose up -d mongodb
+```
+
+```bash filename="Log into MongoDB shell with credentials"
+docker exec -it chat-mongodb mongosh -u adminUser -p securePassword --authenticationDatabase admin
+```
+
+```bash filename="Switch to LibreChat database"
+use LibreChat
+```
+
+```bash filename="Create user in LibreChat database"
+db.createUser({ user: 'user', pwd: 'userpasswd', roles: [ { role: "readWrite", db: "LibreChat" } ] });
+```
+
+```bash filename="Exit MongoDB shell after creating user"
+exit
+```
+
+```bash filename="Shut down container after user creation"
+docker compose down
+```
+
+```bash filename="Start all services with final settings"
+docker compose up
+```
+</Callout>
+
+### 例 [#example]
+
+[`librechat.yaml` 設定ファイル](/docs/configuration/librechat_yaml)、[MongoDB 認証](/docs/configuration/mongodb/mongodb_auth)、および [MongoDB データベース管理](/blog/2023-11-30_mongoexpress) 用の `mongo-express` を使用した `docker-compose.override.yml` ファイルの例：
+
+<Callout type="example" title="`docker-compose.override.yml` ファイルの例" collapsible>
+
+```yaml filename="docker-compose.override.yml"
+version: '3.4'
+
+services:
+  api:
+    volumes:
+      - ./librechat.yaml:/app/librechat.yaml
+    environment:
+      - MONGO_URI=mongodb://user:userpasswd@mongodb:27017/LibreChat
+  mongodb:
+    command: mongod --auth
+  mongo-express:
+    image: mongo-express
+    container_name: mongo-express
+    environment:
+      ME_CONFIG_MONGODB_SERVER: mongodb
+      ME_CONFIG_BASICAUTH_USERNAME: admin
+      ME_CONFIG_BASICAUTH_PASSWORD: password
+      ME_CONFIG_MONGODB_URL: 'mongodb://adminUser:securePassword@mongodb:27017'
+      ME_CONFIG_MONGODB_ADMINUSERNAME: adminUser
+      ME_CONFIG_MONGODB_ADMINPASSWORD: securePassword
+    ports:
+      - '8081:8081'
+    depends_on:
+      - mongodb
+    restart: always
+```
+</Callout>
+
+## Step 1: 管理者ユーザーの作成 [#step-1-creating-an-admin-user]
+
+まず、デフォルトのコンテナの実行を停止し、mongodbコンテナのみを実行する必要があります。
+
+```bash filename="Stop all running containers"
+docker compose down
+```
+
+```bash filename="Start mongodb container in detached mode"
+docker compose up -d mongodb
+```
+
+> 注: `-d` フラグは、コンテナをバックグラウンドで実行し、現在のターミナルインスタンスを切り離します。mongodb のログ出力を確認したい場合は、このフラグを省略し、別のターミナルで実行を続けてください。
+
+実行が開始されたら、コンテナのターミナルに入り、`mongosh` を実行します：
+
+```bash filename="Connect to the MongoDB shell"
+docker exec -it chat-mongodb mongosh
+```
+以下のような出力が表示されるはずです：
+
+```bash filename="Output"
+~/LibreChat$ docker exec -it chat-mongodb mongosh
+Current Mongosh Log ID: 65bfed36f7d7e3c2b01bcc3d
+Connecting to:          mongodb://127.0.0.1:27017/?directConnection=true&serverSelectionTimeoutMS=2000&appName=mongosh+2.1.1
+Using MongoDB:          7.0.4
+Using Mongosh:          2.1.1
+
+For mongosh info see: https://docs.mongodb.com/mongodb-shell/
+
+test> 
+```
+
+オプション: ついでに、必要であればMongoDBのテレメトリを無効にすることもできます。これは匿名化された利用データであり、定期的にMongoDBへ収集・送信されるものです:
+
+以下のコマンドを実行してください。
+
+> 注記:
+> - 以降のすべてのコマンドは、環境（Docker、Linux、`mongosh`など）に関係なく、現在のターミナルセッションで実行してください。
+> - 実際のターミナル表示は # example input/output と表記するか、場合によっては出力のみを表示します。
+
+コマンド:
+
+```bash filename="Disable Telemetry"
+disableTelemetry()
+```
+
+入力/出力の例:
+
+```bash filename="example input/output"
+test> disableTelemetry()
+Telemetry is now disabled.
+```
+
+次に、管理者ユーザーを作成するために、mongodbがデフォルトで作成するadminデータベースにアクセスする必要があります。
+
+```bash filename="Switch to Admin Database"
+use admin
+```
+
+> db admin に切り替えました
+
+必要に応じて認証情報を置き換え、このガイドの残りの手順のために安全な場所に保管してください。
+
+以下のコマンドを実行して管理者ユーザーを作成します：
+
+```bash filename="Create Admin User"
+db.createUser({ user: "adminUser", pwd: "securePassword", roles: ["userAdminAnyDatabase", "readWriteAnyDatabase"] })
+```
+
+"ok" という出力が表示されるはずです。
+
+また、`show users` を実行することで、管理者が作成されたことを確認することもできます：
+
+```bash filename="example input/output"
+admin> show users
+[
+  {
+    _id: 'admin.adminUser',
+    userId: UUID('86e90441-b5b7-4043-9662-305540dfa6cf'),
+    user: 'adminUser',
+    db: 'admin',
+    roles: [
+      { role: 'userAdminAnyDatabase', db: 'admin' },
+      { role: 'readWriteAnyDatabase', db: 'admin' }
+    ],
+    mechanisms: [ 'SCRAM-SHA-1', 'SCRAM-SHA-256' ]
+  }
+]
+```
+
+:warning: **重要:** `mongo-express` を使用して [データベースを管理している場合 (ガイドはこちら)](../../features/manage_your_database.md)、`mongo-express` サービスを正しく実行するために以下の追加権限が必要です:
+
+```bash filename="Grant Roles to Admin User"
+db.grantRolesToUser("adminUser", ["clusterAdmin", "readAnyDatabase"])
+```
+
+`exit` を実行して Mongosh/Container Terminal を終了します：
+```bash filename="Exit the Mongosh/Container Terminal"
+admin> exit
+```
+
+そして、実行中のコンテナを停止します：
+```bash filename="Shut down the running container"
+docker compose down
+```
+
+## Step 2: 認証の有効化と `readWrite` アクセス権を持つユーザーの作成 [#step-2-enabling-authentication-and-creating-a-user-with-readwrite-access]
+
+mongodbコンテナの認証を有効にするために、`docker-compose.override.yml` ファイルを作成または編集する必要があります。以下の設定を開始用または参照用として使用できます：
+
+```yaml filename="docker-compose.override.yml"
+version: '3.4'
+
+services:
+  api:
+    volumes:
+      - ./librechat.yaml:/app/librechat.yaml # Optional for using the librechat config file.
+  mongodb:
+    command: mongod --auth # <--- Add this to enable authentication
+```
+
+上記のようにオーバーライドファイルを構成した後、mongodbコンテナを再度実行します：
+
+```bash filename="Start the MongoDB container"
+docker compose up -d mongodb
+```
+
+そして、管理者ユーザーとして mongosh にアクセスします：
+
+```bash filename="Connect to MongoDB container using mongo shell"
+docker exec -it chat-mongodb mongosh -u adminUser -p securePassword --authenticationDatabase admin
+```
+
+認証されていることを確認してください：
+```bash filename="Check MongoDB Connection Status Command"
+db.runCommand({ connectionStatus: 1 })
+```
+
+```bash filename="example input/output"
+test> db.runCommand({ connectionStatus: 1 })
+{
+  authInfo: {
+    authenticatedUsers: [ { user: 'adminUser', db: 'admin' } ],
+    authenticatedUserRoles: [
+      { role: 'readWriteAnyDatabase', db: 'admin' },
+      { role: 'userAdminAnyDatabase', db: 'admin' }
+    ]
+  },
+  ok: 1
+}
+test>
+```
+
+"LibreChat" データベースに切り替えます
+
+> 注: これは、MONGO_URI を変更していない場合のデフォルトのデータベースです。デフォルトの URI: `MONGO_URI=mongodb://mongodb:27017/LibreChat`
+
+```bash filename="Switch to the LibreChat database"
+use LibreChat
+```
+
+次に、Mongo接続文字列で使用する実際の認証情報を作成します。これには「LibreChat」データベースへの読み取り/書き込みアクセス権のみが制限されます。以前と同様に、例を希望する認証情報に置き換えてください。
+
+`db.createUser({ user: 'user', pwd: 'userpasswd', roles: [ { role: "readWrite", db: "LibreChat" } ] });`
+
+再び "ok" という出力が表示されるはずです。
+
+`show users` コマンドを使用して、ユーザー作成を確認できます。
+
+`exit` で再度 Mongosh/コンテナターミナルを終了し、コンテナを停止します：
+
+```bash filename="End the current shell session"
+exit
+```
+
+```bash filename="Stop the current Docker Compose services"
+docker compose down
+```
+
+新しく作成したユーザーが作成後に永続化されないという問題が発生しました。これを解決するために、作成手順を繰り返して確実に作成されるようにしました。参考までに手順を以下に記載します：
+
+```bash filename="Shut down container"
+docker compose down
+```
+
+```bash filename="Start Mongo container"
+docker compose up -d mongodb
+```
+
+```bash filename="Access MongoDB shell as admin"
+docker exec -it chat-mongodb mongosh -u adminUser -p securePassword --authenticationDatabase admin
+```
+
+```bash filename="Switch to LibreChat database"
+use LibreChat
+```
+
+```bash filename="Show current users in LibreChat database"
+show users
+```
+
+```bash filename="Create a new user in LibreChat database"
+db.createUser({ user: 'user', pwd: 'userpasswd', roles: [ { role: "readWrite", db: "LibreChat" } ] });
+```
+
+それでも永続化されない場合は、すべてのコンテナを起動した状態でコマンドを実行してみてください。ただし、`LibreChat` コンテナはエラーまたは再試行の状態になることに注意してください。
+
+## ステップ 3: `MONGO_URI` を新しい認証情報で更新する [#step-3-update-the-mongo_uri-to-use-the-new-credentials]
+
+最後に、新しく作成した認証情報を含む接続文字列を、`docker-compose.override.yml` ファイルの `api` サービスの下に追加します。
+
+```yaml filename="docker-compose.override.yml"
+    environment:
+      - MONGO_URI=mongodb://user:userpasswd@mongodb:27017/LibreChat
+```
+
+したがって、オーバーライドファイルは以下のようになります：
+
+```yaml filename="docker-compose.override.yml"
+version: '3.4'
+
+services:
+  api:
+    volumes:
+      - ./librechat.yaml:/app/librechat.yaml
+    environment:
+      - MONGO_URI=mongodb://user:userpasswd@mongodb:27017/LibreChat
+  mongodb:
+    command: mongod --auth
+```
+
+これで `docker compose up` を実行し、LibreChat データベースへの読み取り/書き込み権限で正常に認証できるようになります。
+
+接続成功の例:
+```bash filename="successful connection example"
+LibreChat         | 2024-02-04 20:59:43 info: Server listening on all interfaces at port 3080. Use http://localhost:3080 to access it
+chat-mongodb      | {"t":{"$date":"2024-02-04T20:59:53.880+00:00"},"s":"I",  "c":"NETWORK",  "id":22943,   "ctx":"listener","msg":"Connection accepted","attr":{"remote":"192.168.160.4:58114","uuid":{"uuid":{"$uuid":"027bdc7b-a3f4-429a-80ee-36cd172058ec"}},"connectionId":17,"connectionCount":10}}
+```
+
+認証エラーが発生する場合は、ステップ2の最後の部分を再度実行してください。なぜ不安定なのかは不明ですが、数回試せば動作するはずです。
+
