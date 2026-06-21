@@ -1,4 +1,5 @@
 import { docsSource } from '@/lib/source'
+import { i18n } from '@/lib/i18n'
 import { createFromSource } from 'fumadocs-core/search/server'
 import { createTokenizer as createMandarinTokenizer } from '@orama/tokenizers/mandarin'
 import { createTokenizer as createJapaneseTokenizer } from '@orama/tokenizers/japanese'
@@ -24,7 +25,26 @@ export const revalidate = false
 // here and the build succeeds; zh/ja tokenization is to be verified against real
 // translated content during the first backfill. The proper long-term fix is to
 // upgrade Fumadocs onto Orama 3.
-export const { GET } = createFromSource(docsSource, undefined, {
+// Restrict each non-default locale's index to pages that have a real translated
+// file (path ends `.<locale>.mdx`). getLanguages() otherwise includes the English
+// fallback for every untranslated page, and those hits resolve to /<locale>/docs/...
+// URLs that immediately redirect to English (see the docs page route) — so
+// localized search would surface results that bounce. Filtering keeps each locale's
+// search consistent with what actually renders under /<locale>/docs/. The default
+// language keeps every page.
+const localeFilteredSource: typeof docsSource = {
+  ...docsSource,
+  getLanguages: () =>
+    docsSource.getLanguages().map((entry) => ({
+      language: entry.language,
+      pages:
+        entry.language === i18n.defaultLanguage
+          ? entry.pages
+          : entry.pages.filter((page) => page.file.path.endsWith(`.${entry.language}.mdx`)),
+    })),
+}
+
+export const { GET } = createFromSource(localeFilteredSource, undefined, {
   localeMap: {
     en: 'english',
     es: 'spanish',
