@@ -74,6 +74,42 @@ const nonPermanentRedirects = [
  */
 const OG_VERSION = computeOgVersion()
 
+/**
+ * Edge-cache headers for the App Router routes whose HTML we want a shared CDN
+ * (Cloudflare, in front of the origin) to cache.
+ *
+ * The App Router serves two responses at every page URL: the HTML document and
+ * the RSC flight payload (`text/x-component`), told apart only by the `RSC`
+ * request header that Next advertises via `Vary: RSC`. Cloudflare ignores
+ * `Vary: RSC`, so a single `public, s-maxage` rule on the URL lets it cache
+ * whichever variant it happens to see first and serve that to everyone. When a
+ * Next prefetch populates the entry with the flight payload, real browser
+ * navigations then receive raw `text/x-component` data and render it as garbage
+ * (`:HL[...] 0:{"buildId"...}`) instead of the page.
+ *
+ * Split the rule on the `RSC` header: the document response (no header) stays
+ * shared-cacheable, the flight payload (header present) is marked
+ * `private, no-store` so the CDN never caches it and therefore can never serve
+ * one as a document. A cached document occasionally returned to an RSC request
+ * just makes Next fall back to a full navigation, which is harmless.
+ */
+const SHARED_CDN_CACHE = 'public, s-maxage=86400, stale-while-revalidate=604800'
+const cdnCacheHeaders = [
+  '/docs/:path*',
+  '/(blog|changelog|authors|privacy|tos|cookie)(.*)',
+].flatMap((source) => [
+  {
+    source,
+    missing: [{ type: 'header', key: 'RSC' }],
+    headers: [{ key: 'Cache-Control', value: SHARED_CDN_CACHE }],
+  },
+  {
+    source,
+    has: [{ type: 'header', key: 'RSC' }],
+    headers: [{ key: 'Cache-Control', value: 'private, no-store' }],
+  },
+])
+
 /** @type {import('next').NextConfig} */
 const config = {
   poweredByHeader: false,
@@ -209,24 +245,7 @@ const config = {
           },
         ],
       },
-      {
-        source: '/docs/:path*',
-        headers: [
-          {
-            key: 'Cache-Control',
-            value: 'public, s-maxage=86400, stale-while-revalidate=604800',
-          },
-        ],
-      },
-      {
-        source: '/(blog|changelog|authors|privacy|tos|cookie)(.*)',
-        headers: [
-          {
-            key: 'Cache-Control',
-            value: 'public, s-maxage=86400, stale-while-revalidate=604800',
-          },
-        ],
-      },
+      ...cdnCacheHeaders,
     ]
   },
   async rewrites() {
