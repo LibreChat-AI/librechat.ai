@@ -1,0 +1,275 @@
+---
+title: S3 を使用した CloudFront
+icon: AWS
+description: >-
+  S3に保存されたLibreChatファイル用のCDNレイヤーとしてAmazon
+  CloudFrontを設定します（安定したメディアリンク、署名付きCookie、署名付きダウンロードURLを含みます）。
+---
+
+CloudFront を使用することで、LibreChat はファイルを S3 に保持したまま、安定した CDN URL を通じて画像、アバター、ダウンロードを提供できるようになります。これは、S3 の耐久性を維持しつつ、有効期限付きの S3 署名付き画像 URL をユーザーに公開したくない場合に推奨される AWS のセットアップです。
+
+## CloudFront を使用するタイミング [#when-to-use-cloudfront]
+
+CloudFront を使用するのは次のような場合です：
+
+- UI全体でレンダリングされ続ける安定したアバターおよび画像URL
+- S3バケットの前段におけるグローバルエッジキャッシング
+- プライベートなインライン画像およびアバター用の署名付きクッキー
+- ダウンロード用のバックエンド認証済み署名付きURL
+- ファイル削除時のオプションのキャッシュ無効化
+
+<Callout type="info" title="S3は引き続き必要です">
+  `cloudfront` ファイル戦略は、オブジェクトを S3 に保存し、CloudFront URL を返します。まず S3 の環境変数を設定してから、`librechat.yaml` に `cloudfront` ブロックを追加してください。
+</Callout>
+
+## 要件 [#requirements]
+
+- プライベートなS3バケット
+- S3バケットをオリジンとするCloudFrontディストリビューション
+- CloudFrontがS3から読み取れるようにするためのOrigin Access Control (OAC) または同等のオリジンアクセス権限ポリシー
+- `AWS_REGION` および `AWS_BUCKET_NAME`
+- `AWS_ACCESS_KEY_ID` および `AWS_SECRET_ACCESS_KEY`（デプロイメントで IRSA などの AWS ID プロバイダーを使用している場合を除く）
+- 署名付きCookieまたは署名付きダウンロードURLを使用する場合の `CLOUDFRONT_KEY_PAIR_ID` および `CLOUDFRONT_PRIVATE_KEY`
+
+## 環境変数 [#environment-variables]
+
+```bash filename=".env"
+AWS_ACCESS_KEY_ID=your_access_key_id
+AWS_SECRET_ACCESS_KEY=your_secret_access_key
+AWS_REGION=us-east-1
+AWS_BUCKET_NAME=your_bucket_name
+
+# Required for signed cookies and signed CloudFront download URLs
+CLOUDFRONT_KEY_PAIR_ID=K1234567890ABC
+CLOUDFRONT_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----"
+```
+
+`CLOUDFRONT_PRIVATE_KEY` には、PEM形式の秘密鍵全体を含める必要があります。`.env` 内では引用符で囲み、改行を保持するか、プラットフォームのシークレットマネージャーから注入してください。
+
+## 基本設定 [#basic-configuration]
+
+画像やアバターにはCloudFrontを使用しつつ、ドキュメントはS3の署名付きURLで保持したい場合は、`fileStrategies`を使用してください：
+
+```yaml filename="librechat.yaml"
+version: 1.3.11
+
+fileStrategies:
+  avatar: 'cloudfront'
+  image: 'cloudfront'
+  document: 's3'
+
+cloudfront:
+  domain: 'https://cdn.example.com'
+  imageSigning: 'none'
+  urlExpiry: 3600
+```
+
+すべてのファイルタイプでCloudFrontを使用する場合は、`fileStrategy`を使用してください：
+
+```yaml filename="librechat.yaml"
+fileStrategy: 'cloudfront'
+
+cloudfront:
+  domain: 'https://cdn.example.com'
+```
+
+## 署名付きクッキー (Signed Cookies) [#signed-cookies]
+
+署名付きCookieは、プライベートなインライン画像やアバターのためのセキュアなモードです。これにより、LibreChatはメッセージやレコード内で安定したCloudFront URLを維持しつつ、短期間有効なCookieでアクセスを承認できるようになります。
+
+```yaml filename="librechat.yaml"
+fileStrategies:
+  avatar: 'cloudfront'
+  image: 'cloudfront'
+  document: 's3'
+
+cloudfront:
+  domain: 'https://cdn.example.com'
+  imageSigning: 'cookies'
+  cookieDomain: '.example.com'
+  cookieExpiry: 1800
+  urlExpiry: 3600
+  requireSignedAccess: true
+```
+
+### ドメイン要件 [#domain-requirements]
+
+署名付きクッキーの場合、LibreChat APIとCloudFrontのホスト名は親ドメインを共有している必要があります：
+
+- API: `https://api.example.com`
+- CloudFront CNAME: `https://cdn.example.com`
+- `cookieDomain: ".example.com"`
+
+`cookieDomain` はドットで始まる必要があります。ブラウザは、関連のないドメインに対してCloudFrontのクッキーを送信しません。
+
+### Cookieが保護するもの [#what-cookies-protect]
+
+LibreChatは、署名付きクッキーのスコープをインラインメディアパスに限定します：
+
+- `/i/...` ユーザーごとにスコープされた、プライベートなアップロード済みまたは生成済みの画像
+- `/a/...` アバターアセット。`tenantId` が存在する場合はテナントにスコープされます。
+
+ドキュメント、一般的なアップロード、およびコードの出力は、それらのインラインメディアパスの外部に保持されます。ダウンロードはバックエンドによって認証され、署名付きのCloudFront URLとして返されます。
+
+### Cookie Refresh [#cookie-refresh]
+
+signed-cookieモードが有効な場合、LibreChatは起動時の設定でクッキー更新用のendpointをアドバタイズします：
+
+```text
+POST /api/auth/cloudfront/refresh
+```
+
+認証済みセッションは、認証フロー、トークン更新、および CloudFront 画像再試行パスの実行中にクッキーを更新します。更新レスポンスには、クッキーの有効期間と推奨される更新タイミングが含まれています。
+
+## 署名付きダウンロード [#signed-downloads]
+
+LibreChatは、認証されたダウンロードのために署名付きCloudFront URLを使用します。`urlExpiry`設定は、その有効期間を秒単位で制御します：
+
+```yaml filename="librechat.yaml"
+cloudfront:
+  domain: 'https://cdn.example.com'
+  imageSigning: 'cookies'
+  cookieDomain: '.example.com'
+  urlExpiry: 3600
+```
+
+直接ダウンロードのファイル名およびContent-Typeのオーバーライドについては、CloudFrontのキャッシュ/オリジンリクエストポリシーを設定し、これらのクエリ文字列をS3に転送するようにしてください：
+
+- `response-content-disposition`
+- `response-content-type`
+
+ダウンロードパスについては、以下の設定を含むレスポンスヘッダーポリシーを付与してください：
+
+- `X-Content-Type-Options: nosniff`
+- `default-src 'none'` のような制限の厳しい Content Security Policy
+
+## キャッシュの無効化 [#cache-invalidation]
+
+デフォルトでは、LibreChatはS3オブジェクトを削除しますが、CloudFrontの無効化（invalidation）は作成しません。削除されたファイルをエッジキャッシュから即座に消去する必要がある場合は、無効化を有効にしてください：
+
+```yaml filename="librechat.yaml"
+cloudfront:
+  domain: 'https://cdn.example.com'
+  distributionId: 'E1234ABCD'
+  invalidateOnDelete: true
+```
+
+`invalidateOnDelete` が `true` の場合、`distributionId` が必須です。LibreChat が使用する AWS ID には `cloudfront:CreateInvalidation` 権限も必要です。
+
+## マルチリージョンオブジェクトパス [#multi-region-object-paths]
+
+`includeRegionInPath` は、新しく生成されるオブジェクトキーにストレージリージョンを追加します：
+
+```yaml filename="librechat.yaml"
+cloudfront:
+  domain: 'https://cdn.example.com'
+  storageRegion: 'us-east-2'
+  includeRegionInPath: true
+```
+
+有効にすると、新しいキーにはリージョンを認識するパスセグメントが含まれます。例：
+
+```text
+/i/r/us-east-2/t/tenantId/images/userId/file.png
+/a/r/us-east-2/t/tenantId/avatars/userId/avatar.png
+/r/us-east-2/t/tenantId/images/userId/file.pdf
+```
+
+これは新しく生成されたキーにのみ影響します。既存のファイルは移動されません。LibreChatは、CloudFrontのオリジン、Route 53、またはリージョンルーティングの設定を代行することはありません。
+
+## CloudFront ブロックリファレンス [#cloudfront-block-reference]
+
+<OptionTable
+  options={[
+    [
+      'domain',
+      'string',
+      'CloudFrontディストリビューションドメインまたはCNAME。必須。',
+      'domain: "https://cdn.example.com"',
+    ],
+    [
+      'distributionId',
+      'string',
+      'キャッシュ無効化に使用されるDistribution ID。',
+      'distributionId: "E1234ABCD"',
+    ],
+    [
+      'invalidateOnDelete',
+      'boolean',
+      'ファイルが削除されたときにCloudFrontの無効化を作成します。デフォルト: false。',
+      'invalidateOnDelete: false',
+    ],
+    [
+      'imageSigning',
+      'string',
+      'インラインメディアアクセスモード。パブリックなCloudFrontアクセスには `"none"` を、署名付きCookieには `"cookies"` を使用してください。 `"url"` は予約済みであり、画像には実装されていません。',
+      'imageSigning: "cookies"',
+    ],
+    [
+      'cookieDomain',
+      'string',
+      '署名付きクッキーの共有親ドメイン。`imageSigning` が `"cookies"` の場合に必須です。',
+      'cookieDomain: ".example.com"',
+    ],
+    [
+      'cookieExpiry',
+      'number',
+      '署名付きクッキーの有効期間（秒単位）。デフォルト: 1800。最大値: 604800。',
+      'cookieExpiry: 1800',
+    ],
+    [
+      'urlExpiry',
+      'number',
+      '署名付きダウンロードURLの有効期間（秒）。デフォルト: 3600。',
+      'urlExpiry: 3600',
+    ],
+    [
+      'storageRegion',
+      'string',
+      'リージョン対応のオブジェクトパスに使用するオプションのリージョンラベル。',
+      'storageRegion: "us-east-2"',
+    ],
+    [
+      'includeRegionInPath',
+      'boolean',
+      '新しく生成されるオブジェクトキーに `storageRegion` を含めます。デフォルト: false。',
+      'includeRegionInPath: false',
+    ],
+    [
+      'requireSignedAccess',
+      'boolean',
+      '署名付きCookieによるCloudFrontアクセスが初期化できない場合に起動を失敗させます。デフォルト: false。',
+      'requireSignedAccess: true',
+    ],
+  ]}
+/>
+
+## 推奨されるAWS権限 [#suggested-aws-permissions]
+
+S3バケットには最小権限のIAM権限を使用してください。`invalidateOnDelete`が有効な場合にのみ、CloudFrontの無効化権限を追加してください。
+
+```json filename="iam-policy.json"
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["s3:PutObject", "s3:GetObject", "s3:DeleteObject", "s3:ListBucket"],
+      "Resource": ["arn:aws:s3:::my-librechat-bucket", "arn:aws:s3:::my-librechat-bucket/*"]
+    },
+    {
+      "Effect": "Allow",
+      "Action": "cloudfront:CreateInvalidation",
+      "Resource": "arn:aws:cloudfront::123456789012:distribution/E1234ABCD"
+    }
+  ]
+}
+```
+
+## トラブルシューティング [#troubleshooting]
+
+- 起動ログに `CloudFront domain is required` と表示される場合: `cloudfront.domain` を追加してください。
+- 起動ログ `S3 must be initialized`: 最初にS3環境変数を設定してください。
+- 署名付きクッキーが設定されていません：`imageSigning: "cookies"`、`cookieDomain`、`CLOUDFRONT_KEY_PAIR_ID`、および `CLOUDFRONT_PRIVATE_KEY` を確認してください。
+- ブラウザで画像が読み込めない場合：APIとCDNのホスト名が設定済みの親ドメインを共有していること、および `Secure` と `SameSite=None` でCookieが許可されていることを確認してください。
+- ダウンロードがファイル名/コンテンツタイプを無視する問題：CloudFrontのキャッシュ/オリジンリクエストポリシーを更新し、レスポンスオーバーライドのクエリ文字列を転送するように設定してください。

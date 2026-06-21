@@ -1,0 +1,379 @@
+---
+title: Configuración de resumen
+icon: ScrollText
+---
+
+## Descripción general [#overview]
+
+La configuración `summarization` proporciona un control centralizado sobre el resumen de conversaciones y la poda de contexto. Esto reemplaza los campos `summarize` y `summaryModel` por endpoint que estaban disponibles anteriormente en los endpoints personalizados y de Azure OpenAI.
+
+Cuando una conversación excede la ventana de contexto del modelo, el sistema de resumen comprime automáticamente los mensajes antiguos en un resumen de punto de control conciso. Esto permite que las conversaciones continúen indefinidamente sin perder contexto importante. El sistema también incluye **context pruning**, que degrada progresivamente los resultados de herramientas extensos en mensajes antiguos para recuperar espacio de tokens antes de que sea necesario realizar un resumen.
+
+Después de un turno de resumen, el medidor de uso de contexto utiliza la línea base del resumen persistido más los turnos posteriores al resumen en lugar de volver a contar el historial previo al resumen que fue descartado. Los totales acumulados de uso y costo aún incluyen el gasto total de la rama.
+
+## Ejemplo [#example]
+
+```yaml filename="summarization"
+summarization:
+  provider: 'openAI'
+  model: 'gpt-4o-mini'
+  maxSummaryTokens: 4096
+  reserveRatio: 0.05
+  trigger:
+    type: 'token_ratio'
+    value: 0.8
+  contextPruning:
+    enabled: true
+    keepLastAssistants: 3
+    softTrimRatio: 0.3
+    hardClearRatio: 0.5
+    minPrunableToolChars: 50000
+    softTrim:
+      maxChars: 4000
+      headChars: 1500
+      tailChars: 1500
+    hardClear:
+      enabled: true
+      placeholder: '[Old tool result content cleared]'
+```
+
+## provider
+
+<OptionTable
+  options={[
+    [
+      'provider',
+      'String',
+      "El proveedor de LLM a utilizar para las llamadas de resumen. Si se omite, utiliza el propio proveedor del agente.",
+      'provider: "openAI"',
+    ],
+  ]}
+/>
+
+**Predeterminado:** Proveedor propio del agente
+
+## model
+
+<OptionTable
+  options={[
+    [
+      'model',
+      'String',
+      "El modelo a utilizar para las llamadas de resumen. Si se omite, utiliza el propio modelo del agente.",
+      'model: "gpt-4o-mini"',
+    ],
+  ]}
+/>
+
+**Predeterminado:** Modelo propio del agente
+
+## parameters
+
+<OptionTable
+  options={[
+    [
+      'parameters',
+      'Object',
+      'Parámetros adicionales de LLM para solicitudes de resumen (p. ej., temperature, top_p).',
+      'parameters: { temperature: 0.3 }',
+    ],
+  ]}
+/>
+
+## prompt
+
+<OptionTable
+  options={[
+    [
+      'prompt',
+      'String',
+      'Prompt personalizado para la sumarización inicial. Reemplaza el prompt de punto de control integrado.',
+      '',
+    ],
+  ]}
+/>
+
+**Predeterminado:** Un prompt de punto de control estructurado que genera secciones para Objetivo, Restricciones y Preferencias, Progreso, Decisiones Clave, Próximos Pasos y Contexto Crítico.
+
+## updatePrompt
+
+<OptionTable
+  options={[
+    [
+      'updatePrompt',
+      'String',
+      'Prompt personalizado para la recompactación cuando ya existe un resumen previo. Se utiliza cuando el resumen necesita actualizarse con nuevo contenido de la conversación.',
+      '',
+    ],
+  ]}
+/>
+
+**Predeterminado:** Un prompt integrado que fusiona mensajes nuevos en el punto de control existente, comprime los detalles más antiguos y proporciona más detalle a las acciones recientes.
+
+## maxSummaryTokens
+
+<OptionTable
+  options={[
+    [
+      'maxSummaryTokens',
+      'Number',
+      'Número máximo de tokens de salida para la respuesta del modelo de resumen.',
+      'maxSummaryTokens: 4096',
+    ],
+  ]}
+/>
+
+## reserveRatio
+
+<OptionTable
+  options={[
+    [
+      'reserveRatio',
+      'Number',
+      'Fracción del presupuesto de tokens reservada como margen (0–1). Evita que el contexto se llene hasta su capacidad absoluta.',
+      'reserveRatio: 0.05',
+    ],
+  ]}
+/>
+
+**Predeterminado:** `0.05` (5% de margen)
+
+## trigger
+
+<OptionTable
+  options={[
+    [
+      'trigger',
+      'Object',
+      'Define cuándo se activa la sumarización. Si se omite, la sumarización se activa siempre que la poda de mensajes elimine algún mensaje.',
+      '',
+    ],
+  ]}
+/>
+
+### Sub-claves de trigger [#trigger-sub-keys]
+
+<OptionTable
+  options={[
+    [
+      'type',
+      'String',
+      'La estrategia de activación. Opciones: `"token_ratio"`, `"remaining_tokens"`, `"messages_to_refine"`.',
+      'type: "token_ratio"',
+    ],
+    [
+      'value',
+      'Number',
+      'El valor umbral para el tipo de activador elegido. Para `token_ratio`: 0–1 (inclusive). Para `remaining_tokens` y `messages_to_refine`: entero positivo.',
+      'value: 0.8',
+    ],
+  ]}
+/>
+
+### Tipos de activadores [#trigger-types]
+
+| Tipo | Valor | Se activa cuando |
+| -------------------- | ---------------- | ----------------------------------------------------------------------------- |
+| `token_ratio`        | `0.0–1.0`        | La fracción de tokens de contexto utilizados alcanza o supera el valor |
+| `remaining_tokens`   | Entero positivo | Los tokens de contexto restantes caen a o por debajo del valor |
+| `messages_to_refine` | Entero positivo | El recuento de mensajes elegibles para resumen alcanza o supera el valor |
+| _(no establecido)_   | —                | Siempre que la poda elimine cualquier mensaje (comportamiento predeterminado) |
+
+**Ejemplo:**
+
+```yaml filename="summarization / trigger"
+summarization:
+  trigger:
+    type: 'remaining_tokens'
+    value: 8000
+```
+
+## contextPruning
+
+<OptionTable
+  options={[
+    [
+      'contextPruning',
+      'Object',
+      'Configura la degradación de resultados de herramientas basada en la posición. Los resultados de herramientas extensos en mensajes antiguos se recortan o eliminan progresivamente para recuperar espacio de tokens.',
+      '',
+    ],
+  ]}
+/>
+
+La poda de contexto (context pruning) es una función opcional que opera independientemente de la sumarización. Se enfoca en resultados grandes de llamadas a herramientas en mensajes antiguos, aplicando dos etapas progresivas:
+
+1. **Soft trim** — Trunca los resultados de la herramienta para conservar solo las partes inicial y final, con puntos suspensivos en medio
+2. **Hard clear** — Reemplaza todo el resultado de la herramienta con un marcador de posición corto
+
+Ambas etapas están basadas en la posición: los mensajes más cercanos al inicio de la conversación (más antiguos) se eliminan primero.
+
+### Sub-claves de contextPruning [#contextpruning-sub-keys]
+
+<OptionTable
+  options={[
+    ['enabled', 'Boolean', 'Habilita la degradación de resultados de herramientas basada en la posición.', 'enabled: true'],
+    [
+      'keepLastAssistants',
+      'Number',
+      'Número de turnos recientes del asistente a proteger de cualquier poda.',
+      'keepLastAssistants: 3',
+    ],
+    [
+      'softTrimRatio',
+      'Number',
+      'Relación de antigüedad (0–1) en la que se activa el soft-trim. Los mensajes más antiguos que esta relación de la conversación son candidatos para el soft-trimming.',
+      'softTrimRatio: 0.3',
+    ],
+    [
+      'hardClearRatio',
+      'Number',
+      'Proporción de antigüedad (0–1) en la que se activa el borrado completo (hard-clear). Los mensajes más antiguos que esta proporción son candidatos para un reemplazo total.',
+      'hardClearRatio: 0.5',
+    ],
+    [
+      'minPrunableToolChars',
+      'Number',
+      'Cantidad mínima de caracteres de un resultado de herramienta antes de que se aplique el recorte. Los resultados más pequeños se dejan intactos.',
+      'minPrunableToolChars: 50000',
+    ],
+    ['softTrim', 'Object', 'Configuración para la etapa de soft-trim.', ''],
+    ['hardClear', 'Object', 'Configuración para la etapa de borrado completo (hard-clear).', ''],
+  ]}
+/>
+
+**Predeterminados:**
+
+| Campo                  | Predeterminado |
+| ---------------------- | -------------- |
+| `enabled`              | `false`        |
+| `keepLastAssistants`   | `3`            |
+| `softTrimRatio`        | `0.3`          |
+| `hardClearRatio`       | `0.5`          |
+| `minPrunableToolChars` | `50000`        |
+
+### Sub-claves de softTrim [#softtrim-sub-keys]
+
+<OptionTable
+  options={[
+    [
+      'maxChars',
+      'Number',
+      'Número máximo de caracteres totales después de recortar ligeramente el resultado de una herramienta.',
+      'maxChars: 4000',
+    ],
+    [
+      'headChars',
+      'Number',
+      'Número de caracteres a preservar desde el principio del resultado de la herramienta.',
+      'headChars: 1500',
+    ],
+    [
+      'tailChars',
+      'Number',
+      'Número de caracteres a preservar desde el final del resultado de la herramienta.',
+      'tailChars: 1500',
+    ],
+  ]}
+/>
+
+**Valores predeterminados:** `maxChars: 4000`, `headChars: 1500`, `tailChars: 1500`
+
+### Sub-claves de hardClear [#hardclear-sub-keys]
+
+<OptionTable
+  options={[
+    [
+      'enabled',
+      'Boolean',
+      'Si la etapa de borrado completo (hard-clear) está activa. Cuando está desactivada, solo se aplica el recorte suave (soft-trim).',
+      'enabled: true',
+    ],
+    [
+      'placeholder',
+      'String',
+      'Texto de marcador de posición que reemplaza el contenido completo del resultado de la herramienta cuando se borra por completo.',
+      'placeholder: "[Old tool result content cleared]"',
+    ],
+  ]}
+/>
+
+**Valores predeterminados:** `enabled: true`, `placeholder: "[Old tool result content cleared]"`
+
+**Ejemplo:**
+
+```yaml filename="summarization / contextPruning"
+summarization:
+  contextPruning:
+    enabled: true
+    keepLastAssistants: 5
+    softTrimRatio: 0.25
+    hardClearRatio: 0.6
+    minPrunableToolChars: 30000
+    softTrim:
+      maxChars: 6000
+      headChars: 2500
+      tailChars: 2500
+    hardClear:
+      enabled: true
+      placeholder: '[Content removed for context management]'
+```
+
+## Ejemplo de configuración completa [#complete-configuration-example]
+
+```yaml filename="librechat.yaml"
+version: 1.3.10
+cache: true
+
+summarization:
+  provider: 'openAI'
+  model: 'gpt-4o-mini'
+  maxSummaryTokens: 4096
+  reserveRatio: 0.05
+  trigger:
+    type: 'token_ratio'
+    value: 0.8
+  contextPruning:
+    enabled: true
+    keepLastAssistants: 3
+    softTrimRatio: 0.3
+    hardClearRatio: 0.5
+    minPrunableToolChars: 50000
+    softTrim:
+      maxChars: 4000
+      headChars: 1500
+      tailChars: 1500
+    hardClear:
+      enabled: true
+      placeholder: '[Old tool result content cleared]'
+```
+
+## Migración desde la configuración por endpoint [#migration-from-per-endpoint-settings]
+
+Si anteriormente utilizaste `summarize` y `summaryModel` en endpoints personalizados o de Azure OpenAI:
+
+```yaml filename="Before (removed)"
+endpoints:
+  custom:
+    - name: 'My Endpoint'
+      summarize: true
+      summaryModel: 'gpt-3.5-turbo'
+```
+
+Estos campos han sido eliminados. Utilice la configuración de nivel superior `summarization` en su lugar:
+
+```yaml filename="After"
+summarization:
+  model: 'gpt-4o-mini'
+```
+
+## Notas [#notes]
+
+- La función de resumen (Summarization) se configura de forma global en lugar de por endpoint.
+- Los campos `summarize` y `summaryModel` en los endpoints personalizados y en los endpoints de Azure OpenAI ya no son compatibles.
+- Cuando se omiten `provider` y `model`, se utilizan el provider y el model propios del agente para la sumarización.
+- La poda de contexto (context pruning) está desactivada de forma predeterminada y debe habilitarse explícitamente con `contextPruning.enabled: true`
+- La poda de contexto solo afecta a los resultados de llamadas a herramientas que exceden `minPrunableToolChars`; los resultados más pequeños nunca se podan.
+- El ajuste `keepLastAssistants` protege los turnos recientes de la poda, independientemente de las proporciones de recorte/limpieza.
+- Los valores personalizados de `prompt` y `updatePrompt` reemplazan por completo los prompts integrados; úselos con precaución.
+- Establezca `AGENT_DEBUG_LOGGING=true` en su archivo `.env` para habilitar el registro detallado del conteo de tokens y los diagnósticos de poda de contexto.

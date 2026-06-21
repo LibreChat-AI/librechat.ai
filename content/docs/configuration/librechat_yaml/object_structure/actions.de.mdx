@@ -1,0 +1,135 @@
+---
+title: Struktur des Actions-Objekts
+icon: Webhook
+---
+
+Actions können verwendet werden, um dynamisch Tools aus OpenAPI-Spezifikationen zu erstellen. Die Struktur des `actions`-Objekts ermöglicht es Ihnen, zulässige Domains für Agenten-/Assistenten-Aktionen festzulegen.
+
+Weitere Informationen: [Agents - Actions](/docs/features/agents#actions)
+
+## Beispiel [#example]
+
+```yaml filename="Actions Object Structure"
+# Example Actions Object Structure
+actions:
+  # Strict whitelist mode:
+  # allowedDomains:
+  #   - "swapi.dev"
+  #   - "librechat.ai"
+  #   - "google.com"
+  #   - "https://api.example.com:8443"  # With protocol and port
+
+  # Default SSRF mode with private service exemptions:
+  allowedAddresses:
+    - "host.docker.internal:11434"    # Permit one private host on one port
+    - "10.0.0.5:8080"                 # Permit one private IP on one port
+```
+
+## allowedDomains
+
+**Schlüssel:**
+<OptionTable
+  options={[
+    ['allowedDomains', 'Array of Strings', 'Eine Liste, die zulässige Domains für Agenten-/Assistenten-Aktionen festlegt.', 'When configured, only listed domains are allowed. When not configured, SSRF targets are blocked but all other domains are allowed.'],
+  ]}
+/>
+
+**Optional**
+
+### Sicherheitskontext (SSRF-Schutz) [#security-context-ssrf-protection]
+
+LibreChat enthält einen SSRF-Schutz (Server-Side Request Forgery) mit folgendem Verhalten:
+
+**Wenn `allowedDomains` NICHT konfiguriert ist:**
+- SSRF-anfällige Ziele sind **standardmäßig blockiert**
+- Alle anderen externen Domains sind **erlaubt**
+
+**Wenn `allowedDomains` konfiguriert IST:**
+- **Nur** Domains auf der Liste sind erlaubt
+- Interne/SSRF-Ziele können zugelassen werden, indem sie explizit zur Liste hinzugefügt werden
+
+**Blockierte SSRF-Ziele umfassen:**
+- **Localhost**-Adressen (`localhost`, `127.0.0.1`, `::1`)
+- **Private IP-Bereiche** (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`)
+- **Link-Local-Adressen** (`169.254.0.0/16`, beinhaltet Cloud-Metadaten-IPs)
+- **Interne TLDs** (`.internal`, `.local`, `.localhost`)
+- **Gängige interne Dienstnamen** (`redis`, `mongodb`, `postgres`, `api` usw.)
+
+Wenn Ihre Aktionen auf interne Dienste zugreifen müssen, fügen Sie diese entweder der strikten `allowedDomains`-Whitelist hinzu oder lassen Sie `allowedDomains` leer und fügen Sie den genauen privaten Dienst zu `allowedAddresses` hinzu.
+
+### Musterformate [#pattern-formats]
+
+Das `allowedDomains` Array unterstützt verschiedene Formate:
+
+1. **Nur Domain** - Erlaubt alle Protokolle und Ports:
+   ```yaml
+   allowedDomains:
+     - "api.example.com"
+   ```
+
+2. **Mit Protokoll** - Beschränkt auf ein bestimmtes Protokoll:
+   ```yaml
+   allowedDomains:
+     - "https://api.example.com"
+   ```
+
+3. **Mit Protokoll und Port** - Beschränkt auf ein bestimmtes Protokoll und einen bestimmten Port:
+   ```yaml
+   allowedDomains:
+     - "https://api.example.com:8443"
+   ```
+
+4. **Interne Adressen** (müssen explizit erlaubt werden):
+   ```yaml
+   allowedDomains:
+     - "192.168.1.100"
+     - "internal-api.local"
+   ```
+
+**Beispiel:**
+```yaml filename="actions / allowedDomains"
+allowedDomains:
+  - "swapi.dev"
+  - "librechat.ai"
+  - "google.com"
+  - "https://secure-api.example.com:443"
+  - "192.168.1.50"  # Internal service (explicitly allowed)
+```
+
+## allowedAddresses
+
+`allowedAddresses` ist eine **Ausnahmeliste** für die SSRF-Blockierung privater IP-Adressen – keine Domain-Whitelist. Es ist das richtige Werkzeug, wenn Sie ein oder zwei spezifische private/interne Dienste zulassen möchten, ohne einzuschränken, was Ihre Actions im öffentlichen Internet erreichen können.
+
+### Wann es anstelle von `allowedDomains` verwendet werden sollte [#when-to-use-it-instead-of-alloweddomains]
+
+`allowedDomains` ist eine strikte Whitelist: Wenn sie festgelegt ist, sind **nur** die aufgelisteten Einträge erreichbar. Das Hinzufügen einer privaten IP-Adresse, um beispielsweise eine selbst gehostete interne API zu erlauben, blockiert auch jeden öffentlichen Aktions-endpoint, den Sie nicht ebenfalls aufgelistet haben.
+
+`allowedAddresses` wird nur verwendet, wenn `allowedDomains` nicht konfiguriert ist. Es erlaubt spezifische private `host:port`-Ziele, während der Rest des öffentlichen Internets über die standardmäßige SSRF-Richtlinie erreichbar bleibt.
+
+```yaml filename="default SSRF + permitted private host"
+actions:
+  allowedAddresses:
+    - "host.docker.internal:11434"
+    - "10.0.0.5:8080"
+  # allowedDomains is intentionally not set — public destinations
+  # remain reachable, only listed private host:port services are exempted.
+```
+
+Wenn `allowedDomains` konfiguriert ist, ist dies maßgeblich: Private Dienste müssen dort aufgelistet werden, anstatt sich auf `allowedAddresses` zu verlassen.
+
+### Zulässige Einträge [#acceptable-entries]
+
+- **Hostnamen mit Port**: `host.docker.internal:11434`, `ollama.internal:8080`, `localhost:11434`
+- **Private IPv4-Literale mit Port**: `10.0.0.5:8080`, `127.0.0.1:11434`, `192.168.1.10:443`, `169.254.169.254:80`
+- **Eingeklammerte private IPv6-Literale mit Port**: `[::1]:11434`, `[fc00::1]:8080`, `[fe80::1]:8080`
+
+### Abgelehnte Einträge (validiert beim Laden der Konfiguration) [#rejected-entries-validated-at-config-load]
+
+- **URLs / Pfade / CIDR-Bereiche**: `http://10.0.0.5`, `10.0.0.0/24`, `/path`
+- **Bare Hostnamen oder IPs**: `localhost`, `10.0.0.5`, `::1`, `[::1]` — jeder Eintrag muss einen Port enthalten
+- **Ungültige Ports**: `localhost:0`, `localhost:65536`, `localhost:http`
+- **Öffentliche IP-Literale**: `8.8.8.8:53`, `1.1.1.1:53`, `[2001:4860::8888]:443` — das Feld ist auf den privaten IP-Adressraum beschränkt; öffentliche IPs sind keine SSRF-Ziele und eine Ausnahme für öffentliche IPs hat keinen defensiven Zweck
+
+### Hostname-Vertrauen [#hostname-trust]
+
+Ein Hostname-Eintrag vertraut jeder IP-Adresse, zu der der Hostname zur Laufzeit auf dem angegebenen Port aufgelöst wird. Wenn das DNS für einen aufgeführten Hostnamen rotiert oder gekapert wird, um auf eine andere private IP-Adresse zu verweisen, gilt die Ausnahme auch für diese. Führen Sie nur Hostnamen auf, deren DNS Sie kontrollieren. **Bevorzugen Sie nach Möglichkeit direkte IP-Adressen.**

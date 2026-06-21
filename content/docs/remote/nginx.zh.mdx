@@ -1,0 +1,178 @@
+---
+title: NGINX
+icon: Nginx
+description: 使用 Nginx 作为反向代理并配置 HTTPS 来保护您的 LibreChat 部署的分步指南
+---
+
+本指南涵盖了使用 SSL/TLS 证书为 HTTPS 保护 LibreChat 部署、设置 Nginx 作为反向代理以及配置域名的基本步骤。
+
+## 先决条件 [#prerequisites]
+
+1. 云服务器（例如 AWS、Google Cloud、Azure、Digital Ocean）。
+2. 一个已注册的域名。
+3. 访问云服务器的终端。
+4. 如果您直接在主机上运行 LibreChat，则需要 Node.js `v24.16.0` 和 npm `v11.16.0`。
+
+## 初始设置 [#initial-setup]
+
+### 将您的域名指向您的服务器 [#pointing-your-domain-to-your-server]
+
+在获取证书之前，请将您的域名指向云服务器的 IP 地址。此步骤是基础，必须在设置 SSL 证书之前完成，因为 DNS 记录在全球范围内生效可能需要一定时间。
+
+1. 登录您的域名注册商控制面板。
+2. 导航至 DNS 设置。
+3. 创建一个指向您云服务器 IP 地址的 `A record`。
+4. 等待 DNS 更改在全球范围内生效（你可以通过 ping 你的域名来检查：`ping your_domain.com`）。
+
+## 获取 SSL/TLS 证书 [#obtain-an-ssltls-certificate]
+
+为了使用 HTTPS 保护您的 LibreChat 应用程序，您需要一个 SSL/TLS 证书。Let's Encrypt 提供免费证书：
+
+1. 安装 Certbot：
+    - 对于 Ubuntu：`sudo apt-get install certbot python3-certbot-nginx`
+    - 对于 CentOS：`sudo yum install certbot python2-certbot-nginx`
+
+2. 获取证书：
+    - 运行 `sudo certbot --nginx` 以自动为 Nginx 获取并安装证书。
+    - 按照屏幕上的说明进行操作。Certbot 将会询问相关信息并完成验证过程。
+    - 成功后，Certbot 将会存储您的证书文件。
+
+## 设置 Nginx 作为反向代理 [#set-up-nginx-as-a-reverse-proxy]
+
+Nginx 作为反向代理，将客户端请求转发到您的 LibreChat 应用程序。有两种部署选项：
+
+### 选项 A：使用 `deploy-compose.yml` Docker Compose（推荐） [#option-a-using-the-deploy-composeyml-docker-compose-recommended]
+
+`deploy-compose.yml` 文件包含一个 Nginx 容器，并使用 `client/nginx.conf` 文件进行 Nginx 配置。然而，由于 `sudo certbot --nginx` 会将证书提取到宿主机配置中，你需要将该证书复制到 Docker 容器中。
+
+1. 使用您的域名和证书路径更新 `client/nginx.conf`。
+2. 在 `client` 部分更新 `deploy-compose.yml`，以挂载来自宿主机的证书文件：
+
+```yaml
+client:
+  # ...
+  volumes:
+    - ./client/nginx.conf:/etc/nginx/conf.d/default.conf
+    - /etc/letsencrypt/live/<your-domain>:/etc/letsencrypt/live/<your-domain>
+    - /etc/letsencrypt/archive/<your-domain>:/etc/letsencrypt/archive/<your-domain>
+    - /etc/letsencrypt/options-ssl-nginx.conf:/etc/letsencrypt/options-ssl-nginx.conf
+    - /etc/letsencrypt/ssl-dhparams.pem:/etc/letsencrypt/ssl-dhparams.pem
+```
+
+3. 停止任何正在运行的实例：`npm run stop:deployed`
+4. 将更改提交到一个新的 Git 分支。
+5. 重新基于已部署的实例进行变基：`npm run rebase:deployed`
+
+### 选项 B：不使用 Docker 的主机部署 [#option-b-host-based-deployment-without-docker]
+
+如果您没有使用 Docker，可以直接在主机上安装并配置 Nginx：
+
+1. 安装 Nginx：
+    - Ubuntu: `sudo apt-get install nginx`
+    - CentOS: `sudo yum install nginx`
+
+2. 启动 Nginx: `sudo systemctl start nginx`
+
+3. 打开 Nginx 配置文件：`sudo nano /etc/nginx/sites-available/default`
+
+4. 将文件内容替换为以下内容，并确保将 `your_domain.com` 替换为您的域名，将 `app_port` 替换为您应用程序的端口：
+
+```nginx filename="/etc/nginx/sites-available/default"
+server {
+    listen 80;
+    server_name your_domain.com;
+
+    location / {
+        proxy_pass http://localhost:app_port;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+    }
+}
+```
+
+5. 检查 Nginx 配置：`sudo nginx -t`
+6. 重载 Nginx：`sudo systemctl reload nginx`
+
+## 运行应用程序 [#run-the-application]
+
+1. 导航到您的应用程序目录：
+
+```bash filename="Replace 'LibreChat' with your actual application directory.
+cd LibreChat
+```
+
+2. 使用 Docker Compose 启动您的应用程序：
+
+```bash filename="Start your application"
+sudo docker compose -f ./deploy-compose.yml up -d
+```
+
+## 使用 nginx 时更新证书 [#renewing-certificates-when-using-nginx]
+
+如果您按照上述推荐的选项 A 设置了 nginx，请使用以下步骤更新证书：
+
+1. 导航到您的应用程序目录
+```bash filename="Replace 'LibreChat' with your actual application directory.
+cd LibreChat
+```
+
+2. 停止正在运行的 Docker 容器
+
+```bash filename="Stop your application"
+sudo docker compose -f ./deploy-compose.yml down -d
+```
+
+3. 更新证书
+
+```bash
+sudo certbot renew
+```
+
+4. 重启您的应用程序
+
+```bash filename="Start your application"
+sudo docker compose -f ./deploy-compose.yml up -d
+```
+
+注意：certbot 可能会重启宿主机的 nginx。你可以使用 `sudo pkill nginx` 将其终止。
+
+## Web 应用防火墙 [#web-application-firewall]
+
+可以通过利用 OWASP Core Rule Set (CRS) 将 Nginx 配置为 Web 应用防火墙 (WAF)，该规则集提供了一套强大的规则，用于防御常见的 Web 应用漏洞和攻击。将 OWASP CRS 与 Nginx 结合使用，可以通过增加额外的保护层来增强 LibreChat 部署的安全性。
+
+1. 安装 OWASP CRS：
+
+    - Ubuntu: `sudo apt-get install nginx-modsecurity-crs`
+
+2. 在 Nginx 中启用 ModSecurity：
+    - 打开您的 Nginx 配置文件（例如 `/etc/nginx/nginx.conf`）。
+    - 在 `http` 块中添加以下行：
+
+      ```yaml filename="nginx.conf"
+      modsecurity on;
+      modsecurity_rules_file /usr/share/nginx/modsecurity-crs/nginx-modsecurity.conf;
+      ```
+
+3. 配置 OWASP CRS：
+    - OWASP CRS 软件包通常包含一个配置文件（例如 `/etc/nginx/modsecurity.d/nginx-modsecurity.conf`），您可以在其中根据需求调整各种设置和规则集。
+
+4. 重新加载 Nginx：
+    - `sudo systemctl reload nginx`
+
+通过在 Nginx 配置中启用 OWASP CRS，您可以利用该项目提供的全面规则集来检测并缓解各种 Web 应用程序漏洞和攻击，例如 SQL 注入、跨站脚本攻击 (XSS)、远程文件包含等。
+
+## 静态文件缓存与压缩 [#static-file-caching-and-compression]
+
+LibreChat 现在原生支持静态文件缓存和压缩。如果您正在使用 NGINX 处理压缩，则应在 LibreChat 中禁用压缩，以避免冗余处理。您可以通过在 LibreChat 配置中将 `DISABLE_COMPRESSION` 环境变量设置为 `true` 来实现这一点。
+
+```.env
+# .env file
+DISABLE_COMPRESSION=true
+```
+
+这将防止 LibreChat 压缩静态文件，从而允许 NGINX 更高效地处理压缩。
+
+有关 LibreChat 中静态文件处理的更多信息（包括缓存选项），请参阅 [Static File Handling](/docs/configuration/dotenv#static-file-handling) 文档。
