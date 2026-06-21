@@ -2,98 +2,60 @@ import Link from 'next/link'
 import { Github, Linkedin, Youtube, Mail } from 'lucide-react'
 import Discord from './icons/discord'
 import X from './icons/x'
+import { getUI, type UIStrings } from '@/lib/ui-i18n'
+
+type HeadingKey = keyof UIStrings['footer']['headings']
+type ItemKey = keyof UIStrings['footer']['items']
 
 const menuItems: {
-  heading: string
-  items: { name: string; href: string }[]
+  heading: HeadingKey
+  items: { key: ItemKey; href: string }[]
 }[] = [
   {
-    heading: 'About',
+    heading: 'about',
     items: [
-      {
-        name: 'About',
-        href: '/about',
-      },
-      { name: 'Contact Us', href: '/about#contact-us' },
-      {
-        name: 'Features',
-        href: '/docs/features',
-      },
+      { key: 'about', href: '/about' },
+      { key: 'contactUs', href: '/about#contact-us' },
+      { key: 'features', href: '/docs/features' },
     ],
   },
   {
-    heading: 'Resources',
+    heading: 'resources',
     items: [
-      {
-        name: 'Changelog',
-        href: '/changelog',
-      },
-      {
-        name: 'Roadmap',
-        href: '/blog/2026-02-18_2026_roadmap',
-      },
-      {
-        name: 'Demo',
-        href: 'https://chat.librechat.ai/',
-      },
-      {
-        name: 'Status',
-        href: 'https://status.librechat.ai/',
-      },
+      { key: 'changelog', href: '/changelog' },
+      { key: 'roadmap', href: '/blog/2026-02-18_2026_roadmap' },
+      { key: 'demo', href: 'https://chat.librechat.ai/' },
+      { key: 'status', href: 'https://status.librechat.ai/' },
     ],
   },
   {
-    heading: 'Documentation',
+    heading: 'documentation',
     items: [
-      {
-        name: 'Get Started',
-        href: '/docs',
-      },
-      {
-        name: 'Local Install',
-        href: '/docs/local',
-      },
-      {
-        name: 'Remote Install',
-        href: '/docs/remote',
-      },
+      { key: 'getStarted', href: '/docs' },
+      { key: 'localInstall', href: '/docs/local' },
+      { key: 'remoteInstall', href: '/docs/remote' },
     ],
   },
   {
-    heading: 'Blog',
+    heading: 'blog',
     items: [
-      { name: 'Blog', href: '/blog' },
-      { name: 'Blog Authors', href: '/authors' },
+      { key: 'blog', href: '/blog' },
+      { key: 'blogAuthors', href: '/authors' },
     ],
   },
   {
-    heading: 'Newsletter',
+    heading: 'newsletter',
     items: [
-      {
-        name: 'Subscribe',
-        href: '/subscribe',
-      },
-      {
-        name: 'Unsubscribe',
-        href: '/unsubscribe',
-      },
+      { key: 'subscribe', href: '/subscribe' },
+      { key: 'unsubscribe', href: '/unsubscribe' },
     ],
   },
   {
-    heading: 'Legal',
+    heading: 'legal',
     items: [
-      {
-        name: 'Terms of Service',
-        href: '/tos',
-      },
-      {
-        name: 'Privacy policy',
-        href: '/privacy',
-      },
-      {
-        name: 'Cookie policy',
-        href: '/cookie',
-      },
+      { key: 'termsOfService', href: '/tos' },
+      { key: 'privacyPolicy', href: '/privacy' },
+      { key: 'cookiePolicy', href: '/cookie' },
     ],
   },
 ]
@@ -132,7 +94,8 @@ const socialLinks = [
 ]
 
 /** Site footer with navigation link columns and social media icon links. */
-const FooterMenu = () => {
+const FooterMenu = ({ lang }: { lang?: string }) => {
+  const t = getUI(lang).footer
   return (
     <footer className="w-full" role="contentinfo">
       <nav
@@ -141,12 +104,12 @@ const FooterMenu = () => {
       >
         {menuItems.map((menu) => (
           <div key={menu.heading}>
-            <p className="pb-2 font-mono font-bold text-primary">{menu.heading}</p>
+            <p className="pb-2 font-mono font-bold text-primary">{t.headings[menu.heading]}</p>
             <ul className="flex flex-col gap-2">
               {menu.items.map((item) => (
-                <li key={item.name}>
+                <li key={item.key}>
                   <Link href={item.href} className="text-sm leading-tight hover:text-primary/80">
-                    {item.name}
+                    {t.items[item.key]}
                   </Link>
                 </li>
               ))}

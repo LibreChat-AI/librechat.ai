@@ -13,101 +13,46 @@ import {
   ChevronRight,
   Terminal,
 } from 'lucide-react'
+import { getUI, type UIStrings } from '@/lib/ui-i18n'
 
-const paths = [
+type ItemKey = keyof UIStrings['docsHub']['items']
+type SectionKey = keyof UIStrings['docsHub']['sections']
+
+const paths: { id: SectionKey; items: { icon: typeof Rocket; key: ItemKey; href: string }[] }[] = [
   {
     id: 'deploy',
-    title: 'Deploy',
     items: [
-      {
-        icon: Rocket,
-        title: 'Quick Start',
-        description: 'Docker setup in 5 minutes',
-        href: '/docs/quick_start',
-      },
-      {
-        icon: Server,
-        title: 'Local Installation',
-        description: 'Docker, npm, and Helm Chart',
-        href: '/docs/local',
-      },
-      {
-        icon: Cloud,
-        title: 'Remote Hosting',
-        description: 'DigitalOcean, Railway, and more',
-        href: '/docs/remote',
-      },
+      { icon: Rocket, key: 'quickStart', href: '/docs/quick_start' },
+      { icon: Server, key: 'local', href: '/docs/local' },
+      { icon: Cloud, key: 'remote', href: '/docs/remote' },
     ],
   },
   {
     id: 'configure',
-    title: 'Configure',
     items: [
-      {
-        icon: Settings,
-        title: 'Configuration',
-        description: 'Environment variables, YAML, and auth',
-        href: '/docs/configuration',
-      },
-      {
-        icon: Terminal,
-        title: 'Custom Endpoints',
-        description: 'Connect Ollama, Deepseek, Groq, and more',
-        href: '/docs/quick_start/custom_endpoints',
-      },
+      { icon: Settings, key: 'configuration', href: '/docs/configuration' },
+      { icon: Terminal, key: 'customEndpoints', href: '/docs/quick_start/custom_endpoints' },
     ],
   },
   {
     id: 'use',
-    title: 'Use',
     items: [
-      {
-        icon: Sparkles,
-        title: 'Features',
-        description: 'MCP, Agents, Code Interpreter, Artifacts',
-        href: '/docs/features',
-      },
-      {
-        icon: BookOpen,
-        title: 'User Guides',
-        description: 'Presets, tips, and best practices',
-        href: '/docs/user_guides',
-      },
+      { icon: Sparkles, key: 'features', href: '/docs/features' },
+      { icon: BookOpen, key: 'userGuides', href: '/docs/user_guides' },
     ],
   },
   {
     id: 'contribute',
-    title: 'Contribute',
-    items: [
-      {
-        icon: Code,
-        title: 'Development',
-        description: 'Contributing, architecture, and debugging',
-        href: '/docs/development',
-      },
-    ],
+    items: [{ icon: Code, key: 'development', href: '/docs/development' }],
   },
 ]
 
-const resources = [
-  {
-    icon: FileText,
-    title: 'Changelog',
-    description: 'Latest releases',
-    href: '/changelog',
-  },
-  {
-    icon: Map,
-    title: '2026 Roadmap',
-    description: "What's planned",
-    href: '/blog/2026-02-18_2026_roadmap',
-  },
-  {
-    icon: MessageSquare,
-    title: 'Discord',
-    description: 'Get help',
-    href: 'https://discord.librechat.ai',
-  },
+type ResourceKey = keyof UIStrings['resources']
+
+const resources: { icon: typeof FileText; key: ResourceKey; href: string }[] = [
+  { icon: FileText, key: 'changelog', href: '/changelog' },
+  { icon: Map, key: 'roadmap', href: '/blog/2026-02-18_2026_roadmap' },
+  { icon: MessageSquare, key: 'discord', href: 'https://discord.librechat.ai' },
 ]
 
 function SectionHeading({ children, id }: { children: React.ReactNode; id: string }) {
@@ -124,19 +69,22 @@ function SectionHeading({ children, id }: { children: React.ReactNode; id: strin
   )
 }
 
-export function DocsHub() {
+export function DocsHub({ lang }: { lang?: string }) {
+  const ui = getUI(lang)
+  const t = ui.docsHub
   return (
     <nav className="not-prose space-y-10" aria-label="Documentation navigation">
       {/* Intent-based path groups */}
       {paths.map((path) => (
         <section key={path.id} aria-labelledby={`${path.id}-heading`}>
-          <SectionHeading id={`${path.id}-heading`}>{path.title}</SectionHeading>
+          <SectionHeading id={`${path.id}-heading`}>{t.sections[path.id]}</SectionHeading>
           <div className="overflow-hidden rounded-xl border border-fd-border">
             {path.items.map((item, i) => {
               const Icon = item.icon
+              const text = t.items[item.key]
               return (
                 <Link
-                  key={item.title}
+                  key={item.key}
                   href={item.href}
                   className={`group flex items-center gap-4 px-5 py-4 transition-colors hover:bg-fd-accent${i < path.items.length - 1 ? ' border-b border-fd-border' : ''}`}
                 >
@@ -147,8 +95,8 @@ export function DocsHub() {
                     />
                   </div>
                   <div className="min-w-0 flex-1">
-                    <span className="text-sm font-medium text-fd-foreground">{item.title}</span>
-                    <p className="text-xs text-fd-muted-foreground">{item.description}</p>
+                    <span className="text-sm font-medium text-fd-foreground">{text.title}</span>
+                    <p className="text-xs text-fd-muted-foreground">{text.description}</p>
                   </div>
                   <ChevronRight
                     className="size-4 shrink-0 text-fd-muted-foreground/40 transition-all group-hover:translate-x-0.5 group-hover:text-fd-foreground"
@@ -163,14 +111,15 @@ export function DocsHub() {
 
       {/* Resources */}
       <section aria-labelledby="resources-heading">
-        <SectionHeading id="resources-heading">Resources</SectionHeading>
+        <SectionHeading id="resources-heading">{ui.common.resources}</SectionHeading>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           {resources.map((item) => {
             const Icon = item.icon
+            const text = ui.resources[item.key]
             const isExternal = item.href.startsWith('http')
             return (
               <Link
-                key={item.title}
+                key={item.key}
                 href={item.href}
                 {...(isExternal ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
                 className="group flex items-center gap-3 rounded-lg border border-fd-border px-4 py-3 transition-all hover:border-fd-foreground/20 hover:bg-fd-accent"
@@ -180,8 +129,8 @@ export function DocsHub() {
                   aria-hidden="true"
                 />
                 <div className="min-w-0">
-                  <span className="text-sm font-medium text-fd-foreground">{item.title}</span>
-                  <span className="ml-2 text-xs text-fd-muted-foreground">{item.description}</span>
+                  <span className="text-sm font-medium text-fd-foreground">{text.title}</span>
+                  <span className="ml-2 text-xs text-fd-muted-foreground">{text.description}</span>
                 </div>
               </Link>
             )

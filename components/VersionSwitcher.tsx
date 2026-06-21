@@ -11,6 +11,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { versions } from '@/lib/versions'
 import { i18n } from '@/lib/i18n'
+import { getUI } from '@/lib/ui-i18n'
 import { cn } from '@/lib/utils'
 
 /**
@@ -34,6 +35,7 @@ export function VersionSwitcher() {
       ? firstSegment
       : null
   const localePrefix = locale ? `/${locale}` : ''
+  const t = getUI(locale ?? i18n.defaultLanguage).version
 
   // Strip the locale prefix to compare against the registry's canonical URLs.
   const canonicalPath = locale ? pathname.slice(localePrefix.length) || '/' : pathname
@@ -52,11 +54,11 @@ export function VersionSwitcher() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
-        aria-label="Select documentation version"
+        aria-label={t.aria}
         className="flex w-full items-center justify-between gap-2 rounded-lg border border-fd-border bg-fd-card px-3 py-2 text-sm transition-colors hover:bg-fd-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fd-ring"
       >
         <span className="flex flex-col items-start">
-          <span className="text-[11px] text-fd-muted-foreground">Version</span>
+          <span className="text-[11px] text-fd-muted-foreground">{t.label}</span>
           <span className="font-medium text-fd-foreground">{active.label}</span>
         </span>
         <ChevronsUpDown className="size-4 shrink-0 text-fd-muted-foreground" aria-hidden="true" />

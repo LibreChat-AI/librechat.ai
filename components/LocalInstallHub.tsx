@@ -12,6 +12,7 @@ import {
   Shield,
 } from 'lucide-react'
 import type { ComponentProps } from 'react'
+import { getUI, type UIStrings } from '@/lib/ui-i18n'
 
 function DockerLogo(props: ComponentProps<'svg'>) {
   return (
@@ -53,7 +54,24 @@ const services = [
   { name: 'Vector DB', icon: HardDrive },
 ]
 
-const methods = [
+type MethodKey = keyof UIStrings['localInstallHub']['methods']
+type DifficultyKey = keyof UIStrings['localInstallHub']['difficulty']
+
+// Structural data only; localized description is pulled from the dictionary by
+// `id`. Brand titles, prereq labels, commands and bundled service names stay as
+// written.
+const methods: {
+  id: MethodKey
+  icon: typeof DockerLogo
+  title: string
+  recommended: boolean
+  href: string
+  time: string
+  difficulty: DifficultyKey
+  prereqs: { label: string; href: string | null }[]
+  commands: string[]
+  included: string[]
+}[] = [
   {
     id: 'docker',
     icon: DockerLogo,
@@ -62,8 +80,6 @@ const methods = [
     href: '/docs/local/docker',
     time: '~5 min',
     difficulty: 'Beginner',
-    description:
-      'Everything runs in containers. MongoDB, MeiliSearch, RAG API, and Vector DB are all included automatically.',
     prereqs: [
       { label: 'Git', href: 'https://git-scm.com/downloads' },
       { label: 'Docker Desktop', href: 'https://www.docker.com/products/docker-desktop/' },
@@ -84,8 +100,6 @@ const methods = [
     href: '/docs/local/npm',
     time: '~20 min',
     difficulty: 'Intermediate',
-    description:
-      'Run LibreChat directly with Node.js. You manage external services like MongoDB and MeiliSearch yourself.',
     prereqs: [
       { label: 'Node.js v20.19+', href: 'https://nodejs.org/en/download' },
       { label: 'Git', href: 'https://git-scm.com/downloads' },
@@ -107,8 +121,6 @@ const methods = [
     href: '/docs/local/helm_chart',
     time: '~15 min',
     difficulty: 'Advanced',
-    description:
-      'Deploy on Kubernetes using Helm. Best for production clusters and infrastructure-as-code workflows.',
     prereqs: [
       { label: 'Kubernetes cluster', href: null },
       { label: 'kubectl + Helm', href: null },
@@ -121,7 +133,7 @@ const methods = [
   },
 ]
 
-function DifficultyBadge({ level }: { level: string }) {
+function DifficultyBadge({ level, label }: { level: DifficultyKey; label: string }) {
   const colors: Record<string, string> = {
     Beginner: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
     Intermediate: 'bg-amber-500/10 text-amber-600 dark:text-amber-400',
@@ -129,12 +141,14 @@ function DifficultyBadge({ level }: { level: string }) {
   }
   return (
     <span className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium ${colors[level] ?? ''}`}>
-      {level}
+      {label}
     </span>
   )
 }
 
-export function LocalInstallHub() {
+export function LocalInstallHub({ lang }: { lang?: string }) {
+  const ui = getUI(lang)
+  const t = ui.localInstallHub
   return (
     <div className="not-prose space-y-10">
       {/* Services matrix — what Docker includes */}
@@ -144,7 +158,7 @@ export function LocalInstallHub() {
             id="included-heading"
             className="shrink-0 text-xs font-semibold uppercase tracking-widest text-fd-muted-foreground"
           >
-            Bundled with Docker
+            {t.bundledHeading}
           </h2>
           <div className="h-px flex-1 bg-fd-border" aria-hidden="true" />
         </div>
@@ -162,10 +176,7 @@ export function LocalInstallHub() {
             )
           })}
         </div>
-        <p className="mt-3 text-xs leading-relaxed text-fd-muted-foreground">
-          Docker Compose handles all dependencies. With npm or Helm, you install and configure these
-          services separately.
-        </p>
+        <p className="mt-3 text-xs leading-relaxed text-fd-muted-foreground">{t.bundledNote}</p>
       </section>
 
       {/* Installation methods */}
@@ -175,7 +186,7 @@ export function LocalInstallHub() {
             id="methods-heading"
             className="shrink-0 text-xs font-semibold uppercase tracking-widest text-fd-muted-foreground"
           >
-            Choose a method
+            {t.chooseMethodHeading}
           </h2>
           <div className="h-px flex-1 bg-fd-border" aria-hidden="true" />
         </div>
@@ -209,13 +220,16 @@ export function LocalInstallHub() {
                       <h3 className="text-base font-semibold text-fd-foreground">{method.title}</h3>
                       {method.recommended && (
                         <span className="rounded-full bg-fd-primary px-2.5 py-0.5 text-[11px] font-medium text-fd-primary-foreground">
-                          Recommended
+                          {ui.common.recommended}
                         </span>
                       )}
-                      <DifficultyBadge level={method.difficulty} />
+                      <DifficultyBadge
+                        level={method.difficulty}
+                        label={t.difficulty[method.difficulty]}
+                      />
                     </div>
                     <p className="text-sm leading-relaxed text-fd-muted-foreground">
-                      {method.description}
+                      {t.methods[method.id].description}
                     </p>
                   </div>
                   <div className="hidden shrink-0 items-center gap-1.5 text-xs text-fd-muted-foreground sm:flex">
@@ -229,7 +243,7 @@ export function LocalInstallHub() {
                   {/* Prerequisites */}
                   <div className="sm:w-1/3">
                     <span className="mb-2 block text-[11px] font-semibold uppercase tracking-wider text-fd-muted-foreground">
-                      Prerequisites
+                      {ui.common.prerequisites}
                     </span>
                     <ul className="space-y-1.5">
                       {method.prereqs.map((prereq) => (
@@ -247,7 +261,7 @@ export function LocalInstallHub() {
                   {/* Quick commands */}
                   <div className="flex-1">
                     <span className="mb-2 block text-[11px] font-semibold uppercase tracking-wider text-fd-muted-foreground">
-                      Commands
+                      {ui.common.commands}
                     </span>
                     <div className="overflow-hidden rounded-lg border border-fd-border bg-fd-background">
                       {method.commands.map((cmd, i) => (
@@ -286,14 +300,14 @@ export function LocalInstallHub() {
                     </div>
                   ) : (
                     <span className="text-[11px] text-fd-muted-foreground/60">
-                      External services required
+                      {t.externalServicesRequired}
                     </span>
                   )}
                   <span
                     className="inline-flex items-center gap-1.5 text-sm font-medium text-fd-foreground transition-colors group-hover:text-fd-foreground/80"
                     aria-hidden="true"
                   >
-                    View full guide
+                    {ui.common.viewFullGuide}
                     <ArrowRight className="size-3.5 transition-transform group-hover:translate-x-0.5" />
                   </span>
                 </div>
@@ -310,7 +324,7 @@ export function LocalInstallHub() {
             id="remote-heading"
             className="shrink-0 text-xs font-semibold uppercase tracking-widest text-fd-muted-foreground"
           >
-            Not running locally?
+            {t.notRunningLocallyHeading}
           </h2>
           <div className="h-px flex-1 bg-fd-border" aria-hidden="true" />
         </div>
@@ -326,10 +340,10 @@ export function LocalInstallHub() {
               />
             </div>
             <div className="min-w-0 flex-1">
-              <span className="text-sm font-medium text-fd-foreground">Remote Hosting</span>
-              <p className="text-xs text-fd-muted-foreground">
-                DigitalOcean, Railway, Azure, and more
-              </p>
+              <span className="text-sm font-medium text-fd-foreground">
+                {t.remoteHosting.title}
+              </span>
+              <p className="text-xs text-fd-muted-foreground">{t.remoteHosting.description}</p>
             </div>
             <ArrowRight
               className="size-4 shrink-0 text-fd-muted-foreground/40 transition-all group-hover:translate-x-0.5 group-hover:text-fd-foreground"
@@ -347,10 +361,8 @@ export function LocalInstallHub() {
               />
             </div>
             <div className="min-w-0 flex-1">
-              <span className="text-sm font-medium text-fd-foreground">.env Configuration</span>
-              <p className="text-xs text-fd-muted-foreground">
-                In-depth guide for environment variables
-              </p>
+              <span className="text-sm font-medium text-fd-foreground">{t.envConfig.title}</span>
+              <p className="text-xs text-fd-muted-foreground">{t.envConfig.description}</p>
             </div>
             <ArrowRight
               className="size-4 shrink-0 text-fd-muted-foreground/40 transition-all group-hover:translate-x-0.5 group-hover:text-fd-foreground"
