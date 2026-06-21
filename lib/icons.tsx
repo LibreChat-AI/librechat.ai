@@ -87,6 +87,7 @@ import {
   Github,
   Chrome,
   // Features
+  FolderKanban,
   Puzzle,
   Palette,
   Image,
@@ -176,6 +177,7 @@ const icons: Record<string, ReactElement> = {
   MessageCircle: <MessageCircle />,
   Github: <Github />,
   Chrome: <Chrome />,
+  FolderKanban: <FolderKanban />,
   Puzzle: <Puzzle />,
   Palette: <Palette />,
   Image: <Image />,
