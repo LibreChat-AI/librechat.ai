@@ -34,6 +34,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history so the bot commit can be rebased onto an advanced main
+          # before pushing (see the Commit step's rebase-and-retry loop).
+          fetch-depth: 0
 
       - uses: pnpm/action-setup@v4
 
@@ -64,5 +68,24 @@ jobs:
             echo "No translation changes to commit"
           else
             git commit --no-verify -m "chore: update docs translations"
-            git push
+            # main may have advanced while translating (e.g. an unrelated non-docs
+            # commit that does not queue another translate run). Rebase the bot
+            # commit onto the latest main and retry so a non-fast-forward rejection
+            # doesn't silently drop the generated translations. Only locale files
+            # and the cache are touched here, so a rebase onto other changes is
+            # conflict-free in practice.
+            pushed=false
+            for attempt in 1 2 3 4 5; do
+              git pull --rebase origin main
+              if git push; then
+                pushed=true
+                break
+              fi
+              echo "push attempt $attempt rejected (remote advanced); retrying"
+              sleep 5
+            done
+            if [ "$pushed" != "true" ]; then
+              echo "::error::failed to push translations after 5 attempts"
+              exit 1
+            fi
           fi
