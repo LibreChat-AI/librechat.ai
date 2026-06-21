@@ -301,10 +301,15 @@ function stripFencedBlocks(body: string): string {
 // them intact. We compare them as multisets in validation: dropping the delimiter
 // row collapses a table, dropping a `>` ejects lines from a blockquote — neither
 // is otherwise visible to the inline-code / link / placeholder guards.
-export function collectBlockStructure(body: string): { tables: string[]; quotes: string[] } {
+export function collectBlockStructure(body: string): {
+  tables: string[]
+  quotes: string[]
+  headings: string[]
+} {
   const withoutFences = stripFencedBlocks(body)
   const tables: string[] = []
   const quotes: string[] = []
+  const headings: string[] = []
   for (const raw of withoutFences.split('\n')) {
     const line = raw.trim()
     // Delimiter row: only spaces, pipes, colons, dashes, with at least one of each
@@ -315,8 +320,13 @@ export function collectBlockStructure(body: string): { tables: string[]; quotes:
     }
     const q = raw.match(/^\s*(>+)/)
     if (q) quotes.push(q[1])
+    // ATX heading marker. A translation that drops or changes the `#` level (e.g.
+    // returns plain `Was ist RAG` instead of `## Was ist RAG`) silently loses the
+    // heading and its TOC entry, and any pinned same-page anchor stops resolving.
+    const h = raw.match(/^ {0,3}(#{1,6})\s/)
+    if (h) headings.push(h[1])
   }
-  return { tables, quotes }
+  return { tables, quotes, headings }
 }
 
 /**

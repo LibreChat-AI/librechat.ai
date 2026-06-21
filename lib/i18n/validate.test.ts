@@ -192,6 +192,39 @@ describe('validateTranslation', () => {
     expect(validateTranslation(src, good).ok).toBe(true)
   })
 
+  it('accepts a translated heading but rejects one that loses its ATX marker', () => {
+    const src = `---\ntitle: T\ndescription: D\n---\n\n## What is RAG\n\nBody.\n`
+    const good = `---\ntitle: T\ndescription: D\n---\n\n## Was ist RAG\n\nKörper.\n`
+    const bad = `---\ntitle: T\ndescription: D\n---\n\nWas ist RAG\n\nKörper.\n`
+    expect(validateTranslation(src, good).ok).toBe(true)
+    const result = validateTranslation(src, bad)
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatch(/heading level/i)
+  })
+
+  it('rejects a heading whose level changed', () => {
+    const src = `---\ntitle: T\ndescription: D\n---\n\n## Section\n\nBody.\n`
+    const bad = `---\ntitle: T\ndescription: D\n---\n\n### Abschnitt\n\nKörper.\n`
+    const result = validateTranslation(src, bad)
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatch(/heading level/i)
+  })
+
+  it('rejects a translation that swaps two link destinations', () => {
+    const src = `---\ntitle: T\ndescription: D\n---\n\nUse [Nginx](/docs/nginx) or [Traefik](/docs/traefik).\n`
+    // Labels translated but destinations swapped: same URL multiset, wrong links.
+    const bad = `---\ntitle: T\ndescription: D\n---\n\nVerwende [Nginx](/docs/traefik) oder [Traefik](/docs/nginx).\n`
+    const result = validateTranslation(src, bad)
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatch(/link target/i)
+  })
+
+  it('accepts a translation that keeps each link destination with its label', () => {
+    const src = `---\ntitle: T\ndescription: D\n---\n\nUse [Nginx](/docs/nginx) or [Traefik](/docs/traefik).\n`
+    const good = `---\ntitle: T\ndescription: D\n---\n\nVerwende [Nginx](/docs/nginx) oder [Traefik](/docs/traefik).\n`
+    expect(validateTranslation(src, good).ok).toBe(true)
+  })
+
   it('rejects a rewritten bare URL inside a JSX expression string', () => {
     const src = `---\ntitle: T\ndescription: D\n---\n\n<OptionTable options={[['KEY', 'string', 'Get your key from https://serper.dev/api-key', '# KEY=']]} />\n`
     const bad = `---\ntitle: T\ndescription: D\n---\n\n<OptionTable options={[['KEY', 'string', 'Hol deinen Schlüssel von https://serper.de/api-schluessel', '# KEY=']]} />\n`
