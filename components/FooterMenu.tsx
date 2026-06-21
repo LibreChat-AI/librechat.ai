@@ -110,7 +110,7 @@ const FooterMenu = ({ lang }: { lang?: string }) => {
               {menu.items.map((item) => (
                 <li key={item.key}>
                   <Link
-                    href={localizedDocsHref(item.href, lang ?? 'en')}
+                    href={localizedDocsHref(item.href, lang)}
                     className="text-sm leading-tight hover:text-primary/80"
                   >
                     {t.items[item.key]}

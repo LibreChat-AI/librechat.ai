@@ -11,6 +11,7 @@ import {
   BookOpen,
 } from 'lucide-react'
 import type { ComponentProps } from 'react'
+import { localizedDocsHref } from '@/lib/i18n'
 import { getUI, type UIStrings } from '@/lib/ui-i18n'
 
 function DockerLogo(props: ComponentProps<'svg'>) {
@@ -87,7 +88,7 @@ export function QuickStartHub({ lang }: { lang?: string }) {
           return (
             <Link
               key={method.key}
-              href={method.href}
+              href={localizedDocsHref(method.href, lang)}
               className="group flex flex-col rounded-xl border border-fd-border bg-fd-card transition-all duration-200 hover:border-fd-foreground/20 hover:shadow-lg hover:shadow-fd-foreground/[0.03]"
             >
               {/* Header */}
@@ -164,7 +165,7 @@ export function QuickStartHub({ lang }: { lang?: string }) {
           <div className="h-px flex-1 bg-fd-border" aria-hidden="true" />
         </div>
         <Link
-          href="/docs/quick_start/custom_endpoints"
+          href={localizedDocsHref('/docs/quick_start/custom_endpoints', lang)}
           className="group flex items-center gap-4 rounded-xl border border-fd-border px-5 py-4 transition-colors hover:bg-fd-accent"
         >
           <div className="shrink-0 rounded-md bg-fd-accent p-2 transition-colors group-hover:bg-fd-background">
@@ -199,7 +200,7 @@ export function QuickStartHub({ lang }: { lang?: string }) {
         </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <Link
-            href="/docs/features"
+            href={localizedDocsHref('/docs/features', lang)}
             className="group flex items-center gap-4 rounded-xl border border-fd-border px-5 py-4 transition-colors hover:border-fd-foreground/20 hover:bg-fd-accent"
           >
             <div className="shrink-0 rounded-md bg-fd-accent p-2 transition-colors group-hover:bg-fd-background">
@@ -220,7 +221,7 @@ export function QuickStartHub({ lang }: { lang?: string }) {
             />
           </Link>
           <Link
-            href="/docs/user_guides"
+            href={localizedDocsHref('/docs/user_guides', lang)}
             className="group flex items-center gap-4 rounded-xl border border-fd-border px-5 py-4 transition-colors hover:border-fd-foreground/20 hover:bg-fd-accent"
           >
             <div className="shrink-0 rounded-md bg-fd-accent p-2 transition-colors group-hover:bg-fd-background">
@@ -262,7 +263,7 @@ export function QuickStartHub({ lang }: { lang?: string }) {
             return (
               <Link
                 key={item.key}
-                href={item.href}
+                href={localizedDocsHref(item.href, lang)}
                 {...(isExternal ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
                 className="group flex items-center gap-3 rounded-lg border border-fd-border px-4 py-3 transition-all hover:border-fd-foreground/20 hover:bg-fd-accent"
               >

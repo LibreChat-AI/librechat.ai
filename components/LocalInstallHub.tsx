@@ -12,6 +12,7 @@ import {
   Shield,
 } from 'lucide-react'
 import type { ComponentProps } from 'react'
+import { localizedDocsHref } from '@/lib/i18n'
 import { getUI, type UIStrings } from '@/lib/ui-i18n'
 
 function DockerLogo(props: ComponentProps<'svg'>) {
@@ -197,7 +198,7 @@ export function LocalInstallHub({ lang }: { lang?: string }) {
             return (
               <Link
                 key={method.id}
-                href={method.href}
+                href={localizedDocsHref(method.href, lang)}
                 className={`group flex flex-col overflow-hidden rounded-xl border transition-all duration-200 hover:shadow-lg hover:shadow-fd-foreground/[0.03] ${
                   method.recommended
                     ? 'border-fd-foreground/15 bg-fd-card'
@@ -330,7 +331,7 @@ export function LocalInstallHub({ lang }: { lang?: string }) {
         </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <Link
-            href="/docs/remote"
+            href={localizedDocsHref('/docs/remote', lang)}
             className="group flex items-center gap-4 rounded-xl border border-fd-border px-5 py-4 transition-colors hover:bg-fd-accent"
           >
             <div className="shrink-0 rounded-md bg-fd-accent p-2 transition-colors group-hover:bg-fd-background">
@@ -351,7 +352,7 @@ export function LocalInstallHub({ lang }: { lang?: string }) {
             />
           </Link>
           <Link
-            href="/docs/configuration/dotenv"
+            href={localizedDocsHref('/docs/configuration/dotenv', lang)}
             className="group flex items-center gap-4 rounded-xl border border-fd-border px-5 py-4 transition-colors hover:bg-fd-accent"
           >
             <div className="shrink-0 rounded-md bg-fd-accent p-2 transition-colors group-hover:bg-fd-background">

@@ -27,8 +27,8 @@ export const i18n: I18nConfig = {
  * safe. The default language, external links, and non-docs internal paths
  * (`/blog`, `/changelog`, …) — which have no locale routes — are returned as-is.
  */
-export function localizedDocsHref(href: string, lang: string): string {
-  if (lang === i18n.defaultLanguage) return href
+export function localizedDocsHref(href: string, lang?: string): string {
+  if (!lang || lang === i18n.defaultLanguage) return href
   if (href !== '/docs' && !href.startsWith('/docs/')) return href
   return `/${lang}${href}`
 }

@@ -25,6 +25,7 @@ import {
   ChevronRight,
   Sparkles,
 } from 'lucide-react'
+import { localizedDocsHref } from '@/lib/i18n'
 import { getUI, type UIStrings } from '@/lib/ui-i18n'
 
 type ResolvedFeature = {
@@ -176,7 +177,7 @@ export function FeaturesHub({ lang }: { lang?: string }) {
       <section aria-labelledby="hero-heading">
         <SectionHeading id="hero-heading">{t.featuredHeading}</SectionHeading>
         <Link
-          href={hero.href}
+          href={localizedDocsHref(hero.href, lang)}
           className="group relative flex flex-col overflow-hidden rounded-xl border border-fd-foreground/15 bg-fd-card transition-all duration-200 hover:border-fd-foreground/25 hover:shadow-lg hover:shadow-fd-foreground/[0.04] sm:flex-row"
         >
           {/* Icon area */}
@@ -219,7 +220,11 @@ export function FeaturesHub({ lang }: { lang?: string }) {
             return (
               <FeatureCard
                 key={feature.key}
-                feature={{ icon: feature.icon, href: feature.href, ...text }}
+                feature={{
+                  icon: feature.icon,
+                  href: localizedDocsHref(feature.href, lang),
+                  ...text,
+                }}
                 learnMore={ui.common.learnMore}
               />
             )
@@ -240,7 +245,11 @@ export function FeaturesHub({ lang }: { lang?: string }) {
                 {category.items.map((item) => (
                   <FeatureCard
                     key={item.key}
-                    feature={{ icon: item.icon, href: item.href, ...itemsText[item.key] }}
+                    feature={{
+                      icon: item.icon,
+                      href: localizedDocsHref(item.href, lang),
+                      ...itemsText[item.key],
+                    }}
                     learnMore={ui.common.learnMore}
                   />
                 ))}
@@ -250,7 +259,11 @@ export function FeaturesHub({ lang }: { lang?: string }) {
                 {category.items.map((item, i) => (
                   <ListItem
                     key={item.key}
-                    item={{ icon: item.icon, href: item.href, ...itemsText[item.key] }}
+                    item={{
+                      icon: item.icon,
+                      href: localizedDocsHref(item.href, lang),
+                      ...itemsText[item.key],
+                    }}
                     last={i === category.items.length - 1}
                   />
                 ))}

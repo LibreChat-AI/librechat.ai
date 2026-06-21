@@ -13,6 +13,7 @@ import {
   ChevronRight,
   Terminal,
 } from 'lucide-react'
+import { localizedDocsHref } from '@/lib/i18n'
 import { getUI, type UIStrings } from '@/lib/ui-i18n'
 
 type ItemKey = keyof UIStrings['docsHub']['items']
@@ -85,7 +86,7 @@ export function DocsHub({ lang }: { lang?: string }) {
               return (
                 <Link
                   key={item.key}
-                  href={item.href}
+                  href={localizedDocsHref(item.href, lang)}
                   className={`group flex items-center gap-4 px-5 py-4 transition-colors hover:bg-fd-accent${i < path.items.length - 1 ? ' border-b border-fd-border' : ''}`}
                 >
                   <div className="shrink-0 rounded-md bg-fd-accent p-2 transition-colors group-hover:bg-fd-background">
@@ -120,7 +121,7 @@ export function DocsHub({ lang }: { lang?: string }) {
             return (
               <Link
                 key={item.key}
-                href={item.href}
+                href={localizedDocsHref(item.href, lang)}
                 {...(isExternal ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
                 className="group flex items-center gap-3 rounded-lg border border-fd-border px-4 py-3 transition-all hover:border-fd-foreground/20 hover:bg-fd-accent"
               >

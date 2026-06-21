@@ -12,7 +12,7 @@ import { JsonLd } from '@/components/JsonLd'
 import { articleSchema, breadcrumbSchema } from '@/lib/structured-data'
 import { ogImageUrl } from '@/lib/og'
 import { MachineTranslatedBanner } from '@/components/MachineTranslatedBanner'
-import { i18n } from '@/lib/i18n'
+import { i18n, localizedDocsHref } from '@/lib/i18n'
 import type { Metadata } from 'next'
 
 interface PageProps {
@@ -79,7 +79,11 @@ export default async function Page(props: PageProps) {
     <DocsPage
       toc={page.data.toc}
       tableOfContent={{ style: 'clerk' }}
-      breadcrumb={{ enabled: true, includeRoot: { url: '/docs' }, includePage: true }}
+      breadcrumb={{
+        enabled: true,
+        includeRoot: { url: localizedDocsHref('/docs', params.lang) },
+        includePage: true,
+      }}
       lastUpdate={page.data.lastModified}
       editOnGithub={{
         owner: 'LibreChat-AI',
