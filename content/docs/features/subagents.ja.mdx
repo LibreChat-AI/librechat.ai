@@ -1,0 +1,129 @@
+---
+title: サブエージェント
+icon: Network
+description: 特定のタスクを1つのエージェントから分離された子エージェントの実行へと委任します。
+---
+
+Subagentsを使用すると、LibreChat Agentは特定のタスクに集中させるための分離された子実行を生成できます。子エージェントは独自のコンテキストウィンドウとツール実行フローを持ちます。親エージェントは、すべての中間的なツール呼び出し、トレース、または冗長なファイル操作を自身のコンテキストに取り込むことなく、子エージェントの結果のみを受け取ります。
+
+以下にサブエージェントを使用します：
+
+- 長い中間出力を生成する可能性のあるリサーチサブタスク
+- 専門エージェントによるレビューの合格
+- 親コンテキストの外に留めるべき、ツールを多用する作業
+- 親が調整と要約を行う並列スタイルの分解
+
+## Subagents と Agent Chain の違い [#how-subagents-differ-from-agent-chain]
+
+Agent Chainは、エージェントが設定されたチェーンステップを通じて結果を渡すマルチエージェントグラフを構築します。サブエージェントは、実行中のツール呼び出しとしてエージェントによって生成されます。
+
+- **Agent Chain**: グラフレベルのマルチエージェントワークフロー
+- **Subagents**: 親エージェントから分離された子実行へのランタイム委任
+
+どちらも既存のエージェントを使用できますが、サブエージェントは単一のエージェントの推論ループ内からスコープを限定した委任を行うために設計されています。
+
+## 機能の有効化 [#enable-the-capability]
+
+`subagents` 機能はデフォルトで有効になっています。管理者は、agents エンドポイントの機能リストから削除することで、この機能を無効にできます。
+
+```yaml filename="librechat.yaml"
+endpoints:
+  agents:
+    capabilities:
+      - 'deferred_tools'
+      - 'execute_code'
+      - 'file_search'
+      - 'web_search'
+      - 'artifacts'
+      - 'subagents'
+      - 'actions'
+      - 'context'
+      - 'skills'
+      - 'tools'
+      - 'chain'
+      - 'ocr'
+```
+
+## エージェントの設定 [#configure-an-agent]
+
+Agent Builderで、**Advanced Settings**を開き、**Subagents**を有効にします。
+
+利用可能な設定:
+
+- **Enable subagents**: エージェントにサブエージェント生成ツールを追加します。
+- **Allow self-spawn**: エージェントが分離されたコンテキスト内で自身の新しいコピーを生成できるようにします。これは、サブエージェントが有効な場合にデフォルトで有効になります。
+- **Additional subagents**: 親エージェントが生成できる特定のサブエージェントを選択します。
+
+同等のエージェント形状:
+
+```yaml filename="agent subagents"
+subagents:
+  enabled: true
+  allowSelf: true
+  agent_ids:
+    - 'agent_researcher'
+    - 'agent_reviewer'
+```
+
+## Model Spec の設定 [#configure-a-model-spec]
+
+管理者は、Model Specsから作成された一時的なエージェントに対してSubagentsを有効にすることもできます。これは、ユーザーが永続的な親エージェントを作成または選択することなく、Model Specを特定の目的に特化したエージェントプロファイルのように動作させたい場合に便利です。
+
+```yaml filename="modelSpecs / subagents"
+modelSpecs:
+  list:
+    - name: 'research-assistant'
+      label: 'Research Assistant'
+      subagents:
+        enabled: true
+        allowSelf: true
+        agent_ids: []
+      preset:
+        endpoint: 'agents'
+        model: 'gpt-4o'
+```
+
+スタートアップ設定において、クライアントに送信されるのは `enabled` と `allowSelf` のみです。`agent_ids` の許可リストはサーバー側に保持され、共有の `MAX_SUBAGENTS` 制限に対して検証されます。クライアントのリクエストペイロードは、Model Specs の Subagent 設定を提供したり、上書きしたりすることはできません。
+
+## ランタイムの動作 [#runtime-behavior]
+
+サブエージェントが有効な場合、親エージェントは `subagent` ツールを受け取ります。このツールは以下を生成できます：
+
+- `self`（`allowSelf` が false でない場合）
+- `agent_ids` で設定されたすべての子エージェント
+
+子エージェントは分離されたコンテキストで実行されます。親のツール検索状態や蓄積されたコンテキストは、子エージェントの実行にはコピーされません。子エージェントの実行によるモデル使用量は親のトランザクションに課金され、親の使用量合計に含まれます。UI上では、子エージェントの実行は展開可能なエージェントアクティビティの一部として表示され、ステータス、ティッカーの更新、および最終結果が確認できます。
+
+## 制限 [#limits]
+
+LibreChatは、サブエージェントのグラフを制限内に収めるために以下の制限を設けています：
+
+<OptionTable
+  options={[
+    ['MAX_SUBAGENTS', 'Number', '親エージェントあたりの最大明示的サブエージェント数。', '10'],
+    ['MAX_SUBAGENT_DEPTH', 'Number', 'ルートエージェントからの最大明示的サブエージェントホップ数。', '5'],
+    [
+      'MAX_SUBAGENT_GRAPH_NODES',
+      'Number',
+      '実行時に読み込まれる一意の明示的なサブエージェントターゲットの最大数。',
+      '50',
+    ],
+    [
+      'MAX_SUBAGENT_RUN_CONFIGS',
+      'Number',
+      '1回の実行リクエストに埋め込まれるサブエージェント設定の最大展開数。',
+      '100',
+    ],
+  ]}
+/>
+
+## アクセス制御 [#access-control]
+
+設定された子エージェントは、ユーザーから見える状態である必要があります。ユーザーが参照されたエージェントへの閲覧権限を持っていない場合、LibreChatはそのサブエージェントをスキップします。作成および更新のリクエストにおいて、無効または権限のない `subagents.agent_ids` エントリは拒否されます。
+
+## デザインのヒント [#design-tips]
+
+- 親エージェントのスコープが十分に定義されており、サブタスクのために新しいコンテキストが必要な場合に、self-spawnを有効にします。
+- タスクに異なるモデル、指示セット、ツールセット、またはスキル許可リストが必要な場合は、特定のチャイルドエージェントを追加してください。
+- 子要素の説明を明確に保ってください。親要素は各子要素の名前と説明を使用して、適切な委任先を選択します。
+- 中間作業にはサブエージェントを使用し、コンパクトな結果を返すようにしてください。別の会話パスへの恒久的な引き継ぎには使用しないでください。

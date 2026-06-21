@@ -1,0 +1,231 @@
+---
+title: アクセス制御
+icon: ShieldCheck
+description: >-
+  LibreChatの粒度の細かい認可システム -
+  ユーザー、グループ、ロール、インスタンスレベルで、エージェント、プロンプト、MCPサーバー、その他のリソースの使用、共有、編集、管理を制御します。
+---
+
+# Granular Access Control [#granular-access-control]
+
+LibreChatは、認証の上に完全な認可システムを搭載しています。アクセス権は「すべてか無か」ではありません。アプリ内のすべての共有可能なエンティティ（エージェント、プロンプト、MCPサーバー、リモートエージェント、ファイル、会話）は独自のアクセス制御リスト（ACL）を持っており、すべての機能は**ユーザー**、**グループ**、**ロール**、または**公開**ごとに個別に有効化または制限することができます。
+
+このページでは、小規模なチームで全員が自由に共有する環境から、Entra IDグループの同期、カスタムロール、委任された管理者を利用するエンタープライズ環境まで、組織に合わせて権限をモデル化できるよう、各要素がどのように組み合わさっているかを説明します。
+
+<Callout type="info" title="管理パネル">
+  専用の [**LibreChat Admin Panel**](/docs/features/admin_panel) は、[v0.8.5](/changelog/v0.8.5) で導入されたユーザー、グループ、ロール、カスタム権限プロファイル、およびシステム全体の権限を管理するための次期UIです。このページでは、現在 LibreChat 自体で利用可能な基盤となるモデルについて説明します。
+</Callout>
+
+## アクセスモデルの概要 [#the-access-model-at-a-glance]
+
+LibreChatの認証には、組み合わせて機能する3つの独立したレイヤーがあります。
+
+| レイヤー | スコープ | 制御内容 |
+| ----------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **機能権限 (Feature Permissions)** | ロールごと (USER, ADMIN, カスタム) | プリンシパルが機能クラス（エージェント、プロンプト、MCPサーバー、メモリ、ウェブ検索など）を_使用_、_作成_、_共有_、または_公開共有_できるかどうか。`librechat.yaml` または管理パネルで設定。 |
+| **リソースACL (Resource ACLs)** | 個別のリソースごと | 特定のエージェント、プロンプト、MCPサーバーなどを誰が閲覧、編集、削除、または再共有できるか。アプリ内の共有ダイアログを通じてリソース所有者が管理。 |
+| **システム権限 (System Grants)** | プラットフォーム全体 | 管理機能（例: `manage:users`, `manage:roles`, `read:usage`）。管理パネルで使用。 |
+
+これら3つすべてが、同じ4つの主要なタイプについて評価されます：
+
+- **User**: 個別のLibreChatアカウント
+- **Group**: ユーザーの集合（ローカル、または Entra ID から同期）
+- **Role**: 権限プロファイルの名称（例: `USER`、`ADMIN`、または任意のカスタムロール）
+- **Public**: インスタンス上のすべての認証済みユーザー
+
+## レイヤー 1: 機能権限 (ロールベース) [#layer-1-feature-permissions-role-based]
+
+機能レベルの権限は、特定のロールに対してアプリの全機能を制御します。これらは、_「このロールのユーザーはエージェントを作成できるか？」_、_「プロンプトを公開共有することは許可されているか？」_、_「コードインタープリターを呼び出せるか？」_ といった疑問に対する答えとなります。
+
+### 組み込みシステムロール [#built-in-system-roles]
+
+LibreChatには、常に存在し削除できない2つのシステムロールが付属しています。
+
+- **`ADMIN`**: インスタンスに最初に登録されたアカウントに割り当てられます。管理者はすべてのリソースの閲覧、設定の変更、管理パネルへのアクセス、およびプラットフォーム全体にわたる動作の構成を行うことができます。
+- **`USER`**: すべての新規アカウントに割り当てられるデフォルトのロール。
+
+管理者は、MongoDB内のユーザードキュメントを更新することで手動で昇格させることができます。詳細は [Administrator Controls](/docs/features/agents#administrator-controls) を参照してください。
+
+### 権限タイプ [#permission-types]
+
+各ロールは、**権限タイプ × アクション**の行列を保持します：
+
+| 権限タイプ | 利用可能なアクション |
+| ---------------- | --------------------------------------------------------- |
+| `AGENTS`         | `USE`, `CREATE`, `SHARE`, `SHARE_PUBLIC`                  |
+| `PROMPTS`        | `USE`, `CREATE`, `SHARE`, `SHARE_PUBLIC`                  |
+| `MCP_SERVERS`    | `USE`, `CREATE`, `SHARE`, `SHARE_PUBLIC`, `CONFIGURE_OBO` |
+| `REMOTE_AGENTS`  | `USE`, `CREATE`, `SHARE`, `SHARE_PUBLIC`                  |
+| `SKILLS`         | `USE`, `CREATE`, `SHARE`, `SHARE_PUBLIC`                  |
+| `SHARED_LINKS`   | `CREATE`, `SHARE`, `SHARE_PUBLIC`                         |
+| `MEMORIES`       | `USE`, `CREATE`, `UPDATE`, `READ`, `OPT_OUT`              |
+| `BOOKMARKS`      | `USE`                                                     |
+| `MULTI_CONVO`    | `USE`                                                     |
+| `TEMPORARY_CHAT` | `USE`                                                     |
+| `RUN_CODE`       | `USE`                                                     |
+| `WEB_SEARCH`     | `USE`                                                     |
+| `FILE_SEARCH`    | `USE`                                                     |
+| `FILE_CITATIONS` | `USE`                                                     |
+| `MARKETPLACE`    | `USE`                                                     |
+| `PEOPLE_PICKER`  | `VIEW_USERS`, `VIEW_GROUPS`, `VIEW_ROLES`                 |
+
+`SHARE` と `SHARE_PUBLIC` の違いは重要です。特定のユーザーやグループとエージェントを共有する権限（`SHARE`）をロールに付与しつつ、インスタンス上の全員に対してエージェントを公開する権限（`SHARE_PUBLIC`）は与えない、といった設定が可能です。
+
+### 機能権限の設定 [#configuring-feature-permissions]
+
+機能権限を管理する推奨される方法は、[**LibreChat Admin Panel**](/docs/features/admin_panel) を使用することです。これにより、各ロール（作成したカスタムロールを含む）の権限マトリックスを直接編集できます。変更はLibreChatを再デプロイすることなく反映され、グローバルな `USER` デフォルトではなく、変更したい特定のロールに対してのみ適用されます。
+
+<Callout type="warning" title="レガシー: `librechat.yaml` インターフェースブロック">
+  `librechat.yaml` 内の [`interface` ブロック](/docs/configuration/librechat_yaml/object_structure/interface) は、起動時にデフォルトの `USER` ロールの権限をシード（初期設定）するために引き続き使用可能であり、新規インスタンスのブートストラップや、完全にファイル駆動型のデプロイメントにおいて有用です。ただし、これは `USER` ロールのみを対象としており、カスタムロール間での差異を表現することはできません。継続的な権限管理には、管理パネルを使用することを推奨します。
+</Callout>
+
+### カスタムロール [#custom-roles]
+
+`USER` および `ADMIN` に加え、管理者は独自の機能権限マトリックスを持つ**カスタムロール**を作成できます（v0.8.5で導入。詳細は [#12528](https://github.com/danny-avila/LibreChat/pull/12528) を参照）。ユーザーは複数のロールを保持でき、その有効な権限は保持しているすべてのロールの和集合となります。カスタムロールは管理パネルから管理されます。
+
+### ロールおよびグループ単位の構成オーバーライド [#role--and-group-scoped-configuration-overrides]
+
+機能フラグに加え、v0.8.5では**DBベースの設定オーバーライド**システムが導入されました（[#12354](https://github.com/danny-avila/LibreChat/pull/12354)）。これにより、特定のグループやロールに対して、_異なる `librechat.yaml` 形式の設定_ を割り当てることが可能になります。例えば、「Research」グループには、デフォルトとは異なるエンドポイントへのアクセス権、より高い再帰制限、および異なるエージェント機能を持たせることができます。オーバーライドはログイン時に解決され、ベースとなる設定の上に構成されます。
+
+## レイヤー 2: リソース ACL (エンティティごとの共有) [#layer-2-resource-acls-per-entity-sharing]
+
+LibreChatのすべての共有可能なリソースには、ロールベースの権限とは独立した独自のアクセス制御リスト（ACL）があります。これにより、`SHARE`権限を持つ個々のユーザーは、自身のエージェント、プロンプト、またはMCPサーバーへのアクセス権を_誰に_付与するかを選択できます。
+
+### リソースタイプ [#resource-types]
+
+現在、リソースACLは以下に適用されます：
+
+- **エージェント** (`agent`)
+- **プロンプト / プロンプトグループ** (`promptGroup`)
+- **MCP Servers** (`mcpServer`)
+- **リモートエージェント** (`remoteAgent`)。 [Agents API](/docs/features/agents_api) 用
+- **Files** (`file`)。通常、それらを使用するリソースから継承されます。
+- **Projects** (`project`) は継承をサポートしており、プロジェクトに共有されたリソースは自動的にACLを継承します。
+
+### アクセスロール (権限プリセット) [#access-roles-permission-presets]
+
+エンドユーザーに生のパーミッションビットを公開するのではなく、共有機能ではリソースタイプごとに3つの名前付きロールを使用します。
+
+| ロール | 権限ビット | 付与されたユーザーができること |
+| ---------- | ----------------------------------------------- | ------------------------------------------------------------------- |
+| **Viewer** | `VIEW` (`0b0001`)                               | リソースの使用 / 対話 |
+| **Editor** | `VIEW` + `EDIT` (`0b0011`)                      | リソースの設定、指示、ツール、ファイルの表示および変更 |
+| **Owner**  | `VIEW` + `EDIT` + `DELETE` + `SHARE` (`0b1111`) | フルコントロール：編集、削除、および他者への再共有 |
+
+内部的には、権限は各（リソース、プリンシパル）のペアに対してビットマスク（`permBits`）として保存されます。スーパーセットは自動的に処理されるため、Editorを付与すると自動的にViewerも付与されます。
+
+### UIからアクセスを許可する [#granting-access-from-the-ui]
+
+1. リソース（エージェントビルダー、プロンプトフォーム、MCPサーバー設定など）を開きます。
+2. **Share** ボタンをクリックします（あなたがオーナーまたは管理者であるか、`SHARE` 権限が付与されている場合に表示されます）。
+3. 共有ダイアログ内:
+   - ピープルピッカーを使用して、追加する**ユーザー**、**グループ**、または**ロール**を検索します。
+   - プリンシパルごとにアクセスロール（Viewer / Editor / Owner）を選択してください
+   - 必要に応じて**Public access**を切り替えて、インスタンス上の全員がリソースを閲覧できるようにします（`SHARE_PUBLIC`機能の権限が必要です）。
+4. 保存します。付与対象者は、次回リフレッシュ時にリソースを確認できます。
+
+<Callout type="warning" title="データ漏洩の防止">
+  Editor（編集者）およびOwner（所有者）の権限を持つユーザーは、システムプロンプト、添付ファイル、ツールなど、リソースに設定されているすべての内容を閲覧できます。また、どのエージェントも会話の出力を通じて添付データが漏洩する可能性があるため、編集権限を付与したりエージェントを公開したりする前に、プロンプトインジェクションに対して指示が堅牢であることを確認してください。
+</Callout>
+
+### Grantees に表示される内容 [#what-grantees-see]
+
+- **Viewers**は、関連するピッカー（エージェントのドロップダウンなど）でリソースをすぐに使えるアイテムとして表示します。ビルダーを開いたり、生の指示を確認したり、設定を変更したりすることはできません。
+- **Editors**はリソースの設定を開いて変更することはできますが、削除や再共有を行うことはできません。
+- **Owners**は元の作成者と同じUIを持ち、自由に削除や再共有を行うことができます。
+- **元の作成者**は、ACLの状態に関係なく常に完全な制御権を保持し、管理者はインスタンス上のあらゆるリソースを管理できます。
+
+### Project Inheritance [#project-inheritance]
+
+権限は親の **project** から継承できます。ACLエントリが継承されると、`inheritedFrom` リンクがソースを指し示します。これがLibreChatにおける「グローバル」プロジェクトの仕組みであり、グローバルプロジェクトに追加されたリソースは、プリンシパルごとにエントリを作成することなく、すべてのユーザーが利用できるようになります。
+
+## Layer 3: System Grants (Admin Capabilities) [#layer-3-system-grants-admin-capabilities]
+
+System grants は、**管理者レベルの機能**に使用される個別の権限テーブルであり、「このユーザーは管理パネルにアクセスできるか？」や「このグループは MCP サーバーをグローバルに管理できるか？」といった問いに答えるものです。これらは常にプリンシパル（ユーザー、グループ、またはロール）と機能文字列に対してスコープが設定されます。
+
+標準的な機能には以下が含まれます：
+
+| 機能 | 目的 |
+| ------------------------------------ | --------------------------------------------- |
+| `access:admin`                       | 管理パネルへのアクセス権限 |
+| `read:users` / `manage:users`        | ユーザーアカウントの表示 / 変更 |
+| `read:groups` / `manage:groups`      | グループの表示 / 変更 |
+| `read:roles` / `manage:roles`        | カスタムロールの表示 / 変更 |
+| `read:configs` / `manage:configs`    | システム設定の表示 / 変更 |
+| `assign:configs:{user\|group\|role}` | プリンシパルへの設定オーバーライドプロファイルの割り当て |
+| `read:usage`                         | プラットフォームの使用状況およびテレメトリの表示 |
+| `read:agents` / `manage:agents`      | インスタンス上の全エージェントの表示 / モデレーション |
+| `read:prompts` / `manage:prompts`    | 全プロンプトの表示 / モデレーション |
+| `manage:mcpservers`                  | MCPサーバーのグローバル管理 |
+
+Manage（管理）権限は、対応するRead（読み取り）権限を暗黙的に含みます（例：`manage:users` を保持していると、自動的に `read:users` が付与されます）。`SystemRoles.ADMIN` ユーザーはすべての権限を暗黙的に保持しています。権限付与（grants）を使用することで、管理者以外のプリンシパルを完全な管理者権限にすることなく、管理者権限のサブセットを**委譲**することができます。
+
+システム権限は、管理パネルを通じて付与および取り消しが行われます。
+
+## Principals in Depth [#principals-in-depth]
+
+### ユーザー [#users]
+
+標準的な LibreChat アカウント。ユーザーは **ローカル**（メールアドレス/パスワード）または **フェデレーション**（OAuth2、OIDC、SAML、LDAP）のいずれかとなります。フェデレーションユーザーは外部 ID（`idOnTheSource`）と照合可能です。Entra ID の場合、これは OID であり、グループ同期を有効にするためのものです。
+
+### グループ [#groups]
+
+グループとは、名前付きのユーザーの集合です。LibreChatは以下の2つのソースをサポートしています：
+
+- **Local groups**: 管理パネルから、またはデータベース上で直接作成および管理されます。メンバーはLibreChatのユーザーIDです。
+- **Entra ID (Azure AD) グループ**: [token reuse](/docs/configuration/authentication/OAuth2-OIDC/token-reuse) が有効な状態でユーザーが Azure OIDC 経由でログインした際に、Microsoft Graph から同期されます。同期された各グループは、Entra Object ID を `idOnTheSource` として保存し、LibreChat をテナントのメンバーシップと同期させ続けます。
+
+グループは、あらゆるACL、`peoplePicker`検索、および設定のオーバーライドやシステム権限付与のプリンシパルターゲットとして表示されます。500人のグループと共有された単一のリソースは（500個ではなく）1つのACLエントリとして扱われ、Entraでのメンバーシップの変更は次回のログイン時に自動的に反映されます。
+
+### ロール [#roles]
+
+任意のシステムロールまたはカスタムロールをプリンシパルとして使用できます。エージェントをロール（例: `SupportEngineers`）と共有すると、個々のユーザーを指定することなく、現在そのロールを持つすべてのユーザーにアクセス権が付与されます。ロールベースの共有が管理者のみの関心事である環境では、[`interface.peoplePicker.roles`](/docs/configuration/librechat_yaml/object_structure/interface#peoplepicker) を介して、ピープルピッカーからロールを非表示にすることができます。
+
+### Public [#public]
+
+すべての認証済みユーザーに一致する特別なプリンシパルです。パブリック付与は、付与を行うユーザーがそのリソースタイプに対して `SHARE_PUBLIC` 機能権限を保持している場合にのみ許可されます。
+
+## People Picker Visibility [#people-picker-visibility]
+
+ピープルピッカー（共有ダイアログ内の検索ボックス）は、インスタンスレベルで制限をかけることで、デプロイメントに関連のないプリンシパルタイプを非表示にすることができます。
+
+```yaml filename="librechat.yaml"
+interface:
+  peoplePicker:
+    users: true
+    groups: true
+    roles: false
+```
+
+これは_検索UI_にのみ影響します。非表示のプリンシパルタイプに対する既存のACLエントリは引き続き機能し、通常通り適用されます。
+
+## ACL以前のバージョンからの移行 [#migrations-from-pre-acl-versions]
+
+v0.8.0-rc3より前のバージョンでは、よりシンプルな所有権モデルが使用されていました。アップグレードを行うには、既存のAgentやプロンプトに引き続きアクセスできるようにするため、ACLマイグレーションを実行する必要があります。
+
+**ドライラン（変更のプレビュー）:**
+
+```bash
+npm run migrate:agent-permissions:dry-run
+npm run migrate:prompt-permissions:dry-run
+```
+
+**実行:**
+
+```bash
+npm run migrate:agent-permissions
+npm run migrate:prompt-permissions
+```
+
+Dockerバリアントおよびバッチサイズオプションについては、[エージェント移行ガイド](/docs/features/agents#migration-required-v080-rc3)を参照してください。
+
+## 関連ドキュメント [#related-documentation]
+
+- [エージェント: 共有と権限](/docs/features/agents#sharing-and-permissions)
+- [インターフェース設定 (機能権限)](/docs/configuration/librechat_yaml/object_structure/interface)
+- [認証](/docs/features/authentication)
+- [OpenID Connect トークンの再利用 (Entra ID グループ同期に必須)](/docs/configuration/authentication/OAuth2-OIDC/token-reuse)
+- [Azure / Entra ID OAuth2](/docs/configuration/authentication/OAuth2-OIDC/azure)
+- [SharePoint 統合](/docs/configuration/sharepoint)
+- [Agents API (Remote Agents)](/docs/features/agents_api)
+- [LibreChat 管理パネル](/docs/features/admin_panel)

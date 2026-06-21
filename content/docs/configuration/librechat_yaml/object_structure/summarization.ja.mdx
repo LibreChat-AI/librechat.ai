@@ -1,0 +1,379 @@
+---
+title: 要約設定
+icon: ScrollText
+---
+
+## 概要 [#overview]
+
+`summarization` 設定は、会話の要約とコンテキストの剪定（pruning）を一元管理します。これは、以前カスタムおよび Azure OpenAI エンドポイントで利用可能だったエンドポイントごとの `summarize` および `summaryModel` フィールドに代わるものです。
+
+会話がモデルのコンテキストウィンドウを超えると、要約システムが古いメッセージを自動的に簡潔なチェックポイント要約へと圧縮します。これにより、重要なコンテキストを失うことなく、会話を無期限に継続できます。また、このシステムには**コンテキストプルーニング（context pruning）**が含まれており、要約が必要になる前に、古いメッセージ内の大きなツール結果を段階的に削減してトークン領域を再確保します。
+
+要約のターンが実行された後、コンテキスト使用量ゲージは、破棄された要約前の履歴を再カウントする代わりに、永続化された要約ベースラインと要約後のターンを使用します。累積使用量とコストの合計には、引き続きブランチ全体の支出が含まれます。
+
+## 例 [#example]
+
+```yaml filename="summarization"
+summarization:
+  provider: 'openAI'
+  model: 'gpt-4o-mini'
+  maxSummaryTokens: 4096
+  reserveRatio: 0.05
+  trigger:
+    type: 'token_ratio'
+    value: 0.8
+  contextPruning:
+    enabled: true
+    keepLastAssistants: 3
+    softTrimRatio: 0.3
+    hardClearRatio: 0.5
+    minPrunableToolChars: 50000
+    softTrim:
+      maxChars: 4000
+      headChars: 1500
+      tailChars: 1500
+    hardClear:
+      enabled: true
+      placeholder: '[Old tool result content cleared]'
+```
+
+## provider
+
+<OptionTable
+  options={[
+    [
+      'provider',
+      'String',
+      "要約呼び出しに使用するLLMプロバイダー。省略した場合は、エージェント自身のプロバイダーが使用されます。",
+      'provider: "openAI"',
+    ],
+  ]}
+/>
+
+**デフォルト:** エージェント自身のプロバイダー
+
+## model
+
+<OptionTable
+  options={[
+    [
+      'model',
+      'String',
+      "要約呼び出しに使用するモデル。省略した場合は、エージェント自身のモデルが使用されます。",
+      'model: "gpt-4o-mini"',
+    ],
+  ]}
+/>
+
+**デフォルト:** エージェント自身のモデル
+
+## parameters
+
+<OptionTable
+  options={[
+    [
+      'parameters',
+      'Object',
+      '要約リクエスト用の追加のLLMパラメータ（例：temperature、top_p）。',
+      'parameters: { temperature: 0.3 }',
+    ],
+  ]}
+/>
+
+## prompt
+
+<OptionTable
+  options={[
+    [
+      'prompt',
+      'String',
+      '初期要約用のカスタムプロンプト。組み込みのチェックポイントプロンプトを置き換えます。',
+      '',
+    ],
+  ]}
+/>
+
+**デフォルト:** Goal（目標）、Constraints & Preferences（制約と優先事項）、Progress（進捗）、Key Decisions（重要な決定事項）、Next Steps（次のステップ）、Critical Context（重要なコンテキスト）の各セクションを生成する構造化されたチェックポイントプロンプト。
+
+## updatePrompt
+
+<OptionTable
+  options={[
+    [
+      'updatePrompt',
+      'String',
+      '以前の要約が既に存在する場合の再要約用カスタムプロンプト。新しい会話内容で要約を更新する必要がある際に使用されます。',
+      '',
+    ],
+  ]}
+/>
+
+**デフォルト:** 新しいメッセージを既存のチェックポイントにマージし、古い詳細を圧縮し、最近のアクションにより詳細な情報を与える組み込みのプロンプトです。
+
+## maxSummaryTokens
+
+<OptionTable
+  options={[
+    [
+      'maxSummaryTokens',
+      'Number',
+      '要約モデルの応答に対する出力トークンの最大数。',
+      'maxSummaryTokens: 4096',
+    ],
+  ]}
+/>
+
+## reserveRatio
+
+<OptionTable
+  options={[
+    [
+      'reserveRatio',
+      'Number',
+      'ヘッドルームとして確保するトークンバジェットの割合（0～1）。コンテキストが最大容量まで埋まるのを防ぎます。',
+      'reserveRatio: 0.05',
+    ],
+  ]}
+/>
+
+**デフォルト:** `0.05` (5%のヘッドルーム)
+
+## trigger
+
+<OptionTable
+  options={[
+    [
+      'trigger',
+      'Object',
+      '要約がいつ有効になるかを定義します。省略した場合、メッセージの削除（pruning）によってメッセージが除外されるたびに要約が実行されます。',
+      '',
+    ],
+  ]}
+/>
+
+### trigger サブキー [#trigger-sub-keys]
+
+<OptionTable
+  options={[
+    [
+      'type',
+      'String',
+      'トリガー戦略。オプション: `"token_ratio"`、`"remaining_tokens"`、`"messages_to_refine"`。',
+      'type: "token_ratio"',
+    ],
+    [
+      'value',
+      'Number',
+      '選択したトリガータイプに対するしきい値。`token_ratio` の場合は 0～1（両端含む）。`remaining_tokens` および `messages_to_refine` の場合は正の整数。',
+      'value: 0.8',
+    ],
+  ]}
+/>
+
+### トリガータイプ [#trigger-types]
+
+| タイプ | 値 | 発火条件 |
+| -------------------- | ---------------- | ----------------------------------------------------------------------------- |
+| `token_ratio`        | `0.0–1.0`        | 使用されたコンテキストトークンの割合が指定値に達するか超えたとき |
+| `remaining_tokens`   | 正の整数 | 残りのコンテキストトークンが指定値以下に減少したとき |
+| `messages_to_refine` | 正の整数 | 要約対象となるメッセージ数が指定値に達するか超えたとき |
+| _(設定なし)_          | —                | プルーニング（削除）によってメッセージが削減されるたび（デフォルトの動作） |
+
+**例:**
+
+```yaml filename="summarization / trigger"
+summarization:
+  trigger:
+    type: 'remaining_tokens'
+    value: 8000
+```
+
+## contextPruning
+
+<OptionTable
+  options={[
+    [
+      'contextPruning',
+      'Object',
+      '位置ベースのツール結果の劣化を設定します。古いメッセージ内の大きなツール結果は、トークン領域を再利用するために段階的にトリミングまたはクリアされます。',
+      '',
+    ],
+  ]}
+/>
+
+Context pruningは、要約とは独立して動作するオプトイン機能です。古いメッセージ内の大規模なツール呼び出し結果を対象とし、以下の2つの段階的なステップを適用します。
+
+1. **Soft trim** — ツール結果の先頭と末尾の部分のみを残し、その間に省略記号を挿入して切り詰めます。
+2. **Hard clear** — ツール結果全体を短いプレースホルダーに置き換えます
+
+どちらのステージも位置ベースであり、会話の最初の方（古いもの）に近いメッセージから先に削除されます。
+
+### contextPruning サブキー [#contextpruning-sub-keys]
+
+<OptionTable
+  options={[
+    ['enabled', 'Boolean', '位置ベースのツール結果の劣化を有効にします。', 'enabled: true'],
+    [
+      'keepLastAssistants',
+      'Number',
+      'プルーニングから保護する直近のアシスタントターンの数。',
+      'keepLastAssistants: 3',
+    ],
+    [
+      'softTrimRatio',
+      'Number',
+      'ソフトトリムが有効になる年齢比率（0–1）。この会話の比率よりも古いメッセージが、ソフトトリミングの対象となります。',
+      'softTrimRatio: 0.3',
+    ],
+    [
+      'hardClearRatio',
+      'Number',
+      'ハードクリアが有効になる経過時間の比率（0–1）。この比率を超えて経過したメッセージは、完全置換の対象となります。',
+      'hardClearRatio: 0.5',
+    ],
+    [
+      'minPrunableToolChars',
+      'Number',
+      'プルーニング（切り詰め）が適用される前のツール結果の最小文字数。これより小さい結果はそのまま保持されます。',
+      'minPrunableToolChars: 50000',
+    ],
+    ['softTrim', 'Object', 'soft-trimステージの設定。', ''],
+    ['hardClear', 'Object', 'ハードクリアステージの設定。', ''],
+  ]}
+/>
+
+**デフォルト:**
+
+| フィールド | デフォルト |
+| ---------------------- | ------- |
+| `enabled`              | `false` |
+| `keepLastAssistants`   | `3`     |
+| `softTrimRatio`        | `0.3`   |
+| `hardClearRatio`       | `0.5`   |
+| `minPrunableToolChars` | `50000` |
+
+### softTrim サブキー [#softtrim-sub-keys]
+
+<OptionTable
+  options={[
+    [
+      'maxChars',
+      'Number',
+      'ツール結果をソフトトリミングした後の最大合計文字数。',
+      'maxChars: 4000',
+    ],
+    [
+      'headChars',
+      'Number',
+      'ツール結果の冒頭から保持する文字数。',
+      'headChars: 1500',
+    ],
+    [
+      'tailChars',
+      'Number',
+      'ツール結果の末尾から保持する文字数。',
+      'tailChars: 1500',
+    ],
+  ]}
+/>
+
+**デフォルト:** `maxChars: 4000`, `headChars: 1500`, `tailChars: 1500`
+
+### hardClear サブキー [#hardclear-sub-keys]
+
+<OptionTable
+  options={[
+    [
+      'enabled',
+      'Boolean',
+      'ハードクリアステージが有効かどうか。無効の場合、ソフトトリムのみが適用されます。',
+      'enabled: true',
+    ],
+    [
+      'placeholder',
+      'String',
+      'ハードクリアされた際にツール実行結果の全コンテンツを置き換えるプレースホルダーテキスト。',
+      'placeholder: "[Old tool result content cleared]"',
+    ],
+  ]}
+/>
+
+**デフォルト:** `enabled: true`, `placeholder: "[Old tool result content cleared]"`
+
+**例:**
+
+```yaml filename="summarization / contextPruning"
+summarization:
+  contextPruning:
+    enabled: true
+    keepLastAssistants: 5
+    softTrimRatio: 0.25
+    hardClearRatio: 0.6
+    minPrunableToolChars: 30000
+    softTrim:
+      maxChars: 6000
+      headChars: 2500
+      tailChars: 2500
+    hardClear:
+      enabled: true
+      placeholder: '[Content removed for context management]'
+```
+
+## 設定の完全な例 [#complete-configuration-example]
+
+```yaml filename="librechat.yaml"
+version: 1.3.10
+cache: true
+
+summarization:
+  provider: 'openAI'
+  model: 'gpt-4o-mini'
+  maxSummaryTokens: 4096
+  reserveRatio: 0.05
+  trigger:
+    type: 'token_ratio'
+    value: 0.8
+  contextPruning:
+    enabled: true
+    keepLastAssistants: 3
+    softTrimRatio: 0.3
+    hardClearRatio: 0.5
+    minPrunableToolChars: 50000
+    softTrim:
+      maxChars: 4000
+      headChars: 1500
+      tailChars: 1500
+    hardClear:
+      enabled: true
+      placeholder: '[Old tool result content cleared]'
+```
+
+## エンドポイントごとの設定からの移行 [#migration-from-per-endpoint-settings]
+
+カスタムまたはAzure OpenAIエンドポイントで以前に `summarize` および `summaryModel` を使用していた場合：
+
+```yaml filename="Before (removed)"
+endpoints:
+  custom:
+    - name: 'My Endpoint'
+      summarize: true
+      summaryModel: 'gpt-3.5-turbo'
+```
+
+これらのフィールドは削除されました。代わりにトップレベルの `summarization` 設定を使用してください：
+
+```yaml filename="After"
+summarization:
+  model: 'gpt-4o-mini'
+```
+
+## 注記 [#notes]
+
+- 要約機能はエンドポイントごとではなく、グローバルに設定されます。
+- カスタムエンドポイントおよびAzure OpenAIエンドポイントにおける `summarize` および `summaryModel` フィールドは、現在サポートされていません。
+- `provider` と `model` が省略された場合、エージェント自身の provider と model が要約に使用されます。
+- Context pruningはデフォルトで無効になっており、`contextPruning.enabled: true` を指定して明示的に有効にする必要があります。
+- Context pruningは、`minPrunableToolChars` を超えるツール呼び出しの結果にのみ影響します。これより小さい結果が剪定されることはありません。
+- `keepLastAssistants` 設定は、トリミングやクリアの比率に関係なく、直近のターンを削除から保護します。
+- カスタムの `prompt` および `updatePrompt` 値は、組み込みのプロンプトを完全に置き換えます。使用には十分注意してください。
+- `.env` ファイルで `AGENT_DEBUG_LOGGING=true` を設定すると、トークン数やコンテキストの剪定に関する診断の詳細なログ出力を有効にできます。
