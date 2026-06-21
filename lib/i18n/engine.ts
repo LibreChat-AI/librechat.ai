@@ -8,7 +8,16 @@ export interface TranslateModel {
 }
 
 export function createOpenRouterModel(): TranslateModel {
-  const openrouter = createOpenRouter({ apiKey: process.env.OPENROUTER_API_KEY })
+  const openrouter = createOpenRouter({
+    apiKey: process.env.OPENROUTER_API_KEY,
+    // OpenRouter app-attribution headers: HTTP-Referer (site URL) and X-Title
+    // (app name) credit this traffic to LibreChat on openrouter.ai's app
+    // rankings. https://openrouter.ai/docs/api-reference/overview#headers
+    headers: {
+      'HTTP-Referer': 'https://www.librechat.ai',
+      'X-Title': 'LibreChat',
+    },
+  })
   // Pin the provider via OpenRouter's routing preferences; `service_tier` is not a
   // typed setting, so pass it through `extraBody` (merged verbatim into the request
   // body and forwarded to the upstream provider).
