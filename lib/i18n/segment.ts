@@ -339,17 +339,9 @@ export function collectBlockStructure(body: string): {
   headings: string[]
 } {
   const withoutFences = stripFencedBlocks(body)
-  const tables: string[] = []
   const quotes: string[] = []
   const headings: string[] = []
   for (const raw of withoutFences.split('\n')) {
-    const line = raw.trim()
-    // Delimiter row: only spaces, pipes, colons, dashes, with at least one of each
-    // of `|` and `-`. Normalize dash runs so a benign `---` vs `----` width change
-    // isn't flagged; column count and alignment colons are what must survive.
-    if (line.includes('|') && line.includes('-') && /^[\s|:-]+$/.test(line)) {
-      tables.push(line.replaceAll(/\s/g, '').replaceAll(/-+/g, '-'))
-    }
     const q = raw.match(/^\s*(>+)/)
     if (q) quotes.push(q[1])
     // ATX heading marker. A translation that drops or changes the `#` level (e.g.
@@ -358,6 +350,23 @@ export function collectBlockStructure(body: string): {
     const h = raw.match(/^ {0,3}(#{1,6})\s/)
     if (h) headings.push(h[1])
   }
+  // Table shape from the AST: per table, the column count and each row's cell
+  // count (e.g. `2:2,2`). A translation that drops/merges a pipe in any header or
+  // body row distorts the rendered table — it changes a row's cell count, or drops
+  // the table entirely (a header that no longer matches the delimiter stops being a
+  // table) — neither of which is visible from the delimiter row alone. Fenced code
+  // (verbatim) parses as `code`, not `table`, so it is naturally excluded.
+  const tables: string[] = []
+  const tree = processor.parse(body) as unknown as MdNode
+  const visit = (node: MdNode & { align?: unknown[] }) => {
+    if (node.type === 'table') {
+      const cols = node.align?.length ?? 0
+      const rows = (node.children ?? []).map((r) => (r.children ?? []).length)
+      tables.push(`${cols}:${rows.join(',')}`)
+    }
+    if (node.children) for (const c of node.children) visit(c)
+  }
+  visit(tree)
   return { tables, quotes, headings }
 }
 

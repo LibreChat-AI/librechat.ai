@@ -369,16 +369,17 @@ describe('collectInlineCode fence handling', () => {
 })
 
 describe('collectBlockStructure', () => {
-  it('collects table delimiter rows (normalized) and blockquote markers', () => {
+  it('collects per-table cell shapes and blockquote markers', () => {
     const src = `| A | B |\n|:---|---:|\n| x | y |\n\n> quote one\n> quote two\n`
     const { tables, quotes } = collectBlockStructure(src)
-    expect(tables).toEqual(['|:-|-:|'])
+    // 2 columns; header row + 1 body row, each 2 cells.
+    expect(tables).toEqual(['2:2,2'])
     expect(quotes).toEqual(['>', '>'])
   })
 
-  it('ignores thematic breaks and prose pipes', () => {
-    const src = `---\n\nUse a | b choice.\n`
-    expect(collectBlockStructure(src).tables).toEqual([])
+  it('reflects a body row that drops a cell and ignores prose pipes', () => {
+    expect(collectBlockStructure(`| A | B |\n|---|---|\n| xy |\n`).tables).toEqual(['2:2,1'])
+    expect(collectBlockStructure(`---\n\nUse a | b choice.\n`).tables).toEqual([])
   })
 })
 

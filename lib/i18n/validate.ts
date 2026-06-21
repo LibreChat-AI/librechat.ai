@@ -35,19 +35,21 @@ function corpus(file: matter.GrayMatterFile<string>): string {
  * - `template placeholder`: every bare `{name}`, `{{name}}`, or `${name}` token,
  *   so a placeholder name (e.g. a prompt template `{input}`/`{output}` or an env
  *   var `${API_KEY}`) is not localized into an invalid template.
- * - `table structure` / `blockquote marker` / `heading level`: GFM table
- *   delimiter rows, `>` markers, and ATX heading levels, so a translation can't
- *   silently collapse a table, eject lines from a blockquote, or drop/alter a
- *   heading marker (losing the heading, its TOC entry, and its pinned anchor).
+ * - `table structure` / `blockquote marker` / `heading level`: per-table column
+ *   and per-row cell shape (from the AST), `>` markers, and ATX heading levels, so
+ *   a translation can't silently break a table (drop/merge a pipe in any row),
+ *   eject lines from a blockquote, or drop/alter a heading marker (losing the
+ *   heading, its TOC entry, and its pinned anchor).
  *
  * Fenced code blocks are preserved structurally (verbatim segments) and only
  * count-checked here; JSX tags/structural props and heading ids are likewise
  * handled in segmentation, not by this guard.
  *
- * `link target` is intentionally NOT sorted: it is compared in document order so a
- * translation that swaps two destinations between their labels (same URL multiset,
- * wrong links) is rejected. The other classes are sorted, tolerating benign
- * reordering since position is not load-bearing for them.
+ * `link target` and `heading level` are intentionally NOT sorted: they are compared
+ * in document order so a translation that swaps two link destinations between their
+ * labels, or swaps two heading depths (same multiset, wrong hierarchy/anchors), is
+ * rejected. The other classes are sorted, tolerating benign reordering since
+ * position is not load-bearing for them.
  */
 function preservedTokens(text: string): Record<string, string[]> {
   const structure = collectBlockStructure(text)
@@ -57,7 +59,7 @@ function preservedTokens(text: string): Record<string, string[]> {
     'template placeholder': collectPlaceholders(text).sort(),
     'table structure': structure.tables.sort(),
     'blockquote marker': structure.quotes.sort(),
-    'heading level': structure.headings.sort(),
+    'heading level': structure.headings,
   }
 }
 

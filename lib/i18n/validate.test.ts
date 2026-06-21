@@ -255,6 +255,24 @@ describe('validateTranslation', () => {
     expect(result.error).toMatch(/table structure/i)
   })
 
+  it('rejects a table whose body row loses a pipe even if the delimiter is intact', () => {
+    const src = `---\ntitle: T\ndescription: D\n---\n\n| A | B |\n|---|---|\n| x | y |\n`
+    // Delimiter row unchanged, but the body row merged its two cells into one.
+    const bad = `---\ntitle: T\ndescription: D\n---\n\n| A | B |\n|---|---|\n| xy |\n`
+    const result = validateTranslation(src, bad)
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatch(/table structure/i)
+  })
+
+  it('rejects a translation that swaps two heading depths', () => {
+    const src = `---\ntitle: T\ndescription: D\n---\n\n## Section\n\nText.\n\n### Subsection\n\nMore.\n`
+    // Same level multiset { ##, ### } but the depths are swapped.
+    const bad = `---\ntitle: T\ndescription: D\n---\n\n### Abschnitt\n\nText.\n\n## Unterabschnitt\n\nMore.\n`
+    const result = validateTranslation(src, bad)
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatch(/heading level/i)
+  })
+
   it('accepts a faithfully translated blockquote but rejects dropped > markers', () => {
     const src = `---\ntitle: T\ndescription: D\n---\n\n> **Note:** first line\n> second line\n> third line\n`
     const good = `---\ntitle: T\ndescription: D\n---\n\n> **Hinweis:** erste Zeile\n> zweite Zeile\n> dritte Zeile\n`
