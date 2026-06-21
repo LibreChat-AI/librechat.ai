@@ -1,5 +1,9 @@
 import { docsSource } from '@/lib/source'
 import { mdxComponents } from '@/lib/mdx-components'
+import { DocsHub } from '@/components/DocsHub'
+import { QuickStartHub } from '@/components/QuickStartHub'
+import { FeaturesHub } from '@/components/FeaturesHub'
+import { LocalInstallHub } from '@/components/LocalInstallHub'
 import { DocsPage, DocsBody, DocsTitle, DocsDescription } from 'fumadocs-ui/page'
 import { notFound, redirect } from 'next/navigation'
 import { LLMCopyButton, ViewOptions } from '@/components/page-actions'
@@ -8,7 +12,7 @@ import { JsonLd } from '@/components/JsonLd'
 import { articleSchema, breadcrumbSchema } from '@/lib/structured-data'
 import { ogImageUrl } from '@/lib/og'
 import { MachineTranslatedBanner } from '@/components/MachineTranslatedBanner'
-import { i18n } from '@/lib/i18n'
+import { i18n, localizedDocsHref } from '@/lib/i18n'
 import type { Metadata } from 'next'
 
 interface PageProps {
@@ -35,6 +39,17 @@ export default async function Page(props: PageProps) {
   }
 
   const MDX = page.data.body
+
+  // The hub components render localized chrome but are invoked from MDX without
+  // props. Bind the current locale to them per request so they pick up the right
+  // dictionary on /<locale>/docs pages.
+  const components = {
+    ...mdxComponents,
+    DocsHub: () => <DocsHub lang={params.lang} />,
+    QuickStartHub: () => <QuickStartHub lang={params.lang} />,
+    FeaturesHub: () => <FeaturesHub lang={params.lang} />,
+    LocalInstallHub: () => <LocalInstallHub lang={params.lang} />,
+  }
 
   // Fumadocs 14.7.7 falls back to the English page for a non-default locale that
   // has no foo.<locale>.mdx yet, so getPage alone can't tell a real translation
@@ -64,7 +79,11 @@ export default async function Page(props: PageProps) {
     <DocsPage
       toc={page.data.toc}
       tableOfContent={{ style: 'clerk' }}
-      breadcrumb={{ enabled: true, includeRoot: { url: '/docs' }, includePage: true }}
+      breadcrumb={{
+        enabled: true,
+        includeRoot: { url: localizedDocsHref('/docs', params.lang) },
+        includePage: true,
+      }}
       lastUpdate={page.data.lastModified}
       editOnGithub={{
         owner: 'LibreChat-AI',
@@ -99,8 +118,8 @@ export default async function Page(props: PageProps) {
           in LibreChat work on translated pages too. For English pages englishHref
           equals page.url, so this is unchanged there.
         */}
-        <LLMCopyButton markdownUrl={`${englishHref}.md`} />
-        <ViewOptions markdownUrl={`${englishHref}.md`} githubUrl={githubHref} />
+        <LLMCopyButton markdownUrl={`${englishHref}.md`} lang={params.lang} />
+        <ViewOptions markdownUrl={`${englishHref}.md`} githubUrl={githubHref} lang={params.lang} />
       </div>
       <DocsBody>
         {isTranslated && (
@@ -110,9 +129,9 @@ export default async function Page(props: PageProps) {
             githubHref={githubHref}
           />
         )}
-        <MDX components={mdxComponents} />
+        <MDX components={components} />
       </DocsBody>
-      <Feedback />
+      <Feedback lang={params.lang} />
     </DocsPage>
   )
 }

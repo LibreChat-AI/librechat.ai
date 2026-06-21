@@ -4,6 +4,7 @@ import { I18nProvider } from 'fumadocs-ui/i18n'
 import { usePathname, useRouter } from 'next/navigation'
 import type { ReactNode } from 'react'
 import { i18n, LOCALE_NAMES } from '@/lib/i18n'
+import { getFumadocsText } from '@/lib/ui-i18n'
 
 const allLocales = i18n.languages.map((locale) => ({
   locale,
@@ -59,7 +60,12 @@ export function DocsI18nProvider({
   }
 
   return (
-    <I18nProvider locale={locale} locales={locales} onChange={onChange}>
+    <I18nProvider
+      locale={locale}
+      locales={locales}
+      onChange={onChange}
+      translations={getFumadocsText(locale)}
+    >
       {children}
     </I18nProvider>
   )

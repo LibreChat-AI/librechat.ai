@@ -11,6 +11,8 @@ import {
   BookOpen,
 } from 'lucide-react'
 import type { ComponentProps } from 'react'
+import { localizedDocsHref } from '@/lib/i18n'
+import { getUI, type UIStrings } from '@/lib/ui-i18n'
 
 function DockerLogo(props: ComponentProps<'svg'>) {
   return (
@@ -55,74 +57,38 @@ function RailwayLogo({ className, ...props }: ComponentProps<'svg'>) {
   )
 }
 
-const methods = [
-  {
-    icon: DockerLogo,
-    title: 'Docker',
-    tag: 'Recommended',
-    description: 'Everything included — MongoDB, MeiliSearch, and RAG API run automatically.',
-    href: '/docs/local/docker',
-    time: '~5 min',
-    prereqs: ['Docker Desktop'],
-    steps: ['Clone the repository', 'Copy .env.example to .env', 'Run docker compose up'],
-  },
-  {
-    icon: NpmLogo,
-    title: 'npm',
-    description: 'Manual setup with Node.js. Requires separate MongoDB and MeiliSearch instances.',
-    href: '/docs/local/npm',
-    time: '~20 min',
-    prereqs: ['Node.js v20.19+', 'MongoDB instance'],
-    steps: [
-      'Clone and install dependencies',
-      'Configure .env and start MongoDB',
-      'Run npm run backend',
-    ],
-  },
-  {
-    icon: RailwayLogo,
-    title: 'Railway',
-    tag: 'One-click',
-    description: 'Deploy to the cloud instantly. No local setup, no Docker, no servers to manage.',
-    href: '/docs/remote/railway',
-    time: '~3 min',
-    prereqs: ['Railway account', 'GitHub account'],
-    steps: ['Click the deploy button', 'Connect your GitHub', 'Set environment variables'],
-  },
+type MethodKey = keyof UIStrings['quickStartHub']['methods']
+
+// Brand titles and structural fields stay here; localized copy (tag, time,
+// description, steps, prereqs) is pulled from the dictionary by `key`.
+const methods: { icon: typeof DockerLogo; title: string; key: MethodKey; href: string }[] = [
+  { icon: DockerLogo, title: 'Docker', key: 'docker', href: '/docs/local/docker' },
+  { icon: NpmLogo, title: 'npm', key: 'npm', href: '/docs/local/npm' },
+  { icon: RailwayLogo, title: 'Railway', key: 'railway', href: '/docs/remote/railway' },
 ]
 
-const resources = [
-  {
-    icon: FileText,
-    title: 'Changelog',
-    description: 'Latest releases',
-    href: '/changelog',
-  },
-  {
-    icon: Map,
-    title: '2026 Roadmap',
-    description: "What's planned",
-    href: '/blog/2026-02-18_2026_roadmap',
-  },
-  {
-    icon: MessageSquare,
-    title: 'Discord',
-    description: 'Get help',
-    href: 'https://discord.librechat.ai',
-  },
+type ResourceKey = keyof UIStrings['resources']
+
+const resources: { icon: typeof FileText; key: ResourceKey; href: string }[] = [
+  { icon: FileText, key: 'changelog', href: '/changelog' },
+  { icon: Map, key: 'roadmap', href: '/blog/2026-02-18_2026_roadmap' },
+  { icon: MessageSquare, key: 'discord', href: 'https://discord.librechat.ai' },
 ]
 
-export function QuickStartHub() {
+export function QuickStartHub({ lang }: { lang?: string }) {
+  const ui = getUI(lang)
+  const t = ui.quickStartHub
   return (
-    <nav className="not-prose space-y-8" aria-label="Quick start guides">
+    <nav className="not-prose space-y-8" aria-label={t.ariaLabel}>
       {/* Installation methods */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         {methods.map((method) => {
           const Icon = method.icon
+          const m = t.methods[method.key]
           return (
             <Link
-              key={method.title}
-              href={method.href}
+              key={method.key}
+              href={localizedDocsHref(method.href, lang)}
               className="group flex flex-col rounded-xl border border-fd-border bg-fd-card transition-all duration-200 hover:border-fd-foreground/20 hover:shadow-lg hover:shadow-fd-foreground/[0.03]"
             >
               {/* Header */}
@@ -132,27 +98,25 @@ export function QuickStartHub() {
                     <Icon className="size-5" aria-hidden="true" />
                   </div>
                   <div className="flex items-center gap-2">
-                    {method.tag && (
+                    {m.tag && (
                       <span className="rounded-full border border-fd-border px-2 py-0.5 text-[10px] font-medium text-fd-muted-foreground">
-                        {method.tag}
+                        {m.tag}
                       </span>
                     )}
                     <span className="inline-flex items-center gap-1 text-xs text-fd-muted-foreground">
                       <Clock className="size-3" aria-hidden="true" />
-                      {method.time}
+                      {m.time}
                     </span>
                   </div>
                 </div>
                 <h3 className="mb-1 text-base font-semibold text-fd-foreground">{method.title}</h3>
-                <p className="text-sm leading-relaxed text-fd-muted-foreground">
-                  {method.description}
-                </p>
+                <p className="text-sm leading-relaxed text-fd-muted-foreground">{m.description}</p>
               </div>
 
               {/* Steps + prereqs */}
               <div className="flex flex-1 flex-col justify-between p-5">
                 <ol className="mb-4 space-y-2" aria-label={`${method.title} steps`}>
-                  {method.steps.map((step, i) => (
+                  {m.steps.map((step, i) => (
                     <li key={step} className="flex items-start gap-2.5">
                       <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-fd-accent text-[10px] font-semibold tabular-nums text-fd-muted-foreground">
                         {i + 1}
@@ -164,7 +128,7 @@ export function QuickStartHub() {
 
                 <div>
                   <ul className="mb-4 space-y-1">
-                    {method.prereqs.map((prereq) => (
+                    {m.prereqs.map((prereq) => (
                       <li
                         key={prereq}
                         className="flex items-center gap-2 text-xs text-fd-muted-foreground"
@@ -179,7 +143,7 @@ export function QuickStartHub() {
                     className="inline-flex items-center gap-1.5 text-sm font-medium text-fd-foreground transition-colors group-hover:text-fd-foreground/80"
                     aria-hidden="true"
                   >
-                    Get started
+                    {ui.common.getStarted}
                     <ArrowRight className="size-3.5 transition-transform group-hover:translate-x-0.5" />
                   </span>
                 </div>
@@ -196,12 +160,12 @@ export function QuickStartHub() {
             id="next-step-heading"
             className="shrink-0 text-xs font-semibold uppercase tracking-widest text-fd-muted-foreground"
           >
-            After Installation
+            {t.afterInstallationHeading}
           </h2>
           <div className="h-px flex-1 bg-fd-border" aria-hidden="true" />
         </div>
         <Link
-          href="/docs/quick_start/custom_endpoints"
+          href={localizedDocsHref('/docs/quick_start/custom_endpoints', lang)}
           className="group flex items-center gap-4 rounded-xl border border-fd-border px-5 py-4 transition-colors hover:bg-fd-accent"
         >
           <div className="shrink-0 rounded-md bg-fd-accent p-2 transition-colors group-hover:bg-fd-background">
@@ -211,10 +175,10 @@ export function QuickStartHub() {
             />
           </div>
           <div className="min-w-0 flex-1">
-            <span className="text-sm font-medium text-fd-foreground">Connect AI Providers</span>
-            <p className="text-xs text-fd-muted-foreground">
-              Add OpenRouter, Ollama, Deepseek, Groq, and other OpenAI-compatible services
-            </p>
+            <span className="text-sm font-medium text-fd-foreground">
+              {t.connectProviders.title}
+            </span>
+            <p className="text-xs text-fd-muted-foreground">{t.connectProviders.description}</p>
           </div>
           <ArrowRight
             className="size-4 shrink-0 text-fd-muted-foreground/40 transition-all group-hover:translate-x-0.5 group-hover:text-fd-foreground"
@@ -230,13 +194,13 @@ export function QuickStartHub() {
             id="explore-heading"
             className="shrink-0 text-xs font-semibold uppercase tracking-widest text-fd-muted-foreground"
           >
-            Explore
+            {ui.common.explore}
           </h2>
           <div className="h-px flex-1 bg-fd-border" aria-hidden="true" />
         </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <Link
-            href="/docs/features"
+            href={localizedDocsHref('/docs/features', lang)}
             className="group flex items-center gap-4 rounded-xl border border-fd-border px-5 py-4 transition-colors hover:border-fd-foreground/20 hover:bg-fd-accent"
           >
             <div className="shrink-0 rounded-md bg-fd-accent p-2 transition-colors group-hover:bg-fd-background">
@@ -246,10 +210,10 @@ export function QuickStartHub() {
               />
             </div>
             <div className="min-w-0 flex-1">
-              <span className="text-sm font-medium text-fd-foreground">Features</span>
-              <p className="text-xs text-fd-muted-foreground">
-                Agents, MCP, web search, RAG, artifacts, image generation, and more
-              </p>
+              <span className="text-sm font-medium text-fd-foreground">
+                {t.exploreFeatures.title}
+              </span>
+              <p className="text-xs text-fd-muted-foreground">{t.exploreFeatures.description}</p>
             </div>
             <ArrowRight
               className="size-4 shrink-0 text-fd-muted-foreground/40 transition-all group-hover:translate-x-0.5 group-hover:text-fd-foreground"
@@ -257,7 +221,7 @@ export function QuickStartHub() {
             />
           </Link>
           <Link
-            href="/docs/user_guides"
+            href={localizedDocsHref('/docs/user_guides', lang)}
             className="group flex items-center gap-4 rounded-xl border border-fd-border px-5 py-4 transition-colors hover:border-fd-foreground/20 hover:bg-fd-accent"
           >
             <div className="shrink-0 rounded-md bg-fd-accent p-2 transition-colors group-hover:bg-fd-background">
@@ -267,10 +231,10 @@ export function QuickStartHub() {
               />
             </div>
             <div className="min-w-0 flex-1">
-              <span className="text-sm font-medium text-fd-foreground">User Guides</span>
-              <p className="text-xs text-fd-muted-foreground">
-                Learn how to use presets, AI providers, and navigate the interface
-              </p>
+              <span className="text-sm font-medium text-fd-foreground">
+                {t.exploreUserGuides.title}
+              </span>
+              <p className="text-xs text-fd-muted-foreground">{t.exploreUserGuides.description}</p>
             </div>
             <ArrowRight
               className="size-4 shrink-0 text-fd-muted-foreground/40 transition-all group-hover:translate-x-0.5 group-hover:text-fd-foreground"
@@ -287,18 +251,19 @@ export function QuickStartHub() {
             id="resources-heading"
             className="shrink-0 text-xs font-semibold uppercase tracking-widest text-fd-muted-foreground"
           >
-            Resources
+            {ui.common.resources}
           </h2>
           <div className="h-px flex-1 bg-fd-border" aria-hidden="true" />
         </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           {resources.map((item) => {
             const Icon = item.icon
+            const text = ui.resources[item.key]
             const isExternal = item.href.startsWith('http')
             return (
               <Link
-                key={item.title}
-                href={item.href}
+                key={item.key}
+                href={localizedDocsHref(item.href, lang)}
                 {...(isExternal ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
                 className="group flex items-center gap-3 rounded-lg border border-fd-border px-4 py-3 transition-all hover:border-fd-foreground/20 hover:bg-fd-accent"
               >
@@ -307,8 +272,8 @@ export function QuickStartHub() {
                   aria-hidden="true"
                 />
                 <div className="min-w-0">
-                  <span className="text-sm font-medium text-fd-foreground">{item.title}</span>
-                  <span className="ml-2 text-xs text-fd-muted-foreground">{item.description}</span>
+                  <span className="text-sm font-medium text-fd-foreground">{text.title}</span>
+                  <span className="ml-2 text-xs text-fd-muted-foreground">{text.description}</span>
                 </div>
               </Link>
             )

@@ -5,6 +5,7 @@ import { ThumbsUp, ThumbsDown, Loader2 } from 'lucide-react'
 import { usePathname } from 'next/navigation'
 import { Collapsible, CollapsibleContent } from 'fumadocs-ui/components/ui/collapsible'
 import { submitFeedback } from '@/app/actions/feedback'
+import { getUI } from '@/lib/ui-i18n'
 
 type Opinion = 'good' | 'bad'
 
@@ -41,7 +42,8 @@ function useStoredFeedback(url: string) {
   return { stored, save }
 }
 
-export function Feedback() {
+export function Feedback({ lang }: { lang?: string }) {
+  const t = getUI(lang).feedback
   const url = usePathname() ?? '/'
   const { stored, save } = useStoredFeedback(url)
   const [opinion, setOpinion] = useState<Opinion | null>(null)
@@ -73,7 +75,7 @@ export function Feedback() {
       className="not-prose border-y border-fd-border py-3"
     >
       <div className="flex flex-row items-center gap-2">
-        <p className="pe-2 text-sm font-medium text-fd-foreground">How is this guide?</p>
+        <p className="pe-2 text-sm font-medium text-fd-foreground">{t.question}</p>
         <button
           disabled={stored !== null}
           className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm font-medium transition-colors [&_svg]:size-4 ${
@@ -82,10 +84,10 @@ export function Feedback() {
               : 'border-fd-border text-fd-muted-foreground hover:bg-fd-accent'
           } disabled:cursor-not-allowed`}
           onClick={() => setOpinion('good')}
-          aria-label="Good"
+          aria-label={t.good}
         >
           <ThumbsUp />
-          Good
+          {t.good}
         </button>
         <button
           disabled={stored !== null}
@@ -95,10 +97,10 @@ export function Feedback() {
               : 'border-fd-border text-fd-muted-foreground hover:bg-fd-accent'
           } disabled:cursor-not-allowed`}
           onClick={() => setOpinion('bad')}
-          aria-label="Bad"
+          aria-label={t.bad}
         >
           <ThumbsDown />
-          Bad
+          {t.bad}
         </button>
       </div>
       <CollapsibleContent className="mt-3">
@@ -106,7 +108,7 @@ export function Feedback() {
           <div className="flex flex-col items-center gap-3 rounded-xl bg-fd-card px-3 py-6 text-center text-sm text-fd-muted-foreground">
             <p className="flex items-center gap-2">
               {pending && <Loader2 className="size-3.5 animate-spin" />}
-              Thank you for your feedback!
+              {t.thanks}
             </p>
             <button
               className="rounded-md border border-fd-border px-3 py-1.5 text-xs font-medium text-fd-muted-foreground transition-colors hover:bg-fd-accent"
@@ -115,18 +117,18 @@ export function Feedback() {
                 save(null)
               }}
             >
-              Submit again
+              {t.submitAgain}
             </button>
           </div>
         ) : (
           <form className="flex flex-col gap-3" onSubmit={submit}>
             <textarea
               autoFocus
-              aria-label="Additional feedback"
+              aria-label={t.additionalAria}
               value={message}
               onChange={(e) => setMessage(e.target.value)}
               className="resize-none rounded-lg border border-fd-border bg-fd-secondary p-3 text-sm text-fd-secondary-foreground placeholder:text-fd-muted-foreground focus-visible:outline-none"
-              placeholder="Any additional feedback? (optional)"
+              placeholder={t.placeholder}
               rows={3}
               onKeyDown={(e) => {
                 if (!e.shiftKey && e.key === 'Enter') {
@@ -138,7 +140,7 @@ export function Feedback() {
               type="submit"
               className="w-fit rounded-md border border-fd-border px-3 py-1.5 text-sm font-medium text-fd-foreground transition-colors hover:bg-fd-accent"
             >
-              Submit
+              {t.submit}
             </button>
           </form>
         )}
