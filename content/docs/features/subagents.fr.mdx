@@ -1,0 +1,131 @@
+---
+title: Sous-agents
+icon: Network
+description: >-
+  Déléguez le travail ciblé d'un agent vers des exécutions d'agents enfants
+  isolés.
+---
+
+Les Subagents permettent à un Agent LibreChat de lancer une exécution enfant isolée pour un travail ciblé. L'agent enfant dispose de sa propre fenêtre de contexte et de son propre flux d'exécution d'outils. Le parent reçoit le résultat de l'enfant sans absorber chaque appel d'outil intermédiaire, trace ou opération de fichier verbeuse dans son propre contexte.
+
+Utilisez des sous-agents pour :
+
+- Rechercher des sous-tâches susceptibles de générer de longs résultats intermédiaires
+- Passages de révision avec un agent spécialisé
+- Travail intensif en outils qui devrait rester en dehors du contexte parent
+- Décomposition de style parallèle où le parent coordonne et résume
+
+## En quoi les Subagents diffèrent des Agent Chain [#how-subagents-differ-from-agent-chain]
+
+Agent Chain construit un graphe multi-agents où les agents transmettent les résultats via des étapes de chaîne configurées. Les sous-agents sont générés par un agent en tant qu'appel d'outil lors d'une exécution.
+
+- **Chaîne d'agents** : flux de travail multi-agents au niveau du graphe
+- **Subagents** : délégation d'exécution d'un agent parent vers des exécutions enfants isolées
+
+Les deux peuvent utiliser des agents existants, mais les subagents sont conçus pour une délégation délimitée à partir de la boucle de raisonnement d'un seul agent.
+
+## Activer la fonctionnalité [#enable-the-capability]
+
+La fonctionnalité `subagents` est activée par défaut. Les administrateurs peuvent la supprimer de la liste des capacités de l'endpoint agents pour désactiver cette fonctionnalité.
+
+```yaml filename="librechat.yaml"
+endpoints:
+  agents:
+    capabilities:
+      - 'deferred_tools'
+      - 'execute_code'
+      - 'file_search'
+      - 'web_search'
+      - 'artifacts'
+      - 'subagents'
+      - 'actions'
+      - 'context'
+      - 'skills'
+      - 'tools'
+      - 'chain'
+      - 'ocr'
+```
+
+## Configurer un Agent [#configure-an-agent]
+
+Dans le Agent Builder, ouvrez **Advanced Settings** et activez **Subagents**.
+
+Paramètres disponibles :
+
+- **Activer les subagents** : ajoute l'outil de création de subagents à l'agent.
+- **Allow self-spawn** : permet à l'agent de générer une nouvelle copie de lui-même dans un contexte isolé. Cette option est activée par défaut lorsque les subagents sont activés.
+- **Sous-agents supplémentaires** : sélectionne les agents spécifiques que le parent peut générer.
+
+Forme d'agent équivalente :
+
+```yaml filename="agent subagents"
+subagents:
+  enabled: true
+  allowSelf: true
+  agent_ids:
+    - 'agent_researcher'
+    - 'agent_reviewer'
+```
+
+## Configurer un Model Spec [#configure-a-model-spec]
+
+Les administrateurs peuvent également activer les Subagents pour les agents éphémères créés à partir d'un Model Specs. Ceci est utile lorsqu'un Model Specs doit se comporter comme un profil d'agent ciblé sans obliger les utilisateurs à créer ou à sélectionner un agent parent persisté.
+
+```yaml filename="modelSpecs / subagents"
+modelSpecs:
+  list:
+    - name: 'research-assistant'
+      label: 'Research Assistant'
+      subagents:
+        enabled: true
+        allowSelf: true
+        agent_ids: []
+      preset:
+        endpoint: 'agents'
+        model: 'gpt-4o'
+```
+
+Seuls `enabled` et `allowSelf` sont envoyés aux clients dans la configuration de démarrage. La liste blanche `agent_ids` reste côté serveur et est validée par rapport à la limite partagée `MAX_SUBAGENTS`. Les charges utiles des requêtes client ne peuvent pas fournir ou remplacer la configuration des Subagents dans Model Specs.
+
+## Comportement à l'exécution [#runtime-behavior]
+
+Lorsque les subagents sont activés, l'agent parent reçoit un outil `subagent`. L'outil peut générer :
+
+- `self`, lorsque `allowSelf` n'est pas false
+- Tout agent enfant configuré dans `agent_ids`
+
+Les agents enfants s'exécutent avec un contexte isolé. L'état de recherche d'outils du parent et le contexte accumulé ne sont pas copiés dans l'exécution de l'enfant. L'utilisation du modèle par l'exécution enfant est facturée dans la transaction parente et incluse dans les totaux d'utilisation du parent. L'interface utilisateur affiche l'exécution enfant sous forme de partie d'activité d'agent extensible avec le statut, les mises à jour en temps réel et le résultat final.
+
+## Limites [#limits]
+
+LibreChat applique ces limites pour maintenir les graphes de sous-agents dans des bornes définies :
+
+<OptionTable
+  options={[
+    ['MAX_SUBAGENTS', 'Number', 'Nombre maximal de sous-agents explicites par agent parent.', '10'],
+    ['MAX_SUBAGENT_DEPTH', 'Number', 'Nombre maximal de sauts de sous-agent explicites depuis un agent racine.', '5'],
+    [
+      'MAX_SUBAGENT_GRAPH_NODES',
+      'Number',
+      'Nombre maximal de cibles de sous-agents explicites uniques chargées au moment de l\'exécution.',
+      '50',
+    ],
+    [
+      'MAX_SUBAGENT_RUN_CONFIGS',
+      'Number',
+      'Configurations de sous-agents étendus maximales intégrées dans une seule requête d\'exécution.',
+      '100',
+    ],
+  ]}
+/>
+
+## Contrôle d'accès [#access-control]
+
+Les agents enfants configurés doivent être visibles par l'utilisateur. Si l'utilisateur n'a pas accès en lecture à un agent référencé, LibreChat ignore ce sous-agent. Pour les requêtes de création et de mise à jour, les entrées `subagents.agent_ids` invalides ou non autorisées sont rejetées.
+
+## Conseils de conception [#design-tips]
+
+- Activez l'auto-génération (self-spawn) lorsque l'agent parent est déjà bien délimité et a simplement besoin d'un nouveau contexte pour une sous-tâche.
+- Ajoutez des agents enfants spécifiques lorsque la tâche nécessite un modèle, un ensemble d'instructions, un ensemble d'outils ou une liste d'autorisation de compétences différents.
+- Gardez les descriptions des enfants claires. Le parent utilise le nom et la description de chaque enfant pour choisir la bonne cible de délégation.
+- Utilisez des sous-agents pour les tâches intermédiaires devant renvoyer un résultat compact, et non pour des transferts permanents vers un autre chemin de conversation.

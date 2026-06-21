@@ -1,0 +1,131 @@
+---
+title: Subagents
+icon: Network
+description: >-
+  Delegieren Sie fokussierte Aufgaben von einem Agenten an isolierte
+  Child-Agent-Ausführungen.
+---
+
+Subagents ermöglichen es einem LibreChat Agenten, einen isolierten untergeordneten Prozess für fokussierte Aufgaben zu starten. Der untergeordnete Agent erhält sein eigenes Kontextfenster und einen eigenen Tool-Ausführungsablauf. Der übergeordnete Agent empfängt das Ergebnis des untergeordneten Agenten, ohne jeden zwischenzeitlichen Tool-Aufruf, Trace oder ausführliche Dateioperation in seinen eigenen Kontext aufzunehmen.
+
+Verwenden Sie Subagents für:
+
+- Recherchieren Sie Teilaufgaben, die möglicherweise lange Zwischenergebnisse generieren
+- Überprüfungen mit einem spezialisierten Agenten bestehen
+- Tool-lastige Arbeit, die außerhalb des übergeordneten Kontexts bleiben sollte
+- Dekomposition im Parallel-Stil, bei der das übergeordnete Element koordiniert und zusammenfasst
+
+## Wie sich Subagents von Agent Chain unterscheiden [#how-subagents-differ-from-agent-chain]
+
+Agent Chain erstellt einen Multi-Agenten-Graphen, in dem Agenten Ergebnisse über konfigurierte Chain-Schritte weitergeben. Subagents werden von einem Agenten während eines Laufs als Tool-Aufruf gestartet.
+
+- **Agent Chain**: Graph-basierter Multi-Agenten-Workflow
+- **Subagents**: Laufzeit-Delegierung von einem übergeordneten Agenten an isolierte untergeordnete Ausführungen
+
+Beide können bestehende Agents verwenden, aber Subagents sind für die bereichsbezogene Delegation innerhalb der Reasoning-Schleife eines einzelnen Agents konzipiert.
+
+## Die Funktion aktivieren [#enable-the-capability]
+
+Die `subagents`-Funktion ist standardmäßig aktiviert. Administratoren können sie aus der Liste der Fähigkeiten des agents-endpoint entfernen, um die Funktion zu deaktivieren.
+
+```yaml filename="librechat.yaml"
+endpoints:
+  agents:
+    capabilities:
+      - 'deferred_tools'
+      - 'execute_code'
+      - 'file_search'
+      - 'web_search'
+      - 'artifacts'
+      - 'subagents'
+      - 'actions'
+      - 'context'
+      - 'skills'
+      - 'tools'
+      - 'chain'
+      - 'ocr'
+```
+
+## Einen Agenten konfigurieren [#configure-an-agent]
+
+Öffnen Sie im Agent Builder die **Advanced Settings** und aktivieren Sie **Subagents**.
+
+Verfügbare Einstellungen:
+
+- **Subagents aktivieren**: fügt das Subagent-Spawn-Tool zum Agenten hinzu.
+- **Allow self-spawn**: ermöglicht es dem Agenten, eine frische Kopie seiner selbst in einem isolierten Kontext zu erstellen. Dies ist standardmäßig aktiviert, wenn Subagents aktiviert sind.
+- **Zusätzliche Subagents**: wählt spezifische Agents aus, die der übergeordnete Agent erstellen darf.
+
+Äquivalente Agentenform:
+
+```yaml filename="agent subagents"
+subagents:
+  enabled: true
+  allowSelf: true
+  agent_ids:
+    - 'agent_researcher'
+    - 'agent_reviewer'
+```
+
+## Konfigurieren eines Model Specs [#configure-a-model-spec]
+
+Admins können auch Subagents für ephemere Agents aktivieren, die aus einem Model Spec erstellt wurden. Dies ist nützlich, wenn ein Model Spec sich wie ein fokussiertes Agent-Profil verhalten soll, ohne dass Benutzer einen dauerhaften übergeordneten Agenten erstellen oder auswählen müssen.
+
+```yaml filename="modelSpecs / subagents"
+modelSpecs:
+  list:
+    - name: 'research-assistant'
+      label: 'Research Assistant'
+      subagents:
+        enabled: true
+        allowSelf: true
+        agent_ids: []
+      preset:
+        endpoint: 'agents'
+        model: 'gpt-4o'
+```
+
+Nur `enabled` und `allowSelf` werden in der Startkonfiguration an Clients gesendet. Die `agent_ids`-Whitelist verbleibt serverseitig und wird gegen das gemeinsam genutzte `MAX_SUBAGENTS`-Limit validiert. Client-Anfrage-Payloads können die Subagent-Konfiguration der Model Specs weder bereitstellen noch überschreiben.
+
+## Laufzeitverhalten [#runtime-behavior]
+
+Wenn Subagents aktiviert sind, erhält der übergeordnete Agent ein `subagent`-Tool. Das Tool kann Folgendes erstellen:
+
+- `self`, wenn `allowSelf` nicht false ist
+- Jeder konfigurierte untergeordnete Agent in `agent_ids`
+
+Child-Agents werden mit isoliertem Kontext ausgeführt. Der Tool-Suchstatus und der angesammelte Kontext des übergeordneten Agents werden nicht in die Child-Ausführung kopiert. Die Modellnutzung der Child-Ausführung wird der übergeordneten Transaktion in Rechnung gestellt und in die Nutzungssummen des übergeordneten Agents einbezogen. Die Benutzeroberfläche zeigt die Child-Ausführung als erweiterbare Agent-Aktivität mit Status, Ticker-Updates und dem Endergebnis an.
+
+## Limits [#limits]
+
+LibreChat erzwingt diese Limits, um Subagent-Graphen begrenzt zu halten:
+
+<OptionTable
+  options={[
+    ['MAX_SUBAGENTS', 'Number', 'Maximale explizite Sub-Agents pro übergeordnetem Agent.', '10'],
+    ['MAX_SUBAGENT_DEPTH', 'Number', 'Maximale explizite Subagent-Hops von einem Root-Agenten.', '5'],
+    [
+      'MAX_SUBAGENT_GRAPH_NODES',
+      'Number',
+      'Maximale Anzahl eindeutiger expliziter Subagent-Ziele, die zur Laufzeit geladen werden.',
+      '50',
+    ],
+    [
+      'MAX_SUBAGENT_RUN_CONFIGS',
+      'Number',
+      'Maximale Anzahl eingebetteter Subagent-Konfigurationen in einer Ausführungsanfrage.',
+      '100',
+    ],
+  ]}
+/>
+
+## Zugriffskontrolle [#access-control]
+
+Konfigurierte untergeordnete Agenten (Child Agents) müssen für den Benutzer sichtbar sein. Wenn der Benutzer keinen Lesezugriff auf einen referenzierten Agenten hat, überspringt LibreChat diesen Subagenten. Bei Erstellungs- und Aktualisierungsanfragen werden ungültige oder nicht autorisierte `subagents.agent_ids`-Einträge abgelehnt.
+
+## Design-Tipps [#design-tips]
+
+- Aktiviere Self-Spawn, wenn der übergeordnete Agent bereits gut eingegrenzt ist und lediglich einen neuen Kontext für eine Teilaufgabe benötigt.
+- Fügen Sie spezifische untergeordnete Agenten (Child Agents) hinzu, wenn die Aufgabe ein anderes Modell, ein anderes Anweisungsset, ein anderes Tool-Set oder eine andere Skill-Allowlist erfordert.
+- Halten Sie untergeordnete Beschreibungen klar. Das übergeordnete Element verwendet jeden Namen und jede Beschreibung eines untergeordneten Elements, um das richtige Delegationsziel auszuwählen.
+- Verwenden Sie Subagents für Zwischenarbeiten, die ein kompaktes Ergebnis liefern sollen, nicht für dauerhafte Übergaben an einen anderen Konversationspfad.

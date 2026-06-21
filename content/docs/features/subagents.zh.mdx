@@ -1,0 +1,129 @@
+---
+title: 子代理
+icon: Network
+description: 将专注的工作从一个智能体委派给独立的子智能体运行。
+---
+
+Subagents 允许 LibreChat Agent 衍生出一个独立的子运行（child run）以进行专注的工作。子 Agent 拥有自己的上下文窗口和工具执行流程。父 Agent 接收子 Agent 的结果，而无需将每一个中间工具调用、追踪或冗长的文件操作吸收到其自身的上下文中。
+
+使用子智能体（subagents）来实现：
+
+- 研究可能生成长中间输出的子任务
+- 使用专门的智能体进行审查通过
+- 需要保留在父上下文之外的工具密集型工作
+- 并行式分解，由父级进行协调和总结
+
+## Subagents 与 Agent Chain 的区别 [#how-subagents-differ-from-agent-chain]
+
+Agent Chain 构建了一个多智能体图，其中智能体通过配置的链步骤传递结果。子智能体由智能体在运行期间作为工具调用生成。
+
+- **Agent Chain**: 图级多智能体工作流
+- **Subagents**：从父智能体到独立子运行的运行时委派
+
+两者都可以使用现有的 agents，但 subagents 旨在从单个 agent 的推理循环内部进行范围受限的委派。
+
+## 启用该功能 [#enable-the-capability]
+
+`subagents` 功能默认处于启用状态。管理员可以将其从 agents endpoint 功能列表中移除以禁用该功能。
+
+```yaml filename="librechat.yaml"
+endpoints:
+  agents:
+    capabilities:
+      - 'deferred_tools'
+      - 'execute_code'
+      - 'file_search'
+      - 'web_search'
+      - 'artifacts'
+      - 'subagents'
+      - 'actions'
+      - 'context'
+      - 'skills'
+      - 'tools'
+      - 'chain'
+      - 'ocr'
+```
+
+## 配置 Agent [#configure-an-agent]
+
+在 Agent Builder 中，打开 **Advanced Settings** 并启用 **Subagents**。
+
+可用设置：
+
+- **启用子代理 (subagents)**：将子代理生成工具添加到代理中。
+- **Allow self-spawn**：允许智能体在隔离的上下文中生成自身的全新副本。当启用子智能体（subagents）时，此功能默认开启。
+- **Additional subagents**：选择父代理可以生成的特定代理。
+
+等效智能体形态：
+
+```yaml filename="agent subagents"
+subagents:
+  enabled: true
+  allowSelf: true
+  agent_ids:
+    - 'agent_researcher'
+    - 'agent_reviewer'
+```
+
+## 配置 Model Spec [#configure-a-model-spec]
+
+管理员还可以为从 Model Specs 创建的临时智能体启用 Subagents。当 Model Specs 需要表现得像一个专注的智能体配置文件，且无需用户创建或选择持久化的父智能体时，此功能非常有用。
+
+```yaml filename="modelSpecs / subagents"
+modelSpecs:
+  list:
+    - name: 'research-assistant'
+      label: 'Research Assistant'
+      subagents:
+        enabled: true
+        allowSelf: true
+        agent_ids: []
+      preset:
+        endpoint: 'agents'
+        model: 'gpt-4o'
+```
+
+只有 `enabled` 和 `allowSelf` 会在启动配置中发送给客户端。`agent_ids` 白名单保留在服务器端，并根据共享的 `MAX_SUBAGENTS` 限制进行验证。客户端请求负载无法提供或覆盖 Model Specs 的 Subagent 配置。
+
+## 运行时行为 [#runtime-behavior]
+
+当启用子智能体（subagents）时，父智能体将接收到一个 `subagent` 工具。该工具可以生成：
+
+- `self`，当 `allowSelf` 不为 false 时
+- 在 `agent_ids` 中配置的任何子智能体
+
+子智能体在隔离的上下文中运行。父级工具搜索状态和累积的上下文不会被复制到子运行中。子运行的模型使用量会计入父级事务，并包含在父级的总使用量中。UI 将子运行显示为可展开的智能体活动部分，包含状态、实时更新和最终结果。
+
+## 限制 [#limits]
+
+LibreChat 强制执行这些限制以保持子代理图（subagent graphs）在有限范围内：
+
+<OptionTable
+  options={[
+    ['MAX_SUBAGENTS', 'Number', '每个父级 agent 允许的最大显式子 agent 数量。', '10'],
+    ['MAX_SUBAGENT_DEPTH', 'Number', '来自根代理的最大显式子代理跳数。', '5'],
+    [
+      'MAX_SUBAGENT_GRAPH_NODES',
+      'Number',
+      '运行时加载的最大唯一显式子代理目标数。',
+      '50',
+    ],
+    [
+      'MAX_SUBAGENT_RUN_CONFIGS',
+      'Number',
+      '单次运行请求中嵌入的最大展开子代理配置数。',
+      '100',
+    ],
+  ]}
+/>
+
+## 访问控制 [#access-control]
+
+配置的子智能体必须对用户可见。如果用户缺乏对所引用智能体的查看权限，LibreChat 将跳过该子智能体。对于创建和更新请求，无效或未经授权的 `subagents.agent_ids` 条目将被拒绝。
+
+## 设计技巧 [#design-tips]
+
+- 当父 Agent 的范围已经界定明确，且仅需为子任务提供全新的上下文时，启用自我生成（self-spawn）。
+- 当任务需要不同的模型、指令集、工具集或技能白名单时，请添加特定的子智能体（child agents）。
+- 保持子项描述清晰。父项会使用每个子项的名称和描述来选择正确的委派目标。
+- 使用子代理（subagents）来处理需要返回简洁结果的中间工作，而不是将其作为永久移交给另一个对话路径的手段。

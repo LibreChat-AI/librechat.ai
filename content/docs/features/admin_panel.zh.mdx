@@ -1,0 +1,179 @@
+---
+title: 管理面板
+icon: LayoutDashboard
+description: 一个用于管理 LibreChat 用户、组、角色、配置覆盖和系统授权的独立 Web UI，无需手动编辑 librechat.yaml。
+---
+
+# LibreChat 管理面板 [#librechat-admin-panel]
+
+**LibreChat Admin Panel** 是一个基于浏览器的独立 LibreChat 管理界面。它连接到与 LibreChat 相同的数据库，并为支持 [granular access control](/docs/features/access_control) 的管理任务提供了图形用户界面（GUI）：包括用户和组管理、角色管理、针对角色或组的配置覆盖，以及系统级权限授予。
+
+<Callout type="info" title="状态：预览">
+  管理面板现已可供测试，它是基于 [LibreChat v0.8.5](/changelog/v0.8.5) 中引入的 admin API 构建的全新管理界面。源代码、问题追踪和发布版本位于 [github.com/ClickHouse/librechat-admin-panel](https://github.com/ClickHouse/librechat-admin-panel)。
+</Callout>
+
+## 功能概述 [#what-it-does]
+
+管理面板是一个瘦客户端：所有数据都存储在 LibreChat 的数据库中，并且每个操作都通过 LibreChat API 服务器上带有版本号的 `/api/admin/*` endpoint 进行。它为管理员提供了一个统一的平台，用于：
+
+- **管理配置**：通过动态的、基于模式（schema-driven）的表单查看并编辑每一项 LibreChat 设置。添加到配置模式中的新字段会自动显示，无需发布管理面板即可生效。
+- **应用基于主体的覆盖（Apply per-principal overrides）**：将配置覆盖范围限定于特定角色或组，并通过基于优先级的级联机制来确定每个用户在登录时最终解析出的值。
+- **管理用户**：列出、搜索并查看实例上的每个账户。
+- **管理组**：创建和删除组，添加/移除成员，并将组作为 ACL 和覆盖配置中的一等主体使用。
+- **管理角色**：创建除内置 `USER` / `ADMIN` 之外的自定义角色，编辑其功能权限矩阵，并将用户分配给这些角色。
+- **颁发系统授权**：将管理权限（例如 `manage:users`、`read:usage`、`manage:mcpservers`）委派给特定用户、组或角色，而无需将其设为完全管理员。
+- **Authenticate**: 使用本地 LibreChat 管理员账户登录，或在 LibreChat 实例中启用 OpenID SSO / SAML / 支持的 OAuth 提供商时，通过这些方式进行登录。
+
+有关底层权限模型（主体、资源 ACL、功能以及各层如何组合）的详细信息，请参阅 [Access Control](/docs/features/access_control) 页面。
+
+## 架构 [#architecture]
+
+```
+┌──────────────────┐         ┌──────────────────┐         ┌──────────────┐
+│  Admin Panel     │ ───────▶│  LibreChat API   │ ───────▶│   MongoDB    │
+│  (Bun + Vite)    │  HTTPS  │  /api/admin/*    │         │  (shared DB) │
+└──────────────────┘         └──────────────────┘         └──────────────┘
+       │                             │
+       │ OAuth/OIDC/SAML redirect    │ Verifies admin access
+       └─────────────────────────────┘
+```
+
+管理面板作为独立的服务运行；它不与 LibreChat 共享进程。管理功能通过 LibreChat 端的 `access:admin` 系统授权或 `SystemRoles.ADMIN` 角色进行验证，因此该面板无法授予自身其本不应拥有的权限。
+
+LibreChat 暴露的管理员 API 接口为：
+
+| 挂载点 | 用途 |
+| ----------------------------------------- | --------------------------------------------------------- |
+| `POST /api/admin/login` &nbsp; `/oauth/*` | 管理员专用身份验证端点（本地 + SSO） |
+| `GET /api/admin/verify`                   | 验证管理员会话 |
+| `/api/admin/users`                        | 用户列表与搜索 |
+| `/api/admin/groups`                       | 群组 CRUD + 成员管理 |
+| `/api/admin/roles`                        | 自定义角色 CRUD + 权限编辑 + 成员管理 |
+| `/api/admin/grants`                       | 系统能力授权（分配/撤销/列表） |
+| `/api/admin/config`                       | 基础配置 + 各主体配置覆盖 |
+
+## 入门指南 [#getting-started]
+
+### 先决条件 [#prerequisites]
+
+- 一个正在运行的 LibreChat 实例，版本需为 **v0.8.5 或更高版本**（早期版本不提供管理 API）
+- 从 admin-panel 容器/主机到 LibreChat API 的网络访问
+- LibreChat 上的管理员账户：即第一个注册的用户（自动管理员）、在 Mongo 中设置了 `role: 'ADMIN'` 的用户，或被授予了 `access:admin` 权限的主体。
+
+### 使用 Docker 运行（推荐） [#run-with-docker-recommended]
+
+使用来自 GHCR 的已发布镜像：
+
+```bash
+# 1. Create an env file
+cp .env.example .env
+
+# 2. Edit .env and set at minimum:
+#    SESSION_SECRET=<random string, min 32 characters>
+#    VITE_API_BASE_URL=http://host.docker.internal:3080
+
+# 3. Start it
+docker compose up -d   # http://localhost:3000
+docker compose down    # stop
+```
+
+独立的 `docker run`：
+
+```bash
+docker run -p 3000:3000 \
+  --add-host=host.docker.internal:host-gateway \
+  -e SESSION_SECRET=replace-with-32-char-random-string \
+  -e VITE_API_BASE_URL=http://host.docker.internal:3080 \
+  ghcr.io/clickhouse/librechat-admin-panel:latest
+```
+
+<Callout type="warning" title="Docker 网络">
+  在容器内部，`localhost` 指的是容器本身，而非您的宿主机。当 LibreChat 在同一台宿主机上运行时，请将 `VITE_API_BASE_URL` 指向 `http://host.docker.internal:3080`（Linux 系统：请添加 `--add-host=host.docker.internal:host-gateway`）。在生产环境中，请使用您 LibreChat API 的公网/内网 DNS 名称。
+</Callout>
+
+### 本地运行以进行开发 [#run-locally-for-development]
+
+```bash
+git clone https://github.com/ClickHouse/librechat-admin-panel.git
+cd librechat-admin-panel
+cp .env.example .env    # then edit
+bun install
+bun dev                 # http://localhost:3000
+```
+
+## 环境变量 [#environment-variables]
+
+| 变量 | 必需 | 默认值 | 描述 |
+| ------------------------------- | --------------------- | --------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SESSION_SECRET`                | 生产环境**是** | 运行 `bun dev` 时使用硬编码的开发回退值；Docker 镜像中**无默认值** | 会话加密密钥。必须至少 32 个字符。 |
+| `VITE_API_BASE_URL`             | Docker 环境**是** | `http://localhost:3080` (仅限本地开发) | 浏览器访问的 LibreChat API 服务器 URL，用于 OAuth 重定向。 |
+| `API_SERVER_URL`                | 否 | 回退至 `VITE_API_BASE_URL` | 用于 LibreChat API 调用的服务端 URL。当管理面板服务器通过与浏览器不同的 URL（例如内部 Kubernetes 服务与公共主机名）访问 LibreChat 时非常有用。 |
+| `PORT`                          | 否 | `3000` | 管理面板监听的端口。 |
+| `ADMIN_SSO_ONLY`                | 否 | `false` | 隐藏电子邮件/密码登录表单，强制仅使用 SSO 登录。 |
+| `ADMIN_SESSION_IDLE_TIMEOUT_MS` | 否 | `1800000` (30 分钟) | 会话空闲超时时间（毫秒）。 |
+| `SESSION_COOKIE_SECURE`         | 否 | 生产环境为 `true` | 会话 Cookie 是否需要 HTTPS。 |
+| `ADMIN_PANEL_METRICS_SECRET`    | 否 | _未设置_ | 抓取 `/metrics` Prometheus endpoint 所需的 Bearer 令牌。如果未设置或不匹配，该 endpoint 将返回 `401`。 |
+
+### LibreChat 重定向 URL [#librechat-redirect-url]
+
+当管理面板托管在与 LibreChat 不同的 URL 上时，请在 LibreChat API 环境中设置 `ADMIN_PANEL_URL`。请使用外部管理面板的基础 URL（包括任何路径前缀），并省略末尾的斜杠：
+
+```bash filename=".env"
+ADMIN_PANEL_URL=https://admin.example.com/admin
+```
+
+对于 Helm 部署，请在您的 values 文件中设置 `librechat.adminPanelUrl`。Chart 会将其渲染为 LibreChat 管理员 OAuth 流程所需的 `ADMIN_PANEL_URL`：
+
+```yaml filename="values.yaml"
+librechat:
+  adminPanelUrl: https://admin.example.com/admin
+```
+
+对于 OpenID SSO，请将 `${DOMAIN_SERVER}/api/admin/oauth/openid/callback` 注册到您的身份提供商。
+
+### 缓存控制 [#cache-controls]
+
+这些镜像了 LibreChat 的缓存环境变量。`ADMIN_PANEL_*` 变体具有优先权，当未设置时，将回退到共享的 LibreChat 等效项。
+
+| 变量 | 用途 |
+| --------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `STATIC_CACHE_MAX_AGE` / `ADMIN_PANEL_STATIC_CACHE_MAX_AGE`     | `/assets/` 中哈希资产的浏览器 `max-age`（以秒为单位，默认 172800 = 2 天）。 |
+| `STATIC_CACHE_S_MAX_AGE` / `ADMIN_PANEL_STATIC_CACHE_S_MAX_AGE` | CDN `s-maxage`（以秒为单位，默认 86400 = 1 天）。 |
+| `INDEX_CACHE_CONTROL` / `ADMIN_PANEL_INDEX_CACHE_CONTROL`       | HTML 索引响应的 `Cache-Control` 标头。 |
+| `INDEX_PRAGMA` / `ADMIN_PANEL_INDEX_PRAGMA`                     | HTML 索引响应的 `Pragma` 标头。 |
+| `INDEX_EXPIRES` / `ADMIN_PANEL_INDEX_EXPIRES`                   | HTML 索引响应的 `Expires` 标头。 |
+
+## 身份验证 [#authentication]
+
+管理面板复用了 LibreChat 的身份验证堆栈，且没有自己的用户数据库。支持两种登录路径：
+
+- **本地账户**：针对任何通过管理员访问检查的 LibreChat 用户进行用户名/密码验证。
+- **单点登录 (Single sign-on)**：OpenID Connect、SAML 以及已在您的 LibreChat 实例上配置的社交 OAuth 提供商。设置 `ADMIN_SSO_ONLY=true` 可完全隐藏密码登录表单。
+
+LibreChat 会在每次请求时在服务器端验证管理员权限。该账户必须满足以下任一条件：
+
+1. 在 MongoDB 中拥有 `role: 'ADMIN'`，**或者**
+2. 拥有 `access:admin` 系统授权（通过管理面板本身分配给另一个主体；请参阅 [System Grants](/docs/features/access_control#layer-3-system-grants-admin-capabilities)）。
+
+会话基于 cookie，使用 `SESSION_SECRET` 进行加密，并根据 `ADMIN_SESSION_IDLE_TIMEOUT_MS` 设置空闲过期时间。
+
+## 配置管理 [#configuration-management]
+
+该面板将 LibreChat 配置渲染为由配置模式驱动的动态表单。这具有两个有用的特性：
+
+- **前向兼容**：当 LibreChat 发布新的配置字段时，面板会自动从 schema 中获取该字段。无需升级或重新部署管理面板。
+- **分层覆盖 (Layered overrides)**：基础配置（来自 `librechat.yaml`）可以被针对特定角色或组的“按主体覆盖 (per-principal overrides)”所遮蔽。当用户登录时，覆盖项会按优先级顺序进行解析，并合并到基础配置之上，从而生成该用户所看到的最终有效配置。
+
+这是 LibreChat [基于数据库的每个主体配置覆盖系统](https://github.com/danny-avila/LibreChat/pull/12354)背后的实现。典型用例包括：
+
+- 为“Research”组提供更高的 `recursionLimit` 和额外的 endpoint
+- 允许 "FinanceAdmins" 角色管理 MCP 服务器，而普通用户仅能使用它们
+- 将更严格的 `interface` 权限范围限定为外部承包商组
+
+## 相关内容 [#related]
+
+- [Access Control](/docs/features/access_control)：管理面板所基于的权限模型
+- [界面配置](/docs/configuration/librechat_yaml/object_structure/interface)：面板编辑的功能标志
+- [Authentication](/docs/features/authentication): LibreChat 上的用户身份验证
+- [v0.8.5 更新日志](/changelog/v0.8.5)：admin API 基础
+- [GitHub: ClickHouse/librechat-admin-panel](https://github.com/ClickHouse/librechat-admin-panel): 源码，问题，发布版本
