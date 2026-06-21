@@ -1,0 +1,180 @@
+---
+title: NGINX
+icon: Nginx
+description: >-
+  Guide étape par étape pour sécuriser votre déploiement LibreChat avec Nginx
+  comme proxy inverse et HTTPS
+---
+
+Ce guide couvre les étapes essentielles pour sécuriser votre déploiement LibreChat avec un certificat SSL/TLS pour HTTPS, configurer Nginx en tant que reverse proxy et paramétrer votre domaine.
+
+## Prérequis [#prerequisites]
+
+1. Un serveur cloud (par ex. AWS, Google Cloud, Azure, Digital Ocean).
+2. Un nom de domaine enregistré.
+3. Accès au terminal de votre serveur cloud.
+4. Node.js `v24.16.0` et npm `v11.16.0` si vous exécutez LibreChat directement sur l'hôte.
+
+## Configuration initiale [#initial-setup]
+
+### Pointer votre domaine vers votre serveur [#pointing-your-domain-to-your-server]
+
+Avant de procéder à l'acquisition du certificat, faites pointer votre domaine vers l'adresse IP de votre serveur cloud. Cette étape est fondamentale et doit précéder la configuration du certificat SSL en raison du temps que les enregistrements DNS peuvent mettre à se propager à l'échelle mondiale.
+
+1. Connectez-vous au panneau de contrôle de votre registraire de domaine.
+2. Accédez aux paramètres DNS.
+3. Créez un `A record` pointant votre domaine vers l'adresse IP de votre serveur cloud.
+4. Attendez que les changements DNS se propagent mondialement (vous pouvez vérifier en effectuant un ping sur votre domaine : `ping your_domain.com`).
+
+## Obtenir un certificat SSL/TLS [#obtain-an-ssltls-certificate]
+
+Pour sécuriser votre application LibreChat avec HTTPS, vous aurez besoin d'un certificat SSL/TLS. Let's Encrypt propose des certificats gratuits :
+
+1. Installer Certbot :
+    - Pour Ubuntu : `sudo apt-get install certbot python3-certbot-nginx`
+    - Pour CentOS : `sudo yum install certbot python2-certbot-nginx`
+
+2. Obtenir le certificat :
+    - Exécutez `sudo certbot --nginx` pour obtenir et installer automatiquement le certificat pour Nginx.
+    - Suivez les instructions à l'écran. Certbot vous demandera des informations et terminera le processus de validation.
+    - Une fois l'opération réussie, Certbot stockera vos fichiers de certificat.
+
+## Configurer Nginx comme proxy inverse [#set-up-nginx-as-a-reverse-proxy]
+
+Nginx agit comme un reverse proxy, transférant les requêtes des clients vers votre application LibreChat. Il existe deux options de déploiement :
+
+### Option A : Utilisation du `deploy-compose.yml` Docker Compose (Recommandé) [#option-a-using-the-deploy-composeyml-docker-compose-recommended]
+
+Le fichier `deploy-compose.yml` inclut un conteneur Nginx et utilise le fichier `client/nginx.conf` pour la configuration de Nginx. Cependant, comme `sudo certbot --nginx` extrait le certificat vers la configuration de l'hôte, vous devez dupliquer le certificat vers les conteneurs Docker.
+
+1. Mettez à jour `client/nginx.conf` avec votre domaine et les chemins de vos certificats.
+2. Mettez à jour `deploy-compose.yml` dans la section `client` pour monter les fichiers de certificat depuis l'hôte :
+
+```yaml
+client:
+  # ...
+  volumes:
+    - ./client/nginx.conf:/etc/nginx/conf.d/default.conf
+    - /etc/letsencrypt/live/<your-domain>:/etc/letsencrypt/live/<your-domain>
+    - /etc/letsencrypt/archive/<your-domain>:/etc/letsencrypt/archive/<your-domain>
+    - /etc/letsencrypt/options-ssl-nginx.conf:/etc/letsencrypt/options-ssl-nginx.conf
+    - /etc/letsencrypt/ssl-dhparams.pem:/etc/letsencrypt/ssl-dhparams.pem
+```
+
+3. Arrêtez toute instance en cours d'exécution : `npm run stop:deployed`
+4. Validez les modifications dans une nouvelle branche Git.
+5. Rebasez l'instance déployée : `npm run rebase:deployed`
+
+### Option B : Déploiement basé sur l'hôte sans Docker [#option-b-host-based-deployment-without-docker]
+
+Si vous n'utilisez pas Docker, vous pouvez installer et configurer Nginx directement sur l'hôte :
+
+1. Installer Nginx :
+    - Ubuntu : `sudo apt-get install nginx`
+    - CentOS : `sudo yum install nginx`
+
+2. Démarrer Nginx : `sudo systemctl start nginx`
+
+3. Ouvrez le fichier de configuration Nginx : `sudo nano /etc/nginx/sites-available/default`
+
+4. Remplacez le contenu du fichier par ce qui suit, en veillant à remplacer `your_domain.com` par votre domaine et `app_port` par le port de votre application :
+
+```nginx filename="/etc/nginx/sites-available/default"
+server {
+    listen 80;
+    server_name your_domain.com;
+
+    location / {
+        proxy_pass http://localhost:app_port;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+    }
+}
+```
+
+5. Vérifiez la configuration de Nginx : `sudo nginx -t`
+6. Recharger Nginx : `sudo systemctl reload nginx`
+
+## Exécuter l'application [#run-the-application]
+
+1. Accédez au répertoire de votre application :
+
+```bash filename="Replace 'LibreChat' with your actual application directory.
+cd LibreChat
+```
+
+2. Démarrez votre application en utilisant Docker Compose :
+
+```bash filename="Start your application"
+sudo docker compose -f ./deploy-compose.yml up -d
+```
+
+## Renouvellement des certificats lors de l'utilisation de nginx [#renewing-certificates-when-using-nginx]
+
+Si vous avez configuré nginx en utilisant l'Option A recommandée ci-dessus, suivez ces étapes pour renouveler les certificats :
+
+1. Accédez au répertoire de votre application
+```bash filename="Replace 'LibreChat' with your actual application directory.
+cd LibreChat
+```
+
+2. Arrêtez vos conteneurs Docker en cours d'exécution
+
+```bash filename="Stop your application"
+sudo docker compose -f ./deploy-compose.yml down -d
+```
+
+3. renouveler les certificats
+
+```bash
+sudo certbot renew
+```
+
+4. Redémarrez votre application
+
+```bash filename="Start your application"
+sudo docker compose -f ./deploy-compose.yml up -d
+```
+
+Remarque : certbot pourrait redémarrer le nginx de l'hôte. Vous pouvez le tuer avec `sudo pkill nginx`
+
+## Pare-feu d'application Web (WAF) [#web-application-firewall]
+
+Nginx peut être configuré pour agir en tant que pare-feu d'application web (WAF) en tirant parti de l'OWASP Core Rule Set (CRS), qui fournit un ensemble robuste de règles pour se protéger contre les vulnérabilités et les attaques courantes des applications web. L'utilisation de l'OWASP CRS avec Nginx peut renforcer la sécurité de votre déploiement LibreChat en ajoutant une couche de protection supplémentaire.
+
+1. Installer OWASP CRS :
+
+    - Ubuntu : `sudo apt-get install nginx-modsecurity-crs`
+
+2. Activer ModSecurity dans Nginx :
+    - Ouvrez votre fichier de configuration Nginx (par ex. `/etc/nginx/nginx.conf`).
+    - Ajoutez les lignes suivantes à l'intérieur du bloc `http` :
+
+      ```yaml filename="nginx.conf"
+      modsecurity on;
+      modsecurity_rules_file /usr/share/nginx/modsecurity-crs/nginx-modsecurity.conf;
+      ```
+
+3. Configurer OWASP CRS :
+    - Le package OWASP CRS inclut généralement un fichier de configuration (par exemple, `/etc/nginx/modsecurity.d/nginx-modsecurity.conf`) où vous pouvez ajuster divers paramètres et ensembles de règles en fonction de vos besoins.
+
+4. Recharger Nginx :
+    - `sudo systemctl reload nginx`
+
+En activant OWASP CRS dans votre configuration Nginx, vous pouvez tirer parti de l'ensemble complet de règles fournies par le projet pour détecter et atténuer diverses vulnérabilités et attaques d'applications web, telles que l'injection SQL, le cross-site scripting (XSS), l'inclusion de fichiers distants, et plus encore.
+
+## Mise en cache et compression de fichiers statiques [#static-file-caching-and-compression]
+
+LibreChat prend désormais en charge nativement la mise en cache et la compression des fichiers statiques. Si vous utilisez NGINX pour gérer la compression, vous devriez désactiver la compression dans LibreChat pour éviter tout traitement redondant. Vous pouvez le faire en définissant la variable d'environnement `DISABLE_COMPRESSION` sur `true` dans votre configuration LibreChat.
+
+```.env
+# .env file
+DISABLE_COMPRESSION=true
+```
+
+Cela empêchera LibreChat de compresser les fichiers statiques, permettant ainsi à NGINX de gérer la compression plus efficacement.
+
+Pour plus d'informations sur la gestion des fichiers statiques dans LibreChat, y compris les options de mise en cache, consultez la documentation [Static File Handling](/docs/configuration/dotenv#static-file-handling).
