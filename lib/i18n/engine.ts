@@ -2,6 +2,7 @@ import { generateText } from 'ai'
 import { createOpenRouter } from '@openrouter/ai-sdk-provider'
 import { GLOSSARY, TRANSLATE_MODEL, TRANSLATE_PROVIDER, TRANSLATE_SERVICE_TIER } from './config'
 import { LOCALE_NAMES } from '../i18n'
+import { withRetry } from './retry'
 
 export interface TranslateModel {
   generate(input: { system: string; prompt: string }): Promise<string>
@@ -25,9 +26,23 @@ export function createOpenRouterModel(): TranslateModel {
     provider: { only: [TRANSLATE_PROVIDER] },
     extraBody: { service_tier: TRANSLATE_SERVICE_TIER },
   })
+  // The `flex` tier returns 429s under load. Retry with backoff (honoring any
+  // Retry-After) so a single workflow run converges instead of skipping most pages
+  // and needing repeated manual re-runs. SDK-level retries are disabled so the
+  // backoff lives in one place; TRANSLATE_MAX_RETRIES tunes the budget in CI.
+  const maxRetries = Number(process.env.TRANSLATE_MAX_RETRIES) || 6
   return {
     async generate({ system, prompt }) {
-      const { text } = await generateText({ model, system, prompt, temperature: 0.2 })
+      const { text } = await withRetry(
+        () => generateText({ model, system, prompt, temperature: 0.2, maxRetries: 0 }),
+        {
+          retries: maxRetries,
+          onRetry: ({ attempt, delayMs, error }) =>
+            console.warn(
+              `[translate] rate-limited/transient error, retry ${attempt}/${maxRetries} in ${Math.round(delayMs)}ms: ${(error as Error)?.message ?? error}`,
+            ),
+        },
+      )
       return text
     },
   }
