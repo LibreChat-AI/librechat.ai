@@ -55,14 +55,23 @@ export default function proxy(request: NextRequest, event: NextFetchEvent) {
   // landing page (`/<locale>`); English readers and explicit English choosers
   // stay on `/`. Deliberately limited to `/`: the content routes (/docs, /blog,
   // …) are shared-CDN-cached, and an Accept-Language redirect there would be
-  // cached and served to every reader regardless of their language. `no-store`
-  // + `Vary` keep this redirect itself out of any shared cache.
+  // cached and served to every reader regardless of their language.
+  //
+  // The decision depends on Cookie + Accept-Language, so BOTH outcomes must stay
+  // out of any shared cache: a cached English `/` 200 (not just the redirect)
+  // would otherwise be replayed to a German/Spanish/… visitor without the proxy
+  // re-running, bypassing detection. `Vary` alone isn't enough — Cloudflare
+  // ignores it — so mark both responses `private, no-store`.
   if (pathname === '/') {
     const locale = preferredLocale(request)
-    if (locale === i18n.defaultLanguage) return NextResponse.next()
-    const url = request.nextUrl.clone()
-    url.pathname = `/${locale}`
-    const response = NextResponse.redirect(url, 307)
+    let response: NextResponse
+    if (locale === i18n.defaultLanguage) {
+      response = NextResponse.next()
+    } else {
+      const url = request.nextUrl.clone()
+      url.pathname = `/${locale}`
+      response = NextResponse.redirect(url, 307)
+    }
     response.headers.set('Cache-Control', 'private, no-store')
     response.headers.set('Vary', 'Cookie, Accept-Language')
     return response
