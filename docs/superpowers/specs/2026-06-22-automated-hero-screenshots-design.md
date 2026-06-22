@@ -75,9 +75,18 @@ evolves, which is exactly when fresh screenshots are wanted.
 
 ## Components
 
-### 1. Capture script — `scripts/screenshots/capture.mjs`
+### 1. Capture script — `scripts/screenshots/capture.ts`
 
-Plain ESM run with `node`. Only new dependency is `playwright`.
+Standalone TypeScript script run via `npx tsx` (mirroring the existing
+`scripts/translate.ts`). Playwright (`playwright` / `@playwright/test`) is already a
+project dependency, so **no new deps**. It uses the `playwright` library directly, not
+the `@playwright/test` runner, because the repo's `@playwright/test` config (`testDir:
+./e2e`) auto-starts the local docs server and points at localhost; our target is the
+external `chat.librechat.ai`, so it must stay independent of that harness.
+
+Pure configuration and helpers (the variant matrix, output-path resolver, theme
+bootstrap snippet) live in a sibling `scripts/screenshots/config.ts` so they can be
+unit-tested by Vitest (`scripts/**/*.test.ts` is in the Vitest `include` glob).
 
 Inputs (env):
 
@@ -104,18 +113,21 @@ Behaviour:
 4. On any failure (login, selector timeout) exit non-zero so no broken capture ships.
    One retry wraps the capture loop to absorb transient flakiness.
 
-Variant matrix (aspect preserved from current assets):
+Variant matrix (aspect preserved from current assets). Current files are:
+desktop ~2546x1428 (≈16:9), mobile ~512x1117 (portrait, ≈ iPhone 390x844 ratio):
 
-| Variant | Viewport | Output target |
-| --- | --- | --- |
-| desktop light | ~1600x800 region | `demo_light.png` |
-| desktop dark | ~1600x800 region | `demo_dark.png` |
-| mobile light | narrow viewport, cropped to 2:1 | `demo_mobile_light.png` |
-| mobile dark | narrow viewport, cropped to 2:1 | `demo_mobile_dark.png` |
+| Variant | Viewport (logical) | DSF | Output target |
+| --- | --- | --- | --- |
+| desktop light | 1280x720 | 2 | `demo_light.png` |
+| desktop dark | 1280x720 | 2 | `demo_dark.png` |
+| mobile light | 390x844 (phone portrait) | 2 | `demo_mobile_light.png` |
+| mobile dark | 390x844 (phone portrait) | 2 | `demo_mobile_dark.png` |
 
-Note: existing `demo_mobile_*` are landscape 2:1, not true phone-portrait. We preserve
-that aspect so nothing in the hero shifts. A true portrait phone framing is a possible
-follow-up that would touch `Hero.tsx` and is out of scope here.
+The current mobile assets are **portrait phone shots**, so the script captures a phone
+viewport in portrait. Exact output pixel sizes may differ from today's files, but the
+aspect ratios match, and the hero renders with `object-cover` inside `max-w` containers,
+so no layout shift results. The viewport numbers are starting points to tune during
+implementation against the live demo.
 
 ### 2. Workflow — `.github/workflows/update-screenshots.yml`
 
@@ -136,11 +148,12 @@ browser versions for reproducibility.
 
 ### 3. `package.json`
 
-- Add devDependency: `playwright`.
-- Add script: `"screenshots": "node scripts/screenshots/capture.mjs"`.
+- No new dependency (`playwright` and `tsx`-via-`npx` are already in use).
+- Add script: `"screenshots": "npx tsx scripts/screenshots/capture.ts"` (mirrors the
+  existing `"translate": "npx tsx scripts/translate.ts"`).
 
-(Lockfile must be regenerated against the public npm registry to avoid leaking the
-internal registry URL.)
+(If any dependency change does touch the lockfile, regenerate it against the public npm
+registry so the internal registry URL never leaks.)
 
 ### 4. Local iteration
 
@@ -170,5 +183,5 @@ After the first capture:
 
 ## Open follow-ups (not in scope)
 
-- True phone-portrait mobile framing (would touch `Hero.tsx`).
 - Triggering the workflow on LibreChat release tags in addition to the weekly cron.
+- Optional PNG optimization pass (the repo already has `scripts/optimize-images.mjs`).
