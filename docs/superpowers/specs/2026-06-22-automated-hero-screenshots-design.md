@@ -91,8 +91,8 @@ unit-tested by Vitest (`scripts/**/*.test.ts` is in the Vitest `include` glob).
 Inputs (env):
 
 - `DEMO_EMAIL`, `DEMO_PASSWORD` — demo account login.
-- `DEMO_CONVERSATION_ID` — the curated hero conversation id (default baked in as a
-  non-secret constant, overridable via env).
+- `DEMO_CONVERSATION_ID` — the curated hero conversation id. Required (no baked-in
+  default); supplied as a repo secret in CI and via `.env.local` locally.
 - `DEMO_BASE_URL` — defaults to `https://chat.librechat.ai`.
 
 Behaviour:
@@ -162,8 +162,9 @@ and zoom before trusting CI.
 
 ## Secrets
 
-- GitHub repo secrets: `DEMO_EMAIL`, `DEMO_PASSWORD`. Use a dedicated demo account, not
-  an admin. These are the only secrets the recurring job needs.
+- GitHub repo secrets: `DEMO_EMAIL`, `DEMO_PASSWORD`, `DEMO_CONVERSATION_ID`. Use a
+  dedicated demo account, not an admin. `DEMO_BASE_URL` stays a (non-secret) repo
+  variable. These are the only inputs the recurring job needs.
 - DB connection is used only at Stage A setup, by a human, never stored in CI.
 
 ## Error handling & reliability

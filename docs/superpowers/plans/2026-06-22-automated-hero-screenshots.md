@@ -17,7 +17,7 @@
 - Unit tests must live under `scripts/**/*.test.ts` (the Vitest `include` glob in `vitest.config.ts`).
 - Use the `playwright` library directly, **not** `@playwright/test`. The repo's `playwright.config.ts` (`testDir: ./e2e`) auto-starts the local docs server and targets localhost; this script targets the external demo and must stay independent of that harness.
 - CI conventions (match existing workflows): `actions/checkout@v4`, `pnpm/action-setup@v4`, `actions/setup-node@v4` with `node-version: 20` and `cache: pnpm`, `pnpm install --frozen-lockfile`, `pnpm exec playwright install --with-deps chromium`.
-- Secrets/variables: `DEMO_EMAIL`, `DEMO_PASSWORD` (repo secrets); `DEMO_CONVERSATION_ID`, `DEMO_BASE_URL` (repo variables).
+- Secrets/variables: `DEMO_EMAIL`, `DEMO_PASSWORD`, `DEMO_CONVERSATION_ID` (repo secrets); `DEMO_BASE_URL` (repo variable).
 - Commit messages: natural, no AI attribution.
 - If any dependency change touches the lockfile, regenerate it against `https://registry.npmjs.org/` so the internal registry URL never leaks.
 
@@ -370,7 +370,7 @@ against the demo's current UI.
 | --- | --- | --- |
 | `DEMO_EMAIL` | secret / `.env.local` | demo account login |
 | `DEMO_PASSWORD` | secret / `.env.local` | demo account password |
-| `DEMO_CONVERSATION_ID` | variable / `.env.local` | hero conversation id |
+| `DEMO_CONVERSATION_ID` | secret / `.env.local` | hero conversation id |
 | `DEMO_BASE_URL` | variable / `.env.local` (optional) | defaults to `https://chat.librechat.ai` |
 
 ### Run locally
@@ -499,7 +499,7 @@ jobs:
         env:
           DEMO_EMAIL: ${{ secrets.DEMO_EMAIL }}
           DEMO_PASSWORD: ${{ secrets.DEMO_PASSWORD }}
-          DEMO_CONVERSATION_ID: ${{ vars.DEMO_CONVERSATION_ID }}
+          DEMO_CONVERSATION_ID: ${{ secrets.DEMO_CONVERSATION_ID }}
           DEMO_BASE_URL: ${{ vars.DEMO_BASE_URL }}
 
       - name: Open pull request
@@ -532,7 +532,7 @@ Expected: prints `OK` (the file parses as valid YAML).
 ```bash
 gh secret set DEMO_EMAIL
 gh secret set DEMO_PASSWORD
-gh variable set DEMO_CONVERSATION_ID   # the hero conversation id from Stage A
+gh secret set DEMO_CONVERSATION_ID   # the hero conversation id from Stage A
 gh variable set DEMO_BASE_URL --body "https://chat.librechat.ai"   # optional
 ```
 
