@@ -1,4 +1,5 @@
 import { defineDocs, defineCollections, defineConfig } from 'fumadocs-mdx/config'
+import { rehypeCodeDefaultOptions } from 'fumadocs-core/mdx-plugins'
 import { z } from 'zod'
 
 export const docs = defineDocs({
@@ -43,5 +44,49 @@ export default defineConfig({
     // make builds depend on third-party hosts). Leave external images untouched;
     // only local images under /public get build-time sizing.
     remarkImageOptions: { external: false },
+    // 16 switched Shiki to the JS regex engine. fumadocs only auto-collects the
+    // content's grammars when rehypeCodeOptions is unset, so once we set options
+    // we must list every language ourselves (lazy loading 404s mid-build) and map
+    // aliases the bundle doesn't know; anything unlisted falls back to plain text.
+    rehypeCodeOptions: {
+      ...rehypeCodeDefaultOptions,
+      lazy: false,
+      langs: [
+        'yaml',
+        'bash',
+        'json',
+        'javascript',
+        'typescript',
+        'jsx',
+        'tsx',
+        'python',
+        'markdown',
+        'mdx',
+        'nginx',
+        'diff',
+        'sql',
+        'ini',
+        'html',
+        'css',
+        'toml',
+        'docker',
+      ],
+      langAlias: {
+        ...(rehypeCodeDefaultOptions.langAlias ?? {}),
+        sh: 'bash',
+        shell: 'bash',
+        js: 'javascript',
+        ts: 'typescript',
+        py: 'python',
+        md: 'markdown',
+        txt: 'text',
+        env: 'ini',
+        math: 'text',
+        mermaid: 'text',
+        ansi: 'text',
+        dockerfile: 'docker',
+      },
+      fallbackLanguage: 'text',
+    },
   },
 })

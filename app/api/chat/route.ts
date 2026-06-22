@@ -38,7 +38,7 @@ async function getSearchIndex(): Promise<SearchDoc[]> {
   const results = await Promise.all(
     pages.map(async (page): Promise<SearchDoc | null> => {
       try {
-        const filePath = join(process.cwd(), 'content/docs', page.file.path)
+        const filePath = join(process.cwd(), 'content/docs', page.path)
         const raw = await readFile(filePath, 'utf-8')
         const content = raw.replace(/^---[\s\S]*?---\n*/, '').slice(0, 3000)
         const { title } = page.data
@@ -87,7 +87,7 @@ async function getPageContent(url: string): Promise<string | null> {
       return null
     }
 
-    const filePath = join(process.cwd(), 'content/docs', page.file.path)
+    const filePath = join(process.cwd(), 'content/docs', page.path)
     const raw = await readFile(filePath, 'utf-8')
     const content = raw.replace(/^---[\s\S]*?---\n*/, '').slice(0, 8000)
 

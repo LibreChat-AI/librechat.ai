@@ -1,6 +1,10 @@
 import type { ComponentType } from 'react'
 import type { TableOfContents } from 'fumadocs-core/toc'
-import { docs, blog as blogRaw, changelog as changelogRaw } from '@/.source'
+// Import the SERVER collections entry: `.source/index` uses the bundler-injected
+// `_runtime` (only resolvable in client/page bundles), so server code — the
+// loader, search route, llms text — must use `.source/server`, which builds on
+// fumadocs-mdx's real `server` runtime export. Matches fumadocs' own examples.
+import { docs, blog as blogRaw, changelog as changelogRaw } from '@/.source/server'
 import { loader } from 'fumadocs-core/source'
 import { resolveIcon } from '@/lib/icons'
 import { i18n } from '@/lib/i18n'

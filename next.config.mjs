@@ -140,6 +140,30 @@ const config = {
   turbopack: {},
   pageExtensions: ['mdx', 'md', 'jsx', 'js', 'tsx', 'ts'],
   webpack(webpackConfig, options) {
+    const componentsDir = resolve(process.cwd(), 'components')
+
+    /**
+     * createMDX (withMDX) already pushed a global `.mdx` rule using
+     * `fumadocs-mdx/webpack/mdx`. Scope it away from components/ so it doesn't
+     * double-process the component MDX that the @mdx-js/loader rule below owns
+     * (chaining the two loaders fails with "only import/exports are supported").
+     */
+    for (const rule of webpackConfig.module.rules) {
+      const usesFumadocsMdx =
+        Array.isArray(rule?.use) &&
+        rule.use.some(
+          (u) => typeof u === 'object' && u?.loader?.includes('fumadocs-mdx/webpack/mdx'),
+        )
+      if (usesFumadocsMdx) {
+        const existing = Array.isArray(rule.exclude)
+          ? rule.exclude
+          : rule.exclude
+            ? [rule.exclude]
+            : []
+        rule.exclude = [...existing, componentsDir]
+      }
+    }
+
     /**
      * MDX loader for components/ directory files.
      * These are MDX files imported directly as React components
@@ -148,7 +172,7 @@ const config = {
      */
     webpackConfig.module.rules.push({
       test: /\.mdx?$/,
-      include: [resolve(process.cwd(), 'components')],
+      include: [componentsDir],
       use: [
         options.defaultLoaders.babel,
         {
