@@ -248,6 +248,31 @@ describe('runTranslation', () => {
     expect(await readFile(join(content, 'index.de.mdx'), 'utf8')).toBe(before)
   })
 
+  it('retries a transiently-failing file within one run until it succeeds', async () => {
+    // A rate-limit/provider error throws on the first attempt for the paragraph
+    // block, then succeeds. A single run must converge (translate the file) rather
+    // than skipping it and requiring the whole workflow to be re-run.
+    let thrown = false
+    const flaky: TranslateModel = {
+      generate: async ({ prompt }) => {
+        const text = prompt.split(/Translate the following[^\n]*:\n/).pop() ?? ''
+        if (text.includes('A paragraph') && !thrown) {
+          thrown = true
+          throw Object.assign(new Error('429 Too Many Requests'), { statusCode: 429 })
+        }
+        return text
+      },
+    }
+    const stats = await runTranslation({
+      contentDir: content,
+      cacheDir: cache,
+      locales: ['de'],
+      model: flaky,
+    })
+    expect(stats.skipped).toEqual([])
+    expect(await readdir(content)).toContain('index.de.mdx')
+  })
+
   it('removes a stale locale file when a re-translation fails validation', async () => {
     await runTranslation({ contentDir: content, cacheDir: cache, locales: ['de'], model: stub })
     expect(await readdir(content)).toContain('index.de.mdx')
