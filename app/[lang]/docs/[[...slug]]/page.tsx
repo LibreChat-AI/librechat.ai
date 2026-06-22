@@ -78,7 +78,10 @@ export default async function Page(props: PageProps) {
   return (
     <DocsPage
       toc={page.data.toc}
-      tableOfContent={{ style: 'clerk' }}
+      // single: false makes the clerk TOC track every heading currently in the
+      // viewport (the thumb spans the visible range and all in-view items
+      // highlight), instead of the default single-active-heading behavior.
+      tableOfContent={{ style: 'clerk', single: false }}
       breadcrumb={{
         enabled: true,
         includeRoot: { url: localizedDocsHref('/docs', params.lang) },
