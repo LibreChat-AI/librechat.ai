@@ -36,6 +36,12 @@ async function login(browser: Browser) {
   await page
     .waitForURL(`${baseURL}/c/**`, { timeout: 30_000 })
     .catch(() => page.waitForLoadState('networkidle'))
+  // Hard-fail if we are still on the login page (bad credentials, rate limit,
+  // etc.) so withRetry retries and ultimately exits non-zero instead of
+  // capturing screenshots of the login/error screen.
+  if (new URL(page.url()).pathname.startsWith('/login')) {
+    throw new Error(`Login failed: still on ${page.url()} after submitting credentials`)
+  }
   const state = await context.storageState()
   await context.close()
   return state
