@@ -100,12 +100,14 @@ export async function runTranslation(opts: RunOptions): Promise<RunStats> {
     // TM only after that file validates, so a broken page is never cached.
     const translateString = async (
       staged: Map<string, string>,
+      used: Set<string>,
       text: string,
       kind: 'block' | 'inline',
       context?: string,
     ): Promise<string> => {
       const hash = hashText(text)
       tm.markUsed(hash)
+      used.add(hash)
       const cached = opts.force ? undefined : tm.get(hash)
       if (cached !== undefined) {
         stats.cachedBlocks++
@@ -144,12 +146,16 @@ export async function runTranslation(opts: RunOptions): Promise<RunStats> {
       limit(async () => {
         const abs = join(opts.contentDir, rel)
         const staged = new Map<string, string>()
+        // Every block hash this file touches (cache hits included), so a validation
+        // failure can evict them all — a transient round may have cached some before
+        // the file was ever validated.
+        const used = new Set<string>()
         try {
           if (rel.endsWith('meta.json')) {
             const meta = JSON.parse(await readFile(abs, 'utf8'))
             const map = new Map<string, string>()
             for (const s of extractMetaStrings(meta))
-              map.set(s, await translateString(staged, s, 'inline'))
+              map.set(s, await translateString(staged, used, s, 'inline'))
             if (opts.dryRun) return 'ok'
             const out = rebuildMeta(meta, (s) => map.get(s) ?? s)
             await writeFile(
@@ -194,11 +200,23 @@ export async function runTranslation(opts: RunOptions): Promise<RunStats> {
             // in the translation can't break the generated MDX.
             if (seg.jsQuote) {
               const clean = unescapeJsString(seg.text, seg.jsQuote)
-              const t = await translateString(staged, clean, 'inline', neighborContext(segs, i))
+              const t = await translateString(
+                staged,
+                used,
+                clean,
+                'inline',
+                neighborContext(segs, i),
+              )
               outSegs.push({ text: escapeJsString(t, seg.jsQuote) })
               continue
             }
-            let text = await translateString(staged, seg.text, 'block', neighborContext(segs, i))
+            let text = await translateString(
+              staged,
+              used,
+              seg.text,
+              'block',
+              neighborContext(segs, i),
+            )
             if (isHeading(seg.text) && !headingHasExplicitId(seg.text)) {
               const id = slugger.slug(headingSlugText(seg.text))
               // Trim any trailing whitespace the model added before appending the
@@ -213,7 +231,7 @@ export async function runTranslation(opts: RunOptions): Promise<RunStats> {
           for (const key of ['title', 'description']) {
             const val = parsed.data[key]
             if (typeof val === 'string' && /\p{L}/u.test(val))
-              outData[key] = await translateString(staged, val, 'inline')
+              outData[key] = await translateString(staged, used, val, 'inline')
           }
           if (opts.dryRun) {
             stats.files++
@@ -227,6 +245,11 @@ export async function runTranslation(opts: RunOptions): Promise<RunStats> {
             // fresh English instead of serving a stale translation that predates
             // the source change. It is retried (uncached) on the next run.
             await unlink(join(opts.contentDir, localePath(rel, locale, '.mdx'))).catch(() => {})
+            // Evict every block this file used. A transient round may have committed
+            // some of them before the file ever validated; leaving a structurally bad
+            // block cached would make the next run read it back, fail validation again,
+            // and skip the page forever. Evicting forces a fresh re-translation.
+            for (const h of used) tm.delete(h)
             return 'skip'
           }
           await writeFile(join(opts.contentDir, localePath(rel, locale, '.mdx')), output)
