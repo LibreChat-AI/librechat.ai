@@ -1,0 +1,400 @@
+---
+title: Bilderstellung & -bearbeitung
+icon: Image
+description: >-
+  Umfassender Leitfaden zu den integrierten Bildgenerierungs- und
+  Bearbeitungstools von LibreChat
+---
+
+LibreChat wird mit integrierten Bild-Tools geliefert, die Sie einem [Agent](/docs/features/agents) hinzufügen können. Jedes Tool verfügt über ein eigenes Modell, einen eigenen Preis und eine eigene Einrichtung, die normalerweise nur aus einem API-Schlüssel oder einer URL besteht. Es gibt keine separate Bild-Seite: Sie generieren oder bearbeiten Bilder, indem Sie mit einem Agenten chatten, für den ein Bild-Tool aktiviert ist.
+
+<Callout type="info" title="So funktioniert die Bildgenerierung">
+Laden Sie ein Bild hoch, wenn Sie eine Bearbeitung wünschen, oder senden Sie eine einfache Texteingabe, wenn Sie ein neues Bild benötigen. Generierte Bilder folgen der konfigurierten [`fileStrategy`](/docs/configuration/librechat_yaml/object_structure/config#filestrategy) und die Tool-Ausgabe wird unmittelbar nach der Generierung als Teil des Chat-Kontexts an das LLM gesendet.
+</Callout>
+
+## Schnelleinstieg [#quick-start]
+
+Bringen Sie die Bildgenerierung mit OpenAI Image Tools in wenigen Minuten zum Laufen.
+
+<Steps>
+<Step>
+
+**Erstellen Sie einen Agenten.** Wählen Sie **Agents** aus dem endpoint-Menü, öffnen Sie den Agent Builder über die Seitenleiste und erstellen Sie einen neuen Agenten. Geben Sie ihm einen Namen wie „Image Creator“.
+
+</Step>
+<Step>
+
+**OpenAI Image Tools hinzufügen.** Öffnen Sie die **Tools**-Liste des Agents, wählen Sie **OpenAI Image Tools** aus und speichern Sie den Agent. Dies fügt sowohl Funktionen zur Bilderstellung als auch zur Bildbearbeitung hinzu.
+
+</Step>
+<Step>
+
+**Legen Sie Ihren API-Schlüssel fest.** Fügen Sie Folgendes zu Ihrer `.env` Datei hinzu:
+
+```bash filename=".env"
+IMAGE_GEN_OAI_API_KEY=sk-your-openai-api-key
+# Optional; defaults to gpt-image-1
+IMAGE_GEN_OAI_MODEL=gpt-image-1
+```
+
+</Step>
+<Step>
+
+**Neustart und Test.** Starten Sie LibreChat neu und senden Sie dann eine Nachricht wie „Erstelle ein Bild eines Sonnenuntergangs über Bergen“ an Ihren Agenten.
+
+| Bereitstellung | Befehl |
+| ---------- | --------------------------------------------- |
+| Docker     | `docker compose down && docker compose up -d` |
+| Lokal      | Stoppen (Strg+C) und dann `npm run backend` |
+
+</Step>
+</Steps>
+
+<Callout type="info" title="Gut zu wissen">
+- API-Schlüssel können weggelassen werden, damit Benutzer ihre eigenen Schlüssel über die Benutzeroberfläche eingeben können.
+- Bildausgaben werden nur unmittelbar nach der Generierung an das LLM gesendet, nicht bei jeder Nachricht. Das LLM erhält ansonsten nur dann einen visuellen Kontext, wenn Bilder an Benutzernachrichten angehängt sind. Siehe [Image Storage and Handling](#image-storage-and-handling).
+- MCP-Server-Tools können auch Bilder ausgeben, obwohl sie möglicherweise nicht immer das korrekte Format verwenden. Siehe den [MCP-Abschnitt](#model-context-protocol-mcp).
+</Callout>
+
+## OpenAI Bild-Tools [#openai-image-tools]
+
+"OpenAI Image Tools" ist ein Agent-Toolkit, das aus zwei separaten Tools besteht:
+
+- **Image Generation** erstellt brandneue Bilder aus Texteingaben (kein Upload erforderlich).
+- **Bildbearbeitung** bearbeitet oder remixt von dir hochgeladene Bilder: Farben ändern, Objekte hinzufügen, die Arbeitsfläche erweitern und mehr.
+
+Beide verwenden standardmäßig **GPT-Image-1** für das Befolgen von Anweisungen, Text-Rendering, detaillierte Bearbeitung und Wissen über die reale Welt. Verwenden Sie `IMAGE_GEN_OAI_MODEL`, um ein anderes OpenAI-Bildmodell zu wählen, sofern Ihre Bereitstellung dies unterstützt. Weitere Einzelheiten finden Sie in der [Dokumentation zur Bildgenerierung](https://platform.openai.com/docs/guides/image-generation?image-generation-model=gpt-image-1) von OpenAI.
+
+### Generierung vs. Bearbeitung [#generation-vs-editing]
+
+| Anwendungsfall | Ruft auf |
+| ----------------------- | -------------------- |
+| "Von Grund auf neu starten" | **Bildgenerierung** |
+| "Vorhandene(s) Bild(er) verwenden" | **Bildbearbeitung** |
+
+Beide Tools sind jederzeit verfügbar, und der Agent wählt basierend auf der Anfrage das jeweils passende aus:
+
+- **Bildgenerierung** erstellt neue Bilder ausschließlich aus Textbeschreibungen.
+- **Bildbearbeitung** modifiziert oder remixt bestehende Bilder unter Verwendung ihrer Bild-IDs. Dabei kann es sich um Bilder aus der aktuellen Nachricht oder um zuvor generierte und referenzierte Bilder handeln. Das LLM verfolgt die Bild-IDs, solange sie im Kontextfenster verbleiben, und fügt sie in die Tool-Ausgabe ein.
+
+<Callout type="warning" title="Die Bildbearbeitung basiert auf Bild-IDs">
+- Image IDs werden im Chatverlauf beibehalten. Wenn Dateien zur aktuellen Anfrage hochgeladen werden, werden deren IDs zum Kontext des LLM hinzugefügt, bevor Tokens generiert werden.
+- Zuvor referenzierte oder generierte Bild-IDs können für die Bearbeitung verwendet werden, solange sie innerhalb des Kontextfensters verbleiben. Das LLM fügt alle relevanten IDs in das `image_ids`-Array ein, wenn das Bearbeitungs-Tool aufgerufen wird.
+- Sie können zuvor hochgeladene Bilder über das Seitenpanel anhängen, ohne sie erneut hochladen zu müssen. Dies gibt einem Vision-Modell auch den Bildkontext, was dazu beitragen kann, den `prompt` für das Bearbeitungstool zu informieren.
+</Callout>
+
+### Parameter [#parameters]
+
+**Bildgenerierung**
+
+- **prompt**: Textbeschreibung (erforderlich)
+- **size**: `auto` (Standard), `1024x1024` (quadratisch), `1536x1024` (Querformat) oder `1024x1536` (Hochformat)
+- **quality**: `auto` (Standard), `high`, `medium` oder `low`
+- **background**: `auto` (Standard), `transparent` oder `opaque` (transparent erfordert das Format PNG oder WebP)
+
+**Bildbearbeitung**
+
+- **image_ids**: Array von Image-IDs, die als Referenz für die Bearbeitung verwendet werden sollen (erforderlich)
+- **prompt**: Textbeschreibung der Änderungen (erforderlich)
+- **size**: `auto` (Standard), `1024x1024`, `1536x1024`, `1024x1536`, `256x256` oder `512x512`
+- **quality**: `auto` (Standard), `high`, `medium` oder `low`
+
+### Einrichtung [#setup]
+
+Erstellen oder verwenden Sie einen OpenAI-Schlüssel und fügen Sie ihn zu `.env` hinzu, dann fügen Sie "OpenAI Image Tools" zur **Tools**-Liste Ihres Agenten hinzu:
+
+```bash filename=".env"
+IMAGE_GEN_OAI_API_KEY=sk-...
+# optional extras
+IMAGE_GEN_OAI_MODEL=gpt-image-1
+IMAGE_GEN_OAI_BASEURL=https://...
+```
+
+Für Azure OpenAI-Bereitstellungen beantragen Sie zuerst den Zugriff unter https://aka.ms/oai/gptimage1access und fügen dann Ihre Anmeldedaten zu `.env` hinzu:
+
+```bash filename=".env"
+IMAGE_GEN_OAI_API_KEY=your-api-key
+# optional extras
+IMAGE_GEN_OAI_MODEL=gpt-image-1
+IMAGE_GEN_OAI_BASEURL=https://deploymentname.openai.azure.com/openai/deployments/gpt-image-1/
+IMAGE_GEN_OAI_AZURE_API_VERSION=2025-04-01-preview
+```
+
+### Erweiterte Konfiguration [#advanced-configuration]
+
+Passen Sie die Tool-Beschreibungen und die Prompt-Anleitung mit diesen Umgebungsvariablen an:
+
+```bash filename=".env"
+# Image Model
+IMAGE_GEN_OAI_MODEL=gpt-image-1
+
+# Image Generation Tool Descriptions
+IMAGE_GEN_OAI_DESCRIPTION=...
+IMAGE_GEN_OAI_PROMPT_DESCRIPTION=...
+
+# Image Editing Tool Descriptions
+IMAGE_EDIT_OAI_DESCRIPTION=...
+IMAGE_EDIT_OAI_PROMPT_DESCRIPTION=...
+```
+
+### Preisgestaltung [#pricing]
+
+Siehe die [GPT-Image-1 Preisübersichtsseite](https://platform.openai.com/docs/models/gpt-image-1) und die [Dokumentation zur Bildgenerierung](https://platform.openai.com/docs/guides/image-generation?image-generation-model=gpt-image-1#cost-and-latency) für die Kosten der Bildgenerierung.
+
+## Gemini Bild-Tools [#gemini-image-tools]
+
+Gemini Image Tools integrieren die neuesten Bildgenerierungsmodelle von Google und unterstützen sowohl die Text-zu-Bild-Generierung als auch die bildkontextbezogene Bearbeitung.
+
+- **Text-zu-Bild-Generierung**: Erstellen Sie hochwertige Bilder aus detaillierten Textbeschreibungen.
+- **Unterstützung für Bildkontext**: Verwenden Sie vorhandene Bilder als Kontext oder Inspiration für neue Generierungen.
+- **Bildbearbeitung**: Generieren Sie neue Bilder basierend auf Änderungen an bestehenden Bildern (fügen Sie die ursprüngliche Bild-ID hinzu).
+- **Mehrere Modelle**: Wählen Sie `gemini-2.5-flash-image` (Standard) oder `gemini-3-pro-image-preview`.
+- **Dual API support**: funktioniert sowohl mit einfachen Gemini API-Keys als auch mit Google Cloud Vertex AI.
+
+### Parameter [#parameters-1]
+
+- **prompt**: detaillierte Textbeschreibung des gewünschten Bildes (erforderlich, bis zu 32.000 Zeichen)
+- **image_ids**: optionales Array von Bild-IDs, die als visueller Kontext für die Generierung verwendet werden sollen
+
+### Einrichtung [#setup-1]
+
+Für die Gemini API erhalten Sie einen Schlüssel über [Google AI Studio](https://aistudio.google.com/app/apikey):
+
+```bash filename=".env"
+GEMINI_API_KEY=your_api_key_here
+```
+
+Für Vertex AI (Google Cloud-Benutzer mit Vertex AI-Zugriff):
+
+```bash filename=".env"
+GOOGLE_SERVICE_KEY_FILE=/path/to/service-account.json
+GOOGLE_CLOUD_LOCATION=us-central1  # optional, default: global
+```
+
+### Modellauswahl [#model-selection]
+
+```bash filename=".env"
+# Default model (fast and efficient)
+GEMINI_IMAGE_MODEL=gemini-2.5-flash-image
+
+# Higher quality model
+GEMINI_IMAGE_MODEL=gemini-3-pro-image-preview
+```
+
+### Erweiterte Konfiguration [#advanced-configuration-1]
+
+Passen Sie Tool-Beschreibungen über Umgebungsvariablen an:
+
+```bash filename=".env"
+GEMINI_IMAGE_GEN_DESCRIPTION=...
+GEMINI_IMAGE_GEN_PROMPT_DESCRIPTION=...
+GEMINI_IMAGE_IDS_DESCRIPTION=...
+```
+
+Weitere Details finden Sie im speziellen [Gemini Image Gen guide](/docs/configuration/tools/gemini_image_gen).
+
+## DALL·E (veraltet) [#dalle-legacy]
+
+DALL·E bietet eine Legacy-Bildgenerierung unter Verwendung des `dall-e-3`-Bildmodells von OpenAI.
+
+### Parameter [#parameters-2]
+
+- **prompt**: Textbeschreibung des gewünschten Bildes (erforderlich, bis zu 4000 Zeichen)
+- **style**: `vivid` (hyper-realistisch, dramatisch, Standard) oder `natural` (weniger hyper-realistisch)
+- **Qualität**: `standard` (Standard) oder `hd`
+- **size**: `1024x1024` (Standard, quadratisch), `1792x1024` (breit) oder `1024x1792` (hoch)
+
+### Einrichtung [#setup-2]
+
+```bash filename=".env"
+# Required
+DALLE_API_KEY=sk-...  # or DALLE3_API_KEY=sk-...
+
+# Optional
+DALLE_REVERSE_PROXY=https://...  # Alternative endpoint
+DALLE3_BASEURL=https://...  # For Azure or custom endpoints
+DALLE3_AZURE_API_VERSION=2023-12-01-preview  # For Azure deployments
+DALLE3_SYSTEM_PROMPT=...  # Custom system prompt for DALL·E
+```
+
+Aktiviere das **DALL·E**-Tool für den Agenten und beginne mit der Eingabe von Prompts.
+
+### Erweiterte Konfiguration [#advanced-configuration-2]
+
+Für Azure OpenAI-Bereitstellungen konfigurieren Sie die Basis-URL und die API-Version:
+
+```bash filename=".env"
+DALLE3_BASEURL=https://your-resource-name.openai.azure.com/openai/deployments/your-deployment-name
+DALLE3_AZURE_API_VERSION=2023-12-01-preview
+DALLE3_API_KEY=your-azure-api-key
+```
+
+### Preisgestaltung [#pricing-1]
+
+Siehe die [DALL-E Preisübersichtsseite](https://platform.openai.com/docs/models/dall-e-3) und die [Dokumentation zur Bildgenerierung](https://platform.openai.com/docs/guides/image-generation?image-generation-model=dall-e-3) für die Kosten der Bildgenerierung.
+
+## Stable Diffusion (lokal) [#stable-diffusion-local]
+
+Führen Sie Bilder vollständig auf Ihrer eigenen Maschine oder Ihrem Server aus. Verweisen Sie LibreChat auf einen beliebigen Automatic1111 (oder kompatiblen) endpoint und schon sind Sie startklar.
+
+### Parameter [#parameters-3]
+
+- **prompt**: detaillierte Schlüsselwörter, die die gewünschten Elemente im Bild beschreiben (erforderlich)
+- **negative_prompt**: Schlüsselwörter, die Elemente beschreiben, die vom Bild ausgeschlossen werden sollen (erforderlich)
+
+Die Stable Diffusion-Implementierung verwendet diese festen Standardparameter, die für die meisten Anwendungsfälle gute Ergebnisse liefern:
+
+- cfg_scale: 4.5
+- Schritte: 22
+- width: 1024
+- height: 1024
+
+### Einrichtung [#setup-3]
+
+Es ist kein API-Schlüssel erforderlich, nur die erreichbare URL Ihrer Automatic1111 WebUI:
+
+```bash filename=".env"
+SD_WEBUI_URL=http://127.0.0.1:7860  # URL to your Automatic1111 WebUI
+```
+
+Weitere Details zur Einrichtung von Automatic1111 finden Sie im speziellen [Stable Diffusion guide](/docs/configuration/tools/stable_diffusion).
+
+## Flux [#flux]
+
+Cloud-Generator mit Fokus auf Geschwindigkeit und optionalen feinabgestimmten Modellen.
+
+- Schnelle cloudbasierte Bildgenerierung
+- Unterstützung für feinabgestimmte Modelle
+- Mehrere Qualitätsstufen und Seitenverhältnisse
+- Raw-Modus für weniger bearbeitete, natürlich aussehende Bilder
+
+### Parameter [#parameters-4]
+
+Das Flux-Tool unterstützt drei Hauptaktionen:
+
+1. **generate**: Erstellen eines neuen Bildes aus einer Texteingabe
+2. **generate_finetuned**: Erstellen eines Bildes mithilfe eines feinabgestimmten Modells
+3. **list_finetunes**: listet die verfügbaren benutzerdefinierten Modelle für den Benutzer auf
+
+Weitere Details finden Sie im speziellen [Flux guide](/docs/configuration/tools/flux#parameters).
+
+### Einrichtung [#setup-4]
+
+Wählen Sie das **Flux**-Tool innerhalb des Agenten aus. Prompts sind einfacher Text, und ein Aufruf erzeugt ein Bild.
+
+```bash filename=".env"
+FLUX_API_KEY=flux_live_...
+FLUX_API_BASE_URL=https://api.us1.bfl.ai   # default is fine for most users
+```
+
+### Preisgestaltung [#pricing-2]
+
+Siehe die [Flux-Preisseite](https://docs.bfl.ml/pricing/) für die Kosten der Bilderzeugung.
+
+## Model Context Protocol (MCP) [#model-context-protocol-mcp]
+
+Bildausgaben werden von MCP-Servern unterstützt. Zum Beispiel kann der [Puppeteer MCP Server](https://github.com/modelcontextprotocol/servers/tree/main/src/puppeteer) Screenshots von Webseiten erstellen, die das Bild im erwarteten Format ausgeben und genauso behandelt werden wie die integrierten Bild-Tools von LibreChat.
+
+<Callout type="warning" title="Die MCP-Bildunterstützung befindet sich noch in der Entwicklung">
+- Die folgenden Beispiele setzen voraus, dass LibreChat außerhalb von Docker direkt mit Node.js ausgeführt wird. Das Model Context Protocol ist ein relativ neues Framework, und viele Entwickler lernen noch, wie sie ihre Systeme mit uv/node für eine skalierbare Verteilung bereitstellen können.
+- Es gibt nur wenige Server zur Bildgenerierung, und viele haben das korrekte Antwortformat für Bilder noch nicht übernommen.
+- Während viele MCP-Server innerhalb von Docker gut funktionieren, tun dies die folgenden Beispiele nicht, oder nur mit fortgeschritteneren Konfigurationen, was einige der aktuellen Inkonsistenzen zwischen MCP-Servern aufzeigt.
+</Callout>
+
+```yaml filename="librechat.yaml"
+mcpServers:
+  puppeteer:
+    command: npx
+    args:
+      - -y
+      - '@modelcontextprotocol/server-puppeteer'
+```
+
+Das Folgende ist ein Beispiel für einen [Image Generation server](https://github.com/GongRzhe/Image-Generation-MCP-Server), der Bilder mithilfe der [Replicate API](https://replicate.com/account/api-tokens) ausgibt, jedoch URLs der Bilder zurückgibt, was nicht dem Bild-Antwortstandard von MCP entspricht.
+
+<Callout type="info" title="Globale Installation erforderlich">
+Installieren Sie für diesen speziellen Server das Paket `@gongrzhe/image-gen-server` global mit `npm install -g @gongrzhe/image-gen-server` und verweisen Sie dann wie unten gezeigt auf die kompilierten Dateien des Pakets.
+</Callout>
+
+```yaml filename="librechat.yaml"
+mcpServers:
+  image-gen:
+    command: 'node'
+    # First, install the package globally using npm:
+    # `npm install -g @gongrzhe/image-gen-server`
+    # Then, point to the location of the installed package,
+    # which you can find by running `npm root -g`
+    args:
+      - '{REPLACE_WITH_NODE_MODULES_LOCATION}/@gongrzhe/image-gen-server/build/index.js'
+      # Example with output from `npm root -g`:
+      # - "/home/danny/.nvm/versions/node/v24.16.0/lib/node_modules/@gongrzhe/image-gen-server/build/index.js"
+    env:
+      # Do not hardcode the API token here, use the environment variable instead
+      # The following will pick up the token from your .env file or environment
+      REPLICATE_API_TOKEN: '${REPLICATE_API_TOKEN}'
+      MODEL: 'google/imagen-3'
+```
+
+## Bildspeicherung und -verarbeitung [#image-storage-and-handling]
+
+Alle generierten Bilder sind:
+
+1. Gespeichert gemäß der konfigurierten [`fileStrategy`](/docs/configuration/librechat_yaml/object_structure/config#filestrategy)
+2. Wird direkt in der Chat-Oberfläche angezeigt
+3. Wird als Teil des unmittelbaren Chat-Kontexts nach der Generierung an das LLM gesendet
+
+Für den letzten Punkt gelten einige Einschränkungen:
+
+- Dies kann zu Problemen mit einem LLM führen, das keine Bildeingaben unterstützt. Eine Option, dieses Verhalten pro Agent zu deaktivieren, ist geplant.
+- Ausgaben werden nur bei der Generierung an das LLM gesendet, nicht bei jeder Nachricht.
+- Um ein Bild in späteren Nachrichten einzufügen, hängen Sie es über das Seitenpanel an die Nachricht an.
+- Kurz gesagt erhält das LLM den Bildkontext nur durch Bilder, die an Benutzernachrichten angehängt sind, sowie durch Generierungen oder Bearbeitungen unmittelbar nach deren Erstellung.
+
+## Proxy-Unterstützung [#proxy-support]
+
+Alle Bildgenerierungstools unterstützen die Proxy-Konfiguration über die Umgebungsvariable `PROXY`:
+
+```bash filename=".env"
+PROXY=http://proxy-url:port
+```
+
+Wenn `PROXY` nicht gesetzt ist, berücksichtigen unterstützte serverseitige Clients `HTTP_PROXY`, `HTTPS_PROXY` und `NO_PROXY`/`no_proxy`.
+
+## Fehlerbehandlung [#error-handling]
+
+Wenn ein Tool auf einen Fehler stößt, gibt es eine Nachricht zurück, die erklärt, was schiefgelaufen ist. Häufige Probleme sind:
+
+- Ungültiger API-Schlüssel
+- API-Nichtverfügbarkeit
+- Verstöße gegen die Inhaltsrichtlinien
+- Proxy-/Netzwerkprobleme
+- Ungültige Parameter
+- Nicht unterstützte Bild-Payload (siehe [Image Storage and Handling](#image-storage-and-handling) oben)
+
+## Prompting [#prompting]
+
+Sie können die Prompts für [OpenAI Image Tools](#advanced-configuration) und [DALL·E](#advanced-configuration-2) anpassen, aber die folgenden Tipps geben Aufschluss über die Standard-Prompts, die von den Tools bereitgestellt werden. Dies ist nützlich für Ihre eigenen Formulierungen:
+
+1. Beginnen Sie mit dem **Subjekt** und dem **Stil** (Foto, Ölgemälde usw.).
+2. Fügen Sie **Komposition** und **Kamera/Medium** hinzu („Weitwinkelaufnahme von…“, „Aquarell…“).
+3. Erwähne **Beleuchtung und Stimmung** („goldene Stunde“, „dramatische Schatten“).
+4. Schließen Sie mit **Detail-Keywords** (Texturen, Farben, Ausdrücke) ab.
+5. Halten Sie Negative positiv: Beschreiben Sie, was enthalten sein sollte, nicht was vermieden werden soll.
+
+Beispiel:
+
+> Ein filmisches Foto einer antiken Bibliothek, die in warmes Nachmittagslicht getaucht ist. Hohe Holzregale quellen über vor ledergebundenen Büchern und Staubpartikel schimmern im Licht. Eine einzelne grüne Bankerlampe beleuchtet einen aufgeschlagenen Atlas auf einem polierten Mahagonischreibtisch im Vordergrund. 85-mm-Objektiv, geringe Schärfentiefe, satte Bernsteintöne, ultrahohe Detailgenauigkeit.
+
+## Verwandte Seiten [#related-pages]
+
+<Cards num={3}>
+  <Cards.Card title="Agenten" href="/docs/features/agents" arrow>
+    Erstellen und konfigurieren Sie AI-Agenten mit benutzerdefinierten Tools
+  </Cards.Card>
+  <Cards.Card title="MCP-Server" href="/docs/features/mcp" arrow>
+    Bringen Sie Ihre eigenen Tools über das Model Context Protocol ein
+  </Cards.Card>
+  <Cards.Card title="Gemini-Bildtools" href="/docs/configuration/tools/gemini_image_gen" arrow>
+    Detaillierte Einrichtungsanleitung für die Google Gemini Bildgenerierung
+  </Cards.Card>
+</Cards>
