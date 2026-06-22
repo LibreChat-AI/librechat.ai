@@ -40,11 +40,11 @@ const localeFilteredSource: typeof docsSource = {
       pages:
         entry.language === i18n.defaultLanguage
           ? entry.pages
-          : entry.pages.filter((page) => page.file.path.endsWith(`.${entry.language}.mdx`)),
+          : entry.pages.filter((page) => page.path.endsWith(`.${entry.language}.mdx`)),
     })),
 }
 
-export const { GET } = createFromSource(localeFilteredSource, undefined, {
+export const { GET } = createFromSource(localeFilteredSource, {
   localeMap: {
     en: 'english',
     es: 'spanish',

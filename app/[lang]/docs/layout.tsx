@@ -57,7 +57,11 @@ export default async function Layout({
       >
         {/* Skip-link target at the start of the docs content region. */}
         <div id="main-content" tabIndex={-1} />
-        {children}
+        {/* fumadocs 16's DocsPage renders the content as <article>, with no
+            <main> landmark. Wrap it so screen-reader users get a main region;
+            `display: contents` keeps fumadocs' grid placement (the inner
+            article's [grid-area:main]) intact. */}
+        <main className="contents">{children}</main>
       </DocsLayout>
     </DocsI18nProvider>
   )

@@ -34,7 +34,7 @@ export default async function Page(props: PageProps) {
   // English page: no duplicate English content at a localized URL, and the sidebar
   // links resolve instead of 404ing. A real translation (path ends .<locale>.mdx)
   // renders normally.
-  if (params.lang !== i18n.defaultLanguage && !page.file.path.endsWith(`.${params.lang}.mdx`)) {
+  if (params.lang !== i18n.defaultLanguage && !page.path.endsWith(`.${params.lang}.mdx`)) {
     redirect(englishHref)
   }
 
@@ -57,9 +57,9 @@ export default async function Page(props: PageProps) {
   // fallback ends in plain `.mdx`. Gate the banner (and the hreflang alternates
   // below) on that so untranslated English fallbacks aren't treated as translated.
   const isTranslated =
-    params.lang !== i18n.defaultLanguage && page.file.path.endsWith(`.${params.lang}.mdx`)
+    params.lang !== i18n.defaultLanguage && page.path.endsWith(`.${params.lang}.mdx`)
 
-  // On localized pages page.file.path is the generated locale file (foo.de.mdx).
+  // On localized pages page.path is the generated locale file (foo.de.mdx).
   // Point all GitHub links at the English source instead: the locale file is
   // regenerated from the source doc plus content/.i18n-cache on every run and is
   // excluded from the workflow trigger, so edits made directly to it are silently
@@ -67,13 +67,15 @@ export default async function Page(props: PageProps) {
   const localeSuffix = new RegExp(
     `\\.(${i18n.languages.filter((l) => l !== i18n.defaultLanguage).join('|')})\\.mdx$`,
   )
-  const sourcePath = page.file.path.replace(localeSuffix, '.mdx')
+  const sourcePath = page.path.replace(localeSuffix, '.mdx')
   const githubHref = `https://github.com/LibreChat-AI/librechat.ai/blob/main/content/docs/${sourcePath}`
 
+  // `lastModified` is populated only when a git last-modified loader option is
+  // enabled (this site doesn't), so it's optional and absent from the strict
+  // fumadocs 16 data type — read it defensively.
+  const lastModifiedRaw = (page.data as { lastModified?: Date | string }).lastModified
   const lastModified =
-    page.data.lastModified instanceof Date
-      ? page.data.lastModified.toISOString()
-      : (page.data.lastModified as string | undefined)
+    lastModifiedRaw instanceof Date ? lastModifiedRaw.toISOString() : lastModifiedRaw
 
   return (
     <DocsPage
@@ -87,7 +89,7 @@ export default async function Page(props: PageProps) {
         includeRoot: { url: localizedDocsHref('/docs', params.lang) },
         includePage: true,
       }}
-      lastUpdate={page.data.lastModified}
+      lastUpdate={lastModifiedRaw}
       editOnGithub={{
         owner: 'LibreChat-AI',
         repo: 'librechat.ai',
@@ -147,7 +149,7 @@ export async function generateStaticParams() {
   // have a real translated file on disk (same discriminator as the hreflang gate).
   return docsSource.generateParams().filter((p) => {
     if (p.lang === i18n.defaultLanguage) return true
-    return docsSource.getPage(p.slug, p.lang)?.file.path.endsWith(`.${p.lang}.mdx`) ?? false
+    return docsSource.getPage(p.slug, p.lang)?.path.endsWith(`.${p.lang}.mdx`) ?? false
   })
 }
 
@@ -157,7 +159,7 @@ export async function generateMetadata(props: PageProps): Promise<Metadata> {
   if (!page) notFound()
   // Match Page(): a non-default locale resolving to an English fallback redirects
   // to the English page, so don't emit metadata for a URL that won't render here.
-  if (params.lang !== i18n.defaultLanguage && !page.file.path.endsWith(`.${params.lang}.mdx`)) {
+  if (params.lang !== i18n.defaultLanguage && !page.path.endsWith(`.${params.lang}.mdx`)) {
     const slugPath = (params.slug ?? []).join('/')
     redirect(slugPath ? `/docs/${slugPath}` : '/docs')
   }
@@ -177,7 +179,7 @@ export async function generateMetadata(props: PageProps): Promise<Metadata> {
           .filter((locale) => {
             if (locale === i18n.defaultLanguage) return true
             const localePage = docsSource.getPage(params.slug, locale)
-            return localePage?.file.path.endsWith(`.${locale}.mdx`) ?? false
+            return localePage?.path.endsWith(`.${locale}.mdx`) ?? false
           })
           .map((locale) => {
             const slugPath = (params.slug ?? []).join('/')

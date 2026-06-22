@@ -1,4 +1,4 @@
-import { start } from 'fumadocs-mdx/next'
+import { createMDX } from 'fumadocs-mdx/next'
 import NextBundleAnalyzer from '@next/bundle-analyzer'
 import { resolve } from 'path'
 import { computeOgVersion } from './lib/og-version.mjs'
@@ -8,13 +8,11 @@ const withBundleAnalyzer = NextBundleAnalyzer({
 })
 
 /**
- * Start the Fumadocs MDX server which generates .source/ files
- * from content/ directory. This runs separately from the webpack loader.
+ * Fumadocs MDX (v15) integration. `createMDX` wires the content/ MDX loaders
+ * (webpack + turbopack) and generates the `.source/` files from source.config.ts;
+ * it replaces the removed `start()` API and the manual content/ webpack rule.
  */
-if (process.env._FUMADOCS_MDX !== '1') {
-  process.env._FUMADOCS_MDX = '1'
-  void start(process.env.NODE_ENV === 'development', 'source.config.ts', '.source')
-}
+const withMDX = createMDX({ configPath: 'source.config.ts' })
 
 /**
  * CSP headers
@@ -142,33 +140,39 @@ const config = {
   turbopack: {},
   pageExtensions: ['mdx', 'md', 'jsx', 'js', 'tsx', 'ts'],
   webpack(webpackConfig, options) {
+    const componentsDir = resolve(process.cwd(), 'components')
+
     /**
-     * Fumadocs MDX loader: only applied to content/ directory files.
-     * These are processed by fumadocs-mdx for the app/ router docs.
+     * createMDX (withMDX) already pushed a global `.mdx` rule using
+     * `fumadocs-mdx/webpack/mdx`. Scope it away from components/ so it doesn't
+     * double-process the component MDX that the @mdx-js/loader rule below owns
+     * (chaining the two loaders fails with "only import/exports are supported").
      */
-    webpackConfig.module.rules.push({
-      test: /\.mdx?$/,
-      include: [resolve(process.cwd(), 'content')],
-      use: [
-        options.defaultLoaders.babel,
-        {
-          loader: 'fumadocs-mdx/loader-mdx',
-          options: {
-            configPath: 'source.config.ts',
-            outDir: '.source',
-          },
-        },
-      ],
-    })
+    for (const rule of webpackConfig.module.rules) {
+      const usesFumadocsMdx =
+        Array.isArray(rule?.use) &&
+        rule.use.some(
+          (u) => typeof u === 'object' && u?.loader?.includes('fumadocs-mdx/webpack/mdx'),
+        )
+      if (usesFumadocsMdx) {
+        const existing = Array.isArray(rule.exclude)
+          ? rule.exclude
+          : rule.exclude
+            ? [rule.exclude]
+            : []
+        rule.exclude = [...existing, componentsDir]
+      }
+    }
 
     /**
      * MDX loader for components/ directory files.
      * These are MDX files imported directly as React components
-     * (e.g. changelog content, repeated sections).
+     * (e.g. changelog content, repeated sections). The content/ MDX is handled
+     * by createMDX (withMDX), so only the components/ rule lives here.
      */
     webpackConfig.module.rules.push({
       test: /\.mdx?$/,
-      include: [resolve(process.cwd(), 'components')],
+      include: [componentsDir],
       use: [
         options.defaultLoaders.babel,
         {
@@ -273,4 +277,4 @@ const config = {
   ],
 }
 
-export default withBundleAnalyzer(config)
+export default withBundleAnalyzer(withMDX(config))
