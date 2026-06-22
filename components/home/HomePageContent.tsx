@@ -27,7 +27,7 @@ import FooterMenu from '@/components/FooterMenu'
 import { JsonLd } from '@/components/JsonLd'
 import { HomeI18nProvider } from '@/components/HomeI18nProvider'
 import { organizationSchema, websiteSchema, softwareApplicationSchema } from '@/lib/structured-data'
-import { localizedDocsHref } from '@/lib/i18n'
+import { localizedDocsHref, localizedHomeHref } from '@/lib/i18n'
 import { getUI, fmt, type UIStrings } from '@/lib/ui-i18n'
 
 type HomeStrings = UIStrings['home']
@@ -513,7 +513,7 @@ export async function HomePageContent({ lang }: { lang: string }) {
         {...baseOptions}
         i18n
         links={navLinks}
-        nav={{ ...baseOptions.nav, transparentMode: 'top' }}
+        nav={{ ...baseOptions.nav, url: localizedHomeHref(lang), transparentMode: 'top' }}
       >
         <JsonLd data={[organizationSchema, websiteSchema, softwareApplicationSchema]} />
         <main id="main-content" tabIndex={-1} className="min-h-screen">

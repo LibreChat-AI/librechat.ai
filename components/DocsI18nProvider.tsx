@@ -3,7 +3,7 @@
 import { I18nProvider } from 'fumadocs-ui/i18n'
 import { usePathname, useRouter } from 'next/navigation'
 import type { ReactNode } from 'react'
-import { i18n, LOCALE_NAMES } from '@/lib/i18n'
+import { i18n, LOCALE_NAMES, rememberLocale } from '@/lib/i18n'
 import { getFumadocsText } from '@/lib/ui-i18n'
 
 const allLocales = i18n.languages.map((locale) => ({
@@ -53,6 +53,8 @@ export function DocsI18nProvider({
   )
 
   const onChange = (next: string) => {
+    // Record the explicit choice so the `/` auto-detect honors it next time.
+    rememberLocale(next)
     const segs = pathname.split('/').filter(Boolean)
     if (i18n.languages.includes(segs[0])) segs.shift()
     const rest = segs.join('/')
