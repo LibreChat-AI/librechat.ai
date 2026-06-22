@@ -242,6 +242,17 @@ export async function runTranslation(opts: RunOptions): Promise<RunStats> {
           // the same run; only if it still fails after every round is it reported
           // as skipped. (A successful-but-structurally-broken translation is
           // removed deliberately by the validateTranslation path above.)
+          //
+          // Persist the blocks that DID translate before the failure. Each one
+          // succeeded individually (non-empty model output); only a later block in
+          // the file was rate-limited. Caching them now lets the retry rounds — and
+          // every subsequent workflow/cron run — skip them instead of re-translating
+          // the whole file from scratch. Without this a long file re-burns all N
+          // blocks on each rate-limited attempt and can only finish if all N survive
+          // one uninterrupted pass, so big files never converge under load. The
+          // validation-failure path above stays uncached on purpose (a bad block may
+          // be the culprit there, so it must be retried fresh).
+          for (const [h, v] of staged) tm.set(h, v)
           lastTransientError.set(rel, (e as Error).message)
           return 'transient'
         }

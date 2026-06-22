@@ -273,6 +273,35 @@ describe('runTranslation', () => {
     expect(await readdir(content)).toContain('index.de.mdx')
   })
 
+  it('caches blocks that succeeded before a later block failed transiently', async () => {
+    // index.mdx (beforeEach) has two blocks: the heading "# Hello" translates
+    // fine, but "A paragraph." is rate-limited on every attempt, so the file is
+    // skipped this run. The heading's translation must still be cached: otherwise
+    // a long file re-translates every block on each rate-limited run and can never
+    // converge (it only succeeds if ALL blocks survive one uninterrupted pass).
+    const rateLimited: TranslateModel = {
+      generate: async ({ prompt }) => {
+        const text = prompt.split(/Translate the following[^\n]*:\n/).pop() ?? ''
+        if (text.includes('A paragraph')) {
+          throw Object.assign(new Error('429 Too Many Requests'), { statusCode: 429 })
+        }
+        return text
+      },
+    }
+    const stats = await runTranslation({
+      contentDir: content,
+      cacheDir: cache,
+      locales: ['de'],
+      model: rateLimited,
+    })
+    expect(stats.skipped.some((s) => s.includes('index.mdx'))).toBe(true)
+    expect(await readdir(content)).not.toContain('index.de.mdx')
+
+    const tm = await TM.load('de', cache)
+    expect(tm.get(hashText('# Hello'))).toBe('# Hello') // succeeded → cached
+    expect(tm.get(hashText('A paragraph.'))).toBeUndefined() // failed → not cached
+  })
+
   it('removes a stale locale file when a re-translation fails validation', async () => {
     await runTranslation({ contentDir: content, cacheDir: cache, locales: ['de'], model: stub })
     expect(await readdir(content)).toContain('index.de.mdx')
