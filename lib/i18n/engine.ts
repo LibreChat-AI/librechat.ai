@@ -3,6 +3,7 @@ import { createOpenRouter } from '@openrouter/ai-sdk-provider'
 import { GLOSSARY, TRANSLATE_MODEL, TRANSLATE_PROVIDER, TRANSLATE_SERVICE_TIER } from './config'
 import { LOCALE_NAMES } from '../i18n'
 import { withRetry } from './retry'
+import { progress } from './progress'
 
 export interface TranslateModel {
   generate(input: { system: string; prompt: string }): Promise<string>
@@ -37,10 +38,11 @@ export function createOpenRouterModel(): TranslateModel {
         () => generateText({ model, system, prompt, temperature: 0.2, maxRetries: 0 }),
         {
           retries: maxRetries,
-          onRetry: ({ attempt, delayMs, error }) =>
-            console.warn(
-              `[translate] rate-limited/transient error, retry ${attempt}/${maxRetries} in ${Math.round(delayMs)}ms: ${(error as Error)?.message ?? error}`,
-            ),
+          // Backoff is routine on the flex tier: count it for the progress UI
+          // instead of emitting a log line per attempt (that spam buried the
+          // signal in CI). A retry that ultimately exhausts its budget still
+          // surfaces — its error rides up to run.ts and into `skipped`.
+          onRetry: () => progress.retry(),
         },
       )
       return text

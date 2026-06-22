@@ -20,6 +20,7 @@ import { validateTranslation } from './validate'
 import { translate, type TranslateModel } from './engine'
 import { TM } from './tm'
 import { TARGET_LOCALES } from './config'
+import { progress } from './progress'
 
 export interface RunOptions {
   contentDir: string
@@ -89,7 +90,9 @@ export async function runTranslation(opts: RunOptions): Promise<RunStats> {
   )
   const filtered = opts.only ? sources.filter((f) => f.includes(opts.only!)) : sources
 
+  progress.begin({ locales: opts.locales, filesPerLocale: filtered.length, stats })
   for (const locale of opts.locales) {
+    progress.startLocale(locale)
     const tm = await TM.load(locale, opts.cacheDir)
     const limit = pLimit(FILE_CONCURRENCY)
 
@@ -249,21 +252,34 @@ export async function runTranslation(opts: RunOptions): Promise<RunStats> {
     // the model (retry.withRetry); these rounds give a file whose retry budget was
     // exhausted a fresh attempt, so one workflow run converges rather than leaving
     // most pages untranslated for a manual re-run.
+    // Count each file's terminal completion exactly once for the progress UI: a
+    // file may resolve 'transient' in one round and 'ok'/'skip' in a later one.
+    const counted = new Set<string>()
     let pending = filtered
     for (let round = 0; ; round++) {
       const results = await Promise.all(
         pending.map(async (rel) => [rel, await processFile(rel)] as const),
       )
+      for (const [rel, r] of results)
+        if (r !== 'transient' && !counted.has(rel)) {
+          counted.add(rel)
+          progress.fileDone(locale)
+        }
       const transient = results.filter(([, r]) => r === 'transient').map(([rel]) => rel)
       if (transient.length === 0 || round >= MAX_FILE_ROUNDS) {
-        for (const rel of transient)
+        for (const rel of transient) {
+          if (!counted.has(rel)) {
+            counted.add(rel)
+            progress.fileDone(locale)
+          }
           stats.skipped.push(
             `${rel} [${locale}]: ${lastTransientError.get(rel) ?? 'transient failure'}`,
           )
+        }
         break
       }
-      console.warn(
-        `[translate] ${locale}: retrying ${transient.length} transiently-failed file(s) (round ${round + 1}/${MAX_FILE_ROUNDS})`,
+      progress.note(
+        `${locale}: retrying ${transient.length} transiently-failed file(s) (round ${round + 1}/${MAX_FILE_ROUNDS})`,
       )
       pending = transient
     }
@@ -286,7 +302,9 @@ export async function runTranslation(opts: RunOptions): Promise<RunStats> {
     }
 
     if (!opts.dryRun) await tm.save()
+    progress.finishLocale(locale)
   }
 
+  progress.end()
   return stats
 }
