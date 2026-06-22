@@ -1,0 +1,327 @@
+---
+title: SharePoint 集成
+icon: SharePoint
+description: 配置 LibreChat 与 SharePoint Online 和 OneDrive for Business 的集成
+---
+
+LibreChat 提供与 SharePoint Online 和 OneDrive for Business 的企业级集成，使用户能够直接在对话中无缝浏览、选择并附加来自其 Microsoft 365 环境的文件。
+
+## 概述 [#overview]
+
+SharePoint 集成允许用户：
+- 浏览 SharePoint 文档库和 OneDrive 文件
+- 一次选择多个文件（默认最多 10 个）
+- 查看实时下载进度
+- 将 SharePoint 中的文件附加到对话中
+- 通过适当的访问控制维护企业安全性
+
+<Callout type="info" title="企业级功能">
+此功能需要 Microsoft 365/SharePoint Online，专为使用 Azure Entra ID（前身为 Azure AD）身份验证的企业部署而设计。
+</Callout>
+
+## 先决条件 [#prerequisites]
+
+在配置 SharePoint 集成之前，请确保您已完成以下准备工作：
+
+1. **Azure Entra ID Authentication** 已配置并正常工作
+2. **Token Reuse** 已启用 (`OPENID_REUSE_TOKENS=true`)
+3. **一个暴露的 API 范围**（An exposed API scope），例如 `api://<client-id>/access_as_user`
+4. **Admin access** to your Azure tenant for app permissions
+5. 已启用 **HTTPS**（生产环境必需）
+
+<Callout type="error" title="关键要求">
+如果没有 `OPENID_REUSE_TOKENS=true`，SharePoint 集成将无法正常工作，因为它依赖于“代表用户”(on-behalf-of) 令牌流来访问 Microsoft Graph API。
+</Callout>
+
+## Azure App Registration 设置 [#azure-app-registration-setup]
+
+### 第一步：配置 API 权限 [#step-1-configure-api-permissions]
+
+1. 导航至 [Azure Portal](https://portal.azure.com) 中的应用注册。
+2. 前往左侧菜单中的 **API permissions**
+3. 点击 **Add a permission**
+
+### 第 2 步：公开并授予 LibreChat API 范围 [#step-2-expose-and-grant-a-librechat-api-scope]
+
+“代表” (on-behalf-of) 流程需要初始的 OpenID 访问令牌来指向您的 LibreChat 应用 API，而不是 Microsoft Graph。请公开一个 API 范围 (scope)，以便 Azure 可以颁发一个以 LibreChat 为受众 (audience) 的令牌。
+
+1. 前往左侧菜单中的 **Expose an API**
+2. 如果尚未配置，请将 **Application ID URI** 设置为 `api://<client-id>`
+3. 点击 **Add a scope**
+4. 将范围命名为 `access_as_user`
+5. 保存作用域，然后复制完整的作用域值：
+
+```text
+api://<client-id>/access_as_user
+```
+
+然后将该范围授予应用注册：
+
+1. 返回 **API permissions**
+2. 点击 **Add a permission**
+3. 选择 **APIs my organization uses**
+4. 搜索并选择您的 LibreChat 应用注册
+5. 选择 **Delegated permissions**
+6. 选择 `access_as_user`
+7. 点击 **Add permissions**
+
+在本指南后续部分配置 `OPENID_SCOPE` 时，请使用完整的 `api://<client-id>/access_as_user` 作用域值。
+
+### 步骤 3：添加 SharePoint 权限 [#step-3-add-sharepoint-permissions]
+
+对于文件选择器界面：
+
+1. 从 API 列表中选择 **SharePoint**
+2. 选择 **Delegated permissions**
+3. 搜索并选择：
+   - `AllSites.Read` - 读取所有网站集中的项目
+4. 点击 **Add permissions**
+
+### 第 4 步：添加 Microsoft Graph 权限 [#step-4-add-microsoft-graph-permissions]
+
+对于文件下载：
+
+1. 再次点击 **Add a permission**
+2. 选择 **Microsoft Graph**
+3. 选择 **Delegated permissions**
+4. 搜索并选择：
+   - `Files.Read.All` - 读取用户可以访问的所有文件
+5. 点击 **Add permissions**
+
+### 第 5 步：授予管理员许可 [#step-5-grant-admin-consent]
+
+1. 添加权限后，您将看到它们被列出
+2. 点击 **Grant admin consent for [Your Organization]**
+3. 在弹窗中确认同意
+
+您的权限设置应如下所示：
+
+| API / 权限名称 | 类型 | 描述 | 状态 |
+|------------------------|------|-------------|---------|
+| Microsoft Graph - Files.Read.All | Delegated | 读取用户可访问的所有文件 | ✅ 已授予 |
+| SharePoint - AllSites.Read | Delegated | 读取所有网站集中的项目 | ✅ 已授予 |
+| LibreChat - access_as_user | Delegated | 允许 LibreChat 接收 OBO 兼容令牌 | ✅ 已授予 |
+
+## 环境配置 [#environment-configuration]
+
+将以下环境变量添加到您的 `.env` 文件中：
+
+```bash filename=".env"
+# OpenID token reuse and OBO-compatible audience
+OPENID_REUSE_TOKENS=true
+OPENID_SCOPE=openid profile email offline_access api://<client-id>/access_as_user
+OPENID_ON_BEHALF_FLOW_FOR_USERINFO_REQUIRED=true
+
+# Enable SharePoint file picker
+ENABLE_SHAREPOINT_FILEPICKER=true
+
+# Your SharePoint tenant base URL
+# Format: https://[your-tenant-name].sharepoint.com
+SHAREPOINT_BASE_URL=https://contoso.sharepoint.com
+
+# SharePoint scope for the file picker
+# Replace 'contoso' with your actual tenant name
+SHAREPOINT_PICKER_SHAREPOINT_SCOPE=https://contoso.sharepoint.com/AllSites.Read
+
+# Microsoft Graph scope for file downloads
+SHAREPOINT_PICKER_GRAPH_SCOPE=Files.Read.All
+```
+
+<Callout type="warning" title="租户名称">
+请确保将上述示例中的 `contoso` 替换为您实际的 SharePoint 租户名称。此名称必须与您的 SharePoint URL 完全一致。
+</Callout>
+
+<Callout type="warning" title="OpenID 作用域受众">
+将 `<client-id>` 替换为您 Azure 应用注册的应用程序（客户端）ID。`api://<client-id>/access_as_user` 作用域为 Azure 提供了用于 OBO 断言的特定于应用的受众。如果 `OPENID_SCOPE` 仅包含标准的 OpenID 作用域，Azure 可能会颁发一个 Graph 受众的访问令牌，该令牌无法再次交换以获取 SharePoint 或 Graph 的访问权限。
+</Callout>
+
+<Callout type="info" title="Userinfo 令牌交换">
+`OPENID_ON_BEHALF_FLOW_FOR_USERINFO_REQUIRED=true` 允许 LibreChat 在调用 OpenID userinfo 端点之前，将应用受众（app-audience）访问令牌交换为兼容 userinfo 的令牌。对于 `OPENID_SCOPE` 包含上述 LibreChat API 范围的 Azure Entra ID 设置，此项是必需的。
+</Callout>
+
+## 工作原理 [#how-it-works]
+
+### 身份验证流程 [#authentication-flow]
+
+1. 用户通过 Azure Entra ID 进行身份验证
+2. 当访问 SharePoint 选择器时，LibreChat 会将用户的令牌交换为 SharePoint 访问权限。
+3. Tokens 会被缓存以实现最佳性能（通常为 50 分钟）
+4. 独立的范围确保了最小权限原则
+
+### 文件选择流程 [#file-selection-process]
+
+1. 用户在附件菜单中点击“From SharePoint”
+2. SharePoint Online 文件选择器在嵌入式 iframe 中打开
+3. 用户使用熟悉的 SharePoint 界面浏览并选择文件
+4. 选定的文件已加入下载队列
+
+### 下载流程 [#download-process]
+
+1. 文件将分批下载（最多同时下载 3 个）。
+2. 进度指示器显示当前文件和完成百分比
+3. 下载的文件已附加到对话中
+4. 下载失败会自动重试
+
+## 用户体验 [#user-experience]
+
+### 访问 SharePoint 文件 [#accessing-sharepoint-files]
+
+配置正确后，用户将在文件附件菜单中看到一个新选项：
+
+1. 点击消息输入框中的附件图标
+2. 从菜单中选择“From SharePoint”
+3. SharePoint 文件选择器将会打开
+4. 根据需要浏览并选择文件
+5. 点击“Select”开始下载
+
+### 可用功能 [#features-available]
+
+- **多文件选择**：一次最多可选择 10 个文件
+- **熟悉的界面**：使用原生的 SharePoint 文件选择器
+- **进度跟踪**：查看实时下载进度
+- **错误处理**：针对任何问题提供清晰的提示信息
+- **本地化**: 支持多种语言
+
+## 安全注意事项 [#security-considerations]
+
+### 访问控制 [#access-control]
+
+- 只有用户在 SharePoint 中有权访问的文件才可用
+- 遵循所有 SharePoint 权限和策略
+- 没有提升权限或绕过安全控制
+
+### Token Security [#token-security]
+
+- 使用安全的代表（on-behalf-of）流程进行令牌交换
+- Token 是短效的，并且会自动刷新
+- 不长期存储 SharePoint 凭据
+
+### 作用域隔离 [#scope-isolation]
+
+- SharePoint 范围仅限于只读操作
+- Graph API 范围限制为文件读取访问权限
+- 无法通过 LibreChat 修改或删除文件
+
+## 故障排除 [#troubleshooting]
+
+### 常见问题 [#common-issues]
+
+#### “From SharePoint” 选项未显示 [#from-sharepoint-option-not-appearing]
+
+**原因**：功能未正确启用或存在身份验证问题
+
+**解决方案**：
+1. 在 `.env` 中验证 `ENABLE_SHAREPOINT_FILEPICKER=true`
+2. 确认已设置 `OPENID_REUSE_TOKENS=true`
+3. 检查用户是否已通过 Azure Entra ID 完成身份验证
+4. 在配置更改后重启 LibreChat
+
+#### 文件选择器无法打开 [#file-picker-fails-to-open]
+
+**原因**：缺少权限或权限不正确
+
+**解决方案**：
+1. 在 Azure 中验证 SharePoint 权限是否已授予
+2. 确保已获得管理员同意
+3. 请检查 `SHAREPOINT_BASE_URL` 是否与您的租户完全匹配
+4. 确认 `SHAREPOINT_PICKER_SHAREPOINT_SCOPE` 使用完整的租户 URL，例如 `https://contoso.sharepoint.com/AllSites.Read`
+5. 确认在生产环境中已启用 HTTPS
+
+#### 文件选择器打开后显示为空白页面 [#file-picker-opens-to-a-blank-white-page]
+
+**原因**：Azure 可能因为 OpenID 访问令牌的受众（audience）错误，或者未启用 userinfo 令牌交换，从而拒绝了代表（on-behalf-of）交换请求。
+
+**解决方案**：
+1. 确认您的 Azure 应用注册已拥有一个公开的 API 范围，例如 `api://<client-id>/access_as_user`
+2. 将该完整范围添加到 `OPENID_SCOPE`
+3. 设置 `OPENID_ON_BEHALF_FLOW_FOR_USERINFO_REQUIRED=true`
+4. 重启 LibreChat 并重新登录，以便 Azure 签发新的 OpenID 令牌
+
+#### 下载失败或超时 [#downloads-fail-or-timeout]
+
+**原因**：Graph API 权限或网络问题
+
+**解决方案**：
+1. 验证已授予 `Files.Read.All` 权限
+2. 检查与 SharePoint 的网络连接
+3. 确保令牌未过期（如有必要，请重新进行身份验证）
+4. 检查浏览器控制台以获取具体的错误信息
+
+### 调试模式 [#debug-mode]
+
+若需进行故障排查，请启用调试日志：
+
+```bash filename=".env"
+DEBUG_LOGGING=true
+DEBUG_CONSOLE=true
+```
+
+这将提供关于以下内容的详细日志：
+- Token exchange processes
+- 对 SharePoint 和 Graph 的 API 调用
+- 下载进度和错误
+- 身份验证流程
+
+## 性能优化 [#performance-optimization]
+
+### Token Caching [#token-caching]
+
+- 令牌会被缓存以减少身份验证开销
+- 缓存持续时间与令牌生命周期一致（通常为 50 分钟）
+- 在过期前自动刷新
+
+### 并发下载 [#concurrent-downloads]
+
+- 最多同时下载 3 个文件
+- 防止浏览器或服务器过载
+- 同时针对速度和稳定性进行了优化
+
+### 文件大小注意事项 [#file-size-considerations]
+
+- 大文件下载可能需要一些时间
+- 进度指示器有助于管理用户预期
+- 请考虑 LibreChat 配置中的文件上传限制
+
+## 最佳实践 [#best-practices]
+
+### 针对管理员 [#for-administrators]
+
+1. **定期权限审计**：定期审查应用权限
+2. **监控使用情况**：在日志中跟踪 SharePoint 集成的使用情况
+3. **更新文档**：保持内部文档与您的租户特定信息同步更新
+4. **全面测试**：在进行任何 Azure AD 更改后，请验证其功能。
+
+### 面向最终用户 [#for-end-users]
+
+1. **文件组织**：组织良好的 SharePoint 库可改善用户体验
+2. **文件大小**：请注意大文件可能会拖慢对话速度
+3. **权限**: 在共享之前，请确保您拥有文件的访问权限
+4. **Patient Downloads**: 为多个或大型文件预留时间
+
+## 高级配置 [#advanced-configuration]
+
+### 自定义作用域 (Custom Scopes) [#custom-scopes]
+
+对于有特定要求的组织，您可以自定义范围：
+
+```bash filename=".env"
+# Example: Limiting to specific site collections
+SHAREPOINT_PICKER_SHAREPOINT_SCOPE=https://contoso.sharepoint.com/sites/Engineering/AllSites.Read
+
+# Example: Using more restrictive Graph permissions
+SHAREPOINT_PICKER_GRAPH_SCOPE=Files.Read
+```
+
+### 与信息壁垒的集成 [#integration-with-information-barriers]
+
+如果您的组织使用信息壁垒 (Information Barriers)：
+- SharePoint 集成遵循所有屏障策略
+- 用户只能看到他们被允许访问的内容
+- 无需额外配置
+
+## 相关文档 [#related-documentation]
+
+- [Azure Entra 身份验证](/docs/configuration/authentication/OAuth2-OIDC/azure)
+- [OpenID Token Reuse](/docs/configuration/authentication/OAuth2-OIDC/token-reuse)
+- [Microsoft Graph API 集成](/docs/configuration/authentication/OAuth2-OIDC/azure#advanced-microsoft-graph-api-integration)
+- [文件上传配置](/docs/configuration/librechat_yaml/object_structure/file_config)

@@ -1,0 +1,343 @@
+---
+title: Redis
+icon: Redis
+description: 在 LibreChat 中设置 Redis 以实现缓存、会话存储和水平扩展
+---
+
+本指南介绍了如何为 LibreChat 配置 Redis 以实现缓存和会话存储。Redis 可显著提升性能，并且是**水平扩展所必需的**——如果您在负载均衡器后运行多个 LibreChat 实例，Redis 可确保所有实例之间状态的一致性。
+
+## 目录 [#table-of-contents]
+
+- [基本设置](#basic-setup)
+- [连接类型](#connection-types)
+- [安全配置](#security-configuration)
+- [高级选项](#advanced-options)
+- [性能调优](#performance-tuning)
+- [配置示例](#configuration-examples)
+- [可恢复流](#resumable-streams)
+
+## 基本设置 [#basic-setup]
+
+### 启用 Redis [#enable-redis]
+
+要在 LibreChat 中启用 Redis，请在您的 `.env` 文件中设置以下环境变量：
+
+```bash
+USE_REDIS=true
+```
+
+**重要提示**：当 `USE_REDIS=true` 时，您还必须提供 `REDIS_URI`。如果启用了 Redis 但未提供连接 URI，应用程序将抛出错误。
+
+## 连接类型 [#connection-types]
+
+### 单个 Redis 实例 [#single-redis-instance]
+
+对于标准的单 Redis 服务器设置：
+
+```bash
+# Local Redis instance
+REDIS_URI=redis://127.0.0.1:6379
+
+# Remote Redis instance
+REDIS_URI=redis://your-redis-host:6379
+```
+
+### Redis 集群 [#redis-cluster]
+
+对于具有多个节点的 Redis 集群部署：
+
+```bash
+# Multiple Redis cluster nodes
+REDIS_URI=redis://127.0.0.1:7001,redis://127.0.0.1:7002,redis://127.0.0.1:7003
+```
+
+当提供多个 URI 时，应用程序会自动检测集群模式。
+
+如果您的 redis 集群只有一个 URI，您可以使用 `USE_REDIS_CLUSTER` 环境变量来启用集群模式：
+
+```bash
+# Redis cluster with single URI
+REDIS_URI=redis://127.0.0.1:7001
+USE_REDIS_CLUSTER=true
+```
+
+### 单一端点托管 Redis 服务 [#single-endpoint-managed-redis-services]
+
+一些托管的 Redis 服务（包括 AWS ElastiCache Serverless 和 AWS 上的 Redis Enterprise Cloud）在内部进行键分片的同时，仅暴露一个连接 endpoint。在这种设置下，请保持 LibreChat 处于单节点连接模式，但如果缓存清除失败并出现 `CROSSSLOT Keys in request don't hash to the same slot` 错误，请启用集群安全删除（cluster-safe deletes）。
+
+```bash
+USE_REDIS=true
+REDIS_URI=rediss://your-managed-redis-endpoint:6379
+USE_REDIS_CLUSTER=false
+REDIS_CLUSTER_SAFE_DELETE=true
+```
+
+`REDIS_CLUSTER_SAFE_DELETE=true` 会使 LibreChat 逐个删除匹配的缓存键，而不是发送多键 `DEL` 命令。这可以避免 `CROSSSLOT` 错误，且无需更改 LibreChat 连接 Redis 的方式。
+
+仅当 LibreChat 需要创建 Redis Cluster 客户端时，才使用 `USE_REDIS_CLUSTER=true`。对于单端点托管服务，`REDIS_CLUSTER_SAFE_DELETE=true` 是更安全的选择。
+
+### 使用 TLS/SSL 的 Redis [#redis-with-tlsssl]
+
+对于安全的 Redis 连接：
+
+```bash
+# Redis with TLS encryption
+REDIS_URI=rediss://127.0.0.1:6380
+
+# Path to CA certificate for TLS verification
+REDIS_CA=/path/to/ca-cert.pem
+```
+
+## 安全配置 [#security-configuration]
+
+### 身份验证 [#authentication]
+
+配置 Redis 身份验证凭据：
+
+```bash
+# Method 1: Include credentials in URI
+# With both username and password
+REDIS_URI=redis://myuser:mypassword@127.0.0.1:6379
+
+
+# Method 2: Separate environment variables
+REDIS_URI=redis://127.0.0.1:6379
+REDIS_USERNAME=your_redis_username
+REDIS_PASSWORD=your_redis_password
+```
+
+**注意**：如果同时提供了用户名/密码变量和 URI，则单独的用户名/密码变量会覆盖 URI 中的凭据。
+
+### TLS 配置 [#tls-configuration]
+
+对于加密连接：
+
+```bash
+# Enable TLS with rediss:// protocol
+REDIS_URI=rediss://your-redis-host:6380
+
+# Provide CA certificate for verification
+REDIS_CA=/path/to/your/ca-certificate.pem
+```
+
+### 使用 Elasticache 的 TLS [#tls-with-elasticache]
+
+Elasticache 可能需要为 TLS 连接使用备用的 dnsLookup。请参阅此网页上的“Special Note: Aws Elasticache Clusters with TLS”：https://www.npmjs.com/package/ioredis
+
+```bash
+# Enable redis alternate dnsLookup
+REDIS_USE_ALTERNATIVE_DNS_LOOKUP=true
+```
+
+## 高级选项 [#advanced-options]
+
+### 键前缀 (Key Prefixing) [#key-prefixing]
+
+Redis key prefixing 通过在共享同一 Redis 服务器的不同环境、版本或实例之间隔离缓存数据，防止跨部署污染。这对于以下方面至关重要：
+
+- **多租户部署**：分离暂存、生产和开发环境
+- **蓝绿部署 (Blue-green deployments)**：隔离不同应用程序版本之间的缓存
+
+```bash
+# Option 1: Dynamic prefix from environment variable (recommended for cloud)
+
+# Google Cloud Platform - Cloud Run
+REDIS_KEY_PREFIX_VAR=K_REVISION
+
+# AWS - ECS/Fargate
+REDIS_KEY_PREFIX_VAR=AWS_EXECUTION_ENV
+
+# Azure Container Instances
+REDIS_KEY_PREFIX_VAR=CONTAINER_NAME
+
+# Kubernetes - Pod name or deployment
+REDIS_KEY_PREFIX_VAR=HOSTNAME
+REDIS_KEY_PREFIX_VAR=POD_NAME
+
+# Kubernetes - Custom deployment identifier
+REDIS_KEY_PREFIX_VAR=DEPLOYMENT_ID
+
+# Heroku
+REDIS_KEY_PREFIX_VAR=DYNO
+
+# Option 2: Static prefix (for manual control)
+REDIS_KEY_PREFIX=librechat-prod-v2
+REDIS_KEY_PREFIX=staging-branch-feature-x
+REDIS_KEY_PREFIX=dev-john-local
+```
+
+**重要提示**：你不能同时设置 `REDIS_KEY_PREFIX_VAR` 和 `REDIS_KEY_PREFIX`。
+
+**未添加前缀的污染示例**：
+
+- 生产缓存被暂存部署覆盖
+- 功能分支测试破坏了 main 分支缓存
+- 旧部署版本提供过期的缓存数据
+
+**键前缀格式**：
+
+- IoRedis 客户端：`{prefix}::{key}`
+- Keyv client: 由存储层处理
+
+### 连接限制 [#connection-limits]
+
+配置 Redis 连接限制：
+
+```bash
+# Maximum number of event listeners (default: 40)
+REDIS_MAX_LISTENERS=40
+```
+
+### 连接保持 (Connection Keep-Alive) [#connection-keep-alive]
+
+配置 Redis ping 间隔以维持连接：
+
+```bash
+# Redis ping interval in seconds (default: 0 = disabled)
+# When set to a positive integer (in seconds), Redis clients will ping the server at this interval
+# When unset or 0, no pinging is performed (recommended for most use cases)
+# Example: 300 = ping every 5 minutes
+REDIS_PING_INTERVAL=300
+```
+
+**重要提示**：
+
+- 设置 `REDIS_PING_INTERVAL=0` 或省略该项将完全禁用 ping。
+- 仅在遇到连接超时问题时，才设置正数值（以秒为单位）。
+- 该间隔以秒为单位指定，并同时适用于 IoRedis 和 Keyv Redis 客户端。
+- 示例值：`300`（5 分钟），`600`（10 分钟），`60`（1 分钟）
+
+### 选择性内存缓存 [#selective-in-memory-caching]
+
+强制特定的缓存命名空间使用内存存储，即使在启用了 Redis 的情况下：
+
+```bash
+# Comma-separated list of cache keys
+FORCED_IN_MEMORY_CACHE_NAMESPACES=ROLES,MESSAGES
+```
+
+有效的缓存键（来自 `librechat-data-provider` 中的 `CacheKeys` 枚举）：
+
+| Key                       | Description               |
+| ------------------------- | ------------------------- |
+| `CONFIG_STORE`            | 配置存储                   |
+| `ROLES`                   | 用户角色                   |
+| `PLUGINS`                 | 插件数据                   |
+| `GEN_TITLE`               | 生成的标题                 |
+| `TOOLS`                   | 工具数据                   |
+| `MODELS_CONFIG`           | 模型配置                   |
+| `MODEL_QUERIES`           | 模型查询                   |
+| `STARTUP_CONFIG`          | 启动配置                   |
+| `ENDPOINT_CONFIG`         | endpoint 配置             |
+| `TOKEN_CONFIG`            | 令牌配置                   |
+| `APP_CONFIG`              | 应用程序配置               |
+| `ABORT_KEYS`              | 中止键                     |
+| `BANS`                    | 封禁数据                   |
+| `ENCODED_DOMAINS`         | 编码域名                   |
+| `AUDIO_RUNS`              | 音频处理运行               |
+| `MESSAGES`                | 消息                       |
+| `FLOWS`                   | 流程数据                   |
+| `PENDING_REQ`             | 待处理请求                 |
+| `S3_EXPIRY_INTERVAL`      | S3 过期时间间隔             |
+| `OPENID_EXCHANGED_TOKENS` | OpenID 交换令牌             |
+| `OPENID_SESSION`          | OpenID 会话                |
+| `SAML_SESSION`            | SAML 会话                  |
+
+<Callout type="warn" title="无效的密钥">
+  使用无效的键（例如已弃用的 `STATIC_CONFIG`）会导致启动错误。请仅使用上表中的键。
+</Callout>
+
+## 性能调优 [#performance-tuning]
+
+### 连接保持 (Connection Keep-Alive) [#connection-keep-alive-1]
+
+该应用程序实现了可配置的连接保持活跃（keep-alive）功能：
+
+- Ping 间隔由 `REDIS_PING_INTERVAL` 环境变量控制
+- 默认行为：不进行 ping（推荐用于大多数部署）
+- 启用后，将按指定的时间间隔对 IoRedis 和 Keyv Redis 客户端执行 ping 操作。
+- 在断开连接/关闭事件时自动清除 ping 间隔
+
+### 缓存策略 [#cache-strategy]
+
+该应用程序采用双客户端方法：
+
+- **IoRedis client**: 主要的 Redis 操作，支持自动添加前缀
+- **Keyv Redis 客户端**：`cacheFactory.js` 中带有前缀处理的存储层操作
+
+### 内存优化 [#memory-optimization]
+
+使用 `FORCED_IN_MEMORY_CACHE_NAMESPACES` 可以通过将频繁访问的小型数据集保留在内存中，同时对较大的缓存使用 Redis，从而优化性能。
+
+## 配置示例 [#configuration-examples]
+
+### 开发环境设置 [#development-setup]
+
+```bash
+USE_REDIS=true
+REDIS_URI=redis://127.0.0.1:6379
+REDIS_KEY_PREFIX=librechat-dev
+```
+
+### 生产环境设置 [#production-setup]
+
+```bash
+USE_REDIS=true
+REDIS_URI=rediss://prod-redis.company.com:6380
+REDIS_USERNAME=librechat_user
+REDIS_PASSWORD=secure_password_here
+REDIS_CA=/etc/ssl/redis-ca.pem
+REDIS_KEY_PREFIX_VAR=DEPLOYMENT_ID
+REDIS_MAX_LISTENERS=100
+REDIS_PING_INTERVAL=300
+FORCED_IN_MEMORY_CACHE_NAMESPACES=ROLES,MESSAGES
+```
+
+### 集群设置 [#cluster-setup]
+
+```bash
+USE_REDIS=true
+REDIS_URI=redis://cluster-node1:7001,redis://cluster-node2:7002,redis://cluster-node3:7003
+REDIS_USERNAME=cluster_user
+REDIS_PASSWORD=cluster_password
+REDIS_KEY_PREFIX=librechat-cluster
+```
+
+## 可恢复流 (Resumable Streams) [#resumable-streams]
+
+Redis 为水平扩展部署启用了 [Resumable Streams](/docs/features/resumable_streams)。启用后，AI 响应可以在不同服务器实例之间无缝重新连接并恢复。
+
+**重要提示：** 当 `USE_REDIS=true` 时，可恢复流会自动使用 Redis 进行跨实例协调。对于用户可能连接到不同服务器实例的水平扩展部署，这是推荐的配置方式。
+
+**注意：** 如果您只运行单个 LibreChat 实例，则用于可恢复流的 Redis 通常是大材小用——内置的内存模式即可正常工作。当您在负载均衡器后拥有多个 LibreChat 实例时，Redis 就变得至关重要，因为用户的重新连接可能会连接到与流开始时不同的服务器。
+
+### 配置 [#configuration]
+
+```bash
+# Redis enabled = resumable streams automatically use Redis
+USE_REDIS=true
+REDIS_URI=redis://127.0.0.1:6379
+
+# Optional: explicitly control resumable streams behavior
+# USE_REDIS_STREAMS=true  # Enabled by default when USE_REDIS=true
+```
+
+### 主要优势（针对水平扩展） [#key-benefits-for-horizontal-scaling]
+
+- **跨实例连续性**：用户可以在一台服务器上开始生成，并在另一台服务器上继续。
+- **滚动部署 (Rolling deployments)**：活动流在服务器重启后依然保持存续
+- **多标签页同步**：在负载均衡环境中，同一对话可在多个浏览器标签页之间同步
+- **连接弹性**：无论哪个服务器处理请求，均可自动重新连接
+
+### 集群配置 [#cluster-configuration]
+
+对于 Redis Cluster 部署，LibreChat 会自动使用哈希标签（hash-tagged）键，以确保流操作保持在同一个集群槽（cluster slot）内：
+
+```bash
+USE_REDIS=true
+USE_REDIS_STREAMS=true
+USE_REDIS_CLUSTER=true
+REDIS_URI=redis://node1:7001,redis://node2:7002,redis://node3:7003
+```
+
+有关此功能的更多详细信息，请参阅 [Resumable Streams](/docs/features/resumable_streams)。

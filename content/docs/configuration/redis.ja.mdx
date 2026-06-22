@@ -1,0 +1,343 @@
+---
+title: Redis
+icon: Redis
+description: LibreChatにおけるキャッシュ、セッションストレージ、および水平スケーリングのためのRedisの設定
+---
+
+このガイドでは、LibreChatでキャッシュおよびセッションストレージとしてRedisを設定する方法を説明します。Redisはパフォーマンスを大幅に向上させ、**水平スケーリングに必須**です。ロードバランサーの背後で複数のLibreChatインスタンスを実行している場合、Redisを使用することで全インスタンス間で一貫した状態が保たれます。
+
+## 目次 [#table-of-contents]
+
+- [基本的なセットアップ](#basic-setup)
+- [接続タイプ](#connection-types)
+- [セキュリティ設定](#security-configuration)
+- [高度なオプション](#advanced-options)
+- [パフォーマンスチューニング](#performance-tuning)
+- [設定例](#configuration-examples)
+- [再開可能なストリーム](#resumable-streams)
+
+## 基本セットアップ [#basic-setup]
+
+### Redisを有効にする [#enable-redis]
+
+LibreChatでRedisを有効にするには、`.env`ファイルに以下の環境変数を設定します。
+
+```bash
+USE_REDIS=true
+```
+
+**重要**: `USE_REDIS=true` の場合、`REDIS_URI` も指定する必要があります。Redis が有効で接続 URI が指定されていない場合、アプリケーションはエラーをスローします。
+
+## 接続タイプ [#connection-types]
+
+### 単一のRedisインスタンス [#single-redis-instance]
+
+標準的なシングルRedisサーバー構成の場合：
+
+```bash
+# Local Redis instance
+REDIS_URI=redis://127.0.0.1:6379
+
+# Remote Redis instance
+REDIS_URI=redis://your-redis-host:6379
+```
+
+### Redis Cluster [#redis-cluster]
+
+複数のノードを持つRedisクラスターデプロイメントの場合：
+
+```bash
+# Multiple Redis cluster nodes
+REDIS_URI=redis://127.0.0.1:7001,redis://127.0.0.1:7002,redis://127.0.0.1:7003
+```
+
+複数のURIが提供されると、アプリケーションは自動的にクラスターモードを検出します。
+
+RedisクラスターのURIが1つだけの場合は、`USE_REDIS_CLUSTER`環境変数を使用してクラスターモードを有効にできます：
+
+```bash
+# Redis cluster with single URI
+REDIS_URI=redis://127.0.0.1:7001
+USE_REDIS_CLUSTER=true
+```
+
+### 単一エンドポイントのマネージド Redis サービス [#single-endpoint-managed-redis-services]
+
+AWS ElastiCache Serverless や AWS 上の Redis Enterprise Cloud を含む一部のマネージド Redis サービスでは、内部でキーをシャーディングしながら単一の接続 endpoint を公開しています。そのような構成では、LibreChat をシングルノード接続モードのままにしてください。ただし、キャッシュのクリアが `CROSSSLOT Keys in request don't hash to the same slot` というエラーで失敗する場合は、クラスターセーフな削除（cluster-safe deletes）を有効にしてください。
+
+```bash
+USE_REDIS=true
+REDIS_URI=rediss://your-managed-redis-endpoint:6379
+USE_REDIS_CLUSTER=false
+REDIS_CLUSTER_SAFE_DELETE=true
+```
+
+`REDIS_CLUSTER_SAFE_DELETE=true` を設定すると、LibreChatはマルチキーの `DEL` コマンドを送信する代わりに、一致するキャッシュキーを1つずつ削除するようになります。これにより、LibreChatのRedisへの接続方法を変更することなく、`CROSSSLOT` エラーを回避できます。
+
+LibreChatがRedis Clusterクライアントを作成すべき場合にのみ `USE_REDIS_CLUSTER=true` を使用してください。シングルエンドポイントのマネージドサービスの場合は、`REDIS_CLUSTER_SAFE_DELETE=true` の方が安全なオプションです。
+
+### TLS/SSL を使用した Redis [#redis-with-tlsssl]
+
+セキュアなRedis接続の場合:
+
+```bash
+# Redis with TLS encryption
+REDIS_URI=rediss://127.0.0.1:6380
+
+# Path to CA certificate for TLS verification
+REDIS_CA=/path/to/ca-cert.pem
+```
+
+## セキュリティ設定 [#security-configuration]
+
+### 認証 [#authentication]
+
+Redis認証情報を設定する:
+
+```bash
+# Method 1: Include credentials in URI
+# With both username and password
+REDIS_URI=redis://myuser:mypassword@127.0.0.1:6379
+
+
+# Method 2: Separate environment variables
+REDIS_URI=redis://127.0.0.1:6379
+REDIS_USERNAME=your_redis_username
+REDIS_PASSWORD=your_redis_password
+```
+
+**注**: ユーザー名とパスワードの両方の変数が提供されている場合、それらはURI内の認証情報を上書きします。
+
+### TLS 設定 [#tls-configuration]
+
+暗号化された接続の場合:
+
+```bash
+# Enable TLS with rediss:// protocol
+REDIS_URI=rediss://your-redis-host:6380
+
+# Provide CA certificate for verification
+REDIS_CA=/path/to/your/ca-certificate.pem
+```
+
+### Elasticache での TLS [#tls-with-elasticache]
+
+Elasticacheでは、TLS接続のために代替の dnsLookup を使用する必要がある場合があります。このウェブページの「Special Note: Aws Elasticache Clusters with TLS」を参照してください: https://www.npmjs.com/package/ioredis
+
+```bash
+# Enable redis alternate dnsLookup
+REDIS_USE_ALTERNATIVE_DNS_LOOKUP=true
+```
+
+## 高度なオプション [#advanced-options]
+
+### キーのプレフィックス設定 [#key-prefixing]
+
+Redisのキープレフィックスは、同じRedisサーバーを共有する異なる環境、バージョン、またはインスタンス間でキャッシュデータを分離することで、デプロイメント間の汚染を防ぎます。これは以下の目的において不可欠です：
+
+- **マルチテナントデプロイ**: ステージング、本番、および開発環境の分離
+- **Blue-green deployments**: 異なるアプリケーションバージョン間でキャッシュを分離します
+
+```bash
+# Option 1: Dynamic prefix from environment variable (recommended for cloud)
+
+# Google Cloud Platform - Cloud Run
+REDIS_KEY_PREFIX_VAR=K_REVISION
+
+# AWS - ECS/Fargate
+REDIS_KEY_PREFIX_VAR=AWS_EXECUTION_ENV
+
+# Azure Container Instances
+REDIS_KEY_PREFIX_VAR=CONTAINER_NAME
+
+# Kubernetes - Pod name or deployment
+REDIS_KEY_PREFIX_VAR=HOSTNAME
+REDIS_KEY_PREFIX_VAR=POD_NAME
+
+# Kubernetes - Custom deployment identifier
+REDIS_KEY_PREFIX_VAR=DEPLOYMENT_ID
+
+# Heroku
+REDIS_KEY_PREFIX_VAR=DYNO
+
+# Option 2: Static prefix (for manual control)
+REDIS_KEY_PREFIX=librechat-prod-v2
+REDIS_KEY_PREFIX=staging-branch-feature-x
+REDIS_KEY_PREFIX=dev-john-local
+```
+
+**重要**: `REDIS_KEY_PREFIX_VAR` と `REDIS_KEY_PREFIX` を同時に設定することはできません。
+
+**プレフィックスなしの汚染の例**:
+
+- ステージング環境のデプロイにより本番環境のキャッシュが上書きされました
+- フィーチャーブランチのテストがメインブランチのキャッシュを破損させている
+- 古いキャッシュデータを配信している古いデプロイバージョン
+
+**キーのプレフィックス形式**:
+
+- IoRedis クライアント: `{prefix}::{key}`
+- Keyv client: ストアレイヤーによって処理されます
+
+### 接続制限 [#connection-limits]
+
+Redis接続制限の設定:
+
+```bash
+# Maximum number of event listeners (default: 40)
+REDIS_MAX_LISTENERS=40
+```
+
+### Connection Keep-Alive [#connection-keep-alive]
+
+Redisのping間隔を設定して接続を維持します：
+
+```bash
+# Redis ping interval in seconds (default: 0 = disabled)
+# When set to a positive integer (in seconds), Redis clients will ping the server at this interval
+# When unset or 0, no pinging is performed (recommended for most use cases)
+# Example: 300 = ping every 5 minutes
+REDIS_PING_INTERVAL=300
+```
+
+**重要**:
+
+- `REDIS_PING_INTERVAL=0` を設定するか、省略すると、pingの送信が完全に無効になります。
+- 接続タイムアウトの問題が発生する場合にのみ、正の値（秒単位）を設定してください。
+- 間隔は秒単位で指定され、IoRedisとKeyv Redisの両方のクライアントに適用されます。
+- 設定値の例: `300` (5分), `600` (10分), `60` (1分)
+
+### 選択的インメモリキャッシング [#selective-in-memory-caching]
+
+Redisが有効な場合でも、特定のキャッシュ名前空間でインメモリストレージを使用するように強制します：
+
+```bash
+# Comma-separated list of cache keys
+FORCED_IN_MEMORY_CACHE_NAMESPACES=ROLES,MESSAGES
+```
+
+有効なキャッシュキー（`librechat-data-provider` 内の `CacheKeys` enum より）:
+
+| Key                       | Description               |
+| ------------------------- | ------------------------- |
+| `CONFIG_STORE`            | 設定ストア                |
+| `ROLES`                   | ユーザーロール            |
+| `PLUGINS`                 | プラグインデータ          |
+| `GEN_TITLE`               | 生成されたタイトル        |
+| `TOOLS`                   | ツールデータ              |
+| `MODELS_CONFIG`           | モデル設定                |
+| `MODEL_QUERIES`           | モデルクエリ              |
+| `STARTUP_CONFIG`          | 起動設定                  |
+| `ENDPOINT_CONFIG`         | endpoint設定              |
+| `TOKEN_CONFIG`            | トークン設定              |
+| `APP_CONFIG`              | アプリケーション設定      |
+| `ABORT_KEYS`              | 中断キー                  |
+| `BANS`                    | 禁止データ                |
+| `ENCODED_DOMAINS`         | エンコードされたドメイン  |
+| `AUDIO_RUNS`              | 音声処理実行              |
+| `MESSAGES`                | メッセージ                |
+| `FLOWS`                   | フローデータ              |
+| `PENDING_REQ`             | 保留中のリクエスト        |
+| `S3_EXPIRY_INTERVAL`      | S3有効期限間隔            |
+| `OPENID_EXCHANGED_TOKENS` | OpenID交換トークン        |
+| `OPENID_SESSION`          | OpenIDセッション          |
+| `SAML_SESSION`            | SAMLセッション            |
+
+<Callout type="warn" title="無効なキー">
+  無効なキー（例：非推奨の `STATIC_CONFIG`）を使用すると、起動時にエラーが発生します。上記の表にあるキーのみを使用してください。
+</Callout>
+
+## パフォーマンスチューニング [#performance-tuning]
+
+### Connection Keep-Alive [#connection-keep-alive-1]
+
+本アプリケーションは、設定可能な接続キープアライブを実装しています：
+
+- Ping間隔は `REDIS_PING_INTERVAL` 環境変数によって制御されます。
+- デフォルトの動作: Pingなし（ほとんどのデプロイメントで推奨）
+- 有効にすると、指定された間隔でIoRedisとKeyv Redisの両方のクライアントにpingを送信します。
+- 切断/終了イベント時にping間隔を自動的にクリアします
+
+### キャッシュ戦略 [#cache-strategy]
+
+このアプリケーションは、デュアルクライアントアプローチを採用しています：
+
+- **IoRedis client**: 自動プレフィックス機能を備えた主要なRedis操作
+- **Keyv Redis client**: `cacheFactory.js` におけるプレフィックス処理を伴うストア層の操作
+
+### メモリの最適化 [#memory-optimization]
+
+`FORCED_IN_MEMORY_CACHE_NAMESPACES` を使用して、頻繁にアクセスされる小さなデータセットをメモリ内に保持し、大きなキャッシュにはRedisを使用することで、パフォーマンスを最適化します。
+
+## 設定例 [#configuration-examples]
+
+### 開発セットアップ [#development-setup]
+
+```bash
+USE_REDIS=true
+REDIS_URI=redis://127.0.0.1:6379
+REDIS_KEY_PREFIX=librechat-dev
+```
+
+### 本番環境のセットアップ [#production-setup]
+
+```bash
+USE_REDIS=true
+REDIS_URI=rediss://prod-redis.company.com:6380
+REDIS_USERNAME=librechat_user
+REDIS_PASSWORD=secure_password_here
+REDIS_CA=/etc/ssl/redis-ca.pem
+REDIS_KEY_PREFIX_VAR=DEPLOYMENT_ID
+REDIS_MAX_LISTENERS=100
+REDIS_PING_INTERVAL=300
+FORCED_IN_MEMORY_CACHE_NAMESPACES=ROLES,MESSAGES
+```
+
+### クラスター設定 [#cluster-setup]
+
+```bash
+USE_REDIS=true
+REDIS_URI=redis://cluster-node1:7001,redis://cluster-node2:7002,redis://cluster-node3:7003
+REDIS_USERNAME=cluster_user
+REDIS_PASSWORD=cluster_password
+REDIS_KEY_PREFIX=librechat-cluster
+```
+
+## 再開可能なストリーム [#resumable-streams]
+
+Redisは、水平スケーリングされたデプロイメントにおいて[Resumable Streams](/docs/features/resumable_streams)を有効にします。これを有効にすると、AIの応答がサーバーインスタンスをまたいでシームレスに再接続および再開できるようになります。
+
+**重要:** `USE_REDIS=true` の場合、再開可能なストリームはインスタンス間調整のために自動的にRedisを使用します。これは、ユーザーが異なるサーバーインスタンスに接続する可能性がある水平スケーリングされたデプロイメントにおいて推奨される設定です。
+
+**注:** LibreChat インスタンスを単一で実行している場合、再開可能なストリームのための Redis は通常過剰な構成であり、組み込みのインメモリモードで問題なく動作します。Redis が不可欠となるのは、ロードバランサーの背後に複数の LibreChat インスタンスを配置しており、ユーザーの再接続先がストリームを開始したサーバーとは異なるサーバーになる可能性がある場合です。
+
+### 設定 [#configuration]
+
+```bash
+# Redis enabled = resumable streams automatically use Redis
+USE_REDIS=true
+REDIS_URI=redis://127.0.0.1:6379
+
+# Optional: explicitly control resumable streams behavior
+# USE_REDIS_STREAMS=true  # Enabled by default when USE_REDIS=true
+```
+
+### 主な利点（水平スケーリング向け） [#key-benefits-for-horizontal-scaling]
+
+- **インスタンス間での継続性**: ユーザーは1つのサーバーで生成を開始し、別のサーバーで再開することができます
+- **ローリングデプロイ**: サーバー再起動後もアクティブなストリームが維持されます
+- **マルチタブ同期**: ロードバランシング環境において、同一の会話が複数のブラウザタブ間で同期されます
+- **接続の回復性**: リクエストを処理するサーバーに関係なく、自動的に再接続を行います。
+
+### クラスター設定 [#cluster-configuration]
+
+Redis Clusterのデプロイメントにおいて、LibreChatはストリーム操作が同一のクラスタスロット内に留まるよう、自動的にハッシュタグ付きキーを使用します。
+
+```bash
+USE_REDIS=true
+USE_REDIS_STREAMS=true
+USE_REDIS_CLUSTER=true
+REDIS_URI=redis://node1:7001,redis://node2:7002,redis://node3:7003
+```
+
+この機能の詳細については、[Resumable Streams](/docs/features/resumable_streams) を参照してください。

@@ -1,0 +1,302 @@
+---
+title: トークン使用量
+icon: Coins
+description: >-
+  LibreChatにおけるトークン使用量の追跡と制御方法について説明します。コンテキストとコストの表示、トランザクションの設定、ユーザー残高の有効化、およびアカウントへのクレジット追加方法を学びます。
+---
+
+## はじめに [#intro]
+
+`v0.6.0` 以降、LibreChat はサポートされている endpoint のトークン使用量を正確に追跡します。すべてのトークン取引は、データベースの「Transactions」コレクションに保存されます。現在のリリースでは、有効にすると会話 UI にリアルタイムのコンテキスト使用量とコストも表示されます。
+
+現在、ユーザー残高を有効にすることで、ユーザーのトークン使用量を制限できます。環境変数でトークンクレジットの制限を設定する代わりに、`librechat.yaml` ファイルの **balance** セクションでこれらのオプションを設定するようになりました。コスト値はデフォルトで非表示になっており、`interface.contextCost` で有効にする必要があります。
+
+## コンテキストの使用状況とコストの確認 [#viewing-context-usage-and-cost]
+
+LibreChatは、会話の実行中にコンテキストゲージを表示します。このゲージはストリーミング中の使用状況イベントに基づいて更新され、以下を表示できます：
+
+- モデルのコンテキストウィンドウに対する現在のプロンプト/コンテキストの使用量
+- トークンとコストの詳細を素早く確認できるホバーサマリー
+- プロンプト、補完、キャッシュされたトークン使用量、ブランチ合計、および会話合計のクリック可能な内訳
+
+使用量の内訳は、メッセージや会話とともに永続化されます。再開されたチャットでは、アクティブなストリーミングセッションのみに依存するのではなく、ブランチおよび合計の使用量/コストの詳細が保持されます。
+
+要約によって長い会話が圧縮される際、LibreChatは圧縮された要約のベースラインを記録し、コンテキストゲージについてはその要約以降のターンのみをカウントします。使用量とコストの合計には、引き続きブランチ全体の消費分が含まれます。
+
+管理者は `librechat.yaml` でこれらの表示を制御できます：
+
+```yaml filename="librechat.yaml"
+interface:
+  contextUsage: true
+  contextCost: true
+  currency:
+    code: EUR
+    rate: 0.92
+```
+
+- `contextUsage` は、ユーザーがコンテキストウィンドウとトークン使用量のゲージを表示するかどうかを制御します。
+- `contextCost` は、ユーザーが使用状況の詳細でコスト値を確認できるかどうかを制御します。デフォルトは `false` です。コストを表示するには `true` に設定してください。
+- `currency` は、コスト表示が有効な場合に、静的な乗数を使用して表示されるUSDコストを変換します。トランザクションは引き続き LibreChat のトークンクレジット会計を使用して記録されます。
+
+## カスタム endpoint トークン設定 [#custom-endpoint-token-config]
+
+カスタムエンドポイントの場合、`endpoints.custom[].tokenConfig` を使用して、モデル固有のコンテキストウィンドウと100万トークンあたりの料金を定義します。
+
+```yaml filename="librechat.yaml"
+endpoints:
+  custom:
+    - name: 'Mistral'
+      apiKey: '${MISTRAL_API_KEY}'
+      baseURL: 'https://api.mistral.ai/v1'
+      models:
+        default: ['mistral-large-latest']
+      tokenConfig:
+        mistral-large-latest:
+          prompt: 2
+          completion: 6
+          context: 128000
+```
+
+各モデルのエントリには、`prompt`、`completion`、および `context` が必須です。キャッシュされた入力の使用量を報告するプロバイダーに対しては、`cacheRead` および `cacheWrite` を追加できます。複数のendpointを使用するエージェントの場合、LibreChatは使用量とコストを記録する際に、一致するendpoint/modelのトークン設定を使用します。
+
+エンドポイントのモデル、キー、URL、またはヘッダーがリクエストコンテキストによって異なる場合、取得されたトークン設定はユーザースコープでキャッシュされるため、分離されたカスタムエンドポイントの料金設定とコンテキストウィンドウは個別に保持されます。
+
+## トランザクション設定 [#transaction-configuration]
+
+トランザクションシステムは、トークン使用量の記録をデータベースに保存するかどうかを制御します。これは、残高システムとは別に設定可能です。
+
+### トランザクション設定 [#transaction-settings]
+
+```yaml filename="librechat.yaml"
+version: 1.2.9
+
+# Transaction settings
+# Controls whether to save transaction records to the database
+# Default is true (enabled)
+transactions:
+  enabled: false
+```
+
+**重要:** `balance.enabled` が `true` に設定されている場合、`transactions.enabled` の設定に関わらず、トランザクションの記録が自動的に有効になります。これにより、すべてのトークン使用量の完全な記録を保持することで、残高追跡機能が正しく動作することが保証されます。
+
+    詳細については、[Transactions Configuration](/docs/configuration/librechat_yaml/object_structure/transactions) ページをご確認ください。
+
+## バランス設定 [#balance-configuration]
+
+LibreChatの残高システムでは、管理者がユーザーのトークンクレジット残高の管理方法を設定できます。すべての残高設定は、現在 `balance` オブジェクト配下のYAML設定で管理されています。
+
+**注:** これは以前の環境変数 (`CHECK_BALANCE` および `START_BALANCE`) に代わるものであり、ユーザー残高を管理するためのより構造化された方法を提供します。
+
+### 完全なバランス設定 [#complete-balance-settings]
+
+```yaml filename="librechat.yaml"
+version: 1.3.5
+
+# Balance settings
+balance:
+  enabled: true # Enable token credit balances for users
+  startBalance: 20000 # Initial tokens credited upon registration
+  autoRefillEnabled: false # Enable automatic token refills
+  refillIntervalValue: 30 # Numerical value for refill interval
+  refillIntervalUnit: 'days' # Time unit for refill interval (days, hours, etc.)
+  refillAmount: 10000 # Tokens added during each refill
+```
+
+### Balance Settings の解説 [#balance-settings-explained]
+
+- **enabled**: ユーザーのトークンクレジット追跡と残高管理を有効にします。`true` に設定すると、システムはトークン使用量を追跡し、残高制限を適用します。
+
+- **startBalance**: ユーザー登録時に付与される初期トークン数を指定します。これはすべての新規ユーザーの開始残高となります。
+
+- **autoRefillEnabled**: トークンクレジットの自動補充を有効にするかどうかを決定します。`true` に設定すると、システムは補充間隔に基づいてユーザーの残高にクレジットを自動的に追加します。
+
+- **refillIntervalValue**: トークンクレジットが自動的に補充される間隔の数値を指定します。`refillIntervalUnit` と組み合わせて機能します。
+
+- **refillIntervalUnit**: リフィル間隔の時間単位を指定します。サポートされている値は "seconds"、"minutes"、"hours"、"days"、"weeks"、"months" です。
+
+- **refillAmount**: 自動リフィル時にユーザーの残高へ追加されるトークン数を指定します。
+
+詳細については、[Balance Configuration](/docs/configuration/librechat_yaml/object_structure/balance) ページをご確認ください。
+
+## Auto-Refill の仕組み [#how-auto-refill-works]
+
+ユーザーの残高が追跡されており、**autoRefill** が有効な場合、システムは前回の補充から指定された時間間隔が経過したときにのみ、自動的に残高へクレジットを追加します。これは、現在の日付と `lastRefill` の日付に指定された間隔を加算したものを比較することで実現されます。
+
+### 自動リフィルプロセス [#auto-refill-process]
+
+1. ユーザーがトークンを消費しようとすると、システムは現在の残高が十分かどうかを確認します。
+2. トランザクション後に残高がゼロ以下になる場合、システムは自動リチャージが有効かどうかを確認します。
+3. auto-refill が有効な場合、システムは前回の補充から指定された時間間隔が経過しているかどうかを確認します。
+   - システムは現在の日付を `lastRefill + refillInterval` と比較します。
+   - 間隔が経過すると、トークンがユーザーの残高に追加されます
+   - `lastRefill` 日付は現在の日付に更新されます
+4. 残高が十分である場合（最初から十分であるか、リフィル後に十分になった場合）、トランザクションは進行します。
+
+### サポートされている時間単位 [#supported-time-units]
+
+`refillIntervalUnit` には、以下のいずれかの値を設定できます：
+
+- 秒
+- 分
+- 時間
+- 日
+- 週間
+- ヶ月
+
+例えば、`refillIntervalValue` が 30 に設定され、`refillIntervalUnit` が `days` に設定されている場合、システムは前回の補充から30日が経過したときにのみ、ユーザーの残高に `refillAmount` トークンを追加します。
+
+### 残高同期 [#balance-synchronization]
+
+ユーザーがログインすると、システムは自動的にユーザーの残高設定を現在のグローバルな残高構成と同期します。これにより、残高構成に対する変更がすべてのユーザーに確実に適用されます。
+
+同期プロセス:
+
+1. ユーザーに残高記録があるかを確認します
+2. レコードが存在しない場合は、現在の `startBalance` でレコードを作成します。
+3. ユーザーの自動リフィル設定をグローバル設定と一致するように更新します
+4. ユーザーの補充間隔と補充量がグローバル設定と一致していることを確認します
+
+## トークン残高の管理 [#managing-token-balances]
+
+ユーザーの残高を手動で追加または設定できます。これは、開発中や、将来的に（例えば管理ダッシュボードなどを通じて）完全な残高蓄積システムを構築する予定がある場合に特に便利です。
+
+### 残高の追加 [#adding-balances]
+
+```bash filename="To manually add balances, run the following command:"
+# Local Development
+npm run add-balance
+
+# Docker (default setup)
+docker compose exec api npm run add-balance
+
+# Docker (deployment setup)
+docker exec -it LibreChat-API /bin/sh -c "cd .. && npm run add-balance"
+```
+
+```bash filename="You can also specify the email and token credit amount to add, e.g.:"
+# Local Development
+npm run add-balance danny@librechat.ai 1000
+
+# Docker (default setup)
+docker compose exec api npm run add-balance danny@librechat.ai 1000
+
+# Docker (deployment setup)
+docker exec -it LibreChat-API /bin/sh -c "cd .. && npm run add-balance danny@librechat.ai 1000"
+```
+
+### バランスの設定 [#setting-balances]
+
+さらに、ユーザーの残高を設定することもできます。既存の残高は、新しい残高によって上書きされます。
+
+```bash filename="To manually set balances, run the following command:"
+# Local Development
+npm run set-balance
+
+# Docker (default setup)
+docker compose exec api npm run set-balance
+
+# Docker (deployment setup)
+docker exec -it LibreChat-API /bin/sh -c "cd .. && npm run set-balance"
+```
+
+```bash filename="You can also specify the email and token credit amount to set, e.g.:"
+# Local Development
+npm run set-balance danny@librechat.ai 1000
+
+# Docker (default setup)
+docker compose exec api npm run set-balance danny@librechat.ai 1000
+
+# Docker (deployment setup)
+docker exec -it LibreChat-API /bin/sh -c "cd .. && npm run set-balance danny@librechat.ai 1000"
+```
+
+### 残高の一覧 [#listing-of-balances]
+
+```bash filename="To see the balances of your users, you can run:"
+# Local Development
+npm run list-balances
+
+# Docker (default setup)
+docker compose exec api npm run list-balances
+
+# Docker (deployment setup)
+docker exec -it LibreChat-API /bin/sh -c "cd .. && npm run list-balances"
+```
+
+これは個人利用での使用量を追跡するのに適しています。1000クレジット = $0.001（0.001米ドル）です。
+
+## トークン使用量と残高に関する注意点 [#notes-on-token-usage-and-balance]
+
+- 要約（summarization）が有効な場合、要約が必要なコンテンツのコストとメッセージのペイロードの合計が現在の残高を超えると、APIリクエストの実行がブロックされます。
+- Subagentのchild-runモデルの使用量は親トランザクションに対して記録されるため、親エージェントの実行合計には委任された使用量が含まれます。
+- プロンプトトークンのカウントは、OpenAIの呼び出しに対しては非常に正確ですが、プラグイン（関数呼び出しのため）については100%正確ではありません。非常に近い値かつ保守的な見積もりとなっており、実際のカウントより2〜5トークンほど多くなる可能性があります。
+- システムは、補完トークンによって発生する不足分を許容します。プロンプトトークンに対して十分な残高があるかどうかのみを確認し、補完に関してはかなり寛容です。以下のグラフにそのロジックを詳しく示します。
+- 前述の通り、プラグインは複数のAPI呼び出しを伴うプロセスであるため、各生成ステップでチェックが行われます。LLMが最初のユーザープロンプト以降に生成した内容はすべて、以下のようにエラーメッセージとしてユーザーに共有されます。
+- これは2段階のプロセスであるため、タイトル付けには150トークンのバッファがあり、合計で平均約200トークンとなります。資金が不足している場合、支出が発生する前にタイトル付けはキャンセルされ、エラーはスローされません。
+
+![image](https://github.com/danny-avila/LibreChat/assets/110412045/78175053-9c38-44c8-9b56-4b81df61049e)
+
+## 詳細情報 [#more-details]
+
+ソース: [LibreChat/discussions/1640](https://github.com/danny-avila/LibreChat/discussions/1640#discussioncomment-8251970)
+
+> "rawAmount": -000, // これはなんですか？
+
+トークナイザーアルゴリズムによってカウントされたトークンの生の量。
+
+> "tokenValue": -00000, // これはなんですか？
+
+トークンクレジットの価値。1000クレジット = $0.001 (0.001米ドル)
+
+> "rate": 00, // これはなんですか？
+
+トークンがクレジットとして課金されるレート。
+
+例えば、gpt-3.5-turbo-1106 の場合、ユーザープロンプト（入力）のレートは1、補完（出力）のレートは2です。
+
+| モデル | 入力 | 出力 |
+| ------------------ | ------------------- | ------------------- |
+| gpt-3.5-turbo-1106 | $0.0010 / 1K トークン | $0.0020 / 1K トークン |
+
+提供された例に基づくと：
+
+```sh
+    "rawAmount": -137
+    "tokenValue": -205.5
+    "rate": 1.5
+```
+
+```math
+\text{Token Value} = (\text{Raw Amount of Tokens}) \times (\text{Rate})
+```
+
+```math
+137 \times 1.5 = 205.5
+```
+
+そして、**Token Value** に基づいた実際の米ドル（USD）の支出額を取得するには：
+
+```math
+\frac{\text{Token Value}}{1,000,000} = \left(\frac{\text{Raw Amount of Tokens} \times \text{Rate}}{1,000,000}\right)
+```
+
+```math
+\frac{205.5}{1,000,000} = \$0.0002055 \text{ USD}
+```
+
+カスタムエンドポイントの場合、モデルごとのレート制限やコンテキストウィンドウの設定には、`librechat.yaml` 内の `endpoints.custom[].tokenConfig` を使用することを推奨します。
+
+## プレビュー [#preview]
+
+![image](https://github.com/danny-avila/LibreChat/assets/110412045/39a1aa5d-f8fc-43bf-81f2-299e57d944bb)
+
+![image](https://github.com/danny-avila/LibreChat/assets/110412045/e1b1cc3f-8981-4c7c-a5f8-e7badbc6f675)
+
+## 補足事項 [#additional-notes]
+
+- 要約（summarization）が有効な場合、コンテンツとメッセージのペイロードの合計コストが現在の残高を超えると、APIリクエストはブロックされます。
+- システムはコンプリートトークンに対して寛容であり、主にプロンプトトークンに焦点を当ててバランスチェックを行います。
+- 2段階のプロセスを考慮して、タイトル付けのためのバッファ（約150トークン）が追加されます。
+- トークンクレジットは金銭的価値に換算されます（例：1000クレジット = 0.001米ドル）。
+
+詳細およびカスタマイズについては、[LibreChat Documentation](https://www.librechat.ai/docs/configuration/librechat_yaml) を参照してください。

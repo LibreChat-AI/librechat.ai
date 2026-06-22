@@ -1,0 +1,305 @@
+---
+title: Utilisation des jetons
+icon: Coins
+description: >-
+  Ceci couvre comment suivre et contrôler l'utilisation des jetons dans
+  LibreChat. Vous apprendrez à visualiser le contexte et le coût, à configurer
+  les transactions, à activer les soldes des utilisateurs et à ajouter des
+  crédits à un compte.
+---
+
+## Intro [#intro]
+
+À partir de la version `v0.6.0`, LibreChat suit avec précision l'utilisation des jetons pour les endpoint pris en charge. Toutes les transactions de jetons sont stockées dans la collection "Transactions" de votre base de données. Les versions actuelles affichent également l'utilisation du contexte en temps réel et le coût dans l'interface utilisateur de conversation lorsque cette option est activée.
+
+Actuellement, vous pouvez limiter l'utilisation des jetons par les utilisateurs en activant les soldes utilisateur. Au lieu de configurer les limites de crédit de jetons via des variables d'environnement, vous définissez désormais ces options dans votre fichier `librechat.yaml` sous la section **balance**. Les valeurs de coût sont masquées par défaut et doivent être activées avec `interface.contextCost`.
+
+## Affichage de l'utilisation du contexte et du coût [#viewing-context-usage-and-cost]
+
+LibreChat affiche une jauge de contexte pendant qu'une conversation est en cours. La jauge se met à jour à partir des événements d'utilisation pendant le streaming et peut afficher :
+
+- Utilisation actuelle du prompt/contexte par rapport à la fenêtre de contexte du modèle
+- Un résumé au survol pour des détails rapides sur les jetons et les coûts
+- Une ventilation détaillée par clic pour l'utilisation des jetons de prompt, de complétion, mis en cache, les totaux par branche et les totaux de conversation
+
+Les détails de l'utilisation sont conservés avec les messages et les conversations. Les discussions rouvertes conservent les détails de la branche et de l'utilisation/coût total au lieu de dépendre uniquement de la session de streaming active.
+
+Lorsque la synthèse condense une longue conversation, LibreChat enregistre la base de référence du résumé condensé et ne comptabilise que les tours de parole suivant le résumé pour la jauge de contexte. Les totaux d'utilisation et de coût incluent toujours la dépense totale de la branche.
+
+Les administrateurs peuvent contrôler ces affichages dans `librechat.yaml` :
+
+```yaml filename="librechat.yaml"
+interface:
+  contextUsage: true
+  contextCost: true
+  currency:
+    code: EUR
+    rate: 0.92
+```
+
+- `contextUsage` contrôle si les utilisateurs voient la fenêtre de contexte et la jauge d'utilisation des jetons.
+- `contextCost` contrôle si les utilisateurs voient les valeurs de coût dans les détails d'utilisation. La valeur par défaut est `false` ; définissez-la sur `true` pour afficher les coûts.
+- `currency` convertit les coûts affichés en USD en utilisant un multiplicateur statique lorsque l'affichage des coûts est activé. Les transactions sont toujours enregistrées en utilisant la comptabilité des crédits de jetons de LibreChat.
+
+## Configuration des jetons pour les endpoint personnalisés [#custom-endpoint-token-config]
+
+Pour les endpoints personnalisés, définissez les fenêtres de contexte spécifiques au modèle et les tarifs par million de jetons avec `endpoints.custom[].tokenConfig` :
+
+```yaml filename="librechat.yaml"
+endpoints:
+  custom:
+    - name: 'Mistral'
+      apiKey: '${MISTRAL_API_KEY}'
+      baseURL: 'https://api.mistral.ai/v1'
+      models:
+        default: ['mistral-large-latest']
+      tokenConfig:
+        mistral-large-latest:
+          prompt: 2
+          completion: 6
+          context: 128000
+```
+
+`prompt`, `completion` et `context` sont requis pour chaque entrée de modèle. `cacheRead` et `cacheWrite` peuvent être ajoutés pour les fournisseurs qui signalent l'utilisation d'entrées en cache. Pour les Agents qui utilisent plusieurs endpoints, LibreChat utilise la configuration de jetons endpoint/modèle correspondante lors de l'enregistrement de l'utilisation et du coût.
+
+La configuration des jetons récupérée est mise en cache avec une portée utilisateur lorsque les modèles, clés, URL ou en-têtes d'un endpoint peuvent varier selon le contexte de la requête, afin que la tarification et les fenêtres de contexte des endpoints personnalisés isolés restent séparées.
+
+## Configuration des transactions [#transaction-configuration]
+
+Le système de transaction contrôle si les enregistrements d'utilisation des jetons sont enregistrés dans la base de données. Cela peut être configuré séparément du système de solde.
+
+### Paramètres de transaction [#transaction-settings]
+
+```yaml filename="librechat.yaml"
+version: 1.2.9
+
+# Transaction settings
+# Controls whether to save transaction records to the database
+# Default is true (enabled)
+transactions:
+  enabled: false
+```
+
+**Important :** Lorsque `balance.enabled` est défini sur `true`, l'enregistrement des transactions est automatiquement activé, indépendamment du paramètre `transactions.enabled`. Cela garantit que le suivi du solde fonctionne correctement en conservant un enregistrement complet de toute l'utilisation des jetons.
+
+    Consultez la page [Transactions Configuration](/docs/configuration/librechat_yaml/object_structure/transactions) pour plus de détails.
+
+## Configuration du solde [#balance-configuration]
+
+Le système de solde dans LibreChat permet aux administrateurs de configurer la manière dont les soldes de crédits de jetons sont gérés pour les utilisateurs. Tous les paramètres de solde sont désormais gérés dans votre configuration YAML sous l'objet `balance`.
+
+**Note :** Ceci remplace les variables d'environnement précédentes (`CHECK_BALANCE` et `START_BALANCE`) et fournit un moyen plus structuré de gérer les soldes des utilisateurs.
+
+### Paramètres complets du solde [#complete-balance-settings]
+
+```yaml filename="librechat.yaml"
+version: 1.3.5
+
+# Balance settings
+balance:
+  enabled: true # Enable token credit balances for users
+  startBalance: 20000 # Initial tokens credited upon registration
+  autoRefillEnabled: false # Enable automatic token refills
+  refillIntervalValue: 30 # Numerical value for refill interval
+  refillIntervalUnit: 'days' # Time unit for refill interval (days, hours, etc.)
+  refillAmount: 10000 # Tokens added during each refill
+```
+
+### Explication des paramètres de solde [#balance-settings-explained]
+
+- **enabled**: Active le suivi des crédits de jetons et la gestion du solde pour les utilisateurs. Lorsqu'il est défini sur `true`, le système suivra l'utilisation des jetons et appliquera les limites de solde.
+
+- **startBalance** : Spécifie le nombre initial de jetons crédités à un utilisateur lors de son inscription. Il s'agit du solde de départ pour tous les nouveaux utilisateurs.
+
+- **autoRefillEnabled** : Détermine si le rechargement automatique des crédits de jetons est activé. Lorsqu'il est défini sur `true`, le système ajoutera automatiquement des crédits aux soldes des utilisateurs en fonction de l'intervalle de rechargement.
+
+- **refillIntervalValue** : Spécifie la valeur numérique de l'intervalle auquel les crédits de jetons sont automatiquement rechargés. Fonctionne conjointement avec `refillIntervalUnit`.
+
+- **refillIntervalUnit** : Spécifie l'unité de temps pour l'intervalle de recharge. Les valeurs prises en charge incluent "seconds", "minutes", "hours", "days", "weeks" et "months".
+
+- **refillAmount** : Spécifie le nombre de jetons à ajouter au solde de l'utilisateur lors de chaque rechargement automatique.
+
+Consultez la page [Balance Configuration](/docs/configuration/librechat_yaml/object_structure/balance) pour plus de détails.
+
+## Comment fonctionne le remplissage automatique (Auto-Refill) [#how-auto-refill-works]
+
+Lorsque le solde d'un utilisateur est suivi et que **autoRefill** est activé, le système ajoutera automatiquement des crédits au solde uniquement lorsque l'intervalle de temps spécifié s'est écoulé depuis la dernière recharge. Ceci est réalisé en comparant la date actuelle avec la date `lastRefill` augmentée de l'intervalle spécifié.
+
+### Processus de rechargement automatique [#auto-refill-process]
+
+1. Lorsqu'un utilisateur tente de dépenser des jetons, le système vérifie si le solde actuel est suffisant.
+2. Si le solde devait tomber à zéro ou en dessous après la transaction, le système vérifie si le rechargement automatique est activé.
+3. Si le remplissage automatique (auto-refill) est activé, le système vérifie si l'intervalle de temps depuis le dernier remplissage est écoulé :
+   - Le système compare la date actuelle avec `lastRefill + refillInterval`
+   - Si l'intervalle est écoulé, des jetons sont ajoutés au solde de l'utilisateur
+   - La date `lastRefill` est mise à jour à la date actuelle
+4. La transaction se poursuit si le solde est suffisant (soit initialement, soit après une recharge)
+
+### Unités de temps prises en charge [#supported-time-units]
+
+`refillIntervalUnit` peut être défini sur l'une des valeurs suivantes :
+
+- secondes
+- minutes
+- heures
+- jours
+- semaines
+- mois
+
+Par exemple, si `refillIntervalValue` est défini sur 30 et `refillIntervalUnit` sur `days`, le système ajoutera `refillAmount` jetons au solde de l'utilisateur uniquement si 30 jours se sont écoulés depuis la dernière recharge.
+
+### Synchronisation du solde [#balance-synchronization]
+
+Lorsqu'un utilisateur se connecte, le système synchronise automatiquement ses paramètres de solde avec la configuration globale actuelle du solde. Cela garantit que toute modification apportée à la configuration du solde est appliquée à tous les utilisateurs.
+
+Le processus de synchronisation :
+
+1. Vérifie si l'utilisateur possède un enregistrement de solde
+2. Si aucun enregistrement n'existe, en crée un avec le `startBalance` actuel
+3. Met à jour les paramètres de remplissage automatique de l'utilisateur pour correspondre à la configuration globale
+4. Garantit que l'intervalle et le montant de recharge de l'utilisateur correspondent aux paramètres globaux
+
+## Gestion des soldes de jetons [#managing-token-balances]
+
+Vous pouvez ajouter ou définir manuellement les soldes des utilisateurs. Cela est particulièrement utile pendant le développement ou si vous prévoyez de mettre en place un système complet d'accumulation de solde à l'avenir (par exemple, via un tableau de bord d'administration).
+
+### Ajout de soldes [#adding-balances]
+
+```bash filename="To manually add balances, run the following command:"
+# Local Development
+npm run add-balance
+
+# Docker (default setup)
+docker compose exec api npm run add-balance
+
+# Docker (deployment setup)
+docker exec -it LibreChat-API /bin/sh -c "cd .. && npm run add-balance"
+```
+
+```bash filename="You can also specify the email and token credit amount to add, e.g.:"
+# Local Development
+npm run add-balance danny@librechat.ai 1000
+
+# Docker (default setup)
+docker compose exec api npm run add-balance danny@librechat.ai 1000
+
+# Docker (deployment setup)
+docker exec -it LibreChat-API /bin/sh -c "cd .. && npm run add-balance danny@librechat.ai 1000"
+```
+
+### Configuration des soldes [#setting-balances]
+
+De plus, vous pouvez définir un solde pour un utilisateur. Un solde existant sera écrasé par le nouveau solde.
+
+```bash filename="To manually set balances, run the following command:"
+# Local Development
+npm run set-balance
+
+# Docker (default setup)
+docker compose exec api npm run set-balance
+
+# Docker (deployment setup)
+docker exec -it LibreChat-API /bin/sh -c "cd .. && npm run set-balance"
+```
+
+```bash filename="You can also specify the email and token credit amount to set, e.g.:"
+# Local Development
+npm run set-balance danny@librechat.ai 1000
+
+# Docker (default setup)
+docker compose exec api npm run set-balance danny@librechat.ai 1000
+
+# Docker (deployment setup)
+docker exec -it LibreChat-API /bin/sh -c "cd .. && npm run set-balance danny@librechat.ai 1000"
+```
+
+### Liste des soldes [#listing-of-balances]
+
+```bash filename="To see the balances of your users, you can run:"
+# Local Development
+npm run list-balances
+
+# Docker (default setup)
+docker compose exec api npm run list-balances
+
+# Docker (deployment setup)
+docker exec -it LibreChat-API /bin/sh -c "cd .. && npm run list-balances"
+```
+
+Cela fonctionne bien pour suivre votre propre utilisation pour un usage personnel ; 1000 crédits = 0,001 $ (1 mill USD)
+
+## Notes sur l'utilisation des jetons et le solde [#notes-on-token-usage-and-balance]
+
+- Lorsque la fonction de résumé est activée, vous ne pourrez pas effectuer de requête API si le coût du contenu que vous devez résumer + la charge utile de vos messages dépasse votre solde actuel.
+- L'utilisation du modèle par les sous-agents (child-run) est enregistrée dans la transaction parente, de sorte que les exécutions des agents parents incluent l'utilisation déléguée dans leurs totaux.
+- Le comptage des jetons (tokens) de prompt est très précis pour les appels OpenAI, mais pas à 100 % pour les plugins (en raison de l'appel de fonctions). Il est très proche et conservateur, ce qui signifie que son décompte peut être supérieur de 2 à 5 jetons.
+- Le système autorise les déficits occasionnés par les jetons de complétion. Il vérifie uniquement si vous disposez d'un solde suffisant pour les jetons de prompt, et se montre assez indulgent concernant la complétion. Le graphique ci-dessous détaille la logique.
+- Cela étant dit, les plugins sont vérifiés à chaque étape de génération, car le processus fonctionne avec plusieurs appels API. Tout ce que le LLM a généré depuis la requête initiale de l'utilisateur est partagé avec l'utilisateur dans le message d'erreur, comme illustré ci-dessous.
+- Il existe une mémoire tampon de 150 jetons pour le titrage, car il s'agit d'un processus en 2 étapes, ce qui représente environ 200 jetons au total. En cas de fonds insuffisants, le titrage est annulé avant toute dépense et aucune erreur n'est générée.
+
+![image](https://github.com/danny-avila/LibreChat/assets/110412045/78175053-9c38-44c8-9b56-4b81df61049e)
+
+## Plus de détails [#more-details]
+
+source : [LibreChat/discussions/1640](https://github.com/danny-avila/LibreChat/discussions/1640#discussioncomment-8251970)
+
+> "rawAmount": -000, // qu'est-ce que c'est ?
+
+Nombre brut de jetons tel que compté par l'algorithme de tokenisation.
+
+> "tokenValue": -00000, // qu'est-ce que c'est ?
+
+Valeur des crédits de jetons. 1000 crédits = 0,001 $ (1 mill USD)
+
+> "rate": 00, // qu'est-ce que c'est ?
+
+Le taux auquel les jetons sont facturés en tant que crédits.
+
+Par exemple, gpt-3.5-turbo-1106 a un taux de 1 pour le prompt utilisateur (entrée) et de 2 pour la complétion (sortie)
+
+| Modèle             | Entrée              | Sortie              |
+| ------------------ | ------------------- | ------------------- |
+| gpt-3.5-turbo-1106 | $0.0010 / 1K tokens | $0.0020 / 1K tokens |
+
+Compte tenu de l'exemple fourni :
+
+```sh
+    "rawAmount": -137
+    "tokenValue": -205.5
+    "rate": 1.5
+```
+
+```math
+\text{Token Value} = (\text{Raw Amount of Tokens}) \times (\text{Rate})
+```
+
+```math
+137 \times 1.5 = 205.5
+```
+
+Et pour obtenir le montant réel des dépenses en USD basé sur la **Valeur des Jetons** :
+
+```math
+\frac{\text{Token Value}}{1,000,000} = \left(\frac{\text{Raw Amount of Tokens} \times \text{Rate}}{1,000,000}\right)
+```
+
+```math
+\frac{205.5}{1,000,000} = \$0.0002055 \text{ USD}
+```
+
+Pour les endpoints personnalisés, privilégiez `endpoints.custom[].tokenConfig` dans `librechat.yaml` pour les tarifs et les fenêtres de contexte par modèle.
+
+## Aperçu [#preview]
+
+![image](https://github.com/danny-avila/LibreChat/assets/110412045/39a1aa5d-f8fc-43bf-81f2-299e57d944bb)
+
+![image](https://github.com/danny-avila/LibreChat/assets/110412045/e1b1cc3f-8981-4c7c-a5f8-e7badbc6f675)
+
+## Notes supplémentaires [#additional-notes]
+
+- Lorsque la synthèse est activée, les requêtes API sont bloquées si le coût du contenu ajouté à la charge utile des messages dépasse le solde actuel.
+- Le système est indulgent avec les jetons de complétion, se concentrant principalement sur les jetons de prompt pour les vérifications d'équilibre.
+- Une mémoire tampon est ajoutée pour le titrage (environ 150 jetons) afin de prendre en compte le processus en deux étapes.
+- Les crédits de jetons se traduisent en valeur monétaire (par ex. 1000 crédits = 0,001 $ USD).
+
+Pour plus de détails et de personnalisations, veuillez consulter la [documentation de LibreChat](https://www.librechat.ai/docs/configuration/librechat_yaml).

@@ -1,0 +1,502 @@
+---
+title: Bedrock 推理配置 (Inference Profiles)
+icon: AWS
+description: 配置并使用 AWS Bedrock 自定义推理配置文件与 LibreChat 进行跨区域负载均衡、成本分配和合规性控制。
+---
+
+本指南介绍了如何在 LibreChat 中配置和使用 AWS Bedrock 自定义推理配置文件（custom inference profiles），从而允许您通过自定义应用程序推理配置文件路由模型请求，以实现更好的控制、成本分配和跨区域负载均衡。
+
+## 概述 [#overview]
+
+AWS Bedrock inference profiles 允许您为基础模型创建自定义路由配置。当您创建自定义（应用程序）inference profile 时，AWS 会生成一个唯一的 ARN，其中不包含模型名称信息：
+
+```
+arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123def456
+```
+
+LibreChat 的推理配置文件映射功能允许您：
+
+1. 将友好的模型 ID 映射到自定义推理配置文件 ARN
+2. 通过您的自定义配置文件路由请求，同时保持模型能力检测功能。
+3. 使用环境变量进行安全的 ARN 管理
+
+## 为什么要使用自定义推理配置文件 (Custom Inference Profiles)？ [#why-use-custom-inference-profiles]
+
+| 优势 | 描述 |
+| ------------------------------- | ------------------------------------------------------------- |
+| **跨区域负载均衡** | 自动在多个 AWS 区域间分配请求 |
+| **成本分摊** | 按应用程序或团队标记并跟踪成本 |
+| **吞吐量管理** | 为您的应用程序配置专用吞吐量 |
+| **合规性** | 通过特定区域路由请求以满足数据驻留要求 |
+| **监控** | 在 CloudWatch 中按推理配置文件跟踪使用情况 |
+
+## 先决条件 [#prerequisites]
+
+在开始之前，请确保您已准备好：
+
+1. **AWS 账户**（已启用 Bedrock 访问权限）
+2. 已安装并配置 **AWS CLI**
+3. **IAM 权限**:
+   - `bedrock:CreateInferenceProfile`
+   - `bedrock:ListInferenceProfiles`
+   - `bedrock:GetInferenceProfile`
+   - `bedrock:InvokeModel` / `bedrock:InvokeModelWithResponseStream`
+4. 已配置 Bedrock endpoint 的 **LibreChat**（请参阅 [AWS Bedrock Setup](/docs/configuration/pre_configured_ai/bedrock)）
+
+## 创建自定义推理配置文件 [#creating-custom-inference-profiles]
+
+> **重要提示**：自定义推理配置文件（Custom inference profiles）只能通过 API（AWS CLI、SDK 等）创建，无法在 AWS 控制台中创建。
+
+### 方法 1：AWS CLI（推荐） [#method-1-aws-cli-recommended]
+
+#### 第一步：列出可用的系统推理配置文件 [#step-1-list-available-system-inference-profiles]
+
+```bash
+# List all inference profiles
+aws bedrock list-inference-profiles --region us-east-1
+
+# Filter for Claude models
+aws bedrock list-inference-profiles --region us-east-1 \
+  --query "inferenceProfileSummaries[?contains(inferenceProfileId, 'claude')]"
+```
+
+#### 第 2 步：创建自定义推理配置文件 (Custom Inference Profile) [#step-2-create-a-custom-inference-profile]
+
+```bash
+# Get the system inference profile ARN to copy from
+export SOURCE_PROFILE_ARN=$(aws bedrock list-inference-profiles --region us-east-1 \
+  --query "inferenceProfileSummaries[?inferenceProfileId=='us.anthropic.claude-3-7-sonnet-20250219-v1:0'].inferenceProfileArn" \
+  --output text)
+
+# Create your custom inference profile
+aws bedrock create-inference-profile \
+  --inference-profile-name "MyApp-Claude-3-7-Sonnet" \
+  --description "Custom inference profile for my application" \
+  --model-source copyFrom="$SOURCE_PROFILE_ARN" \
+  --region us-east-1
+```
+
+#### 第 3 步：验证创建 [#step-3-verify-creation]
+
+```bash
+# List your custom profiles
+aws bedrock list-inference-profiles --type-equals APPLICATION --region us-east-1
+
+# Get details of a specific profile
+aws bedrock get-inference-profile \
+  --inference-profile-identifier "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123" \
+  --region us-east-1
+```
+
+### 方法 2：Python 脚本 [#method-2-python-script]
+
+```python
+import boto3
+
+AWS_REGION = 'us-east-1'
+
+def create_inference_profile(profile_name: str, source_model_id: str):
+    """
+    Create a custom inference profile for LibreChat.
+
+    Args:
+        profile_name: Name for your custom profile
+        source_model_id: The system inference profile ID to copy from
+                        (e.g., 'us.anthropic.claude-3-7-sonnet-20250219-v1:0')
+    """
+    bedrock = boto3.client('bedrock', region_name=AWS_REGION)
+
+    profiles = bedrock.list_inference_profiles()
+    source_arn = None
+    for profile in profiles['inferenceProfileSummaries']:
+        if profile['inferenceProfileId'] == source_model_id:
+            source_arn = profile['inferenceProfileArn']
+            break
+
+    if not source_arn:
+        raise ValueError(f"Source profile {source_model_id} not found")
+
+    response = bedrock.create_inference_profile(
+        inferenceProfileName=profile_name,
+        description=f'Custom inference profile for {profile_name}',
+        modelSource={'copyFrom': source_arn},
+        tags=[
+            {'key': 'Application', 'value': 'LibreChat'},
+            {'key': 'Environment', 'value': 'Production'}
+        ]
+    )
+
+    print(f"Created profile: {response['inferenceProfileArn']}")
+    return response['inferenceProfileArn']
+
+if __name__ == "__main__":
+    create_inference_profile(
+        "LibreChat-Claude-3-7-Sonnet",
+        "us.anthropic.claude-3-7-sonnet-20250219-v1:0"
+    )
+    create_inference_profile(
+        "LibreChat-Claude-Sonnet-4-5",
+        "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    )
+```
+
+## 配置 LibreChat [#configuring-librechat]
+
+### librechat.yaml 配置 [#librechatyaml-configuration]
+
+将 `bedrock` endpoint 配置添加到您的 `librechat.yaml` 中。有关完整字段参考，请参阅 [AWS Bedrock 对象结构](/docs/configuration/librechat_yaml/object_structure/aws_bedrock)。
+
+```yaml filename="librechat.yaml"
+endpoints:
+  bedrock:
+    # List the models you want available in the UI
+    models:
+      - 'us.anthropic.claude-3-7-sonnet-20250219-v1:0'
+      - 'us.anthropic.claude-sonnet-4-5-20250929-v1:0'
+      - 'global.anthropic.claude-opus-4-5-20251101-v1:0'
+    # Map model IDs to their custom inference profile ARNs
+    inferenceProfiles:
+      # Using environment variable (recommended for security)
+      'us.anthropic.claude-3-7-sonnet-20250219-v1:0': '${BEDROCK_CLAUDE_37_PROFILE}'
+      # Using direct ARN
+      'us.anthropic.claude-sonnet-4-5-20250929-v1:0': 'arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123'
+      # Another env variable example
+      'global.anthropic.claude-opus-4-5-20251101-v1:0': '${BEDROCK_OPUS_45_PROFILE}'
+    # Optional: Configure available regions for cross-region inference
+    availableRegions:
+      - 'us-east-1'
+      - 'us-west-2'
+```
+
+### 环境变量 [#environment-variables]
+
+将您的 Bedrock 区域、AWS 身份验证设置以及推理配置文件 ARN 添加到您的 `.env` 文件中：
+
+```bash filename=".env"
+#===================================#
+# AWS Bedrock Configuration         #
+#===================================#
+
+BEDROCK_AWS_DEFAULT_REGION=us-east-1
+
+# Option 1: Use an AWS profile
+BEDROCK_AWS_PROFILE=your-profile-name
+
+# Option 2: Omit BEDROCK_AWS_PROFILE and Bedrock-specific static credentials
+# to use the AWS SDK default credential provider chain.
+
+# Option 3: Static Bedrock credentials, if profiles or IAM roles are not suitable
+# BEDROCK_AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
+# BEDROCK_AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+# BEDROCK_AWS_SESSION_TOKEN=your-session-token
+
+# Option 4: Bedrock API key (bearer auth)
+# BEDROCK_AWS_BEARER_TOKEN=your-bedrock-api-key
+
+# Inference Profile ARNs
+BEDROCK_CLAUDE_37_PROFILE=arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123
+BEDROCK_OPUS_45_PROFILE=arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/def456
+```
+
+## 设置日志记录 [#setting-up-logging]
+
+要验证您的推理配置文件是否被正确使用，请启用 AWS Bedrock 模型调用日志记录。
+
+### 1. 创建 CloudWatch 日志组 [#1-create-cloudwatch-log-group]
+
+```bash
+aws logs create-log-group \
+  --log-group-name /aws/bedrock/model-invocations \
+  --region us-east-1
+```
+
+### 2. 为 Bedrock 日志记录创建 IAM 角色 [#2-create-iam-role-for-bedrock-logging]
+
+创建信任策略文件 (`bedrock-logging-trust.json`)：
+
+```json filename="bedrock-logging-trust.json"
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "bedrock.amazonaws.com"
+      },
+      "Action": "sts:AssumeRole",
+      "Condition": {
+        "StringEquals": {
+          "aws:SourceAccount": "YOUR_ACCOUNT_ID"
+        },
+        "ArnLike": {
+          "aws:SourceArn": "arn:aws:bedrock:us-east-1:YOUR_ACCOUNT_ID:*"
+        }
+      }
+    }
+  ]
+}
+```
+
+创建角色：
+
+```bash
+aws iam create-role \
+  --role-name BedrockLoggingRole \
+  --assume-role-policy-document file://bedrock-logging-trust.json
+```
+
+附加 CloudWatch Logs 权限：
+
+```bash
+aws iam put-role-policy \
+  --role-name BedrockLoggingRole \
+  --policy-name BedrockLoggingPolicy \
+  --policy-document '{
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Action": [
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ],
+        "Resource": "arn:aws:logs:us-east-1:YOUR_ACCOUNT_ID:log-group:/aws/bedrock/model-invocations:*"
+      }
+    ]
+  }'
+```
+
+为大型数据创建 S3 存储桶（必需）：
+
+```bash
+aws s3 mb s3://bedrock-logs-YOUR_ACCOUNT_ID --region us-east-1
+
+aws iam put-role-policy \
+  --role-name BedrockLoggingRole \
+  --policy-name BedrockS3Policy \
+  --policy-document '{
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Action": ["s3:PutObject"],
+        "Resource": "arn:aws:s3:::bedrock-logs-YOUR_ACCOUNT_ID/*"
+      }
+    ]
+  }'
+```
+
+### 3. 启用模型调用日志 (Enable Model Invocation Logging) [#3-enable-model-invocation-logging]
+
+```bash
+aws bedrock put-model-invocation-logging-configuration \
+  --logging-config '{
+    "cloudWatchConfig": {
+      "logGroupName": "/aws/bedrock/model-invocations",
+      "roleArn": "arn:aws:iam::YOUR_ACCOUNT_ID:role/BedrockLoggingRole",
+      "largeDataDeliveryS3Config": {
+        "bucketName": "bedrock-logs-YOUR_ACCOUNT_ID",
+        "keyPrefix": "large-data"
+      }
+    },
+    "textDataDeliveryEnabled": true,
+    "imageDataDeliveryEnabled": true,
+    "embeddingDataDeliveryEnabled": true
+  }' \
+  --region us-east-1
+```
+
+验证日志记录是否已启用：
+
+```bash
+aws bedrock get-model-invocation-logging-configuration --region us-east-1
+```
+
+## 验证您的配置 [#verifying-your-configuration]
+
+### 通过 CLI 查看日志 [#view-logs-via-cli]
+
+在通过 LibreChat 发出请求后，请检查日志：
+
+```bash
+# Tail logs in real-time
+aws logs tail /aws/bedrock/model-invocations --follow --region us-east-1
+
+# View recent logs
+aws logs tail /aws/bedrock/model-invocations --since 5m --region us-east-1
+```
+
+### 注意事项 [#what-to-look-for]
+
+在日志输出中，查找 `modelId` 字段：
+
+```json
+{
+  "timestamp": "2026-01-16T16:56:15Z",
+  "accountId": "123456789012",
+  "region": "us-east-1",
+  "requestId": "a8b9d8c9-87b3-41ea-8a02-e8bfdba7782f",
+  "operation": "ConverseStream",
+  "modelId": "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123",
+  "inferenceRegion": "us-west-2"
+}
+```
+
+**成功指标：**
+
+- `modelId` 显示您的自定义推理配置文件 ARN（包含 `application-inference-profile`）
+- `inferenceRegion` 可能会有所不同（显示跨区域路由正在工作）
+
+**如果映射无法正常工作：**
+
+- `modelId` 将显示原始模型 ID，而不是 ARN
+
+### 通过 AWS 控制台查看日志 [#view-logs-via-aws-console]
+
+1. 在 AWS 控制台中打开 **CloudWatch**
+2. 导航至 **Logs** > **Log groups**
+3. 选择 `/aws/bedrock/model-invocations`
+4. 点击最新的日志流
+5. 搜索您的推理配置文件 ID
+
+## 监控使用情况 [#monitoring-usage]
+
+### CloudWatch 指标 [#cloudwatch-metrics]
+
+在 CloudWatch 中查看 Bedrock 指标：
+
+```bash
+aws cloudwatch list-metrics --namespace AWS/Bedrock --region us-east-1
+```
+
+### AWS 控制台 [#aws-console]
+
+1. **Bedrock Console** > **Inference profiles** > **Application** 选项卡
+2. 点击您的自定义个人资料
+3. 查看调用指标和使用统计信息
+
+## 故障排除 [#troubleshooting]
+
+### 常见问题 [#common-issues]
+
+| 问题 | 原因 | 解决方案 |
+| ------------------------- | -------------------------------------- | ----------------------------------------------------------------------------- |
+| 模型无法识别 | `models` 数组中缺少模型 | 将模型 ID 添加到 librechat.yaml 中的 `models` |
+| 未使用 ARN | 模型 ID 不匹配 | 确保 `inferenceProfiles` 中的模型 ID 与 `models` 中的完全一致 |
+| 环境变量未解析 | 拼写错误或未设置 | 检查 `.env` 文件并确保变量名称与 `${VAR_NAME}` 匹配 |
+| 拒绝访问 | 缺少 IAM 权限 | 为推理配置 ARN 添加 `bedrock:InvokeModel*` 权限 |
+| 模型访问被拒绝 | 缺少模型协议或协议生效延迟 | 接受 Bedrock 模型协议并等待可用性生效 |
+| 未找到配置 | 区域错误 | 确保在同一区域创建/使用配置 |
+
+### 模型访问协议传播 [#model-access-agreement-propagation]
+
+创建应用程序推理配置文件并不会自动在您的 AWS 账户中启用底层基础模型。如果刚刚启用了模型访问权限，AWS 可能还需要一段简短的传播时间，之后通过推理配置文件的请求才能成功。
+
+即使推理配置文件存在且您的 IAM 角色拥有 `bedrock:InvokeModel` 权限，这也可能显示为 `AccessDeniedException`。错误信息可能会提及 `aws-marketplace:ViewSubscriptions`、`aws-marketplace:Subscribe`，或者要求您在几分钟后重试。
+
+在调试 LibreChat 映射之前，请先检查底层模型的可用性：
+
+```bash
+aws bedrock get-foundation-model-availability \
+  --region us-east-1 \
+  --model-id us.anthropic.claude-sonnet-4-5-20250929-v1:0
+```
+
+查找：
+
+- `agreementAvailability.status` 设置为 `AVAILABLE`
+- `authorizationStatus` 设置为 `AUTHORIZED`
+- `entitlementAvailability` 设置为 `AVAILABLE`
+- `regionAvailability` 设置为 `AVAILABLE`
+
+如果缺少协议，请在 Bedrock 控制台中接受模型协议，或使用具有管理 Bedrock 模型协议和 Marketplace 订阅权限的 AWS 主体进行操作。待其状态变为 `AVAILABLE` 后，请等待几分钟，然后重试调用应用程序推理配置文件。
+
+### 调试清单 [#debug-checklist]
+
+1. Model ID 位于 `models` 数组中
+2. `inferenceProfiles` 中的 Model ID 必须完全匹配（区分大小写）
+3. 已设置环境变量（如果使用 `${VAR}` 语法）
+4. AWS 凭证具有调用推理配置文件的权限
+5. 底层基础模型协议在 Bedrock 中为 `AVAILABLE` 状态
+6. LibreChat 已在配置更改后重启
+
+### 验证配置加载 [#verify-config-loading]
+
+通过在 LibreChat 启动时检查服务器日志，确认您的配置已被正确读取。
+
+## 完整示例 [#complete-example]
+
+### librechat.yaml
+
+```yaml filename="librechat.yaml"
+version: 1.3.5
+
+endpoints:
+  bedrock:
+    models:
+      - 'us.anthropic.claude-3-7-sonnet-20250219-v1:0'
+      - 'us.anthropic.claude-sonnet-4-5-20250929-v1:0'
+      - 'global.anthropic.claude-opus-4-5-20251101-v1:0'
+      - 'us.amazon.nova-pro-v1:0'
+    inferenceProfiles:
+      'us.anthropic.claude-3-7-sonnet-20250219-v1:0': '${BEDROCK_CLAUDE_37_PROFILE}'
+      'us.anthropic.claude-sonnet-4-5-20250929-v1:0': '${BEDROCK_SONNET_45_PROFILE}'
+      'global.anthropic.claude-opus-4-5-20251101-v1:0': '${BEDROCK_OPUS_45_PROFILE}'
+    availableRegions:
+      - 'us-east-1'
+      - 'us-west-2'
+```
+
+### .env
+
+```bash filename=".env"
+# AWS Bedrock
+BEDROCK_AWS_DEFAULT_REGION=us-east-1
+BEDROCK_AWS_PROFILE=your-profile-name
+# Or use a Bedrock API key instead:
+# BEDROCK_AWS_BEARER_TOKEN=your-bedrock-api-key
+
+# Inference Profiles
+BEDROCK_CLAUDE_37_PROFILE=arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123
+BEDROCK_SONNET_45_PROFILE=arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/def456
+BEDROCK_OPUS_45_PROFILE=arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/ghi789
+```
+
+### 快速设置脚本 [#quick-setup-script]
+
+```bash filename="setup-bedrock-profiles.sh"
+#!/bin/bash
+
+REGION="us-east-1"
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+
+# Create inference profiles
+for MODEL in "us.anthropic.claude-3-7-sonnet-20250219-v1:0" "us.anthropic.claude-sonnet-4-5-20250929-v1:0"; do
+  PROFILE_NAME="LibreChat-${MODEL//[.:]/-}"
+  SOURCE_ARN=$(aws bedrock list-inference-profiles --region $REGION \
+    --query "inferenceProfileSummaries[?inferenceProfileId=='$MODEL'].inferenceProfileArn" \
+    --output text)
+  if [ -n "$SOURCE_ARN" ]; then
+    echo "Creating profile for $MODEL..."
+    aws bedrock create-inference-profile \
+      --inference-profile-name "$PROFILE_NAME" \
+      --model-source copyFrom="$SOURCE_ARN" \
+      --region $REGION
+  fi
+done
+
+# List created profiles
+echo ""
+echo "Your custom inference profiles:"
+aws bedrock list-inference-profiles --type-equals APPLICATION --region $REGION \
+  --query "inferenceProfileSummaries[].{Name:inferenceProfileName,ARN:inferenceProfileArn}" \
+  --output table
+```
+
+## 相关资源 [#related-resources]
+
+- [AWS Bedrock Inference Profiles 文档](https://docs.aws.amazon.com/bedrock/latest/userguide/inference-profiles.html)
+- [AWS Bedrock 模型访问文档](https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html)
+- [AWS Bedrock 对象结构](/docs/configuration/librechat_yaml/object_structure/aws_bedrock) - YAML 配置字段参考
+- [AWS Bedrock 设置](/docs/configuration/pre_configured_ai/bedrock) - 基础 Bedrock 配置
+- [AWS Bedrock 模型调用日志记录](https://docs.aws.amazon.com/bedrock/latest/userguide/model-invocation-logging.html)

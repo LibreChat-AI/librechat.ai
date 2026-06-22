@@ -1,0 +1,327 @@
+---
+title: SharePoint 統合
+icon: SharePoint
+description: LibreChatでSharePoint OnlineおよびOneDrive for Businessの統合を設定する
+---
+
+LibreChatは、SharePoint OnlineおよびOneDrive for Businessとのエンタープライズグレードの統合を提供し、ユーザーがMicrosoft 365環境内のファイルを会話内で直接シームレスに閲覧、選択、添付できるようにします。
+
+## 概要 [#overview]
+
+SharePoint統合により、ユーザーは以下のことが可能になります：
+- SharePointドキュメントライブラリおよびOneDriveファイルの閲覧
+- 一度に複数のファイルを選択（デフォルトで最大10個まで）
+- リアルタイムのダウンロード進捗状況を表示する
+- SharePointから会話にファイルを添付する
+- 適切なアクセス制御でエンタープライズセキュリティを維持する
+
+<Callout type="info" title="エンタープライズ機能">
+この機能にはMicrosoft 365/SharePoint Onlineが必要であり、Azure Entra ID (旧Azure AD) 認証を使用するエンタープライズ環境向けに設計されています。
+</Callout>
+
+## 前提条件 [#prerequisites]
+
+SharePoint統合を設定する前に、以下が準備されていることを確認してください：
+
+1. **Azure Entra ID Authentication** が設定され、動作していること
+2. **Token Reuse** が有効 (`OPENID_REUSE_TOKENS=true`)
+3. LibreChatの**公開されたAPIスコープ**（例: `api://<client-id>/access_as_user`）
+4. アプリの権限設定に必要なAzureテナントへの**管理者アクセス権**
+5. **HTTPS** が有効（本番環境では必須）
+
+<Callout type="error" title="重要な要件">
+SharePoint統合は、Microsoft Graph APIへのアクセスにオン・ビハーフ・オブ（on-behalf-of）トークンフローを利用するため、`OPENID_REUSE_TOKENS=true` が設定されていないと機能しません。
+</Callout>
+
+## Azure App Registration セットアップ [#azure-app-registration-setup]
+
+### Step 1: API権限の設定 [#step-1-configure-api-permissions]
+
+1. [Azure Portal](https://portal.azure.com) でアプリの登録に移動します。
+2. 左側のメニューにある **API permissions** に移動します
+3. **Add a permission** をクリックします
+
+### ステップ 2: LibreChat APIスコープの公開と付与 [#step-2-expose-and-grant-a-librechat-api-scope]
+
+On-behalf-of フローでは、Microsoft Graph ではなく LibreChat アプリの API をターゲットにするために、初期の OpenID アクセス トークンが必要です。Azure が LibreChat をオーディエンスとするトークンを発行できるように、API スコープを公開してください。
+
+1. 左側のメニューにある **Expose an API** に移動します
+2. **Application ID URI** がまだ設定されていない場合は、`api://<client-id>` に設定してください。
+3. **Add a scope** をクリックします
+4. スコープを `access_as_user` と命名します
+5. スコープを保存してから、完全なスコープの値をコピーしてください：
+
+```text
+api://<client-id>/access_as_user
+```
+
+次に、そのスコープをアプリ登録に付与します：
+
+1. **API permissions** に戻る
+2. **Add a permission** をクリックします
+3. **APIs my organization uses** を選択します
+4. LibreChat アプリ登録を検索して選択します
+5. **Delegated permissions**を選択します
+6. `access_as_user` を選択します
+7. **Add permissions** をクリックします
+
+このガイドの後半で `OPENID_SCOPE` に完全な `api://<client-id>/access_as_user` スコープ値を使用してください。
+
+### ステップ 3: SharePoint の権限を追加する [#step-3-add-sharepoint-permissions]
+
+ファイルピッカーインターフェースの場合:
+
+1. APIリストから **SharePoint** を選択します
+2. **Delegated permissions**を選択します
+3. 検索して選択:
+   - `AllSites.Read` - すべてのサイトコレクション内のアイテムを読み取る
+4. **Add permissions** をクリックします
+
+### ステップ 4: Microsoft Graph の権限を追加する [#step-4-add-microsoft-graph-permissions]
+
+ファイルダウンロード用:
+
+1. もう一度 **Add a permission** をクリックします
+2. **Microsoft Graph** を選択します
+3. **Delegated permissions**を選択します
+4. 検索して選択:
+   - `Files.Read.All` - ユーザーがアクセス可能なすべてのファイルを読み取る
+5. **Add permissions** をクリックします
+
+### Step 5: 管理者の同意を付与する [#step-5-grant-admin-consent]
+
+1. 権限を追加すると、それらがリストに表示されます
+2. **[Your Organization] に管理者の同意を与える** をクリックします
+3. ポップアップで同意を確認してください
+
+権限は以下のようになっている必要があります：
+
+| API / Permissions name | Type | Description | Status |
+|------------------------|------|-------------|---------|
+| Microsoft Graph - Files.Read.All | Delegated | ユーザーがアクセス可能なすべてのファイルを読み取る | ✅ Granted |
+| SharePoint - AllSites.Read | Delegated | すべてのサイトコレクション内のアイテムを読み取る | ✅ Granted |
+| LibreChat - access_as_user | Delegated | LibreChat が OBO 互換トークンを受信できるようにする | ✅ Granted |
+
+## 環境設定 [#environment-configuration]
+
+`.env` ファイルに以下の環境変数を追加してください：
+
+```bash filename=".env"
+# OpenID token reuse and OBO-compatible audience
+OPENID_REUSE_TOKENS=true
+OPENID_SCOPE=openid profile email offline_access api://<client-id>/access_as_user
+OPENID_ON_BEHALF_FLOW_FOR_USERINFO_REQUIRED=true
+
+# Enable SharePoint file picker
+ENABLE_SHAREPOINT_FILEPICKER=true
+
+# Your SharePoint tenant base URL
+# Format: https://[your-tenant-name].sharepoint.com
+SHAREPOINT_BASE_URL=https://contoso.sharepoint.com
+
+# SharePoint scope for the file picker
+# Replace 'contoso' with your actual tenant name
+SHAREPOINT_PICKER_SHAREPOINT_SCOPE=https://contoso.sharepoint.com/AllSites.Read
+
+# Microsoft Graph scope for file downloads
+SHAREPOINT_PICKER_GRAPH_SCOPE=Files.Read.All
+```
+
+<Callout type="warning" title="テナント名">
+上記の例にある `contoso` を、実際の SharePoint テナント名に置き換えてください。これは SharePoint の URL と完全に一致している必要があります。
+</Callout>
+
+<Callout type="warning" title="OpenIDスコープのオーディエンス">
+`<client-id>` を、Azure アプリ登録のアプリケーション (クライアント) ID に置き換えてください。`api://<client-id>/access_as_user` スコープは、OBO アサーションに対して Azure にアプリ固有のオーディエンスを提供します。`OPENID_SCOPE` に標準の OpenID スコープのみが含まれている場合、Azure は SharePoint や Graph へのアクセスに再交換できない Graph オーディエンスのアクセストークンを発行する可能性があります。
+</Callout>
+
+<Callout type="info" title="Userinfoトークン交換">
+`OPENID_ON_BEHALF_FLOW_FOR_USERINFO_REQUIRED=true` を設定すると、LibreChat は OpenID の userinfo エンドポイントを呼び出す前に、アプリのオーディエンスアクセストークンを userinfo 互換のトークンと交換します。これは、`OPENID_SCOPE` に上記の LibreChat API スコープが含まれる Azure Entra ID のセットアップにおいて必須となります。
+</Callout>
+
+## 仕組み [#how-it-works]
+
+### 認証フロー [#authentication-flow]
+
+1. ユーザーは Azure Entra ID を介して認証します
+2. SharePointピッカーにアクセスする際、LibreChatはユーザーのトークンをSharePointアクセス用に交換します。
+3. トークンは最適なパフォーマンスのためにキャッシュされます（通常50分間）。
+4. 個別のスコープにより、最小権限の原則が確実に守られます。
+
+### ファイル選択プロセス [#file-selection-process]
+
+1. ユーザーが添付ファイルメニューの「From SharePoint」をクリックします
+2. SharePoint Online ファイルピッカーが埋め込み iframe で開きます
+3. ユーザーは使い慣れたSharePointインターフェースを使用してファイルを閲覧および選択します
+4. 選択されたファイルはダウンロード待ちです
+
+### ダウンロードプロセス [#download-process]
+
+1. ファイルはバッチ単位でダウンロードされます（最大3つまで同時にダウンロード可能）
+2. 進捗インジケーターは、現在のファイルと完了率を表示します
+3. ダウンロードされたファイルは会話に添付されます
+4. ダウンロードに失敗した場合は自動的に再試行されます
+
+## ユーザーエクスペリエンス [#user-experience]
+
+### SharePoint ファイルへのアクセス [#accessing-sharepoint-files]
+
+適切に設定されると、ユーザーはファイル添付メニューに新しいオプションが表示されるようになります：
+
+1. メッセージ入力欄の添付アイコンをクリックします
+2. メニューから「From SharePoint」を選択します
+3. SharePointファイルピッカーが開きます
+4. 必要に応じてファイルを参照して選択します
+5. 「Select」をクリックしてダウンロードを開始します
+
+### 利用可能な機能 [#features-available]
+
+- **複数のファイル選択**: 一度に最大10個のファイルを選択できます
+- **使い慣れたインターフェース**: ネイティブのSharePointファイルピッカーを使用します
+- **進捗状況の追跡**: リアルタイムのダウンロード進捗状況を確認できます
+- **エラーハンドリング**: 問題が発生した際の明確なメッセージ
+- **ローカライズ**: 多言語に対応
+
+## セキュリティに関する考慮事項 [#security-considerations]
+
+### アクセス制御 [#access-control]
+
+- ユーザーがSharePointでアクセス権限を持つファイルのみが利用可能です
+- すべてのSharePoint権限およびポリシーを尊重します
+- 昇格されたアクセス権やセキュリティ制御のバイパスはありません
+
+### トークンのセキュリティ [#token-security]
+
+- トークン交換のために安全なon-behalf-ofフローを使用します
+- トークンは短命であり、自動的に更新されます
+- SharePointの認証情報を長期保存しない
+
+### Scope Isolation [#scope-isolation]
+
+- SharePointのスコープは読み取り操作のみに制限されています
+- ファイル読み取りアクセスに制限されたGraph APIスコープ
+- LibreChat を通じてファイルを変更または削除できません
+
+## トラブルシューティング [#troubleshooting]
+
+### よくある問題 [#common-issues]
+
+#### 「From SharePoint」オプションが表示されない [#from-sharepoint-option-not-appearing]
+
+**原因**: 機能が正しく有効化されていないか、認証の問題が発生しています
+
+**解決策**:
+1. `.env` で `ENABLE_SHAREPOINT_FILEPICKER=true` を確認してください。
+2. `OPENID_REUSE_TOKENS=true` が設定されていることを確認してください
+3. Azure Entra ID を介してユーザーが認証されていることを確認する
+4. 設定変更後にLibreChatを再起動する
+
+#### ファイルピッカーが開かない [#file-picker-fails-to-open]
+
+**原因**: 権限の不足または誤り
+
+**解決策**:
+1. AzureでSharePointの権限が付与されていることを確認してください
+2. 管理者の同意が得られていることを確認してください
+3. `SHAREPOINT_BASE_URL` がテナントと完全に一致していることを確認してください
+4. `SHAREPOINT_PICKER_SHAREPOINT_SCOPE` が、`https://contoso.sharepoint.com/AllSites.Read` のような完全なテナントURLを使用していることを確認してください。
+5. 本番環境でHTTPSが有効であることを確認する
+
+#### ファイルピッカーが真っ白なページで開く [#file-picker-opens-to-a-blank-white-page]
+
+**原因**: AzureがOpenIDアクセストークンのオーディエンスが正しくないこと、またはuserinfoトークン交換が有効になっていないことを理由に、on-behalf-of交換を拒否している可能性があります。
+
+**解決策**:
+1. Azureアプリの登録に、`api://<client-id>/access_as_user` のような公開されたAPIスコープがあることを確認してください。
+2. そのフルスコープを `OPENID_SCOPE` に追加してください。
+3. `OPENID_ON_BEHALF_FLOW_FOR_USERINFO_REQUIRED=true` を設定します。
+4. LibreChatを再起動して再度サインインし、Azureが新しいOpenIDトークンを発行するようにしてください。
+
+#### ダウンロードが失敗またはタイムアウトする [#downloads-fail-or-timeout]
+
+**原因**: Graph APIの権限またはネットワークの問題
+
+**解決策**:
+1. `Files.Read.All` 権限が付与されていることを確認してください
+2. SharePoint へのネットワーク接続を確認する
+3. トークンが期限切れになっていないことを確認してください（必要に応じて再認証を行ってください）
+4. ブラウザのコンソールで具体的なエラーメッセージを確認してください
+
+### デバッグモード [#debug-mode]
+
+トラブルシューティングを行うには、デバッグログを有効にしてください：
+
+```bash filename=".env"
+DEBUG_LOGGING=true
+DEBUG_CONSOLE=true
+```
+
+以下は、詳細なログを提供します：
+- トークン交換プロセス
+- SharePoint および Graph への API 呼び出し
+- ダウンロードの進捗とエラー
+- 認証フロー
+
+## パフォーマンスの最適化 [#performance-optimization]
+
+### Token Caching [#token-caching]
+
+- 認証のオーバーヘッドを削減するためにトークンがキャッシュされます。
+- キャッシュ期間はトークンの有効期間（通常50分）と一致します
+- 有効期限前の自動更新
+
+### 同時ダウンロード [#concurrent-downloads]
+
+- 最大3つのファイルを同時にダウンロード
+- ブラウザやサーバーへの過負荷を防ぎます
+- 速度と安定性の両方を最適化します
+
+### ファイルサイズの考慮事項 [#file-size-considerations]
+
+- 大きなファイルはダウンロードに時間がかかる場合があります
+- 進捗インジケーターは、ユーザーの期待値を管理するのに役立ちます。
+- LibreChat設定におけるファイルアップロード制限を考慮してください
+
+## ベストプラクティス [#best-practices]
+
+### 管理者向け [#for-administrators]
+
+1. **定期的な権限監査**: アプリの権限を定期的に見直してください
+2. **使用状況の監視**: ログでSharePoint統合の使用状況を追跡します
+3. **ドキュメントの更新**: 内部ドキュメントをテナント固有の情報で最新の状態に保ってください
+4. **徹底的にテストする**: Azure AD に変更を加えた後は、必ず機能を確認してください。
+
+### エンドユーザー向け [#for-end-users]
+
+1. **ファイルの整理**: 適切に整理されたSharePointライブラリは、ユーザーエクスペリエンスを向上させます
+2. **ファイルサイズ**: 会話の速度を低下させる可能性があるため、大きなファイルには注意してください。
+3. **Permissions**: ファイルを共有する前に、アクセス権があることを確認してください
+4. **Patient Downloads**: 複数または大きなファイルのダウンロードには時間を要します
+
+## 高度な設定 [#advanced-configuration]
+
+### カスタムスコープ [#custom-scopes]
+
+特定の要件を持つ組織向けに、スコープをカスタマイズすることができます：
+
+```bash filename=".env"
+# Example: Limiting to specific site collections
+SHAREPOINT_PICKER_SHAREPOINT_SCOPE=https://contoso.sharepoint.com/sites/Engineering/AllSites.Read
+
+# Example: Using more restrictive Graph permissions
+SHAREPOINT_PICKER_GRAPH_SCOPE=Files.Read
+```
+
+### Information Barriers との統合 [#integration-with-information-barriers]
+
+組織でInformation Barriersを使用している場合：
+- SharePoint統合は、すべてのバリアポリシーを尊重します。
+- ユーザーはアクセスを許可されたコンテンツのみを閲覧できます
+- 追加の設定は不要です
+
+## 関連ドキュメント [#related-documentation]
+
+- [Azure Entra 認証](/docs/configuration/authentication/OAuth2-OIDC/azure)
+- [OpenID トークンの再利用](/docs/configuration/authentication/OAuth2-OIDC/token-reuse)
+- [Microsoft Graph API 統合](/docs/configuration/authentication/OAuth2-OIDC/azure#advanced-microsoft-graph-api-integration)
+- [ファイルアップロード設定](/docs/configuration/librechat_yaml/object_structure/file_config)
