@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { VARIANTS, outputPath, themeBootstrap, THEME_STORAGE_KEY } from './config'
+import { VARIANTS, outputPath, themeBootstrap, THEME_STORAGE_KEY, IMG_DIR } from './config'
 
 describe('screenshot config', () => {
   it('defines exactly the four hero image variants', () => {
@@ -27,7 +27,8 @@ describe('screenshot config', () => {
   })
 
   it('resolves output paths under components/home/img', () => {
-    const p = outputPath(VARIANTS[0])
+    const desktopLight = VARIANTS.find((v) => v.name === 'desktop-light')!
+    const p = outputPath(desktopLight)
     expect(p).toMatch(/components\/home\/img\/demo_light\.png$/)
   })
 
@@ -35,5 +36,11 @@ describe('screenshot config', () => {
     expect(themeBootstrap('dark')).toContain('"dark"')
     expect(themeBootstrap('light')).toContain('"light"')
     expect(themeBootstrap('dark')).toContain(THEME_STORAGE_KEY)
+  })
+
+  it('keeps every output path inside the image directory', () => {
+    for (const v of VARIANTS) {
+      expect(outputPath(v).startsWith(IMG_DIR)).toBe(true)
+    }
   })
 })
