@@ -71,7 +71,11 @@ export function absoluteUrl(path: string): string {
 }
 
 export async function getLLMText(page: InferPageType<typeof docsSource>): Promise<string> {
-  const filePath = page.absolutePath ?? join(process.cwd(), 'content/docs', page.path)
+  // Resolve from the runtime cwd, not page.absolutePath: that is the absolute
+  // source path captured when .source was generated (the build workspace), which
+  // doesn't exist in packaged/serverless deployments and would 500 the raw
+  // Markdown endpoints. page.path is the content-dir-relative path.
+  const filePath = join(process.cwd(), 'content/docs', page.path)
   const raw = await readFile(filePath, 'utf-8')
 
   // Strip frontmatter
