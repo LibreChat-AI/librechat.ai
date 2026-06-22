@@ -51,6 +51,20 @@ export class TM {
     this.used.add(hash)
   }
 
+  /**
+   * Drop a cached entry. Used when a file fails validation: any blocks cached for
+   * it (e.g. committed by a transient-failure round before the file was ever
+   * validated) must be evicted so the next run re-translates them fresh instead
+   * of reading a structurally bad block back and failing validation forever.
+   */
+  delete(hash: string): void {
+    if (hash in this.store) {
+      delete this.store[hash]
+      this.dirty = true
+    }
+    this.used.delete(hash)
+  }
+
   markUsed(hash: string): void {
     this.used.add(hash)
   }
