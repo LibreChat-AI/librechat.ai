@@ -3,7 +3,7 @@ import { DocsI18nProvider } from '@/components/DocsI18nProvider'
 import { docsSource } from '@/lib/source'
 import { getAvailableLocalesBySlug } from '@/lib/doc-locales'
 import { baseOptions } from '@/app/layout.config'
-import { i18n, localizedDocsHref } from '@/lib/i18n'
+import { i18n, localizedDocsHref, localizedHomeHref } from '@/lib/i18n'
 import { getUI } from '@/lib/ui-i18n'
 import { VersionSwitcher } from '@/components/VersionSwitcher'
 import type { ReactNode } from 'react'
@@ -26,6 +26,7 @@ export default async function Layout({
         tree={tree}
         i18n
         {...baseOptions}
+        nav={{ ...baseOptions.nav, url: localizedHomeHref(lang) }}
         links={[
           { text: t.nav.docs, url: docsHref, active: 'nested-url' },
           { text: t.nav.blog, url: '/blog' },

@@ -33,6 +33,32 @@ export function localizedDocsHref(href: string, lang?: string): string {
   return `/${lang}${href}`
 }
 
+/**
+ * The landing-page URL for a locale. The default language lives at `/` (no
+ * prefix, matching `hideLocale: 'default-locale'`); every other locale at
+ * `/<locale>`. Used for the navbar/logo link so clicking it from a localized
+ * surface keeps the reader in their language instead of dropping them onto the
+ * prefix-less English home.
+ */
+export function localizedHomeHref(lang?: string): string {
+  if (!lang || lang === i18n.defaultLanguage) return '/'
+  return `/${lang}`
+}
+
+/** Cookie that records an explicit language choice (read by the proxy's auto-detect). */
+export const LOCALE_COOKIE = 'NEXT_LOCALE'
+
+/**
+ * Remember an explicit language choice in a cookie so the browser-language
+ * auto-detection on `/` doesn't override the reader the next time they land on
+ * the home page. Client-only; a no-op when called during SSR.
+ */
+export function rememberLocale(locale: string): void {
+  if (typeof document === 'undefined') return
+  // 1 year, lax: a first-party preference that should survive top-level navigations.
+  document.cookie = `${LOCALE_COOKIE}=${locale}; path=/; max-age=31536000; samesite=lax`
+}
+
 /** Human-readable names shown in the language switcher. */
 export const LOCALE_NAMES: Record<string, string> = {
   en: 'English',

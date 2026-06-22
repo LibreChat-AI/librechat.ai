@@ -3,7 +3,7 @@
 import { I18nProvider } from 'fumadocs-ui/i18n'
 import { useRouter } from 'next/navigation'
 import type { ReactNode } from 'react'
-import { i18n, LOCALE_NAMES } from '@/lib/i18n'
+import { i18n, LOCALE_NAMES, rememberLocale } from '@/lib/i18n'
 import { getFumadocsText } from '@/lib/ui-i18n'
 
 const locales = i18n.languages.map((locale) => ({
@@ -21,6 +21,8 @@ const locales = i18n.languages.map((locale) => ({
 export function HomeI18nProvider({ locale, children }: { locale: string; children: ReactNode }) {
   const router = useRouter()
   const onChange = (next: string) => {
+    // Record the explicit choice so the `/` auto-detect honors it next time.
+    rememberLocale(next)
     router.push(next === i18n.defaultLanguage ? '/' : `/${next}`)
   }
 
