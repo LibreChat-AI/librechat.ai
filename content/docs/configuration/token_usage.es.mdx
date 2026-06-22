@@ -1,0 +1,304 @@
+---
+title: Uso de tokens
+icon: Coins
+description: >-
+  Esto cubre cómo realizar un seguimiento y controlar el uso de tokens en
+  LibreChat. Aprenderá a ver el contexto y el costo, configurar transacciones,
+  habilitar saldos de usuario y agregar créditos a una cuenta.
+---
+
+## Introducción [#intro]
+
+A partir de `v0.6.0`, LibreChat rastrea con precisión el uso de tokens para los endpoint compatibles. Todas las transacciones de tokens se almacenan en la colección "Transactions" de su base de datos. Las versiones actuales también muestran el uso de contexto en tiempo real y el costo en la interfaz de usuario de la conversación cuando está habilitado.
+
+Actualmente, puede limitar el uso de tokens por parte del usuario habilitando los saldos de usuario. En lugar de configurar los límites de crédito de tokens mediante variables de entorno, ahora debe establecer estas opciones en su archivo `librechat.yaml` bajo la sección **balance**. Los valores de costo están ocultos de forma predeterminada y deben habilitarse con `interface.contextCost`.
+
+## Visualización del uso de contexto y costos [#viewing-context-usage-and-cost]
+
+LibreChat muestra un medidor de contexto mientras se ejecuta una conversación. El medidor se actualiza a partir de los eventos de uso durante el streaming y puede mostrar:
+
+- Uso actual de prompt/contexto frente a la ventana de contexto del modelo
+- Un resumen al pasar el cursor para obtener detalles rápidos de tokens y costos
+- Un desglose detallado mediante clics para el uso de tokens de prompt, finalización y caché, totales de ramas y totales de conversación
+
+Los desgloses de uso se guardan junto con los mensajes y las conversaciones. Los chats reabiertos conservan los detalles de la rama y el uso/costo total en lugar de depender únicamente de la sesión de streaming activa.
+
+Cuando la función de resumen compacta una conversación larga, LibreChat registra la línea base del resumen compactado y cuenta únicamente los turnos posteriores al resumen sobre esta para el medidor de contexto. Los totales de uso y costo aún incluyen el gasto total de la rama completa.
+
+Los administradores pueden controlar estas visualizaciones en `librechat.yaml`:
+
+```yaml filename="librechat.yaml"
+interface:
+  contextUsage: true
+  contextCost: true
+  currency:
+    code: EUR
+    rate: 0.92
+```
+
+- `contextUsage` controla si los usuarios ven la ventana de contexto y el medidor de uso de tokens.
+- `contextCost` controla si los usuarios ven los valores de costo en los detalles de uso. Su valor predeterminado es `false`; establézcalo en `true` para mostrar los costos.
+- `currency` convierte los costos en USD mostrados utilizando un multiplicador estático cuando la visualización de costos está habilitada. Las transacciones se siguen registrando utilizando la contabilidad de créditos de tokens de LibreChat.
+
+## Configuración de Token para Endpoint Personalizado [#custom-endpoint-token-config]
+
+Para endpoints personalizados, defina las ventanas de contexto específicas del modelo y las tarifas por millón de tokens con `endpoints.custom[].tokenConfig`:
+
+```yaml filename="librechat.yaml"
+endpoints:
+  custom:
+    - name: 'Mistral'
+      apiKey: '${MISTRAL_API_KEY}'
+      baseURL: 'https://api.mistral.ai/v1'
+      models:
+        default: ['mistral-large-latest']
+      tokenConfig:
+        mistral-large-latest:
+          prompt: 2
+          completion: 6
+          context: 128000
+```
+
+`prompt`, `completion` y `context` son obligatorios para cada entrada de modelo. `cacheRead` y `cacheWrite` pueden añadirse para proveedores que reportan el uso de entrada en caché. Para los Agentes que utilizan múltiples endpoints, LibreChat utiliza la configuración de tokens del endpoint/modelo correspondiente al registrar el uso y el costo.
+
+La configuración de token obtenida se almacena en caché con ámbito de usuario cuando los modelos, claves, URLs o encabezados de endpoint pueden variar según el contexto de la solicitud, de modo que los precios y las ventanas de contexto de los endpoints personalizados aislados permanezcan separados.
+
+## Configuración de transacciones [#transaction-configuration]
+
+El sistema de transacciones controla si los registros de uso de tokens se guardan en la base de datos. Esto se puede configurar por separado del sistema de saldo.
+
+### Configuración de transacciones [#transaction-settings]
+
+```yaml filename="librechat.yaml"
+version: 1.2.9
+
+# Transaction settings
+# Controls whether to save transaction records to the database
+# Default is true (enabled)
+transactions:
+  enabled: false
+```
+
+**Importante:** Cuando `balance.enabled` está configurado en `true`, el registro de transacciones se habilita automáticamente independientemente de la configuración de `transactions.enabled`. Esto garantiza que el seguimiento del saldo funcione correctamente al mantener un registro completo de todo el uso de tokens.
+
+    Consulta la página de [Configuración de transacciones](/docs/configuration/librechat_yaml/object_structure/transactions) para obtener más detalles.
+
+## Configuración de Balance [#balance-configuration]
+
+El sistema de balance en LibreChat permite a los administradores configurar cómo se gestionan los saldos de crédito de tokens para los usuarios. Todos los ajustes de balance se gestionan ahora en su configuración YAML bajo el objeto `balance`.
+
+**Nota:** Esto reemplaza las variables de entorno anteriores (`CHECK_BALANCE` y `START_BALANCE`) y proporciona una forma más estructurada de gestionar los saldos de los usuarios.
+
+### Configuración completa del balance [#complete-balance-settings]
+
+```yaml filename="librechat.yaml"
+version: 1.3.5
+
+# Balance settings
+balance:
+  enabled: true # Enable token credit balances for users
+  startBalance: 20000 # Initial tokens credited upon registration
+  autoRefillEnabled: false # Enable automatic token refills
+  refillIntervalValue: 30 # Numerical value for refill interval
+  refillIntervalUnit: 'days' # Time unit for refill interval (days, hours, etc.)
+  refillAmount: 10000 # Tokens added during each refill
+```
+
+### Explicación de los ajustes de balance [#balance-settings-explained]
+
+- **enabled**: Activa el seguimiento de créditos de tokens y la gestión de saldo para los usuarios. Cuando se establece en `true`, el sistema realizará un seguimiento del uso de tokens y aplicará límites de saldo.
+
+- **startBalance**: Especifica el número inicial de tokens acreditados a un usuario tras su registro. Este es el saldo inicial para todos los nuevos usuarios.
+
+- **autoRefillEnabled**: Determina si la recarga automática de créditos de tokens está habilitada. Cuando se establece en `true`, el sistema añadirá automáticamente créditos a los saldos de los usuarios según el intervalo de recarga.
+
+- **refillIntervalValue**: Especifica el valor numérico para el intervalo en el que los créditos de tokens se recargan automáticamente. Funciona en conjunto con `refillIntervalUnit`.
+
+- **refillIntervalUnit**: Especifica la unidad de tiempo para el intervalo de recarga. Los valores admitidos incluyen "seconds", "minutes", "hours", "days", "weeks" y "months".
+
+- **refillAmount**: Especifica la cantidad de tokens que se añadirán al saldo del usuario durante cada recarga automática.
+
+Consulta la página de [Balance Configuration](/docs/configuration/librechat_yaml/object_structure/balance) para obtener más detalles.
+
+## Cómo funciona el Auto-Refill [#how-auto-refill-works]
+
+Cuando se realiza un seguimiento del saldo de un usuario y **autoRefill** está habilitado, el sistema añadirá automáticamente créditos al saldo solo cuando haya transcurrido el intervalo de tiempo especificado desde la última recarga. Esto se logra comparando la fecha actual con la fecha de `lastRefill` más el intervalo especificado.
+
+### Proceso de autorrelleno [#auto-refill-process]
+
+1. Cuando un usuario intenta gastar tokens, el sistema verifica si el saldo actual es suficiente
+2. Si el saldo cayera a cero o menos después de la transacción, el sistema verifica si la recarga automática está habilitada
+3. Si auto-refill está habilitado, el sistema verifica si ha transcurrido el intervalo de tiempo desde la última recarga:
+   - El sistema compara la fecha actual con `lastRefill + refillInterval`
+   - Si el intervalo ha pasado, se añaden tokens al saldo del usuario
+   - La fecha `lastRefill` se actualiza a la fecha actual
+4. La transacción procede si el saldo es suficiente (ya sea originalmente o después de una recarga)
+
+### Unidades de tiempo admitidas [#supported-time-units]
+
+`refillIntervalUnit` se puede establecer en cualquiera de los siguientes valores:
+
+- segundos
+- minutos
+- horas
+- días
+- semanas
+- meses
+
+Por ejemplo, si `refillIntervalValue` se establece en 30 y `refillIntervalUnit` es `days`, el sistema añadirá `refillAmount` tokens al saldo del usuario solo si han pasado 30 días desde la última recarga.
+
+### Sincronización de saldo [#balance-synchronization]
+
+Cuando un usuario inicia sesión, el sistema sincroniza automáticamente su configuración de saldo con la configuración de saldo global actual. Esto garantiza que cualquier cambio en la configuración de saldo se aplique a todos los usuarios.
+
+El proceso de sincronización:
+
+1. Comprueba si el usuario tiene un registro de saldo
+2. Si no existe ningún registro, crea uno con el `startBalance` actual
+3. Actualiza la configuración de autorrelleno del usuario para que coincida con la configuración global
+4. Asegura que el intervalo de recarga y la cantidad del usuario coincidan con la configuración global
+
+## Gestión de saldos de tokens [#managing-token-balances]
+
+Puede agregar o establecer manualmente los saldos de los usuarios. Esto es especialmente útil durante el desarrollo o si planea construir un sistema completo de acumulación de saldos en el futuro (por ejemplo, a través de un panel de administración).
+
+### Agregar saldos [#adding-balances]
+
+```bash filename="To manually add balances, run the following command:"
+# Local Development
+npm run add-balance
+
+# Docker (default setup)
+docker compose exec api npm run add-balance
+
+# Docker (deployment setup)
+docker exec -it LibreChat-API /bin/sh -c "cd .. && npm run add-balance"
+```
+
+```bash filename="You can also specify the email and token credit amount to add, e.g.:"
+# Local Development
+npm run add-balance danny@librechat.ai 1000
+
+# Docker (default setup)
+docker compose exec api npm run add-balance danny@librechat.ai 1000
+
+# Docker (deployment setup)
+docker exec -it LibreChat-API /bin/sh -c "cd .. && npm run add-balance danny@librechat.ai 1000"
+```
+
+### Configuración de saldos [#setting-balances]
+
+Además, puedes establecer un saldo para un usuario. Un saldo existente será sobrescrito por el nuevo saldo.
+
+```bash filename="To manually set balances, run the following command:"
+# Local Development
+npm run set-balance
+
+# Docker (default setup)
+docker compose exec api npm run set-balance
+
+# Docker (deployment setup)
+docker exec -it LibreChat-API /bin/sh -c "cd .. && npm run set-balance"
+```
+
+```bash filename="You can also specify the email and token credit amount to set, e.g.:"
+# Local Development
+npm run set-balance danny@librechat.ai 1000
+
+# Docker (default setup)
+docker compose exec api npm run set-balance danny@librechat.ai 1000
+
+# Docker (deployment setup)
+docker exec -it LibreChat-API /bin/sh -c "cd .. && npm run set-balance danny@librechat.ai 1000"
+```
+
+### Listado de saldos [#listing-of-balances]
+
+```bash filename="To see the balances of your users, you can run:"
+# Local Development
+npm run list-balances
+
+# Docker (default setup)
+docker compose exec api npm run list-balances
+
+# Docker (deployment setup)
+docker exec -it LibreChat-API /bin/sh -c "cd .. && npm run list-balances"
+```
+
+Esto funciona bien para realizar un seguimiento de su propio uso para uso personal; 1000 créditos = $0.001 (1 mil USD)
+
+## Notas sobre el uso de tokens y el saldo [#notes-on-token-usage-and-balance]
+
+- Con la función de resumen habilitada, se le impedirá realizar una solicitud a la API si el costo del contenido que necesita resumir + la carga útil de sus mensajes excede el saldo actual.
+- El uso del modelo de ejecución secundaria de un subagente se registra en la transacción principal, por lo que las ejecuciones del agente principal incluyen el uso delegado en sus totales.
+- El conteo de tokens de Prompt es muy preciso para las llamadas a OpenAI, pero no al 100% para los plugins (debido a la llamada de funciones). Es muy cercano y conservador, lo que significa que su conteo puede ser entre 2 y 5 tokens más alto.
+- El sistema permite déficits incurridos por los tokens de finalización. Solo verifica si tienes suficientes para los tokens del prompt, y es bastante permisivo con la finalización. El siguiente gráfico detalla la lógica
+- Dicho esto, los plugins se verifican en cada paso de generación, ya que el proceso funciona con múltiples llamadas a la API. Todo lo que el LLM haya generado desde el prompt inicial del usuario se comparte con el usuario en el mensaje de error, como se muestra a continuación.
+- Existe un búfer de 150 tokens para la creación de títulos, ya que este es un proceso de 2 pasos, lo que promedia alrededor de 200 tokens en total. En caso de fondos insuficientes, la creación del título se cancela antes de que se produzca cualquier gasto y no se genera ningún error.
+
+![image](https://github.com/danny-avila/LibreChat/assets/110412045/78175053-9c38-44c8-9b56-4b81df61049e)
+
+## Más detalles [#more-details]
+
+fuente: [LibreChat/discussions/1640](https://github.com/danny-avila/LibreChat/discussions/1640#discussioncomment-8251970)
+
+> "rawAmount": -000, // ¿qué es esto?
+
+Cantidad bruta de tokens según lo contado por el algoritmo del tokenizador.
+
+> "tokenValue": -00000, // ¿qué es esto?
+
+Valor de los créditos de token. 1000 créditos = $0.001 (1 mil USD)
+
+> "rate": 00, // ¿qué es esto?
+
+La tasa a la que se cobran los tokens como créditos.
+
+Por ejemplo, gpt-3.5-turbo-1106 tiene una tasa de 1 para el prompt del usuario (entrada) y de 2 para la finalización (salida)
+
+| Modelo             | Entrada             | Salida              |
+| ------------------ | ------------------- | ------------------- |
+| gpt-3.5-turbo-1106 | $0.0010 / 1K tokens | $0.0020 / 1K tokens |
+
+Dado el ejemplo proporcionado:
+
+```sh
+    "rawAmount": -137
+    "tokenValue": -205.5
+    "rate": 1.5
+```
+
+```math
+\text{Token Value} = (\text{Raw Amount of Tokens}) \times (\text{Rate})
+```
+
+```math
+137 \times 1.5 = 205.5
+```
+
+Y para obtener la cantidad real de gasto en USD basada en el **Token Value**:
+
+```math
+\frac{\text{Token Value}}{1,000,000} = \left(\frac{\text{Raw Amount of Tokens} \times \text{Rate}}{1,000,000}\right)
+```
+
+```math
+\frac{205.5}{1,000,000} = \$0.0002055 \text{ USD}
+```
+
+Para endpoints personalizados, prefiera `endpoints.custom[].tokenConfig` en `librechat.yaml` para tasas y ventanas de contexto por modelo.
+
+## Vista previa [#preview]
+
+![image](https://github.com/danny-avila/LibreChat/assets/110412045/39a1aa5d-f8fc-43bf-81f2-299e57d944bb)
+
+![image](https://github.com/danny-avila/LibreChat/assets/110412045/e1b1cc3f-8981-4c7c-a5f8-e7badbc6f675)
+
+## Notas adicionales [#additional-notes]
+
+- Con la función de resumen habilitada, las solicitudes a la API se bloquean si el costo del contenido más la carga útil de los mensajes supera el saldo actual.
+- El sistema es flexible con los tokens de finalización, centrándose principalmente en los tokens de prompt para las comprobaciones de saldo.
+- Se añade un búfer para la titulación (aproximadamente 150 tokens) para tener en cuenta el proceso de dos pasos.
+- Los créditos de tokens se traducen a valor monetario (por ejemplo, 1000 créditos = $0.001 USD).
+
+Para más detalles y personalizaciones, por favor consulte la [Documentación de LibreChat](https://www.librechat.ai/docs/configuration/librechat_yaml).

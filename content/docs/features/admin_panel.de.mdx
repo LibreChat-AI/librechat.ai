@@ -1,0 +1,182 @@
+---
+title: Admin-Panel
+icon: LayoutDashboard
+description: >-
+  Eine eigenständige Web-UI zur Verwaltung von LibreChat-Benutzern, Gruppen,
+  Rollen, Konfigurations-Overrides und Systemberechtigungen – ohne manuelle
+  Bearbeitung der librechat.yaml.
+---
+
+# LibreChat Admin-Panel [#librechat-admin-panel]
+
+Das **LibreChat Admin Panel** ist eine eigenständige, browserbasierte Verwaltungsoberfläche für LibreChat. Sie verbindet sich mit derselben Datenbank wie LibreChat selbst und bietet eine grafische Benutzeroberfläche für die administrativen Aufgaben, die die [granulare Zugriffskontrolle](/docs/features/access_control) ermöglichen: Benutzer- und Gruppenverwaltung, Rollenmanagement, Konfigurationsüberschreibungen mit Gültigkeitsbereich für Rollen oder Gruppen sowie die Vergabe von Berechtigungen auf Systemebene.
+
+<Callout type="info" title="Status: Vorschau">
+  Das Admin-Panel steht jetzt zum Testen bereit und ist die kommende Verwaltungsoberfläche, die auf den in [LibreChat v0.8.5](/changelog/v0.8.5) eingeführten Admin-APIs aufbaut. Quellcode, Issues und Releases finden Sie unter [github.com/ClickHouse/librechat-admin-panel](https://github.com/ClickHouse/librechat-admin-panel).
+</Callout>
+
+## Was es bewirkt [#what-it-does]
+
+Das Admin-Panel ist ein Thin Client: Alle Daten befinden sich in der Datenbank von LibreChat, und jede Aktion erfolgt über die versionierten `/api/admin/*` Endpoints auf dem LibreChat API-Server. Es bietet Administratoren einen zentralen Ort, um:
+
+- **Konfiguration verwalten**: Zeigen Sie alle LibreChat-Einstellungen über ein dynamisches, schema-basiertes Formular an und bearbeiten Sie diese. Neue Felder, die dem Konfigurationsschema hinzugefügt werden, erscheinen automatisch; eine Veröffentlichung des Admin-Panels ist nicht erforderlich.
+- **Anwendung von Überschreibungen pro Principal**: Begrenzen Sie Konfigurationsüberschreibungen auf bestimmte Rollen oder Gruppen, mit einer prioritätsbasierten Kaskade, die den endgültigen aufgelösten Wert bestimmt, den jeder Benutzer bei der Anmeldung sieht.
+- **Benutzer verwalten**: Alle Konten auf der Instanz auflisten, suchen und anzeigen.
+- **Gruppen verwalten**: Gruppen erstellen und löschen, Mitglieder hinzufügen/entfernen und Gruppen als erstklassige Prinzipale in ACLs und Overrides verwenden.
+- **Rollen verwalten**: Erstellen Sie benutzerdefinierte Rollen über die integrierten `USER` / `ADMIN` hinaus, bearbeiten Sie deren Funktionsberechtigungsmatrix und weisen Sie Benutzern Rollen zu.
+- **Issue system grants**: Delegieren Sie Administrator-Funktionen (z. B. `manage:users`, `read:usage`, `manage:mcpservers`) an bestimmte Benutzer, Gruppen oder Rollen, ohne ihnen volle Administratorrechte zu erteilen.
+- **Authentifizierung**: Melden Sie sich mit einem lokalen LibreChat-Administratorkonto an oder über OpenID SSO / SAML / unterstützte OAuth-Anbieter, sofern diese auf der LibreChat-Instanz aktiviert sind.
+
+Für das zugrunde liegende Berechtigungsmodell (Principals, Ressourcen-ACLs, Capabilities und wie sich die Ebenen zusammensetzen), siehe die Seite [Access Control](/docs/features/access_control).
+
+## Architektur [#architecture]
+
+```
+┌──────────────────┐         ┌──────────────────┐         ┌──────────────┐
+│  Admin Panel     │ ───────▶│  LibreChat API   │ ───────▶│   MongoDB    │
+│  (Bun + Vite)    │  HTTPS  │  /api/admin/*    │         │  (shared DB) │
+└──────────────────┘         └──────────────────┘         └──────────────┘
+       │                             │
+       │ OAuth/OIDC/SAML redirect    │ Verifies admin access
+       └─────────────────────────────┘
+```
+
+Das Admin-Panel läuft als separater Dienst; es teilt sich keinen Prozess mit LibreChat. Admin-Funktionen werden auf der LibreChat-Seite über die `access:admin`-Systemberechtigung oder die `SystemRoles.ADMIN`-Rolle verifiziert, sodass das Panel sich selbst keine Privilegien gewähren kann, die es nicht haben sollte.
+
+Die von LibreChat bereitgestellte Admin-API-Oberfläche ist:
+
+| Mount | Zweck |
+| ----------------------------------------- | --------------------------------------------------------- |
+| `POST /api/admin/login` &nbsp; `/oauth/*` | Admin-spezifische Authentifizierungs-endpoints (lokal + SSO) |
+| `GET /api/admin/verify`                   | Validiert die Admin-Sitzung |
+| `/api/admin/users`                        | Benutzerauflistung und -suche |
+| `/api/admin/groups`                       | Gruppen-CRUD + Mitgliederverwaltung |
+| `/api/admin/roles`                        | Benutzerdefinierte Rollen-CRUD + Berechtigungsbearbeitung + Mitgliederverwaltung |
+| `/api/admin/grants`                       | System-Berechtigungszuweisungen (zuweisen/widerrufen/auflisten) |
+| `/api/admin/config`                       | Basis- + prinzipalbasierte Konfigurationsüberschreibungen |
+
+## Erste Schritte [#getting-started]
+
+### Voraussetzungen [#prerequisites]
+
+- Eine laufende LibreChat-Instanz auf **v0.8.5 oder höher** (Admin-APIs sind in früheren Versionen nicht verfügbar)
+- Netzwerkzugriff vom admin-panel Container/Host auf die LibreChat API
+- Ein Admin-Konto auf LibreChat: entweder der zuerst registrierte Benutzer (Auto-Admin), ein Benutzer mit `role: 'ADMIN'`, der in Mongo festgelegt wurde, oder ein Principal, dem die `access:admin`-Berechtigung erteilt wurde.
+
+### Mit Docker ausführen (empfohlen) [#run-with-docker-recommended]
+
+Verwendung des veröffentlichten Images von GHCR:
+
+```bash
+# 1. Create an env file
+cp .env.example .env
+
+# 2. Edit .env and set at minimum:
+#    SESSION_SECRET=<random string, min 32 characters>
+#    VITE_API_BASE_URL=http://host.docker.internal:3080
+
+# 3. Start it
+docker compose up -d   # http://localhost:3000
+docker compose down    # stop
+```
+
+Eigenständiges `docker run`:
+
+```bash
+docker run -p 3000:3000 \
+  --add-host=host.docker.internal:host-gateway \
+  -e SESSION_SECRET=replace-with-32-char-random-string \
+  -e VITE_API_BASE_URL=http://host.docker.internal:3080 \
+  ghcr.io/clickhouse/librechat-admin-panel:latest
+```
+
+<Callout type="warning" title="Docker-Netzwerke">
+  Innerhalb eines Containers bezieht sich `localhost` auf den Container selbst, nicht auf Ihren Host. Wenn LibreChat auf demselben Host ausgeführt wird, verweisen Sie `VITE_API_BASE_URL` auf `http://host.docker.internal:3080` (Linux: fügen Sie `--add-host=host.docker.internal:host-gateway` hinzu). Verwenden Sie in der Produktion den öffentlichen/internen DNS-Namen Ihrer LibreChat-API.
+</Callout>
+
+### Lokal für die Entwicklung ausführen [#run-locally-for-development]
+
+```bash
+git clone https://github.com/ClickHouse/librechat-admin-panel.git
+cd librechat-admin-panel
+cp .env.example .env    # then edit
+bun install
+bun dev                 # http://localhost:3000
+```
+
+## Umgebungsvariablen [#environment-variables]
+
+| Variable | Erforderlich | Standardwert | Beschreibung |
+| :--- | :--- | :--- | :--- |
+| `SESSION_SECRET` | **Ja** in Produktion | Hardcodierter Dev-Fallback bei Ausführung von `bun dev`; **kein Standardwert** im Docker-Image | Schlüssel zur Sitzungsverschlüsselung. Muss mindestens 32 Zeichen lang sein. |
+| `VITE_API_BASE_URL` | **Ja** in Docker | `http://localhost:3080` (nur lokale Entwicklung) | Browserseitige URL des LibreChat API-Servers, verwendet für OAuth-Weiterleitungen. |
+| `API_SERVER_URL` | Nein | Greift auf `VITE_API_BASE_URL` zurück | Serverseitige URL für LibreChat API-Aufrufe. Nützlich, wenn der Admin-Panel-Server LibreChat über eine andere URL erreicht als der Browser (z. B. interner Kubernetes-Dienst vs. öffentlicher Hostname). |
+| `PORT` | Nein | `3000` | Port, auf dem das Admin-Panel lauscht. |
+| `ADMIN_SSO_ONLY` | Nein | `false` | Blendet das E-Mail/Passwort-Formular aus und erzwingt die Anmeldung ausschließlich über SSO. |
+| `ADMIN_SESSION_IDLE_TIMEOUT_MS` | Nein | `1800000` (30 Min.) | Timeout für inaktive Sitzungen in Millisekunden. |
+| `SESSION_COOKIE_SECURE` | Nein | `true` in Produktion | Legt fest, ob das Sitzungs-Cookie HTTPS erfordert. |
+| `ADMIN_PANEL_METRICS_SECRET` | Nein | _nicht gesetzt_ | Bearer-Token, das zum Abrufen des `/metrics` Prometheus-Endpunkts erforderlich ist. Der Endpunkt gibt `401` zurück, wenn er nicht gesetzt oder falsch ist. |
+
+### LibreChat Redirect-URL [#librechat-redirect-url]
+
+Wenn das Admin-Panel unter einer separaten URL von LibreChat gehostet wird, setzen Sie `ADMIN_PANEL_URL` in der LibreChat API-Umgebung. Verwenden Sie die externe Basis-URL des Admin-Panels, einschließlich eines eventuellen Pfad-Präfixes, und lassen Sie den abschließenden Schrägstrich weg:
+
+```bash filename=".env"
+ADMIN_PANEL_URL=https://admin.example.com/admin
+```
+
+Für Helm-Deployments setzen Sie `librechat.adminPanelUrl` in Ihrer values-Datei. Das Chart rendert dies als `ADMIN_PANEL_URL` für den Admin-OAuth-Flow von LibreChat:
+
+```yaml filename="values.yaml"
+librechat:
+  adminPanelUrl: https://admin.example.com/admin
+```
+
+Für OpenID SSO registrieren Sie `${DOMAIN_SERVER}/api/admin/oauth/openid/callback` bei Ihrem Identitätsanbieter.
+
+### Cache-Steuerung [#cache-controls]
+
+Diese spiegeln die Cache-Umgebungsvariablen von LibreChat wider. `ADMIN_PANEL_*`-Varianten haben Vorrang und greifen auf die gemeinsam genutzten LibreChat-Äquivalente zurück, wenn sie nicht gesetzt sind.
+
+| Variable | Zweck |
+| --------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `STATIC_CACHE_MAX_AGE` / `ADMIN_PANEL_STATIC_CACHE_MAX_AGE`     | Browser `max-age` in Sekunden für gehashte Assets in `/assets/` (Standard 172800 = 2 Tage). |
+| `STATIC_CACHE_S_MAX_AGE` / `ADMIN_PANEL_STATIC_CACHE_S_MAX_AGE` | CDN `s-maxage` in Sekunden (Standard 86400 = 1 Tag).                                      |
+| `INDEX_CACHE_CONTROL` / `ADMIN_PANEL_INDEX_CACHE_CONTROL`       | `Cache-Control`-Header für die HTML-Index-Antwort.                                     |
+| `INDEX_PRAGMA` / `ADMIN_PANEL_INDEX_PRAGMA`                     | `Pragma`-Header für die HTML-Index-Antwort.                                            |
+| `INDEX_EXPIRES` / `ADMIN_PANEL_INDEX_EXPIRES`                   | `Expires`-Header für die HTML-Index-Antwort.                                           |
+
+## Authentifizierung [#authentication]
+
+Das Admin-Panel verwendet den Authentifizierungs-Stack von LibreChat wieder und verfügt nicht über eine eigene Benutzerdatenbank. Es werden zwei Anmeldepfade unterstützt:
+
+- **Lokale Konten**: Benutzername/Passwort für jeden LibreChat-Benutzer, dessen Konto die Admin-Zugriffsprüfung besteht.
+- **Single sign-on**: OpenID Connect, SAML und die sozialen OAuth-Anbieter, die bereits auf Ihrer LibreChat-Instanz konfiguriert sind. Setzen Sie `ADMIN_SSO_ONLY=true`, um das Passwort-Formular vollständig auszublenden.
+
+Der Administratorzugriff wird von LibreChat für jede Anfrage serverseitig überprüft. Das Konto muss entweder:
+
+1. Haben Sie `role: 'ADMIN'` in MongoDB, **oder**
+2. Sie müssen über die `access:admin` Systemberechtigung verfügen (die einem anderen Principal über das Admin-Panel selbst zugewiesen wurde; siehe [System Grants](/docs/features/access_control#layer-3-system-grants-admin-capabilities)).
+
+Sitzungen sind Cookie-basiert, mit `SESSION_SECRET` verschlüsselt und laufen bei Inaktivität gemäß `ADMIN_SESSION_IDLE_TIMEOUT_MS` ab.
+
+## Konfigurationsverwaltung [#configuration-management]
+
+Das Panel rendert die LibreChat-Konfiguration als dynamisches Formular, das durch das Konfigurationsschema gesteuert wird. Dies hat zwei nützliche Eigenschaften:
+
+- **Vorwärtskompatibel**: Wenn LibreChat ein neues Konfigurationsfeld veröffentlicht, übernimmt das Panel dieses automatisch aus dem Schema. Es ist kein Upgrade oder eine erneute Bereitstellung des Admin-Panels erforderlich.
+- **Layered overrides** (geschichtete Überschreibungen): Die Basiskonfiguration (aus `librechat.yaml`) kann durch prinzipal-spezifische Überschreibungen, die auf eine Rolle oder Gruppe begrenzt sind, überlagert werden. Wenn sich ein Benutzer anmeldet, werden die Überschreibungen in der Prioritätsreihenfolge aufgelöst und mit der Basis zusammengeführt, um die effektive Konfiguration zu erstellen, die der Benutzer sieht.
+
+Dies ist die Oberfläche hinter dem [DB-gestützten Konfigurations-Override-System pro Principal](https://github.com/danny-avila/LibreChat/pull/12354) von LibreChat. Typische Anwendungsfälle:
+
+- Geben Sie einer "Research"-Gruppe ein höheres `recursionLimit` und zusätzliche endpoints
+- Lassen Sie eine "FinanceAdmins"-Rolle MCP-Server verwalten, während normale Benutzer sie nur verwenden können
+- Beschränken Sie strengere `interface`-Berechtigungen auf externe Auftragnehmergruppen
+
+## Verwandt [#related]
+
+- [Access Control](/docs/features/access_control): das Berechtigungsmodell, auf dem das Admin-Panel basiert
+- [Interface Configuration](/docs/configuration/librechat_yaml/object_structure/interface): die Feature-Flags, die das Panel bearbeitet
+- [Authentication](/docs/features/authentication): Benutzerauthentifizierung in LibreChat
+- [v0.8.5 Changelog](/changelog/v0.8.5): Grundlagen der Admin-API
+- [GitHub: ClickHouse/librechat-admin-panel](https://github.com/ClickHouse/librechat-admin-panel): Quellcode, Issues, Releases

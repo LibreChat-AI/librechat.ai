@@ -1,8 +1,15 @@
-import 'vidstack/styles/base.css'
+'use client'
+import '@vidstack/react/player/styles/base.css'
 import { cn } from '@/lib/utils'
-import { MediaPlayer, MediaOutlet, useMediaRemote, useMediaStore } from '@vidstack/react'
+import {
+  MediaPlayer,
+  MediaProvider,
+  useMediaRemote,
+  useMediaStore,
+  type MediaPlayerInstance,
+} from '@vidstack/react'
 import { Play } from 'lucide-react'
-import { useState, useRef } from 'react'
+import { useState, useRef, type ComponentProps } from 'react'
 
 /** Video embed component using vidstack. Supports poster overlays, gif-style autoplay, and lazy loading. */
 export const Video = ({
@@ -11,33 +18,58 @@ export const Video = ({
   aspectRatio,
   className,
   gifStyle = false,
+  autoPlay = false,
   title,
+  type,
 }: {
   src: string
   poster?: string
-  aspectRatio?: number
+  /** Ratio in `width/height` form, e.g. `"16/9"`. */
+  aspectRatio?: string
+  /** Muted, looping, controls-free autoplay (ambient/gif-like). */
   gifStyle?: boolean
+  /** Muted autoplay that keeps player controls so motion can be paused, scrubbed, and replayed. */
+  autoPlay?: boolean
   className?: string
   title?: string
+  /** Explicit MIME type, e.g. `"video/mp4"`. Needed for extensionless URLs. */
+  type?: string
 }) => {
   const [panelDismissed, setPanelDismissed] = useState(false)
-  const mediaPlayerRef = useRef(null)
+  const mediaPlayerRef = useRef<MediaPlayerInstance>(null)
   const remote = useMediaRemote(mediaPlayerRef)
   const { duration } = useMediaStore(mediaPlayerRef)
   const durationString = duration
     ? `${Math.floor(duration / 60)}:${Math.floor(duration % 60)} min`
     : null
 
+  // Vidstack infers the provider from a string src's file extension. Extensionless
+  // URLs (e.g. GitHub asset links) resolve no provider, so pass an explicit MIME
+  // type: honor an override, keep recognized extensions as plain strings, and
+  // default the rest to mp4.
+  const source = (
+    type === undefined
+      ? /\.(mp4|webm|ogg|ogv|mov|m4v|m3u8|mpd)(\?|#|$)/i.test(src)
+        ? src
+        : { src, type: 'video/mp4' }
+      : { src, type }
+  ) as ComponentProps<typeof MediaPlayer>['src']
+
+  // gifStyle and autoPlay both start muted playback eagerly. gifStyle loops with
+  // no controls (ambient), while autoPlay keeps controls so users can pause,
+  // scrub, and replay.
+  const isAutoplay = gifStyle || autoPlay
+
   return (
     <MediaPlayer
       ref={mediaPlayerRef}
-      src={src}
-      controls={!gifStyle && panelDismissed}
-      autoplay={gifStyle}
-      muted={gifStyle}
+      src={source}
+      controls={!gifStyle && (autoPlay || panelDismissed)}
+      autoPlay={isAutoplay}
+      muted={isAutoplay}
       loop={gifStyle}
-      load={gifStyle ? 'eager' : 'custom'}
-      playsinline={gifStyle}
+      load={isAutoplay ? 'eager' : 'custom'}
+      playsInline={isAutoplay}
       aspectRatio={aspectRatio}
       className={cn(
         'my-4 overflow-hidden shadow-lg ring-1 ring-slate-700 bg-cover object-cover',
@@ -47,7 +79,7 @@ export const Video = ({
       {gifStyle ? (
         // Capture mouse events, they broke scrolling on iOS
         <div className="absolute inset-0 z-10" />
-      ) : panelDismissed ? null : (
+      ) : autoPlay || panelDismissed ? null : (
         // Overlay with play button and poster image
         <div
           role="button"
@@ -83,7 +115,7 @@ export const Video = ({
           </div>
         </div>
       )}
-      <MediaOutlet />
+      <MediaProvider />
     </MediaPlayer>
   )
 }

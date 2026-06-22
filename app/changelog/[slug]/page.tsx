@@ -2,6 +2,9 @@ import { notFound } from 'next/navigation'
 import Link from 'next/link'
 import { mdxComponents } from '@/lib/mdx-components'
 import { changelog } from '@/lib/source'
+import { JsonLd } from '@/components/JsonLd'
+import { articleSchema, breadcrumbSchema } from '@/lib/structured-data'
+import { ogImageUrl } from '@/lib/og'
 import type { Metadata } from 'next'
 
 interface PageProps {
@@ -13,7 +16,7 @@ function getSlug(path: string): string {
 }
 
 function findEntry(slug: string) {
-  return changelog.find((entry) => getSlug(entry._file.path) === slug)
+  return changelog.find((entry) => getSlug(entry.info.path) === slug)
 }
 
 export default async function ChangelogDetailPage(props: PageProps) {
@@ -27,6 +30,22 @@ export default async function ChangelogDetailPage(props: PageProps) {
 
   return (
     <article className="mx-auto max-w-3xl">
+      <JsonLd
+        data={[
+          articleSchema({
+            type: 'Article',
+            headline: entry.title,
+            description: entry.description,
+            url: `/changelog/${params.slug}`,
+            image: entry.ogImage ?? ogImageUrl({ title: entry.title, type: 'changelog' }),
+            datePublished: new Date(date).toISOString(),
+          }),
+          breadcrumbSchema([
+            { name: 'Changelog', url: '/changelog' },
+            { name: entry.title, url: `/changelog/${params.slug}` },
+          ]),
+        ]}
+      />
       <header className="mb-8">
         <Link
           href="/changelog"
@@ -48,9 +67,9 @@ export default async function ChangelogDetailPage(props: PageProps) {
               day: 'numeric',
             })}
           </time>
-          {(entry as any).version && (
+          {entry.version && (
             <span className="rounded-full bg-muted px-2.5 py-0.5 text-xs font-medium">
-              v{(entry as any).version}
+              v{entry.version}
             </span>
           )}
         </div>
@@ -65,7 +84,7 @@ export default async function ChangelogDetailPage(props: PageProps) {
 
 export function generateStaticParams(): { slug: string }[] {
   return changelog.map((entry) => ({
-    slug: getSlug(entry._file.path),
+    slug: getSlug(entry.info.path),
   }))
 }
 
@@ -74,15 +93,17 @@ export async function generateMetadata(props: PageProps): Promise<Metadata> {
   const entry = findEntry(params.slug)
   if (!entry) notFound()
 
-  const ogImage = (entry as any).ogImage ?? '/images/socialcards/default-changelog-image.png'
+  const ogImage = entry.ogImage ?? ogImageUrl({ title: entry.title, type: 'changelog' })
 
   return {
     title: entry.title,
     description: entry.description,
+    alternates: { canonical: `/changelog/${params.slug}` },
     openGraph: {
       title: entry.title,
       description: entry.description,
       type: 'article',
+      url: `/changelog/${params.slug}`,
       images: [ogImage],
     },
   }

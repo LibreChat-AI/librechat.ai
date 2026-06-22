@@ -1,0 +1,276 @@
+---
+title: CloudFront con S3
+icon: AWS
+description: >-
+  Configure Amazon CloudFront como la capa CDN para los archivos de LibreChat
+  almacenados en S3, incluyendo enlaces multimedia estables, cookies firmadas y
+  URLs de descarga firmadas.
+---
+
+CloudFront permite que LibreChat mantenga archivos en S3 mientras sirve imágenes, avatares y descargas a través de URLs de CDN estables. Esta es la configuración de AWS recomendada cuando desea la durabilidad de S3 sin exponer a los usuarios a URLs de imágenes presignadas de S3 que caducan.
+
+## Cuándo usar CloudFront [#when-to-use-cloudfront]
+
+Utilice CloudFront cuando desee:
+
+- URLs de avatar e imagen estables que se siguen renderizando a través de la UI
+- Almacenamiento en caché global en el borde (edge) frente a un bucket de S3
+- Cookies firmadas para imágenes en línea privadas y avatares
+- URLs firmados autorizados por el backend para descargas
+- Invalidación de caché opcional cuando se eliminan archivos
+
+<Callout type="info" title="S3 sigue siendo necesario">
+  La estrategia de archivos `cloudfront` almacena objetos en S3 y devuelve URLs de CloudFront. Primero configure las variables de entorno de S3 y, a continuación, añada el bloque `cloudfront` en `librechat.yaml`.
+</Callout>
+
+## Requisitos [#requirements]
+
+- Un bucket de S3 privado
+- Una distribución de CloudFront con el bucket de S3 como origen
+- Un Origin Access Control (OAC) o una política de acceso de origen equivalente para que CloudFront pueda leer desde S3
+- `AWS_REGION` y `AWS_BUCKET_NAME`
+- `AWS_ACCESS_KEY_ID` y `AWS_SECRET_ACCESS_KEY`, a menos que su despliegue utilice un proveedor de identidad de AWS como IRSA
+- `CLOUDFRONT_KEY_PAIR_ID` y `CLOUDFRONT_PRIVATE_KEY` al usar cookies firmadas o URLs de descarga firmadas
+
+## Variables de entorno [#environment-variables]
+
+```bash filename=".env"
+AWS_ACCESS_KEY_ID=your_access_key_id
+AWS_SECRET_ACCESS_KEY=your_secret_access_key
+AWS_REGION=us-east-1
+AWS_BUCKET_NAME=your_bucket_name
+
+# Required for signed cookies and signed CloudFront download URLs
+CLOUDFRONT_KEY_PAIR_ID=K1234567890ABC
+CLOUDFRONT_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----"
+```
+
+`CLOUDFRONT_PRIVATE_KEY` debe contener la clave privada PEM completa. En `.env`, escríbela entre comillas y conserva los saltos de línea, o inyéctala desde el gestor de secretos de tu plataforma.
+
+## Configuración básica [#basic-configuration]
+
+Utilice `fileStrategies` cuando desee CloudFront para imágenes y avatares mientras mantiene los documentos en URLs firmadas de S3:
+
+```yaml filename="librechat.yaml"
+version: 1.3.11
+
+fileStrategies:
+  avatar: 'cloudfront'
+  image: 'cloudfront'
+  document: 's3'
+
+cloudfront:
+  domain: 'https://cdn.example.com'
+  imageSigning: 'none'
+  urlExpiry: 3600
+```
+
+Utilice `fileStrategy` si todos los tipos de archivo deben usar CloudFront:
+
+```yaml filename="librechat.yaml"
+fileStrategy: 'cloudfront'
+
+cloudfront:
+  domain: 'https://cdn.example.com'
+```
+
+## Cookies firmadas [#signed-cookies]
+
+Las cookies firmadas son el modo seguro para imágenes y avatares privados en línea. Permiten que LibreChat mantenga URLs de CloudFront estables en mensajes y registros, mientras autoriza el acceso con cookies de corta duración.
+
+```yaml filename="librechat.yaml"
+fileStrategies:
+  avatar: 'cloudfront'
+  image: 'cloudfront'
+  document: 's3'
+
+cloudfront:
+  domain: 'https://cdn.example.com'
+  imageSigning: 'cookies'
+  cookieDomain: '.example.com'
+  cookieExpiry: 1800
+  urlExpiry: 3600
+  requireSignedAccess: true
+```
+
+### Requisitos de dominio [#domain-requirements]
+
+Para las cookies firmadas, la API de LibreChat y el nombre de host de CloudFront deben compartir un dominio principal:
+
+- API: `https://api.example.com`
+- CNAME de CloudFront: `https://cdn.example.com`
+- `cookieDomain: ".example.com"`
+
+`cookieDomain` debe comenzar con un punto. El navegador no enviará cookies de CloudFront a un dominio no relacionado.
+
+### Qué protegen las cookies [#what-cookies-protect]
+
+LibreChat limita el alcance de las cookies firmadas a las rutas de medios en línea:
+
+- `/i/...` imágenes privadas subidas o generadas, restringidas al usuario
+- `/a/...` activos de avatar, con ámbito al inquilino cuando `tenantId` está presente
+
+Los documentos, las cargas generales y las salidas de código permanecen fuera de esas rutas de medios en línea. Las descargas son autorizadas por el backend y devueltas como URLs de CloudFront firmadas.
+
+### Actualización de cookies [#cookie-refresh]
+
+Cuando el modo signed-cookie está activo, LibreChat anuncia un endpoint de actualización de cookies en la configuración de inicio:
+
+```text
+POST /api/auth/cloudfront/refresh
+```
+
+Las sesiones autenticadas actualizan las cookies durante los flujos de autenticación, la actualización de tokens y las rutas de reintento de imágenes de CloudFront. La respuesta de actualización incluye el tiempo de vida de la cookie y el tiempo de actualización recomendado.
+
+## Descargas firmadas [#signed-downloads]
+
+LibreChat utiliza URLs de CloudFront firmadas para descargas autorizadas. El ajuste `urlExpiry` controla su tiempo de vida en segundos:
+
+```yaml filename="librechat.yaml"
+cloudfront:
+  domain: 'https://cdn.example.com'
+  imageSigning: 'cookies'
+  cookieDomain: '.example.com'
+  urlExpiry: 3600
+```
+
+Para las anulaciones de nombre de archivo y content-type de descarga directa, configure la política de solicitud de origen/caché de CloudFront para reenviar estas cadenas de consulta a S3:
+
+- `response-content-disposition`
+- `response-content-type`
+
+Para las rutas de descarga, adjunte una política de encabezados de respuesta con:
+
+- `X-Content-Type-Options: nosniff`
+- Una Content Security Policy restrictiva, como `default-src 'none'`
+
+## Invalidación de caché [#cache-invalidation]
+
+De forma predeterminada, LibreChat elimina el objeto S3 y no crea una invalidación de CloudFront. Habilite la invalidación cuando los archivos eliminados deban desaparecer de la caché de borde inmediatamente:
+
+```yaml filename="librechat.yaml"
+cloudfront:
+  domain: 'https://cdn.example.com'
+  distributionId: 'E1234ABCD'
+  invalidateOnDelete: true
+```
+
+`distributionId` es obligatorio cuando `invalidateOnDelete` es `true`. La identidad de AWS utilizada por LibreChat también necesita `cloudfront:CreateInvalidation`.
+
+## Rutas de objetos multirregión [#multi-region-object-paths]
+
+`includeRegionInPath` añade la región de almacenamiento a las claves de objeto recién generadas:
+
+```yaml filename="librechat.yaml"
+cloudfront:
+  domain: 'https://cdn.example.com'
+  storageRegion: 'us-east-2'
+  includeRegionInPath: true
+```
+
+Cuando está habilitado, las nuevas claves incluyen segmentos de ruta que reconocen la región, por ejemplo:
+
+```text
+/i/r/us-east-2/t/tenantId/images/userId/file.png
+/a/r/us-east-2/t/tenantId/avatars/userId/avatar.png
+/r/us-east-2/t/tenantId/images/userId/file.pdf
+```
+
+Esto solo afecta a las claves generadas recientemente. Los archivos existentes no se mueven. LibreChat no configura los orígenes de CloudFront, Route 53 ni el enrutamiento regional por usted.
+
+## Referencia de bloque de CloudFront [#cloudfront-block-reference]
+
+<OptionTable
+  options={[
+    [
+      'domain',
+      'string',
+      'Dominio de distribución de CloudFront o CNAME. Requerido.',
+      'domain: "https://cdn.example.com"',
+    ],
+    [
+      'distributionId',
+      'string',
+      'ID de distribución utilizado para invalidaciones de caché.',
+      'distributionId: "E1234ABCD"',
+    ],
+    [
+      'invalidateOnDelete',
+      'boolean',
+      'Crear una invalidación de CloudFront cuando se elimina un archivo. Predeterminado: false.',
+      'invalidateOnDelete: false',
+    ],
+    [
+      'imageSigning',
+      'string',
+      'Modo de acceso a medios en línea. Use `"none"` para acceso público a CloudFront o `"cookies"` para cookies firmadas. `"url"` está reservado y no implementado para imágenes.',
+      'imageSigning: "cookies"',
+    ],
+    [
+      'cookieDomain',
+      'string',
+      'Dominio principal compartido para cookies firmadas. Requerido cuando `imageSigning` es `"cookies"`.',
+      'cookieDomain: ".example.com"',
+    ],
+    [
+      'cookieExpiry',
+      'number',
+      'Duración de la cookie firmada en segundos. Predeterminado: 1800. Máximo: 604800.',
+      'cookieExpiry: 1800',
+    ],
+    [
+      'urlExpiry',
+      'number',
+      'Tiempo de vida de la URL de descarga firmada en segundos. Predeterminado: 3600.',
+      'urlExpiry: 3600',
+    ],
+    [
+      'storageRegion',
+      'string',
+      'Etiqueta de región opcional para rutas de objetos con reconocimiento de región.',
+      'storageRegion: "us-east-2"',
+    ],
+    [
+      'includeRegionInPath',
+      'boolean',
+      'Incluir `storageRegion` en las claves de objeto recién generadas. Predeterminado: false.',
+      'includeRegionInPath: false',
+    ],
+    [
+      'requireSignedAccess',
+      'boolean',
+      'Fallar el inicio si el acceso a CloudFront mediante signed-cookie no puede inicializarse. Predeterminado: false.',
+      'requireSignedAccess: true',
+    ],
+  ]}
+/>
+
+## Permisos de AWS sugeridos [#suggested-aws-permissions]
+
+Utilice permisos IAM de privilegios mínimos para el bucket de S3. Agregue el permiso de invalidación de CloudFront solo si `invalidateOnDelete` está habilitado.
+
+```json filename="iam-policy.json"
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["s3:PutObject", "s3:GetObject", "s3:DeleteObject", "s3:ListBucket"],
+      "Resource": ["arn:aws:s3:::my-librechat-bucket", "arn:aws:s3:::my-librechat-bucket/*"]
+    },
+    {
+      "Effect": "Allow",
+      "Action": "cloudfront:CreateInvalidation",
+      "Resource": "arn:aws:cloudfront::123456789012:distribution/E1234ABCD"
+    }
+  ]
+}
+```
+
+## Solución de problemas [#troubleshooting]
+
+- Registros de inicio `CloudFront domain is required`: añada `cloudfront.domain`.
+- Registros de inicio `S3 must be initialized`: configure primero las variables de entorno de S3.
+- Las cookies firmadas no están configuradas: confirme `imageSigning: "cookies"`, `cookieDomain`, `CLOUDFRONT_KEY_PAIR_ID` y `CLOUDFRONT_PRIVATE_KEY`.
+- El navegador aún no puede cargar las imágenes: confirme que los nombres de host de la API y del CDN compartan el dominio principal configurado y que las cookies estén permitidas con `Secure` y `SameSite=None`.
+- Las descargas ignoran el nombre de archivo/tipo de contenido: actualice la política de solicitud de origen/caché de CloudFront para reenviar las cadenas de consulta de anulación de respuesta.

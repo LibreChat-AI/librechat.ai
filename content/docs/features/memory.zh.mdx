@@ -1,0 +1,273 @@
+---
+title: 用户记忆
+icon: Bookmark
+description: LibreChat 中在每次聊天请求时运行的用户记忆键值存储
+---
+
+## 概述 [#overview]
+
+LibreChat 中的 User Memory 是一个**键/值存储**，用于在不同对话之间持久化存储用户特定的信息。一个专用的记忆代理会在**每次聊天请求**开始时运行，通过读取和写入此存储，为主要的 AI 响应提供个性化的上下文。
+
+<Callout type="info" title="键/值存储，而非对话记忆">
+这**不是**针对您整个对话历史记录的语义记忆。它不会索引、嵌入或搜索过去的对话。相反，它维护了一组结构化的键/值对（例如 `user_preferences`、`learned_facts`），这些键/值对会作为上下文注入到每个请求中。您可以将其视为 AI 在每次回复前都会阅读的持久化记事本。
+
+关于单个对话中先前消息的上下文，LibreChat 已经使用了标准的消息历史记录窗口——这与此功能是分开的。
+
+</Callout>
+
+<Callout type="important" title="⚠️ 需要配置">
+  必须在您的 `librechat.yaml` 文件中显式配置 Memory 功能才能使其生效。它默认处于禁用状态。
+</Callout>
+
+## 核心功能 [#key-features]
+
+- **每次请求时运行**：记忆代理会在每次聊天请求开始时执行，确保始终可以使用已存储的上下文。
+- **键/值存储**：信息以结构化的键/值对形式存储，而非原始对话日志
+- **手动条目**：用户可以直接手动添加、编辑或删除记忆条目，从而完全掌控 AI 所记忆的内容。
+- **用户控制**：启用后，用户可以为各自的对话开启或关闭记忆功能
+- **可自定义的键 (Customizable Keys)**：使用 `validKeys` 限制可以存储的信息类别。
+- **Token Management**: 设置内存使用限制以控制成本
+- **Agent Integration**: 使用 AI Agent 智能管理需要记忆的内容
+
+## 配置 [#configuration]
+
+要启用 memory 功能，您需要在 `librechat.yaml` 文件中添加 `memory` 配置：
+
+```yaml filename="librechat.yaml"
+version: 1.3.5
+cache: true
+
+memory:
+  disabled: false # Set to true to completely disable memory
+  personalize: true # Gives users the ability to toggle memory on/off, true by default
+  tokenLimit: 2000 # Maximum tokens for memory storage
+  maxInputTokens: 12000 # Maximum recent-chat tokens sent to the memory agent
+  messageWindowSize: 5 # Number of recent messages to consider
+  agent:
+    provider: 'openAI'
+    model: 'gpt-4'
+```
+
+provider 字段应与 [Model Spec Guide](/docs/configuration/librechat_yaml/object_structure/model_specs#endpoint) 中定义的接受值相匹配。
+
+**注意：** 如果您正在使用自定义 endpoint，则 endpoint 的值必须与定义的自定义 endpoint 名称完全一致。
+
+请参阅 [Memory Configuration Guide](/docs/configuration/librechat_yaml/object_structure/memory) 以获取详细的配置选项。
+
+## 工作原理 [#how-it-works]
+
+<Callout type="note" title="记忆体代理执行">
+当启用 memory 时，memory agent 会在**每次聊天请求**时运行。它与主聊天响应并发执行——它在主响应开始前启动，并限制在主请求的持续时间内，外加结束后最多 3 秒的时间。
+
+这意味着您发送的每条消息都会触发 memory agent 执行以下操作：
+
+<ol>
+  <li>
+    **读取**当前的键/值存储并将相关条目作为上下文注入
+  </li>
+  <li>
+    <strong>分析</strong>最近的消息窗口，以获取值得存储或更新的信息
+  </li>
+  <li>
+    <strong>写入</strong>任何新的或修改过的条目回存储区
+  </li>
+</ol>
+</Callout>
+
+### 1. 键/值存储 [#1-keyvalue-storage]
+
+Memory 条目以键/值对的形式存储。当启用 Memory 时，系统可以存储如下条目：
+
+- 用户偏好（沟通风格、感兴趣的话题）
+- 用户明确分享的重要事实
+- 正在进行的项目或任务
+- 您通过 `validKeys` 定义的任何类别
+
+用户还可以通过界面**手动创建、编辑和删除**记忆条目，从而直接控制 AI 对其了解的内容。
+
+### 2. 上下文窗口 [#2-context-window]
+
+`messageWindowSize` 参数决定了分析多少条最近的消息以进行记忆更新。这有助于记忆代理（memory agent）决定哪些信息值得存储或在键/值存储中进行更新。
+
+`maxInputTokens` 参数限制了在提取前发送给自动记忆代理（automatic memory agent）的近期聊天文本。如果所选的消息窗口仍然过大，LibreChat 将保留最新的上下文，并在调用记忆代理之前省略较早的聊天内容。
+
+### 3. 用户控制 [#3-user-control]
+
+当 `personalize` 设置为 `true` 时：
+
+- 用户可以在聊天界面中看到一个记忆开关
+- 它们可以启用/禁用单个对话的记忆功能
+- Memory settings persist across sessions
+
+### 4. 有效密钥 [#4-valid-keys]
+
+您可以通过指定 `validKeys` 来限制存储哪些类别的信息：
+
+```yaml filename="memory / validKeys"
+memory:
+  validKeys:
+    - 'user_preferences'
+    - 'conversation_context'
+    - 'learned_facts'
+    - 'personal_information'
+```
+
+## 最佳实践 [#best-practices]
+
+### 1. Token Limits [#1-token-limits]
+
+设置适当的 token 限制，以平衡功能与成本：
+
+- 更高的限制允许更全面的记忆
+- 降低限制可减少处理成本
+- 考虑您的使用模式和预算
+
+### 2. Custom Instructions [#2-custom-instructions]
+
+当使用 `validKeys` 时，请为 memory agent 提供自定义指令：
+
+```yaml filename="memory / agent with instructions"
+memory:
+  agent:
+    provider: 'openAI'
+    model: 'gpt-4'
+    instructions: |
+      Store information only in the specified validKeys categories.
+      Focus on explicitly stated preferences and important facts.
+      Delete outdated or corrected information promptly.
+```
+
+### 3. 隐私注意事项 [#3-privacy-considerations]
+
+- Memory 会在不同对话间存储用户信息
+- 确保用户了解正在存储哪些信息
+- 考虑实施数据保留策略
+- 提供关于内存使用的清晰文档
+
+## 示例 [#examples]
+
+### 基础配置 [#basic-configuration]
+
+使用默认设置启用 memory：
+
+```yaml filename="Basic memory config"
+memory:
+  tokenLimit: 2000
+  maxInputTokens: 12000
+  agent:
+    provider: 'openAI'
+    model: 'gpt-4.1-mini'
+```
+
+### 高级配置 [#advanced-configuration]
+
+包含所有选项的完整配置：
+
+```yaml filename="Advanced memory config"
+memory:
+  disabled: false
+  validKeys: ['preferences', 'context', 'facts']
+  tokenLimit: 3000
+  maxInputTokens: 12000
+  personalize: true
+  messageWindowSize: 10
+  agent:
+    provider: 'anthropic'
+    model: 'claude-3-opus-20240229'
+    instructions: 'Remember only explicitly stated preferences and key facts.'
+    model_parameters:
+      temperature: 0.3
+```
+
+有关各提供商的有效模型参数，请参阅 [Model Spec Preset Fields](/docs/configuration/librechat_yaml/object_structure/model_specs#preset-fields)。
+
+### 使用预定义 Agent [#using-predefined-agents]
+
+通过 ID 引用现有 Agent：
+
+```yaml filename="Memory with agent ID"
+memory:
+  agent:
+    id: 'memory-specialist-001'
+```
+
+### 带有记忆的自定义 endpoint [#custom-endpoints-with-memory]
+
+Memory 完全支持自定义 endpoint，包括那些带有自定义请求头和环境变量的 endpoint。当使用自定义 endpoint 时，请求头占位符和环境变量会在 Memory 处理过程中被正确解析。
+
+```yaml filename="librechat.yaml with custom endpoint for memory"
+
+endpoints:
+    custom:
+        - name: 'Custom Memory Endpoint'
+           apiKey: 'dummy'
+           baseURL: 'https://api.gateway.ai/v1'
+           headers:
+             x-gateway-api-key: '${GATEWAY_API_KEY}'
+             x-gateway-virtual-key: '${GATEWAY_OPENAI_VIRTUAL_KEY}'
+             X-User-Identifier: '{{LIBRECHAT_USER_EMAIL}}'
+             X-Application-Identifier: 'LibreChat - Test'
+             api-key: '${TEST_CUSTOM_API_KEY}'
+           models:
+             default:
+               - 'gpt-4o-mini'
+               - 'gpt-4o'
+             fetch: false
+
+memory:
+  disabled: false
+  tokenLimit: 3000
+  maxInputTokens: 12000
+  personalize: true
+  messageWindowSize: 10
+  agent:
+    provider: 'Custom Memory Endpoint'
+    model: 'gpt-4o-mini'
+```
+
+- 支持所有 [自定义 endpoint 标头](/docs/configuration/librechat_yaml/object_structure/custom_endpoint#headers)
+
+## 故障排除 [#troubleshooting]
+
+### 记忆功能无法使用 [#memory-not-working]
+
+1. 验证 `librechat.yaml` 中是否已配置 memory。
+2. 检查 `disabled` 是否设置为 `false`
+3. 确保已配置的 agent/model 可用
+4. 验证用户已在聊天界面中启用 memory
+5. 对于自定义 endpoint：请确保 `provider` 名称与自定义 endpoint 的 `name` 完全一致
+
+### 高 Token 使用量 [#high-token-usage]
+
+1. 降低 `tokenLimit` 以控制成本
+2. 减小 `maxInputTokens` 以限制发送给 memory agent 的近期聊天记录量
+3. 减小 `messageWindowSize` 以分析更少的消息
+4. 使用 `validKeys` 来限制存储的内容
+5. 审查并优化 Agent 指令
+
+### 内存不一致 [#inconsistent-memory]
+
+1. 检查用户是否正在开启/关闭 memory
+2. 验证令牌限制未被超出
+3. 确保一致的智能体配置
+4. 检查已存储的记忆是否存在冲突
+
+### 自定义 endpoint 身份验证问题 [#custom-endpoint-authentication-issues]
+
+1. 请验证您的 `.env` 文件中的环境变量是否设置正确
+2. 确保自定义标头使用正确的语法（`${ENV_VAR}` 用于环境变量，`{{LIBRECHAT_USER_*}}` 用于用户占位符）
+3. 在测试 memory 之前，请先检查自定义 endpoint 是否适用于常规聊天补全。
+4. 检查服务器日志以查找来自自定义 endpoint API 的身份验证错误
+
+## 未来改进 [#future-improvements]
+
+目前的实现会在每次聊天请求时无条件运行 memory agent。计划中的改进包括：
+
+- **写入的语义触发器**：检测用户何时明确要求模型记住某事（例如：“记住我更喜欢 Python”），并仅在这些情况下运行内存写入代理，从而减少对常规消息的不必要处理。
+- **向量相似度召回 (Vector Similarity Recall)**：与其在每次请求中注入所有存储的记忆条目，不如使用向量嵌入来仅检索与当前对话上下文最相关的条目，从而提高效率和相关性。
+
+## 相关功能 [#related-features]
+
+- [Agents](/docs/features/agents) - 构建自定义 AI 助手
+- [Presets](/docs/user_guides/presets) - 保存对话设置
+- [Fork Messages](/docs/features/fork) - 在保持上下文的同时分支对话

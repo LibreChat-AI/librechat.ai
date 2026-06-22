@@ -1,0 +1,301 @@
+---
+title: Token 使用量
+icon: Coins
+description: 本指南涵盖了如何在 LibreChat 中跟踪和控制 Token 使用量。您将学习如何查看上下文和成本、配置交易、启用用户余额以及为账户添加积分。
+---
+
+## 简介 [#intro]
+
+从 `v0.6.0` 版本开始，LibreChat 可以准确跟踪受支持 endpoint 的 token 使用情况。所有 token 交易都会存储在数据库的 "Transactions" 集合中。当前版本在启用后，还会在对话界面中显示实时的上下文使用量和成本。
+
+目前，你可以通过启用用户余额来限制用户令牌的使用。你现在无需通过环境变量配置令牌额度限制，而是在 `librechat.yaml` 文件的 **balance** 部分设置这些选项。成本数值默认处于隐藏状态，必须通过 `interface.contextCost` 启用。
+
+## 查看上下文使用量与成本 [#viewing-context-usage-and-cost]
+
+LibreChat 在对话进行时会显示一个上下文仪表。该仪表会根据流式传输期间的使用事件进行更新，并可以显示：
+
+- 当前提示词/上下文相对于模型上下文窗口的使用情况
+- 用于快速查看 Token 和成本详情的悬停摘要
+- 点击即可查看提示词、补全、缓存 Token 使用量、分支总计以及对话总计的详细分解。
+
+使用明细会随消息和对话一同持久化。重新打开的聊天会保留分支和总的使用量/成本详情，而不再仅依赖于当前的流式会话。
+
+当摘要功能压缩长对话时，LibreChat 会记录压缩后的摘要基准，并在上下文计量中仅计算摘要之后的对话轮次。使用量和成本总计仍包含完整分支的开销。
+
+管理员可以在 `librechat.yaml` 中控制这些显示：
+
+```yaml filename="librechat.yaml"
+interface:
+  contextUsage: true
+  contextCost: true
+  currency:
+    code: EUR
+    rate: 0.92
+```
+
+- `contextUsage` 用于控制用户是否可以看到上下文窗口和 token 使用量仪表。
+- `contextCost` 控制用户是否能在使用详情中看到成本数值。其默认值为 `false`；将其设置为 `true` 即可显示成本。
+- 当启用成本显示时，`currency` 会使用静态乘数来转换显示的美元成本。交易记录仍将使用 LibreChat 的令牌额度核算进行记录。
+
+## 自定义 Endpoint Token 配置 [#custom-endpoint-token-config]
+
+对于自定义 endpoint，请使用 `endpoints.custom[].tokenConfig` 定义特定于模型的上下文窗口和每百万 token 的费率：
+
+```yaml filename="librechat.yaml"
+endpoints:
+  custom:
+    - name: 'Mistral'
+      apiKey: '${MISTRAL_API_KEY}'
+      baseURL: 'https://api.mistral.ai/v1'
+      models:
+        default: ['mistral-large-latest']
+      tokenConfig:
+        mistral-large-latest:
+          prompt: 2
+          completion: 6
+          context: 128000
+```
+
+每个模型条目都需要 `prompt`、`completion` 和 `context`。对于报告缓存输入用量的提供商，可以添加 `cacheRead` 和 `cacheWrite`。对于使用多个 endpoint 的 Agent，LibreChat 在记录用量和成本时会使用匹配的 endpoint/model 令牌配置。
+
+当 endpoint 模型、密钥、URL 或请求头可能因请求上下文而异时，获取的令牌配置将按用户范围进行缓存，从而确保隔离的自定义 endpoint 定价和上下文窗口保持独立。
+
+## 交易配置 [#transaction-configuration]
+
+交易系统控制是否将令牌使用记录保存到数据库中。这可以与余额系统分开配置。
+
+### 交易设置 [#transaction-settings]
+
+```yaml filename="librechat.yaml"
+version: 1.2.9
+
+# Transaction settings
+# Controls whether to save transaction records to the database
+# Default is true (enabled)
+transactions:
+  enabled: false
+```
+
+**重要提示：** 当 `balance.enabled` 设置为 `true` 时，无论 `transactions.enabled` 的设置如何，交易记录功能都会自动启用。这确保了通过维护所有令牌使用情况的完整记录，使余额跟踪功能能够正常运行。
+
+    请查看 [Transactions Configuration](/docs/configuration/librechat_yaml/object_structure/transactions) 页面以获取更多详细信息。
+
+## 负载均衡配置 [#balance-configuration]
+
+LibreChat 中的余额系统允许管理员配置如何为用户管理代币额度余额。现在，所有余额设置均在您的 YAML 配置中的 `balance` 对象下进行管理。
+
+**注意：** 这取代了之前的环境变量（`CHECK_BALANCE` 和 `START_BALANCE`），并提供了一种更结构化的方式来管理用户余额。
+
+### 完整余额设置 [#complete-balance-settings]
+
+```yaml filename="librechat.yaml"
+version: 1.3.5
+
+# Balance settings
+balance:
+  enabled: true # Enable token credit balances for users
+  startBalance: 20000 # Initial tokens credited upon registration
+  autoRefillEnabled: false # Enable automatic token refills
+  refillIntervalValue: 30 # Numerical value for refill interval
+  refillIntervalUnit: 'days' # Time unit for refill interval (days, hours, etc.)
+  refillAmount: 10000 # Tokens added during each refill
+```
+
+### 余额设置说明 [#balance-settings-explained]
+
+- **enabled**: 激活用户的令牌额度跟踪和余额管理。当设置为 `true` 时，系统将跟踪令牌使用情况并强制执行余额限制。
+
+- **startBalance**：指定用户注册时获得的初始代币数量。这是所有新用户的起始余额。
+
+- **autoRefillEnabled**: 决定是否启用令牌额度的自动充值。当设置为 `true` 时，系统将根据充值间隔自动向用户余额添加额度。
+
+- **refillIntervalValue**: 指定自动补充令牌额度的时间间隔数值。需与 `refillIntervalUnit` 配合使用。
+
+- **refillIntervalUnit**: 指定填充间隔的时间单位。支持的值包括 "seconds"（秒）、"minutes"（分钟）、"hours"（小时）、"days"（天）、"weeks"（周）和 "months"（月）。
+
+- **refillAmount**: 指定每次自动充值时添加到用户余额中的令牌数量。
+
+请查看 [Balance Configuration](/docs/configuration/librechat_yaml/object_structure/balance) 页面以了解更多详情。
+
+## Auto-Refill 的工作原理 [#how-auto-refill-works]
+
+当用户的余额受到跟踪且启用了 **autoRefill** 时，系统仅在距离上次充值已过去指定时间间隔后，才会自动向余额添加额度。这是通过将当前日期与 `lastRefill` 日期加上指定间隔后的时间进行比较来实现的。
+
+### 自动充值流程 [#auto-refill-process]
+
+1. 当用户尝试消耗 token 时，系统会检查当前余额是否充足
+2. 如果交易后余额降至零或以下，系统会检查是否启用了自动充值。
+3. 如果启用了自动补充 (auto-refill)，系统会检查自上次补充以来的时间间隔是否已过：
+   - 系统会将当前日期与 `lastRefill + refillInterval` 进行比较
+   - 如果间隔时间已过，令牌将被添加到用户的余额中
+   - `lastRefill` 日期会更新为当前日期
+4. 如果余额充足（无论是初始余额还是充值后），交易将继续进行。
+
+### 支持的时间单位 [#supported-time-units]
+
+`refillIntervalUnit` 可以设置为以下任意值：
+
+- 秒
+- 分钟
+- 小时
+- 天
+- 周
+- 个月
+
+例如，如果 `refillIntervalValue` 设置为 30 且 `refillIntervalUnit` 为 `days`，则系统仅在距离上次充值已过去 30 天时，才会向用户的余额中添加 `refillAmount` 个令牌。
+
+### 余额同步 [#balance-synchronization]
+
+当用户登录时，系统会自动将其余额设置与当前的全局余额配置进行同步。这确保了对余额配置的任何更改都会应用于所有用户。
+
+同步过程：
+
+1. 检查用户是否有余额记录
+2. 如果不存在记录，则使用当前的 `startBalance` 创建一条记录
+3. 将用户的自动充值设置更新为与全局配置一致
+4. 确保用户的重置间隔和额度与全局设置相匹配
+
+## 管理 Token 余额 [#managing-token-balances]
+
+您可以手动添加或设置用户余额。这在开发过程中，或者如果您计划在未来构建完整的余额累积系统（例如，通过管理仪表板）时特别有用。
+
+### 添加余额 [#adding-balances]
+
+```bash filename="To manually add balances, run the following command:"
+# Local Development
+npm run add-balance
+
+# Docker (default setup)
+docker compose exec api npm run add-balance
+
+# Docker (deployment setup)
+docker exec -it LibreChat-API /bin/sh -c "cd .. && npm run add-balance"
+```
+
+```bash filename="You can also specify the email and token credit amount to add, e.g.:"
+# Local Development
+npm run add-balance danny@librechat.ai 1000
+
+# Docker (default setup)
+docker compose exec api npm run add-balance danny@librechat.ai 1000
+
+# Docker (deployment setup)
+docker exec -it LibreChat-API /bin/sh -c "cd .. && npm run add-balance danny@librechat.ai 1000"
+```
+
+### 设置余额 [#setting-balances]
+
+此外，您可以为用户设置余额。现有的余额将被新余额覆盖。
+
+```bash filename="To manually set balances, run the following command:"
+# Local Development
+npm run set-balance
+
+# Docker (default setup)
+docker compose exec api npm run set-balance
+
+# Docker (deployment setup)
+docker exec -it LibreChat-API /bin/sh -c "cd .. && npm run set-balance"
+```
+
+```bash filename="You can also specify the email and token credit amount to set, e.g.:"
+# Local Development
+npm run set-balance danny@librechat.ai 1000
+
+# Docker (default setup)
+docker compose exec api npm run set-balance danny@librechat.ai 1000
+
+# Docker (deployment setup)
+docker exec -it LibreChat-API /bin/sh -c "cd .. && npm run set-balance danny@librechat.ai 1000"
+```
+
+### 余额列表 [#listing-of-balances]
+
+```bash filename="To see the balances of your users, you can run:"
+# Local Development
+npm run list-balances
+
+# Docker (default setup)
+docker compose exec api npm run list-balances
+
+# Docker (deployment setup)
+docker exec -it LibreChat-API /bin/sh -c "cd .. && npm run list-balances"
+```
+
+这对于追踪个人使用情况非常有效；1000 积分 = $0.001（0.001 美元）
+
+## 关于 Token 使用和余额的说明 [#notes-on-token-usage-and-balance]
+
+- 启用摘要功能后，如果需要摘要的内容成本加上您的消息负载超过了当前余额，您将被禁止发起 API 请求。
+- Subagent 子运行的模型使用量会记录在父级事务中，因此父级代理运行的总量中包含了委托任务的使用量。
+- 对于 OpenAI 调用，计算 Prompt token 非常准确，但对于插件（由于函数调用）则无法达到 100% 准确。其结果非常接近且较为保守，这意味着其计数值可能会比实际高出 2-5 个 token。
+- 该系统允许补全 token 产生的赤字。它仅检查您是否有足够的额度用于提示词（prompt）Token，并且对补全部分的限制较为宽松。下图详细说明了其逻辑。
+- 话虽如此，由于该过程涉及多次 API 调用，插件会在每个生成步骤进行检查。LLM 自初始用户提示词以来生成的所有内容都会在如下所示的错误消息中共享给用户。
+- 由于这是一个两步过程，标题生成会有 150 个 token 的缓冲区，总计平均约为 200 个 token。如果资金不足，标题生成会在产生任何费用之前取消，且不会抛出错误。
+
+![image](https://github.com/danny-avila/LibreChat/assets/110412045/78175053-9c38-44c8-9b56-4b81df61049e)
+
+## 更多详情 [#more-details]
+
+来源: [LibreChat/discussions/1640](https://github.com/danny-avila/LibreChat/discussions/1640#discussioncomment-8251970)
+
+> "rawAmount": -000, // 这是什么？
+
+根据分词器算法计算出的原始 Token 数量。
+
+> "tokenValue": -00000, // 这是什么？
+
+Token credits value. 1000 credits = $0.001 (1 mill USD)
+
+> "rate": 00, // 这是什么？
+
+Token 计费的费率。
+
+例如，gpt-3.5-turbo-1106 的用户提示（输入）费率为 1，补全（输出）费率为 2
+
+| 模型 | 输入 | 输出 |
+| ------------------ | ------------------- | ------------------- |
+| gpt-3.5-turbo-1106 | $0.0010 / 1K tokens | $0.0020 / 1K tokens |
+
+根据提供的示例：
+
+```sh
+    "rawAmount": -137
+    "tokenValue": -205.5
+    "rate": 1.5
+```
+
+```math
+\text{Token Value} = (\text{Raw Amount of Tokens}) \times (\text{Rate})
+```
+
+```math
+137 \times 1.5 = 205.5
+```
+
+若要根据 **Token Value** 获取以美元计算的实际支出金额：
+
+```math
+\frac{\text{Token Value}}{1,000,000} = \left(\frac{\text{Raw Amount of Tokens} \times \text{Rate}}{1,000,000}\right)
+```
+
+```math
+\frac{205.5}{1,000,000} = \$0.0002055 \text{ USD}
+```
+
+对于自定义 endpoint，建议在 `librechat.yaml` 中使用 `endpoints.custom[].tokenConfig` 来配置各模型的速率限制和上下文窗口。
+
+## 预览 [#preview]
+
+![image](https://github.com/danny-avila/LibreChat/assets/110412045/39a1aa5d-f8fc-43bf-81f2-299e57d944bb)
+
+![image](https://github.com/danny-avila/LibreChat/assets/110412045/e1b1cc3f-8981-4c7c-a5f8-e7badbc6f675)
+
+## 附加说明 [#additional-notes]
+
+- 启用摘要功能后，如果内容加上消息负载的成本超过当前余额，API 请求将被拦截。
+- 系统对补全 token 较为宽松，主要侧重于对提示词 token 进行余额检查。
+- 为了处理两步流程，系统会增加一个用于标题生成的缓冲区（约 150 个 token）。
+- Token credits 转换为货币价值（例如：1000 credits = $0.001 USD）。
+
+有关更多详细信息和自定义设置，请参阅 [LibreChat Documentation](https://www.librechat.ai/docs/configuration/librechat_yaml)。

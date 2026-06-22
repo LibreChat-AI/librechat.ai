@@ -1,0 +1,163 @@
+---
+title: Amazon S3
+icon: S3
+description: >-
+  Ce document fournit des instructions pour configurer Amazon S3 comme backend
+  de stockage de fichiers pour LibreChat.
+---
+
+Amazon S3 est un service de stockage d'objets évolutif et sécurisé qui peut être utilisé comme backend de stockage de fichiers pour LibreChat. Suivez ces étapes pour configurer votre bucket S3.
+
+## 1. Créer un compte AWS et configurer un utilisateur IAM (ou utiliser IRSA) [#1-create-an-aws-account-and-configure-an-iam-user-or-use-irsa]
+
+### Option A : Utilisation d'un utilisateur IAM avec des identifiants explicites [#option-a-using-an-iam-user-with-explicit-credentials]
+
+1. **Connectez-vous à AWS :**
+   - Ouvrez la [AWS Management Console](https://aws.amazon.com/console/) et connectez-vous avec votre compte.
+
+2. **Créer ou utiliser un utilisateur IAM existant :**
+   - Accédez à la section **IAM (Identity and Access Management)**.
+   - Créez un nouvel utilisateur IAM avec un **accès par programmation** (Programmatic Access) ou sélectionnez-en un existant.
+   - Attachez une politique appropriée (par exemple, `AmazonS3FullAccess` ou une politique personnalisée avec des permissions S3 limitées).
+   - Après avoir créé l'utilisateur, vous recevrez un **AWS_ACCESS_KEY_ID** et une **AWS_SECRET_ACCESS_KEY**. Stockez-les en toute sécurité.
+
+### Option B : Utilisation d'IRSA (IAM Roles for Service Accounts) dans Kubernetes [#option-b-using-irsa-iam-roles-for-service-accounts-in-kubernetes]
+
+Si vous déployez LibreChat sur Kubernetes (par exemple sur EKS), vous pouvez utiliser IRSA pour attribuer des permissions AWS à vos pods sans avoir à fournir d'identifiants explicites. Pour utiliser IRSA :
+
+1. **Créez une politique de confiance** pour votre compte de service EKS (exemple ci-dessous) :
+   ```json
+   {
+     "Version": "2012-10-17",
+     "Statement": [
+       {
+         "Effect": "Allow",
+         "Principal": {
+           "Federated": "arn:aws:iam::{AWS_ACCOUNT}:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/{EKS_OIDC}"
+         },
+         "Action": "sts:AssumeRoleWithWebIdentity",
+         "Condition": {
+           "StringEquals": {
+             "oidc.eks.us-east-1.amazonaws.com/id/{EKS_OIDC}:sub": "system:serviceaccount:librechat:librechat",
+             "oidc.eks.us-east-1.amazonaws.com/id/{EKS_OIDC}:aud": "sts.amazonaws.com"
+           }
+         }
+       }
+     ]
+   }
+   ```
+2. **Créez une politique** qui accorde les permissions S3 nécessaires (exemple ci-dessous) :
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "VisualEditor0",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:GetObjectAcl",
+        "s3:GetObject",
+        "s3:ListBucket",
+        "s3:DeleteObject"
+      ],
+      "Resource": [
+        "arn:aws:s3:::my-example-librechat-bucket/*",
+        "arn:aws:s3:::my-example-librechat-bucket"
+      ]
+    }
+  ]
+}
+```
+
+3. **Annotatez votre ServiceAccount Kubernetes :**  
+   Assurez-vous que vos pods LibreChat utilisent un service account annoté pour IRSA. De cette façon, le SDK AWS dans votre application (en utilisant notre code d'initialisation S3 mis à jour) utilisera automatiquement les identifiants temporaires fournis par IRSA sans avoir besoin des variables d'environnement pour les identifiants AWS.
+
+## 2. Créer un bucket S3 [#2-create-an-s3-bucket]
+
+1. **Ouvrez la console S3 :**
+
+- Allez sur la [console Amazon S3](https://s3.console.aws.amazon.com/s3/).
+
+2. **Créer un nouveau bucket :**
+
+- Cliquez sur **"Create bucket"**.
+- **Nom du bucket :** Entrez un nom unique (par exemple, `mylibrechatbucket`).
+- **Région :** Sélectionnez la région AWS la plus proche de vos utilisateurs (par exemple, `us-east-1` ou `eu-west-1`).
+- **Options de configuration :** Définissez les autres options selon vos besoins, puis cliquez sur **"Create bucket"**.
+
+## 3. Mettez à jour vos variables d'environnement [#3-update-your-environment-variables]
+
+Si vous n'utilisez **pas** IRSA, créez ou mettez à jour votre fichier `.env` dans le répertoire racine de votre projet avec la configuration suivante :
+
+```bash filename=".env"
+AWS_ACCESS_KEY_ID=your_access_key_id
+AWS_SECRET_ACCESS_KEY=your_secret_access_key
+AWS_REGION=your_selected_region
+AWS_BUCKET_NAME=your_bucket_name
+AWS_ENDPOINT_URL=https://your_endpoint_url
+# AWS_FORCE_PATH_STYLE=false
+```
+
+- **AWS_ACCESS_KEY_ID:** La clé d'accès de votre utilisateur IAM.
+- **AWS_SECRET_ACCESS_KEY :** La clé secrète de votre utilisateur IAM.
+- **AWS_REGION:** La région AWS où se trouve votre bucket S3.
+- **AWS_BUCKET_NAME:** Le nom du bucket S3 que vous avez créé.
+- **AWS_ENDPOINT_URL :** (Optionnel) L'URL de point de terminaison AWS personnalisée. Requis pour les services compatibles S3 tels que MinIO, Cloudflare R2, Hetzner Object Storage, Backblaze B2 et IDrive e2. Incluez le schéma d'URL, tel que `https://a7g8.da.idrivee2-32.com` ; les valeurs sans `http://` ou `https://` peuvent provoquer une erreur `Invalid URL` lors de la diffusion de fichiers.
+- **AWS_FORCE_PATH_STYLE :** (Optionnel) Définissez sur `true` pour les fournisseurs qui nécessitent des URLs de style chemin (`endpoint/bucket/key`) plutôt que le style hébergé virtuellement (`bucket.endpoint/key`). Requis pour Hetzner Object Storage, MinIO et les fournisseurs similaires dont les certificats SSL ne couvrent pas les sous-domaines de bucket. Non nécessaire pour AWS S3 ou Cloudflare R2. Par défaut : `false`.
+
+Si vous utilisez **IRSA** sur Kubernetes, vous n'avez **pas** besoin de définir `AWS_ACCESS_KEY_ID` et `AWS_SECRET_ACCESS_KEY` dans votre environnement. Le SDK AWS obtiendra automatiquement des identifiants temporaires via le compte de service assigné à votre pod. Assurez-vous que `AWS_REGION` et `AWS_BUCKET_NAME` sont toujours fournis.
+
+## 4. Configurer LibreChat pour utiliser Amazon S3 [#4-configure-librechat-to-use-amazon-s3]
+
+Mettez à jour votre fichier de configuration LibreChat (`librechat.yaml`) pour spécifier que l'application doit utiliser Amazon S3 pour la gestion des fichiers :
+
+```yaml filename="librechat.yaml"
+version: 1.3.11
+cache: true
+fileStrategy: 's3'
+```
+
+<Callout type="warning" title="Les URLs présignées S3 expirent pour les ressources visuelles">
+  S3 ne sert pas les fichiers via un CDN. LibreChat accède aux fichiers S3 via des **URL présignées**, qui sont des jetons signés temporaires avec une expiration configurable (`S3_URL_EXPIRY_SECONDS`). AWS limite la durée de vie des URL présignées à 7 jours pour les identifiants d'utilisateur IAM, et à seulement quelques heures lors de l'utilisation d'identifiants temporaires (rôles STS/IAM tels que IRSA). Une fois qu'une URL expire, l'image ou l'avatar auquel elle fait référence apparaîtra comme rompu dans l'interface utilisateur jusqu'à ce que la page soit actualisée et qu'une nouvelle URL soit générée.
+
+La logique de rafraîchissement dans LibreChat n'est pas appliquée de manière cohérente pour chaque surface visuelle. Par exemple, les endpoints de type liste peuvent renvoyer des URLs stockées tandis que les endpoints de détail les rafraîchissent. Cela peut entraîner l'affichage d'images d'avatar brisées dans le sélecteur de modèle et l'interface de chat. Voir la [discussion associée](https://github.com/danny-avila/LibreChat/discussions/10280#discussioncomment-14803903) pour le contexte complet.
+
+**S3 est parfaitement adapté au stockage de documents** (PDF, fichiers texte, code) lorsque des URL de téléchargement présignées à courte durée de vie sont appropriées. Pour les images et les avatars qui doivent s'afficher de manière persistante dans l'interface utilisateur, utilisez [CloudFront with S3](/docs/configuration/cdn/cloudfront), [Firebase](/docs/configuration/cdn/firebase), ou configurez `fileStrategies` pour acheminer uniquement ces types vers une stratégie basée sur un CDN :
+
+```yaml filename="librechat.yaml"
+fileStrategies:
+  avatar: 'cloudfront'
+  image: 'cloudfront'
+  document: 's3'
+```
+
+</Callout>
+
+## Résumé [#summary]
+
+1. **Créer un compte AWS et un utilisateur IAM (ou configurer IRSA) :**
+
+- Pour les déploiements traditionnels, créez un utilisateur IAM avec un accès programmatique et obtenez vos clés d'accès.
+- Pour les déploiements Kubernetes (par ex. sur EKS), configurez IRSA afin que vos pods obtiennent automatiquement des identifiants temporaires.
+
+2. **Créer un bucket S3 :**
+
+- Utilisez la console Amazon S3 pour créer un bucket, en choisissant un nom unique et une région.
+
+3. **Mise à jour des variables d'environnement :**
+
+- Pour les configurations sans IRSA : définissez `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION` et `AWS_BUCKET_NAME` dans votre fichier `.env`.
+- Pour IRSA : définissez uniquement `AWS_REGION` et `AWS_BUCKET_NAME` ; assurez-vous que le compte de service de votre pod est correctement annoté.
+
+4. **Configurer LibreChat :**
+
+- Définissez `fileStrategy` sur `"s3"` dans votre fichier de configuration `librechat.yaml`, ou utilisez `fileStrategies` pour conserver les documents dans S3 tout en envoyant les images et les avatars via CloudFront.
+
+Avec ces étapes, votre application LibreChat utilisera Amazon S3 pour gérer les téléchargements, les envois et les suppressions de fichiers. De plus, grâce à la prise en charge d'IRSA, votre application peut s'exécuter de manière sécurisée sur Kubernetes sans intégrer d'identifiants AWS à long terme.
+
+<Callout type="info" title="Note">
+  Assurez-vous toujours que vos identifiants AWS restent sécurisés. Ne les publiez pas dans un dépôt public.
+  Ajustez les politiques IAM pour suivre le principe du moindre privilège si nécessaire.
+</Callout>

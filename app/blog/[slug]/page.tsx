@@ -4,6 +4,9 @@ import Link from 'next/link'
 import { InlineTOC } from 'fumadocs-ui/components/inline-toc'
 import { mdxComponents } from '@/lib/mdx-components'
 import { blog } from '@/lib/source'
+import { JsonLd } from '@/components/JsonLd'
+import { articleSchema, breadcrumbSchema } from '@/lib/structured-data'
+import { ogImageUrl } from '@/lib/og'
 import type { Metadata } from 'next'
 
 interface PageProps {
@@ -15,7 +18,7 @@ function getSlug(path: string): string {
 }
 
 function findPost(slug: string) {
-  return blog.find((post) => getSlug(post._file.path) === slug)
+  return blog.find((post) => getSlug(post.info.path) === slug)
 }
 
 export default async function BlogPostPage(props: PageProps) {
@@ -29,6 +32,24 @@ export default async function BlogPostPage(props: PageProps) {
 
   return (
     <article className="mx-auto max-w-3xl">
+      <JsonLd
+        data={[
+          articleSchema({
+            type: 'BlogPosting',
+            headline: post.title,
+            description: post.description,
+            url: `/blog/${params.slug}`,
+            image:
+              post.ogMetaImage ?? post.ogImage ?? ogImageUrl({ title: post.title, type: 'blog' }),
+            datePublished: new Date(date).toISOString(),
+            authorName: post.author,
+          }),
+          breadcrumbSchema([
+            { name: 'Blog', url: '/blog' },
+            { name: post.title, url: `/blog/${params.slug}` },
+          ]),
+        ]}
+      />
       <header className="mb-8">
         <Link
           href="/blog"
@@ -50,7 +71,7 @@ export default async function BlogPostPage(props: PageProps) {
               day: 'numeric',
             })}
           </time>
-          {(post as any).author && <span>by {(post as any).author}</span>}
+          {post.author && <span>by {post.author}</span>}
         </div>
         {post.ogImage && (
           <Image
@@ -79,7 +100,7 @@ export default async function BlogPostPage(props: PageProps) {
 
 export function generateStaticParams(): { slug: string }[] {
   return blog.map((post) => ({
-    slug: getSlug(post._file.path),
+    slug: getSlug(post.info.path),
   }))
 }
 
@@ -88,15 +109,22 @@ export async function generateMetadata(props: PageProps): Promise<Metadata> {
   const post = findPost(params.slug)
   if (!post) notFound()
 
-  const ogImage = post.ogMetaImage ?? post.ogImage ?? '/images/socialcards/default-blog-image.png'
+  const ogImage =
+    post.ogMetaImage ?? post.ogImage ?? ogImageUrl({ title: post.title, type: 'blog' })
+  const publishedTime =
+    typeof post.date === 'string' ? post.date : new Date(post.date).toISOString()
 
   return {
     title: post.title,
     description: post.description,
+    alternates: { canonical: `/blog/${params.slug}` },
     openGraph: {
       title: post.title,
       description: post.description,
       type: 'article',
+      url: `/blog/${params.slug}`,
+      publishedTime,
+      authors: post.author ? [post.author] : undefined,
       images: [ogImage],
     },
   }

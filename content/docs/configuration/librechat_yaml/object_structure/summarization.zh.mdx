@@ -1,0 +1,379 @@
+---
+title: 摘要配置
+icon: ScrollText
+---
+
+## 概述 [#overview]
+
+`summarization` 配置提供了对对话摘要和上下文修剪的集中控制。这取代了之前在自定义和 Azure OpenAI endpoint 上可用的每个 endpoint 的 `summarize` 和 `summaryModel` 字段。
+
+当对话超出模型的上下文窗口时，摘要系统会自动将较早的消息压缩为简洁的检查点摘要。这使得对话可以无限期地继续，而不会丢失重要的上下文。该系统还包含**上下文修剪 (context pruning)** 功能，它会在需要摘要之前，逐步降级较早消息中庞大的工具结果，以回收 Token 空间。
+
+在一次总结轮次后，上下文使用量仪表会使用持久化的总结基准加上总结后的轮次，而不是重新计算已丢弃的总结前历史记录。累计使用量和成本总额仍包含完整分支的支出。
+
+## 示例 [#example]
+
+```yaml filename="summarization"
+summarization:
+  provider: 'openAI'
+  model: 'gpt-4o-mini'
+  maxSummaryTokens: 4096
+  reserveRatio: 0.05
+  trigger:
+    type: 'token_ratio'
+    value: 0.8
+  contextPruning:
+    enabled: true
+    keepLastAssistants: 3
+    softTrimRatio: 0.3
+    hardClearRatio: 0.5
+    minPrunableToolChars: 50000
+    softTrim:
+      maxChars: 4000
+      headChars: 1500
+      tailChars: 1500
+    hardClear:
+      enabled: true
+      placeholder: '[Old tool result content cleared]'
+```
+
+## provider
+
+<OptionTable
+  options={[
+    [
+      'provider',
+      'String',
+      "用于摘要调用的 LLM 提供商。如果省略，则使用智能体自身的提供商。",
+      'provider: "openAI"',
+    ],
+  ]}
+/>
+
+**默认：** Agent 自身的提供商
+
+## model
+
+<OptionTable
+  options={[
+    [
+      'model',
+      'String',
+      "用于摘要调用的模型。如果省略，则使用智能体自身的模型。",
+      'model: "gpt-4o-mini"',
+    ],
+  ]}
+/>
+
+**默认：** Agent 自身的模型
+
+## parameters
+
+<OptionTable
+  options={[
+    [
+      'parameters',
+      'Object',
+      '用于摘要请求的额外 LLM 参数（例如 temperature、top_p）。',
+      'parameters: { temperature: 0.3 }',
+    ],
+  ]}
+/>
+
+## prompt
+
+<OptionTable
+  options={[
+    [
+      'prompt',
+      'String',
+      '用于初始摘要的自定义提示词。替换内置的检查点提示词。',
+      '',
+    ],
+  ]}
+/>
+
+**默认值：** 一个结构化的检查点提示词，用于生成目标、约束与偏好、进度、关键决策、后续步骤以及关键背景等部分。
+
+## updatePrompt
+
+<OptionTable
+  options={[
+    [
+      'updatePrompt',
+      'String',
+      '当已存在摘要时，用于重新压缩的自定义提示词。在需要使用新的对话内容更新摘要时使用。',
+      '',
+    ],
+  ]}
+/>
+
+**默认值：** 一个内置提示词，它将新消息合并到现有的检查点中，压缩较旧的细节，并为最近的操作提供更多细节。
+
+## maxSummaryTokens
+
+<OptionTable
+  options={[
+    [
+      'maxSummaryTokens',
+      'Number',
+      '用于摘要模型响应的最大输出 token 数量。',
+      'maxSummaryTokens: 4096',
+    ],
+  ]}
+/>
+
+## reserveRatio
+
+<OptionTable
+  options={[
+    [
+      'reserveRatio',
+      'Number',
+      '预留作为余量的 Token 配额比例（0–1）。防止上下文被完全填满。',
+      'reserveRatio: 0.05',
+    ],
+  ]}
+/>
+
+**默认值：** `0.05` (5% 预留空间)
+
+## trigger
+
+<OptionTable
+  options={[
+    [
+      'trigger',
+      'Object',
+      '定义何时激活摘要功能。如果省略，则每当消息修剪导致丢弃任何消息时，摘要功能就会触发。',
+      '',
+    ],
+  ]}
+/>
+
+### trigger 子键 [#trigger-sub-keys]
+
+<OptionTable
+  options={[
+    [
+      'type',
+      'String',
+      '触发策略。选项：`"token_ratio"`、`"remaining_tokens"`、`"messages_to_refine"`。',
+      'type: "token_ratio"',
+    ],
+    [
+      'value',
+      'Number',
+      '所选触发类型的阈值。对于 `token_ratio`：0–1（包含边界值）。对于 `remaining_tokens` 和 `messages_to_refine`：正整数。',
+      'value: 0.8',
+    ],
+  ]}
+/>
+
+### 触发器类型 [#trigger-types]
+
+| 类型                 | 值               | 触发条件                                                                      |
+| -------------------- | ---------------- | ----------------------------------------------------------------------------- |
+| `token_ratio`        | `0.0–1.0`        | 已使用的上下文 token 比例达到或超过该值                                       |
+| `remaining_tokens`   | 正整数           | 剩余的上下文 token 数量降至或低于该值                                         |
+| `messages_to_refine` | 正整数           | 符合摘要条件的对话消息数量达到或超过该值                                      |
+| _(未设置)_           | —                | 每当修剪操作删除任何消息时（默认行为）                                        |
+
+**示例：**
+
+```yaml filename="summarization / trigger"
+summarization:
+  trigger:
+    type: 'remaining_tokens'
+    value: 8000
+```
+
+## contextPruning
+
+<OptionTable
+  options={[
+    [
+      'contextPruning',
+      'Object',
+      '配置基于位置的工具结果降级。较早消息中的大型工具结果会被逐步修剪或清除，以回收 Token 空间。',
+      '',
+    ],
+  ]}
+/>
+
+上下文修剪（Context pruning）是一项可选功能，其运行独立于摘要功能。它针对旧消息中大型工具调用的结果，并应用两个渐进阶段：
+
+1. **Soft trim** — 截断工具结果，仅保留头部和尾部内容，并在中间添加省略号
+2. **Hard clear** — 使用简短的占位符替换整个工具结果
+
+这两个阶段都是基于位置的：对话开始时（较旧）的消息会首先被修剪。
+
+### contextPruning 子键 [#contextpruning-sub-keys]
+
+<OptionTable
+  options={[
+    ['enabled', 'Boolean', '启用基于位置的工具结果降级。', 'enabled: true'],
+    [
+      'keepLastAssistants',
+      'Number',
+      '保护免受任何修剪的近期助手对话轮数。',
+      'keepLastAssistants: 3',
+    ],
+    [
+      'softTrimRatio',
+      'Number',
+      '触发软修剪（soft-trim）的年龄比例（0–1）。超过此对话比例的旧消息将被视为软修剪的候选对象。',
+      'softTrimRatio: 0.3',
+    ],
+    [
+      'hardClearRatio',
+      'Number',
+      '触发硬清除的年龄比例（0–1）。超过此比例的消息将被视为完全替换的候选对象。',
+      'hardClearRatio: 0.5',
+    ],
+    [
+      'minPrunableToolChars',
+      'Number',
+      '在修剪生效前工具结果的最小字符数。较小的结果将保持不变。',
+      'minPrunableToolChars: 50000',
+    ],
+    ['softTrim', 'Object', '软修剪阶段的配置。', ''],
+    ['hardClear', 'Object', '硬清除阶段的配置。', ''],
+  ]}
+/>
+
+**默认值：**
+
+| 字段 | 默认值 |
+| ---------------------- | ------- |
+| `enabled`              | `false` |
+| `keepLastAssistants`   | `3`     |
+| `softTrimRatio`        | `0.3`   |
+| `hardClearRatio`       | `0.5`   |
+| `minPrunableToolChars` | `50000` |
+
+### softTrim 子键 [#softtrim-sub-keys]
+
+<OptionTable
+  options={[
+    [
+      'maxChars',
+      'Number',
+      '对工具结果进行软截断后的最大总字符数。',
+      'maxChars: 4000',
+    ],
+    [
+      'headChars',
+      'Number',
+      '从工具结果开头保留的字符数。',
+      'headChars: 1500',
+    ],
+    [
+      'tailChars',
+      'Number',
+      '从工具结果末尾保留的字符数。',
+      'tailChars: 1500',
+    ],
+  ]}
+/>
+
+**默认值：** `maxChars: 4000`, `headChars: 1500`, `tailChars: 1500`
+
+### hardClear 子键 [#hardclear-sub-keys]
+
+<OptionTable
+  options={[
+    [
+      'enabled',
+      'Boolean',
+      '是否启用硬清除阶段。禁用时，仅应用软修剪。',
+      'enabled: true',
+    ],
+    [
+      'placeholder',
+      'String',
+      '当硬清除时，替换完整工具结果内容的占位符文本。',
+      'placeholder: "[Old tool result content cleared]"',
+    ],
+  ]}
+/>
+
+**默认值：** `enabled: true`, `placeholder: "[Old tool result content cleared]"`
+
+**示例：**
+
+```yaml filename="summarization / contextPruning"
+summarization:
+  contextPruning:
+    enabled: true
+    keepLastAssistants: 5
+    softTrimRatio: 0.25
+    hardClearRatio: 0.6
+    minPrunableToolChars: 30000
+    softTrim:
+      maxChars: 6000
+      headChars: 2500
+      tailChars: 2500
+    hardClear:
+      enabled: true
+      placeholder: '[Content removed for context management]'
+```
+
+## 完整配置示例 [#complete-configuration-example]
+
+```yaml filename="librechat.yaml"
+version: 1.3.10
+cache: true
+
+summarization:
+  provider: 'openAI'
+  model: 'gpt-4o-mini'
+  maxSummaryTokens: 4096
+  reserveRatio: 0.05
+  trigger:
+    type: 'token_ratio'
+    value: 0.8
+  contextPruning:
+    enabled: true
+    keepLastAssistants: 3
+    softTrimRatio: 0.3
+    hardClearRatio: 0.5
+    minPrunableToolChars: 50000
+    softTrim:
+      maxChars: 4000
+      headChars: 1500
+      tailChars: 1500
+    hardClear:
+      enabled: true
+      placeholder: '[Old tool result content cleared]'
+```
+
+## 从各 endpoint 设置迁移 [#migration-from-per-endpoint-settings]
+
+如果您之前在自定义或 Azure OpenAI endpoint 上使用了 `summarize` 和 `summaryModel`：
+
+```yaml filename="Before (removed)"
+endpoints:
+  custom:
+    - name: 'My Endpoint'
+      summarize: true
+      summaryModel: 'gpt-3.5-turbo'
+```
+
+这些字段已被移除。请改用顶层的 `summarization` 配置：
+
+```yaml filename="After"
+summarization:
+  model: 'gpt-4o-mini'
+```
+
+## 注意事项 [#notes]
+
+- 摘要功能是全局配置的，而不是针对每个 endpoint 进行配置。
+- 自定义 endpoint 和 Azure OpenAI endpoint 上的 `summarize` 和 `summaryModel` 字段已不再受支持。
+- 当省略 `provider` 和 `model` 时，将使用智能体自身的 provider 和 model 进行摘要。
+- 上下文修剪（Context pruning）默认处于禁用状态，必须通过 `contextPruning.enabled: true` 显式启用。
+- 上下文修剪仅影响超过 `minPrunableToolChars` 的工具调用结果——较小的结果永远不会被修剪。
+- `keepLastAssistants` 设置可保护最近的对话轮次不被修剪，无论修剪/清除比例如何。
+- 自定义 `prompt` 和 `updatePrompt` 值会完全替换内置提示词 —— 请谨慎使用
+- 在您的 `.env` 文件中设置 `AGENT_DEBUG_LOGGING=true`，以启用关于 token 计数和上下文修剪诊断的详细日志记录。

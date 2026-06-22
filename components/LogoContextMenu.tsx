@@ -6,11 +6,18 @@ import {
   DropdownMenuSeparator,
 } from './ui/dropdown-menu'
 import { Download, ExternalLink } from 'lucide-react'
+import { usePathname } from 'next/navigation'
+import { i18n } from '@/lib/i18n'
+import { getUI } from '@/lib/ui-i18n'
 
 const LogoContextMenu: React.FC<{
   open: boolean
   setOpen: (open: boolean) => void
 }> = ({ open, setOpen }) => {
+  const pathname = usePathname() ?? '/'
+  const [firstSegment] = pathname.split('/').filter(Boolean)
+  const locale = i18n.languages.includes(firstSegment) ? firstSegment : i18n.defaultLanguage
+  const t = getUI(locale).logoMenu
   return (
     <DropdownMenu open={open} onOpenChange={setOpen} modal={false}>
       <DropdownMenuTrigger />
@@ -22,7 +29,7 @@ const LogoContextMenu: React.FC<{
           }}
         >
           <ExternalLink size={14} className="mr-2" />
-          Open in new tab
+          {t.openNewTab}
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem
@@ -32,7 +39,7 @@ const LogoContextMenu: React.FC<{
           }}
         >
           <Download size={14} className="mr-2" />
-          Logo (png)
+          {t.logoPng}
         </DropdownMenuItem>
         <DropdownMenuItem
           onClick={(e) => {
@@ -41,7 +48,7 @@ const LogoContextMenu: React.FC<{
           }}
         >
           <Download size={14} className="mr-2" />
-          Logo (svg)
+          {t.logoSvg}
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem
@@ -51,7 +58,7 @@ const LogoContextMenu: React.FC<{
           }}
         >
           <Download size={14} className="mr-2" />
-          Docs Logo (png)
+          {t.docsLogoPng}
         </DropdownMenuItem>
         <DropdownMenuItem
           onClick={(e) => {
@@ -60,7 +67,7 @@ const LogoContextMenu: React.FC<{
           }}
         >
           <Download size={14} className="mr-2" />
-          Docs Logo (svg)
+          {t.docsLogoSvg}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

@@ -1,6 +1,8 @@
 'use client'
 
 import Link from 'next/link'
+import { usePathname } from 'next/navigation'
+import { isExternalHref, localizeDocsHref } from '@/lib/localize-href'
 import type { ReactNode, AnchorHTMLAttributes } from 'react'
 
 declare global {
@@ -12,8 +14,9 @@ declare global {
   }
 }
 
-function isExternalHref(href: string): boolean {
-  return href.startsWith('http') || href.startsWith('mailto:')
+/** Rewrite an internal /docs link to the active locale; see localizeDocsHref. */
+function useLocalizedHref(href: string): string {
+  return localizeDocsHref(href, usePathname())
 }
 
 export function TrackedLink({
@@ -27,6 +30,7 @@ export function TrackedLink({
   title?: string
   children: ReactNode
 }) {
+  const localizedHref = useLocalizedHref(href)
   const handleClick = () => {
     window.plausible?.('card_click', {
       props: {
@@ -52,7 +56,7 @@ export function TrackedLink({
   }
 
   return (
-    <Link href={href} className={className} onClick={handleClick} {...props}>
+    <Link href={localizedHref} className={className} onClick={handleClick} {...props}>
       {children}
     </Link>
   )
@@ -63,6 +67,7 @@ export function TrackedAnchor({
   children,
   ...props
 }: AnchorHTMLAttributes<HTMLAnchorElement> & { children?: ReactNode }) {
+  const localizedHref = useLocalizedHref(href ?? '')
   if (!href) return <a {...props}>{children}</a>
 
   const handleClick = () => {
@@ -86,7 +91,7 @@ export function TrackedAnchor({
   }
 
   return (
-    <Link href={href} onClick={handleClick} {...props}>
+    <Link href={localizedHref} onClick={handleClick} {...props}>
       {children}
     </Link>
   )

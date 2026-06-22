@@ -3,9 +3,11 @@ import { GeistSans } from 'geist/font/sans'
 import { GeistMono } from 'geist/font/mono'
 import type { ReactNode } from 'react'
 import type { Metadata } from 'next'
+import { Banner } from 'fumadocs-ui/components/banner'
 import { Provider } from '@/components/provider'
 import { AskAILoader } from '@/components/ai/AskAILoader'
 import { CoreWebVitalsMonitor } from '@/components/analytics/CoreWebVitalsMonitor'
+import { ogImageUrl } from '@/lib/og'
 import './global.css'
 
 const DEFAULT_CWV_ENDPOINT = ''
@@ -23,7 +25,7 @@ export const metadata: Metadata = {
     type: 'website',
     locale: 'en_US',
     siteName: 'LibreChat',
-    images: ['/images/socialcards/default-image.png'],
+    images: [ogImageUrl()],
   },
   twitter: {
     card: 'summary_large_image',
@@ -78,6 +80,22 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       suppressHydrationWarning
     >
       <body className="flex min-h-screen flex-col">
+        <a href="#main-content" className="skip-to-content">
+          Skip to main content
+        </a>
+        {/* Site announcement / release notice. Update the id when the message
+            changes so previously-dismissed visitors see the new banner. */}
+        <Banner id="clickhouse-agentic-data-stack" className="text-sm font-medium">
+          LibreChat is joining ClickHouse to power the open-source Agentic Data Stack 🎉{' '}
+          <a
+            href="https://clickhouse.com/blog/librechat-open-source-agentic-data-stack"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="ms-1 font-semibold underline underline-offset-2"
+          >
+            Learn more
+          </a>
+        </Banner>
         <Provider>{children}</Provider>
         {askAIEnabled && <AskAILoader />}
         {/* Privacy-friendly analytics by Plausible */}

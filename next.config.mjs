@@ -1,19 +1,18 @@
-import { start } from 'fumadocs-mdx/next';
-import NextBundleAnalyzer from '@next/bundle-analyzer';
-import { resolve } from 'path';
+import { createMDX } from 'fumadocs-mdx/next'
+import NextBundleAnalyzer from '@next/bundle-analyzer'
+import { resolve } from 'path'
+import { computeOgVersion } from './lib/og-version.mjs'
 
 const withBundleAnalyzer = NextBundleAnalyzer({
   enabled: process.env.ANALYZE === 'true',
-});
+})
 
 /**
- * Start the Fumadocs MDX server which generates .source/ files
- * from content/ directory. This runs separately from the webpack loader.
+ * Fumadocs MDX (v15) integration. `createMDX` wires the content/ MDX loaders
+ * (webpack + turbopack) and generates the `.source/` files from source.config.ts;
+ * it replaces the removed `start()` API and the manual content/ webpack rule.
  */
-if (process.env._FUMADOCS_MDX !== '1') {
-  process.env._FUMADOCS_MDX = '1';
-  void start(process.env.NODE_ENV === 'development', 'source.config.ts', '.source');
-}
+const withMDX = createMDX({ configPath: 'source.config.ts' })
 
 /**
  * CSP headers
@@ -35,7 +34,7 @@ const cspHeader = `
   frame-ancestors 'none';
   upgrade-insecure-requests;
   block-all-mixed-content;
-`;
+`
 
 const nonPermanentRedirects = [
   ['/discord', 'https://discord.librechat.ai'],
@@ -47,7 +46,7 @@ const nonPermanentRedirects = [
   ['/gh-discussions', 'https://github.com/danny-avila/LibreChat/discussions'],
   ['/roadmap', '/blog/2026-02-18_2026_roadmap'],
   ['/features', '/docs/features'],
-  ['/docs/configuration/librechat_yaml/ai_endpoints/azure', '/docs/configuration/azure'],
+  ['/docs/configuration/azure', '/docs/configuration/librechat_yaml/ai_endpoints/azure'],
   ['/docs/user_guides/artifacts', '/docs/features/artifacts'],
   ['/docs/user_guides/fork', '/docs/features/fork'],
   ['/docs/user_guides/authentication', '/docs/features/authentication'],
@@ -62,44 +61,118 @@ const nonPermanentRedirects = [
   ['/docs/configuration/librechat_yaml/setup', '/docs/configuration/librechat_yaml'],
   ['/toolkit/yaml_checker', '/toolkit/yaml-checker'],
   ['/toolkit/creds_generator', '/toolkit/creds-generator'],
-];
+]
+
+/**
+ * Build-time content fingerprint of the Open Graph cards. Inlined into the
+ * bundle so lib/og.ts can append it as `?v=` to every social-card URL without
+ * any runtime filesystem reads. A card change yields a new hash -> a new URL
+ * -> a cache-miss at every layer (Cloudflare edge + scraper image proxies),
+ * which is what makes updated cards show up without a manual purge/re-scrape.
+ */
+const OG_VERSION = computeOgVersion()
+
+/**
+ * Edge-cache headers for the App Router routes whose HTML we want a shared CDN
+ * (Cloudflare, in front of the origin) to cache.
+ *
+ * The App Router serves two responses at every page URL: the HTML document and
+ * the RSC flight payload (`text/x-component`), told apart only by the `RSC`
+ * request header that Next advertises via `Vary: RSC`. Cloudflare ignores
+ * `Vary: RSC`, so a single `public, s-maxage` rule on the URL lets it cache
+ * whichever variant it happens to see first and serve that to everyone. When a
+ * Next prefetch populates the entry with the flight payload, real browser
+ * navigations then receive raw `text/x-component` data and render it as garbage
+ * (`:HL[...] 0:{"buildId"...}`) instead of the page.
+ *
+ * Split the rule on the `RSC` header: the document response (no header) stays
+ * shared-cacheable, the flight payload (header present) is marked
+ * `private, no-store` so the CDN never caches it and therefore can never serve
+ * one as a document. A cached document occasionally returned to an RSC request
+ * just makes Next fall back to a full navigation, which is harmless.
+ */
+const SHARED_CDN_CACHE = 'public, s-maxage=86400, stale-while-revalidate=604800'
+const cdnCacheHeaders = [
+  '/docs/:path*',
+  // Localized docs (/<locale>/docs/...). Without this they match no cache rule,
+  // so Cloudflare never edge-caches them and every language switch is a full
+  // origin round-trip — including the 307 that untranslated pages redirect with.
+  '/(zh|es|fr|de|ja)/docs/:path*',
+  '/(blog|changelog|authors|privacy|tos|cookie)(.*)',
+].flatMap((source) => [
+  {
+    source,
+    missing: [{ type: 'header', key: 'RSC' }],
+    headers: [{ key: 'Cache-Control', value: SHARED_CDN_CACHE }],
+  },
+  {
+    source,
+    has: [{ type: 'header', key: 'RSC' }],
+    headers: [{ key: 'Cache-Control', value: 'private, no-store' }],
+  },
+])
 
 /** @type {import('next').NextConfig} */
 const config = {
   poweredByHeader: false,
+  env: {
+    OG_VERSION,
+  },
+  // The OG renderer (app/api/og/route.tsx) reads the logo + fonts from disk at
+  // runtime via process.cwd(). Those paths aren't statically analyzable, so
+  // Next's tracing can miss them and the function 404s/500s on Vercel. Force
+  // them into the serverless bundle for that route.
+  outputFileTracingIncludes: {
+    '/api/og': [
+      './lib/fonts/Geist-Regular.ttf',
+      './lib/fonts/Geist-SemiBold.ttf',
+      './public/librechat.png',
+    ],
+  },
   typescript: {
     ignoreBuildErrors: false,
+  },
+  // Tree-shake large barrel-file packages so only the icons/animations actually
+  // used are bundled, instead of the entire module.
+  experimental: {
+    optimizePackageImports: ['lucide-react', 'framer-motion'],
   },
   turbopack: {},
   pageExtensions: ['mdx', 'md', 'jsx', 'js', 'tsx', 'ts'],
   webpack(webpackConfig, options) {
+    const componentsDir = resolve(process.cwd(), 'components')
+
     /**
-     * Fumadocs MDX loader: only applied to content/ directory files.
-     * These are processed by fumadocs-mdx for the app/ router docs.
+     * createMDX (withMDX) already pushed a global `.mdx` rule using
+     * `fumadocs-mdx/webpack/mdx`. Scope it away from components/ so it doesn't
+     * double-process the component MDX that the @mdx-js/loader rule below owns
+     * (chaining the two loaders fails with "only import/exports are supported").
      */
-    webpackConfig.module.rules.push({
-      test: /\.mdx?$/,
-      include: [resolve(process.cwd(), 'content')],
-      use: [
-        options.defaultLoaders.babel,
-        {
-          loader: 'fumadocs-mdx/loader-mdx',
-          options: {
-            configPath: 'source.config.ts',
-            outDir: '.source',
-          },
-        },
-      ],
-    });
+    for (const rule of webpackConfig.module.rules) {
+      const usesFumadocsMdx =
+        Array.isArray(rule?.use) &&
+        rule.use.some(
+          (u) => typeof u === 'object' && u?.loader?.includes('fumadocs-mdx/webpack/mdx'),
+        )
+      if (usesFumadocsMdx) {
+        const existing = Array.isArray(rule.exclude)
+          ? rule.exclude
+          : rule.exclude
+            ? [rule.exclude]
+            : []
+        rule.exclude = [...existing, componentsDir]
+      }
+    }
 
     /**
      * MDX loader for components/ directory files.
      * These are MDX files imported directly as React components
-     * (e.g. changelog content, repeated sections).
+     * (e.g. changelog content, repeated sections). The content/ MDX is handled
+     * by createMDX (withMDX), so only the components/ rule lives here.
      */
     webpackConfig.module.rules.push({
       test: /\.mdx?$/,
-      include: [resolve(process.cwd(), 'components')],
+      include: [componentsDir],
       use: [
         options.defaultLoaders.babel,
         {
@@ -109,9 +182,9 @@ const config = {
           },
         },
       ],
-    });
+    })
 
-    return webpackConfig;
+    return webpackConfig
   },
   transpilePackages: ['react-tweet', 'geist'],
   images: {
@@ -180,33 +253,20 @@ const config = {
           },
         ],
       },
-      {
-        source: '/docs/:path*',
-        headers: [
-          {
-            key: 'Cache-Control',
-            value: 'public, s-maxage=86400, stale-while-revalidate=604800',
-          },
-        ],
-      },
-      {
-        source: '/(blog|changelog|authors|privacy|tos|cookie)(.*)',
-        headers: [
-          {
-            key: 'Cache-Control',
-            value: 'public, s-maxage=86400, stale-while-revalidate=604800',
-          },
-        ],
-      },
-    ];
+      ...cdnCacheHeaders,
+    ]
   },
   async rewrites() {
     return [
       {
+        source: '/docs/:path*.md',
+        destination: '/llms.mdx/docs/:path*',
+      },
+      {
         source: '/docs/:path*.mdx',
         destination: '/llms.mdx/docs/:path*',
       },
-    ];
+    ]
   },
   redirects: async () => [
     ...nonPermanentRedirects.map(([source, destination]) => ({
@@ -215,6 +275,6 @@ const config = {
       permanent: false,
     })),
   ],
-};
+}
 
-export default withBundleAnalyzer(config);
+export default withBundleAnalyzer(withMDX(config))

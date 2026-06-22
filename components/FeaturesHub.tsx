@@ -25,196 +25,76 @@ import {
   ChevronRight,
   Sparkles,
 } from 'lucide-react'
+import { localizedDocsHref } from '@/lib/i18n'
+import { getUI, type UIStrings } from '@/lib/ui-i18n'
 
-type Feature = {
+type ResolvedFeature = {
   icon: LucideIcon
   title: string
   description: string
   href: string
-  tag?: string
 }
 
-const hero: Feature = {
-  icon: Cable,
-  title: 'Model Context Protocol',
-  description:
-    'Connect AI models to any external tool or service through MCP — the open standard for AI tool integration',
-  href: '/docs/features/mcp',
-}
+// Structural data (icon + href + dictionary key). Localized title/description
+// come from the UI dictionary so the hub follows the docs locale.
+const hero = { icon: Cable, href: '/docs/features/mcp' }
 
-const highlights: Feature[] = [
-  {
-    icon: Bot,
-    title: 'Agents',
-    description:
-      'Build custom AI assistants with tools, file handling, code execution, and API actions — no coding required.',
-    href: '/docs/features/agents',
-  },
-  {
-    icon: Terminal,
-    title: 'Code Interpreter',
-    description:
-      'Execute Python, JavaScript, Go, Rust, and more — securely sandboxed with zero setup.',
-    href: '/docs/features/code_interpreter',
-  },
-  {
-    icon: Code,
-    title: 'Artifacts',
-    description:
-      'Generate React components, HTML pages, and Mermaid diagrams directly inside chat.',
-    href: '/docs/features/artifacts',
-  },
-  {
-    icon: Brain,
-    title: 'Memory',
-    description:
-      'Persistent context across conversations so your AI remembers preferences and history.',
-    href: '/docs/features/memory',
-  },
-  {
-    icon: Globe,
-    title: 'Web Search',
-    description: 'Give any model live internet access with built-in search and reranking.',
-    href: '/docs/features/web_search',
-  },
-  {
-    icon: Shield,
-    title: 'Authentication',
-    description: 'Enterprise-ready SSO with OAuth2, SAML, LDAP, and two-factor authentication.',
-    href: '/docs/features/authentication',
-  },
+type HighlightKey = keyof UIStrings['featuresHub']['highlights']
+
+const highlights: { icon: LucideIcon; key: HighlightKey; href: string }[] = [
+  { icon: Bot, key: 'agents', href: '/docs/features/agents' },
+  { icon: Terminal, key: 'codeInterpreter', href: '/docs/features/code_interpreter' },
+  { icon: Code, key: 'artifacts', href: '/docs/features/artifacts' },
+  { icon: Brain, key: 'memory', href: '/docs/features/memory' },
+  { icon: Globe, key: 'webSearch', href: '/docs/features/web_search' },
+  { icon: Shield, key: 'authentication', href: '/docs/features/authentication' },
 ]
 
-type Category = {
-  title: string
-  id: string
-  layout: 'grid' | 'list'
-  items: Feature[]
-}
+type CategoryKey = keyof UIStrings['featuresHub']['categories']
 
-const categories: Category[] = [
+const categories: {
+  key: CategoryKey
+  layout: 'grid' | 'list'
+  items: { icon: LucideIcon; key: string; href: string }[]
+}[] = [
   {
-    title: 'Search & Knowledge',
-    id: 'search-knowledge',
+    key: 'searchKnowledge',
     layout: 'grid',
     items: [
-      {
-        icon: Globe,
-        title: 'Web Search',
-        description: 'Live internet access with built-in search and reranking',
-        href: '/docs/features/web_search',
-      },
-      {
-        icon: Search,
-        title: 'Search',
-        description: 'Find messages and conversations with Meilisearch',
-        href: '/docs/features/search',
-      },
-      {
-        icon: FileText,
-        title: 'RAG API',
-        description: 'Chat with files using retrieval-augmented generation',
-        href: '/docs/features/rag_api',
-      },
-      {
-        icon: Brain,
-        title: 'Memory',
-        description: 'Persistent context across conversations',
-        href: '/docs/features/memory',
-      },
-      {
-        icon: ScanText,
-        title: 'OCR',
-        description: 'Extract text from images and documents',
-        href: '/docs/features/ocr',
-      },
+      { icon: Globe, key: 'webSearch', href: '/docs/features/web_search' },
+      { icon: Search, key: 'search', href: '/docs/features/search' },
+      { icon: FileText, key: 'ragApi', href: '/docs/features/rag_api' },
+      { icon: Brain, key: 'memory', href: '/docs/features/memory' },
+      { icon: ScanText, key: 'ocr', href: '/docs/features/ocr' },
     ],
   },
   {
-    title: 'Media',
-    id: 'media',
+    key: 'media',
     layout: 'grid',
     items: [
-      {
-        icon: ImageIcon,
-        title: 'Image Generation',
-        description: 'Create images with GPT-Image-1, DALL-E, Stable Diffusion, and Flux',
-        href: '/docs/features/image_gen',
-      },
-      {
-        icon: Upload,
-        title: 'Upload as Text',
-        description: 'Upload and process files as text input',
-        href: '/docs/features/upload_as_text',
-      },
+      { icon: ImageIcon, key: 'imageGen', href: '/docs/features/image_gen' },
+      { icon: Upload, key: 'uploadAsText', href: '/docs/features/upload_as_text' },
     ],
   },
   {
-    title: 'Chat',
-    id: 'chat',
+    key: 'chat',
     layout: 'list',
     items: [
-      {
-        icon: GitFork,
-        title: 'Fork',
-        description: 'Split conversations into multiple threads',
-        href: '/docs/features/fork',
-      },
-      {
-        icon: Download,
-        title: 'Import Conversations',
-        description: 'Import chats from ChatGPT and other platforms',
-        href: '/docs/features/import_convos',
-      },
-      {
-        icon: Share2,
-        title: 'Shareable Links',
-        description: 'Share conversations via public links',
-        href: '/docs/features/shareable_links',
-      },
-      {
-        icon: Clock,
-        title: 'Temporary Chat',
-        description: "Private conversations that aren't saved to history",
-        href: '/docs/features/temporary_chat',
-      },
-      {
-        icon: Link2,
-        title: 'URL Query Parameters',
-        description: 'Configure chats dynamically via URL',
-        href: '/docs/features/url_query',
-      },
-      {
-        icon: RefreshCw,
-        title: 'Resumable Streams',
-        description: 'Auto-reconnect and resume interrupted responses',
-        href: '/docs/features/resumable_streams',
-      },
+      { icon: GitFork, key: 'fork', href: '/docs/features/fork' },
+      { icon: Download, key: 'importConvos', href: '/docs/features/import_convos' },
+      { icon: Share2, key: 'shareableLinks', href: '/docs/features/shareable_links' },
+      { icon: Clock, key: 'temporaryChat', href: '/docs/features/temporary_chat' },
+      { icon: Link2, key: 'urlQuery', href: '/docs/features/url_query' },
+      { icon: RefreshCw, key: 'resumableStreams', href: '/docs/features/resumable_streams' },
     ],
   },
   {
-    title: 'Security',
-    id: 'security',
+    key: 'security',
     layout: 'list',
     items: [
-      {
-        icon: Shield,
-        title: 'Authentication',
-        description: 'Multi-user auth with OAuth2, SAML, LDAP, and more',
-        href: '/docs/features/authentication',
-      },
-      {
-        icon: KeyRound,
-        title: 'Password Reset',
-        description: 'Email-based password recovery',
-        href: '/docs/features/password_reset',
-      },
-      {
-        icon: ShieldCheck,
-        title: 'Moderation System',
-        description: 'Content moderation and safety controls',
-        href: '/docs/features/mod_system',
-      },
+      { icon: Shield, key: 'authentication', href: '/docs/features/authentication' },
+      { icon: KeyRound, key: 'passwordReset', href: '/docs/features/password_reset' },
+      { icon: ShieldCheck, key: 'moderation', href: '/docs/features/mod_system' },
     ],
   },
 ]
@@ -233,7 +113,7 @@ function SectionHeading({ children, id }: { children: React.ReactNode; id: strin
   )
 }
 
-function FeatureCard({ feature }: { feature: Feature }) {
+function FeatureCard({ feature, learnMore }: { feature: ResolvedFeature; learnMore: string }) {
   const Icon = feature.icon
   return (
     <Link
@@ -254,14 +134,14 @@ function FeatureCard({ feature }: { feature: Feature }) {
         className="inline-flex items-center gap-1 text-xs font-medium text-fd-muted-foreground transition-all group-hover:gap-1.5 group-hover:text-fd-foreground"
         aria-hidden="true"
       >
-        Learn more
+        {learnMore}
         <ArrowRight className="size-3 transition-transform group-hover:translate-x-0.5" />
       </span>
     </Link>
   )
 }
 
-function ListItem({ item, last }: { item: Feature; last: boolean }) {
+function ListItem({ item, last }: { item: ResolvedFeature; last: boolean }) {
   const Icon = item.icon
   return (
     <Link
@@ -286,16 +166,18 @@ function ListItem({ item, last }: { item: Feature; last: boolean }) {
   )
 }
 
-export function FeaturesHub() {
+export function FeaturesHub({ lang }: { lang?: string }) {
+  const ui = getUI(lang)
+  const t = ui.featuresHub
   const HeroIcon = hero.icon
 
   return (
-    <nav className="not-prose space-y-10" aria-label="Features navigation">
+    <nav className="not-prose space-y-10" aria-label={t.ariaLabel}>
       {/* Hero feature — MCP */}
       <section aria-labelledby="hero-heading">
-        <SectionHeading id="hero-heading">Featured</SectionHeading>
+        <SectionHeading id="hero-heading">{t.featuredHeading}</SectionHeading>
         <Link
-          href={hero.href}
+          href={localizedDocsHref(hero.href, lang)}
           className="group relative flex flex-col overflow-hidden rounded-xl border border-fd-foreground/15 bg-fd-card transition-all duration-200 hover:border-fd-foreground/25 hover:shadow-lg hover:shadow-fd-foreground/[0.04] sm:flex-row"
         >
           {/* Icon area */}
@@ -308,21 +190,16 @@ export function FeaturesHub() {
           {/* Content */}
           <div className="flex flex-1 flex-col justify-center p-5 sm:p-6">
             <div className="mb-2 flex flex-wrap items-center gap-2">
-              <h3 className="text-base font-semibold text-fd-foreground">{hero.title}</h3>
-              {hero.tag && (
-                <span className="rounded-full bg-fd-primary px-2.5 py-0.5 text-[10px] font-medium text-fd-primary-foreground">
-                  {hero.tag}
-                </span>
-              )}
+              <h3 className="text-base font-semibold text-fd-foreground">{t.hero.title}</h3>
             </div>
             <p className="mb-3 text-sm leading-relaxed text-fd-muted-foreground">
-              {hero.description}
+              {t.hero.description}
             </p>
             <span
               className="inline-flex items-center gap-1.5 text-sm font-medium text-fd-foreground transition-colors group-hover:text-fd-foreground/80"
               aria-hidden="true"
             >
-              Read the docs
+              {ui.common.readDocs}
               <ArrowRight className="size-3.5 transition-transform group-hover:translate-x-0.5" />
             </span>
           </div>
@@ -334,36 +211,67 @@ export function FeaturesHub() {
         <SectionHeading id="highlights-heading">
           <span className="inline-flex items-center gap-1.5">
             <Sparkles className="size-3" aria-hidden="true" />
-            Core Features
+            {t.coreFeaturesHeading}
           </span>
         </SectionHeading>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {highlights.map((feature) => (
-            <FeatureCard key={feature.title} feature={feature} />
-          ))}
+          {highlights.map((feature) => {
+            const text = t.highlights[feature.key]
+            return (
+              <FeatureCard
+                key={feature.key}
+                feature={{
+                  icon: feature.icon,
+                  href: localizedDocsHref(feature.href, lang),
+                  ...text,
+                }}
+                learnMore={ui.common.learnMore}
+              />
+            )
+          })}
         </div>
       </section>
 
       {/* Category sections — mixed layouts */}
-      {categories.map((category) => (
-        <section key={category.id} aria-labelledby={`${category.id}-heading`}>
-          <SectionHeading id={`${category.id}-heading`}>{category.title}</SectionHeading>
+      {categories.map((category) => {
+        const cat = t.categories[category.key]
+        const itemsText = cat.items as Record<string, { title: string; description: string }>
+        return (
+          <section key={category.key} aria-labelledby={`${category.key}-heading`}>
+            <SectionHeading id={`${category.key}-heading`}>{cat.title}</SectionHeading>
 
-          {category.layout === 'grid' ? (
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {category.items.map((item) => (
-                <FeatureCard key={item.title} feature={item} />
-              ))}
-            </div>
-          ) : (
-            <div className="overflow-hidden rounded-xl border border-fd-border">
-              {category.items.map((item, i) => (
-                <ListItem key={item.title} item={item} last={i === category.items.length - 1} />
-              ))}
-            </div>
-          )}
-        </section>
-      ))}
+            {category.layout === 'grid' ? (
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {category.items.map((item) => (
+                  <FeatureCard
+                    key={item.key}
+                    feature={{
+                      icon: item.icon,
+                      href: localizedDocsHref(item.href, lang),
+                      ...itemsText[item.key],
+                    }}
+                    learnMore={ui.common.learnMore}
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="overflow-hidden rounded-xl border border-fd-border">
+                {category.items.map((item, i) => (
+                  <ListItem
+                    key={item.key}
+                    item={{
+                      icon: item.icon,
+                      href: localizedDocsHref(item.href, lang),
+                      ...itemsText[item.key],
+                    }}
+                    last={i === category.items.length - 1}
+                  />
+                ))}
+              </div>
+            )}
+          </section>
+        )
+      })}
     </nav>
   )
 }

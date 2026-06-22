@@ -1,0 +1,139 @@
+---
+title: 認証システム
+icon: BookOpen
+description: >-
+  このガイドでは、安全で簡単なメールおよびソーシャルログインを提供するLibreChatのユーザー認証システムの使用方法を説明します。サインアップ、ログイン、パスワードリセットなどの設定方法を学びます。
+---
+
+## 一般 [#general]
+
+概要については、こちらで提供されているユーザーガイドを参照してください: [Authentication](/docs/features/authentication)
+
+一般的な設定の概要は以下の通りです。
+
+<OptionTable
+  options={[
+    ['ALLOW_EMAIL_LOGIN', 'boolean', 'メールログインのみを有効または無効にします。','ALLOW_EMAIL_LOGIN=true'],
+    ['ALLOW_REGISTRATION', 'boolean', '新規ユーザーのメール登録を有効または無効にします。','ALLOW_REGISTRATION=true'],
+    ['ALLOW_SOCIAL_LOGIN', 'boolean', 'ユーザーがさまざまなソーシャルネットワークを使用してLibreChatに接続できるようにします。','ALLOW_SOCIAL_LOGIN=false'],
+    ['ALLOW_SOCIAL_REGISTRATION', 'boolean', 'さまざまなソーシャルネットワークを使用した新規ユーザーの登録を有効または無効にします。','ALLOW_SOCIAL_REGISTRATION=false'],
+  ]}
+/>
+
+> **注:** OpenID および SAML は、登録のみを無効にする機能をサポートしていません。
+
+クイックヒント:
+
+- 登録が無効になっている場合でも、以下で詳述する [the create-user script](#create-user-script) を使用して、データベースに直接ユーザーを追加できます。
+- ユーザーを削除するには、以下で詳しく説明されている[delete-userスクリプト](#delete-user-script)を使用できます。
+
+
+<ThemeImage
+  light="https://github.com/danny-avila/LibreChat/assets/32828263/4c51dc25-31d3-4c51-8c2a-0cdfb5a25033"
+  dark="https://github.com/danny-avila/LibreChat/assets/32828263/3bc5371d-e51d-4e91-ac68-56db6e85bb2c"
+  alt="ユーザー登録画面"
+/>
+
+
+## セッションの有効期限とリフレッシュトークン [#session-expiry-and-refresh-token]
+
+- デフォルト値: セッションの有効期限: 15分、リフレッシュトークンの有効期限: 7日
+  - 詳細については、こちらをご覧ください: **[GitHub PR #927 - Refresh Token](https://github.com/danny-avila/LibreChat/pull/927)**
+
+<OptionTable
+  options={[
+    ['SESSION_EXPIRY', 'integer (milliseconds)', 'セッションの有効期限。','SESSION_EXPIRY=1000 * 60 * 15'],
+    ['REFRESH_TOKEN_EXPIRY', 'integer (milliseconds)', 'リフレッシュトークンの有効期限。','REFRESH_TOKEN_EXPIRY=(1000 * 60 * 60 * 24) * 7'],
+  ]}
+/>
+
+``` mermaid
+sequenceDiagram
+    Client->>Server: Login request with credentials
+    Server->>Passport: Use authentication strategy (e.g., 'local', 'google', etc.)
+    Passport-->>Server: User object or false/error
+    Note over Server: If valid user...
+    Server->>Server: Generate access and refresh tokens
+    Server->>Database: Store hashed refresh token
+    Server-->>Client: Access token and refresh token
+    Client->>Client: Store access token in HTTP Header and refresh token in HttpOnly cookie
+    Client->>Server: Request with access token from HTTP Header
+    Server-->>Client: Requested data
+    Note over Client,Server: Access token expires
+    Client->>Server: Request with expired access token
+    Server-->>Client: Unauthorized
+    Client->>Server: Request with refresh token from HttpOnly cookie
+    Server->>Database: Retrieve hashed refresh token
+    Server->>Server: Compare hash of provided refresh token with stored hash
+    Note over Server: If hashes match...
+    Server-->>Client: New access token and refresh token
+    Client->>Server: Retry request with new access token
+    Server-->>Client: Requested data
+```
+
+## JWT Secret と Refresh Secret [#jwt-secret-and-refresh-secret]
+
+- 新しい安全な値を使用する必要があります。提供されている例は32バイトのキー（16進数で64文字）です。
+  - 以下のツールを使用して、いくつか素早く生成してください： **[JWT Keys](/toolkit/creds_generator)**
+
+<OptionTable
+  options={[
+    ['JWT_SECRET', 'string (hex)', 'JWTシークレットキー','JWT_SECRET=16f8c0ef4a5d391b26034086c628469d3f9f497f08163ab9b40137092f2909ef'],
+    ['JWT_REFRESH_SECRET', 'string (hex)', 'JWTリフレッシュシークレットキー','JWT_REFRESH_SECRET=eaa5191f2914e30b9387fd84e254e4ba6fc51b4654968a9b0803b456a54b8418'],
+  ]}
+/>
+
+---
+
+## 自動モデレーションシステム (オプション) [#automated-moderation-system-optional]
+
+自動モデレーションシステムはデフォルトで有効になっています。このシステムはスコアリングメカニズムを使用して、ユーザーの違反を追跡します。ユーザーが過度なログイン、登録、メッセージ送信などの行為を行うと、違反スコアが蓄積されます。設定されたしきい値に達すると、そのユーザーとIPアドレスは一時的にBAN（禁止）されます。このシステムは、急速な、または疑わしいアクティビティを監視およびペナルティを課すことで、プラットフォームのセキュリティを確保します。
+
+mod systemをセットアップするには、[セットアップガイド](/docs/configuration/mod_system)を確認してください。
+
+> *注意: 開発モードで動作させるには、ルートディレクトリに `.env.development` という名前のファイルを作成し、`DOMAIN_CLIENT` を `http://localhost:3090`、または `npm run frontend-dev` を実行した際に vite によって提供されるポート番号に設定する必要があります。*
+
+## ユーザー管理スクリプト [#user-management-scripts]
+
+### ユーザー・スクリプトの作成 [#create-user-script]
+
+create-user スクリプトを使用すると、登録が無効になっている場合でも、データベースに直接ユーザーを追加できます。使用方法は以下の通りです：
+
+1. デフォルトの `docker-compose.yml` の場合（`docker compose up` を使用してアプリを起動する場合）:
+   ```bash
+   docker compose exec api npm run create-user
+   ```
+
+2. `deploy-compose.yml` については（[Ubuntu Docker Guide](/docs/remote/docker_linux) に従った場合）：
+   ```bash
+   docker exec -it LibreChat-API /bin/sh -c "cd .. && npm run create-user"
+   ```
+
+3. ローカル開発用（プロジェクトルートから）:
+   ```bash
+   npm run create-user
+   ```
+
+プロンプトに従って、新しいユーザーのメールアドレスとパスワードを入力してください。
+
+### ユーザー削除スクリプト [#delete-user-script]
+
+ユーザーを削除するには、delete-user スクリプトを使用できます：
+
+1. デフォルトの `docker-compose.yml` の場合（`docker compose up` を使用してアプリを起動する場合）:
+   ```bash
+   docker compose exec api npm run delete-user email@domain.com
+   ```
+
+2. `deploy-compose.yml` については（[Ubuntu Docker Guide](/docs/remote/docker_linux) に従った場合）：
+   ```bash
+   docker exec -it LibreChat-API /bin/sh -c "cd .. && npm run delete-user email@domain.com"
+   ```
+
+3. ローカル開発用（プロジェクトルートから）:
+   ```bash
+   npm run delete-user email@domain.com
+   ```
+
+`email@domain.com` を、削除したいユーザーのメールアドレスに置き換えてください。
+

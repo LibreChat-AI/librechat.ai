@@ -1,0 +1,180 @@
+---
+title: NGINX
+icon: Nginx
+description: >-
+  Guía paso a paso para asegurar su despliegue de LibreChat con Nginx como proxy
+  inverso y HTTPS
+---
+
+Esta guía cubre los pasos esenciales para asegurar su despliegue de LibreChat con un certificado SSL/TLS para HTTPS, configurar Nginx como proxy inverso y configurar su dominio.
+
+## Requisitos previos [#prerequisites]
+
+1. Un servidor en la nube (por ejemplo, AWS, Google Cloud, Azure, Digital Ocean).
+2. Un nombre de dominio registrado.
+3. Acceso por terminal a su servidor en la nube.
+4. Node.js `v24.16.0` y npm `v11.16.0` si ejecutas LibreChat directamente en el host.
+
+## Configuración inicial [#initial-setup]
+
+### Apuntando su dominio a su servidor [#pointing-your-domain-to-your-server]
+
+Antes de proceder con la adquisición del certificado, apunte su dominio a la dirección IP de su servidor en la nube. Este paso es fundamental y debe preceder a la configuración del certificado SSL debido al tiempo que los registros DNS pueden requerir para propagarse globalmente.
+
+1. Inicia sesión en el panel de control de tu registrador de dominios.
+2. Navega a la configuración de DNS.
+3. Cree un `A record` que apunte su dominio a la dirección IP de su servidor en la nube.
+4. Espera a que los cambios de DNS se propaguen globalmente (puedes verificarlo haciendo ping a tu dominio: `ping your_domain.com`).
+
+## Obtener un certificado SSL/TLS [#obtain-an-ssltls-certificate]
+
+Para proteger su aplicación LibreChat con HTTPS, necesitará un certificado SSL/TLS. Let's Encrypt ofrece certificados gratuitos:
+
+1. Instalar Certbot:
+    - Para Ubuntu: `sudo apt-get install certbot python3-certbot-nginx`
+    - Para CentOS: `sudo yum install certbot python2-certbot-nginx`
+
+2. Obtenga el certificado:
+    - Ejecute `sudo certbot --nginx` para obtener e instalar el certificado automáticamente para Nginx.
+    - Siga las instrucciones en pantalla. Certbot le solicitará información y completará el proceso de validación.
+    - Una vez completado con éxito, Certbot almacenará sus archivos de certificado.
+
+## Configurar Nginx como proxy inverso [#set-up-nginx-as-a-reverse-proxy]
+
+Nginx actúa como un proxy inverso, reenviando las solicitudes del cliente a su aplicación LibreChat. Existen dos opciones de despliegue:
+
+### Opción A: Usar el `deploy-compose.yml` de Docker Compose (Recomendado) [#option-a-using-the-deploy-composeyml-docker-compose-recommended]
+
+El archivo `deploy-compose.yml` incluye un contenedor Nginx y utiliza el archivo `client/nginx.conf` para la configuración de Nginx. Sin embargo, dado que `sudo certbot --nginx` extrae el certificado a la configuración del host, es necesario duplicar el certificado en los contenedores Docker.
+
+1. Actualiza `client/nginx.conf` con tu dominio y las rutas de tus certificados.
+2. Actualice `deploy-compose.yml` en la sección `client` para montar los archivos de certificado desde el host:
+
+```yaml
+client:
+  # ...
+  volumes:
+    - ./client/nginx.conf:/etc/nginx/conf.d/default.conf
+    - /etc/letsencrypt/live/<your-domain>:/etc/letsencrypt/live/<your-domain>
+    - /etc/letsencrypt/archive/<your-domain>:/etc/letsencrypt/archive/<your-domain>
+    - /etc/letsencrypt/options-ssl-nginx.conf:/etc/letsencrypt/options-ssl-nginx.conf
+    - /etc/letsencrypt/ssl-dhparams.pem:/etc/letsencrypt/ssl-dhparams.pem
+```
+
+3. Detenga cualquier instancia en ejecución: `npm run stop:deployed`
+4. Confirma los cambios en una nueva rama de Git.
+5. Rebase la instancia desplegada: `npm run rebase:deployed`
+
+### Opción B: Despliegue basado en host sin Docker [#option-b-host-based-deployment-without-docker]
+
+Si no estás utilizando Docker, puedes instalar y configurar Nginx directamente en el host:
+
+1. Instalar Nginx:
+    - Ubuntu: `sudo apt-get install nginx`
+    - CentOS: `sudo yum install nginx`
+
+2. Inicie Nginx: `sudo systemctl start nginx`
+
+3. Abra el archivo de configuración de Nginx: `sudo nano /etc/nginx/sites-available/default`
+
+4. Reemplace el contenido del archivo con lo siguiente, asegurándose de reemplazar `your_domain.com` con su dominio y `app_port` con el puerto de su aplicación:
+
+```nginx filename="/etc/nginx/sites-available/default"
+server {
+    listen 80;
+    server_name your_domain.com;
+
+    location / {
+        proxy_pass http://localhost:app_port;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+    }
+}
+```
+
+5. Compruebe la configuración de Nginx: `sudo nginx -t`
+6. Recargar Nginx: `sudo systemctl reload nginx`
+
+## Ejecutar la aplicación [#run-the-application]
+
+1. Navega al directorio de tu aplicación:
+
+```bash filename="Replace 'LibreChat' with your actual application directory.
+cd LibreChat
+```
+
+2. Inicie su aplicación usando Docker Compose:
+
+```bash filename="Start your application"
+sudo docker compose -f ./deploy-compose.yml up -d
+```
+
+## Renovación de certificados al usar nginx [#renewing-certificates-when-using-nginx]
+
+Si configuraste nginx usando la Opción A recomendada anteriormente, sigue estos pasos para renovar los certificados:
+
+1. Navega al directorio de tu aplicación
+```bash filename="Replace 'LibreChat' with your actual application directory.
+cd LibreChat
+```
+
+2. Detenga sus contenedores de Docker en ejecución
+
+```bash filename="Stop your application"
+sudo docker compose -f ./deploy-compose.yml down -d
+```
+
+3. renovar certificados
+
+```bash
+sudo certbot renew
+```
+
+4. Reinicie su aplicación
+
+```bash filename="Start your application"
+sudo docker compose -f ./deploy-compose.yml up -d
+```
+
+Nota: certbot podría reiniciar el nginx del host. Puedes detenerlo con `sudo pkill nginx`
+
+## Web Application Firewall [#web-application-firewall]
+
+Nginx puede configurarse para actuar como un firewall de aplicaciones web (WAF) aprovechando el OWASP Core Rule Set (CRS), el cual proporciona un conjunto robusto de reglas para proteger contra vulnerabilidades y ataques comunes en aplicaciones web. El uso de OWASP CRS con Nginx puede mejorar la seguridad de su despliegue de LibreChat al añadir una capa adicional de protección.
+
+1. Instalar OWASP CRS:
+
+    - Ubuntu: `sudo apt-get install nginx-modsecurity-crs`
+
+2. Habilitar ModSecurity en Nginx:
+    - Abra su archivo de configuración de Nginx (por ejemplo, `/etc/nginx/nginx.conf`).
+    - Agregue las siguientes líneas dentro del bloque `http`:
+
+      ```yaml filename="nginx.conf"
+      modsecurity on;
+      modsecurity_rules_file /usr/share/nginx/modsecurity-crs/nginx-modsecurity.conf;
+      ```
+
+3. Configurar OWASP CRS:
+    - El paquete OWASP CRS normalmente incluye un archivo de configuración (por ejemplo, `/etc/nginx/modsecurity.d/nginx-modsecurity.conf`) donde puede ajustar varias configuraciones y conjuntos de reglas según sus necesidades.
+
+4. Recargar Nginx:
+    - `sudo systemctl reload nginx`
+
+Al habilitar OWASP CRS en su configuración de Nginx, puede aprovechar el conjunto integral de reglas proporcionado por el proyecto para detectar y mitigar diversas vulnerabilidades y ataques de aplicaciones web, tales como inyección SQL, cross-site scripting (XSS), inclusión remota de archivos y más.
+
+## Almacenamiento en caché y compresión de archivos estáticos [#static-file-caching-and-compression]
+
+LibreChat ahora admite de forma nativa el almacenamiento en caché y la compresión de archivos estáticos. Si está utilizando NGINX para gestionar la compresión, debería desactivar la compresión en LibreChat para evitar un procesamiento redundante. Puede hacerlo configurando la variable de entorno `DISABLE_COMPRESSION` a `true` en su configuración de LibreChat.
+
+```.env
+# .env file
+DISABLE_COMPRESSION=true
+```
+
+Esto evitará que LibreChat comprima archivos estáticos, permitiendo que NGINX gestione la compresión de manera más eficiente.
+
+Para obtener más información sobre el manejo de archivos estáticos en LibreChat, incluyendo las opciones de caché, consulte la documentación de [Static File Handling](/docs/configuration/dotenv#static-file-handling).

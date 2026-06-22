@@ -1,0 +1,138 @@
+---
+title: 身份验证系统
+icon: BookOpen
+description: 本指南介绍了如何使用 LibreChat 的用户身份验证系统，该系统提供安全且便捷的电子邮件及社交登录功能。您将学习如何设置注册、登录、密码重置等功能。
+---
+
+## 常规 [#general]
+
+如需快速概览，请参阅此处提供的用户指南：[Authentication](/docs/features/authentication)
+
+以下是常规配置的概述。
+
+<OptionTable
+  options={[
+    ['ALLOW_EMAIL_LOGIN', 'boolean', '启用或禁用仅限电子邮件登录。','ALLOW_EMAIL_LOGIN=true'],
+    ['ALLOW_REGISTRATION', 'boolean', '启用或禁用新用户的电子邮件注册。','ALLOW_REGISTRATION=true'],
+    ['ALLOW_SOCIAL_LOGIN', 'boolean', '允许用户通过各种社交网络连接到 LibreChat。','ALLOW_SOCIAL_LOGIN=false'],
+    ['ALLOW_SOCIAL_REGISTRATION', 'boolean', '启用或禁用使用各种社交网络注册新用户。','ALLOW_SOCIAL_REGISTRATION=false'],
+  ]}
+/>
+
+> **注意：** OpenID 和 SAML 不支持仅禁用注册的功能。
+
+快速提示：
+
+- 即使禁用了注册功能，您也可以使用下文详述的 [create-user script](#create-user-script) 将用户直接添加到数据库中。
+- 要删除用户，您可以使用下文详述的 [delete-user 脚本](#delete-user-script)。
+
+
+<ThemeImage
+  light="https://github.com/danny-avila/LibreChat/assets/32828263/4c51dc25-31d3-4c51-8c2a-0cdfb5a25033"
+  dark="https://github.com/danny-avila/LibreChat/assets/32828263/3bc5371d-e51d-4e91-ac68-56db6e85bb2c"
+  alt="用户注册界面"
+/>
+
+
+## 会话过期与刷新令牌 [#session-expiry-and-refresh-token]
+
+- 默认值：会话过期时间：15 分钟，刷新令牌过期时间：7 天
+  - 更多信息请参阅：**[GitHub PR #927 - Refresh Token](https://github.com/danny-avila/LibreChat/pull/927)**
+
+<OptionTable
+  options={[
+    ['SESSION_EXPIRY', 'integer (milliseconds)', '会话过期时间。','SESSION_EXPIRY=1000 * 60 * 15'],
+    ['REFRESH_TOKEN_EXPIRY', 'integer (milliseconds)', '刷新令牌过期时间。','REFRESH_TOKEN_EXPIRY=(1000 * 60 * 60 * 24) * 7'],
+  ]}
+/>
+
+``` mermaid
+sequenceDiagram
+    Client->>Server: Login request with credentials
+    Server->>Passport: Use authentication strategy (e.g., 'local', 'google', etc.)
+    Passport-->>Server: User object or false/error
+    Note over Server: If valid user...
+    Server->>Server: Generate access and refresh tokens
+    Server->>Database: Store hashed refresh token
+    Server-->>Client: Access token and refresh token
+    Client->>Client: Store access token in HTTP Header and refresh token in HttpOnly cookie
+    Client->>Server: Request with access token from HTTP Header
+    Server-->>Client: Requested data
+    Note over Client,Server: Access token expires
+    Client->>Server: Request with expired access token
+    Server-->>Client: Unauthorized
+    Client->>Server: Request with refresh token from HttpOnly cookie
+    Server->>Database: Retrieve hashed refresh token
+    Server->>Server: Compare hash of provided refresh token with stored hash
+    Note over Server: If hashes match...
+    Server-->>Client: New access token and refresh token
+    Client->>Server: Retry request with new access token
+    Server-->>Client: Requested data
+```
+
+## JWT Secret 和 Refresh Secret [#jwt-secret-and-refresh-secret]
+
+- 您应该使用新的安全值。所给示例为 32 字节的密钥（十六进制下为 64 个字符）。
+  - 使用此工具快速生成一些内容：**[JWT Keys](/toolkit/creds_generator)**
+
+<OptionTable
+  options={[
+    ['JWT_SECRET', 'string (hex)', 'JWT 密钥。','JWT_SECRET=16f8c0ef4a5d391b26034086c628469d3f9f497f08163ab9b40137092f2909ef'],
+    ['JWT_REFRESH_SECRET', 'string (hex)', 'JWT 刷新密钥。','JWT_REFRESH_SECRET=eaa5191f2914e30b9387fd84e254e4ba6fc51b4654968a9b0803b456a54b8418'],
+  ]}
+/>
+
+---
+
+## 自动化审核系统 (optional) [#automated-moderation-system-optional]
+
+自动审核系统（Automated Moderation System）默认处于启用状态。它使用评分机制来跟踪用户的违规行为。当用户进行诸如频繁登录、注册或发送消息等操作时，他们会积累违规分数。一旦达到设定的阈值，该用户及其 IP 地址将被暂时封禁。该系统通过监控并惩罚快速或可疑的活动，确保了平台的安全性。
+
+要设置 mod 系统，请查阅 [设置指南](/docs/configuration/mod_system)。
+
+> *请注意：如果您希望此功能在开发模式下正常工作，您需要在根目录下创建一个名为 `.env.development` 的文件，并将 `DOMAIN_CLIENT` 设置为 `http://localhost:3090` 或运行 `npm run frontend-dev` 时 vite 提供的任何端口。*
+
+## 用户管理脚本 [#user-management-scripts]
+
+### 创建用户脚本 [#create-user-script]
+
+create-user 脚本允许您直接向数据库添加用户，即使在禁用了注册功能的情况下也是如此。使用方法如下：
+
+1. 对于默认的 `docker-compose.yml`（如果您使用 `docker compose up` 来启动应用）：
+   ```bash
+   docker compose exec api npm run create-user
+   ```
+
+2. 对于 `deploy-compose.yml`（如果你遵循了 [Ubuntu Docker Guide](/docs/remote/docker_linux)）：
+   ```bash
+   docker exec -it LibreChat-API /bin/sh -c "cd .. && npm run create-user"
+   ```
+
+3. 对于本地开发（从项目根目录）：
+   ```bash
+   npm run create-user
+   ```
+
+按照提示输入新用户的电子邮件和密码。
+
+### 删除用户脚本 [#delete-user-script]
+
+要删除用户，您可以使用 delete-user 脚本：
+
+1. 对于默认的 `docker-compose.yml`（如果您使用 `docker compose up` 来启动应用）：
+   ```bash
+   docker compose exec api npm run delete-user email@domain.com
+   ```
+
+2. 对于 `deploy-compose.yml`（如果你遵循了 [Ubuntu Docker Guide](/docs/remote/docker_linux)）：
+   ```bash
+   docker exec -it LibreChat-API /bin/sh -c "cd .. && npm run delete-user email@domain.com"
+   ```
+
+3. 对于本地开发（从项目根目录）：
+   ```bash
+   npm run delete-user email@domain.com
+   ```
+
+将 `email@domain.com` 替换为您想要删除的用户的电子邮件地址。
+

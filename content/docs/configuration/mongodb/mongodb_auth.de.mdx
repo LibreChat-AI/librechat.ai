@@ -1,0 +1,377 @@
+---
+title: MongoDB-Authentifizierung
+icon: MongoDB
+description: >-
+  Einrichtung der Authentifizierung für Ihre Docker-MongoDB mit der Datei
+  docker-compose.override.yml
+---
+
+Dieser Leitfaden zeigt, wie die Datei `docker-compose.override.yml` verwendet wird, um eine explizite Authentifizierung für MongoDB zu aktivieren.
+
+Weitere Informationen zur Override-Datei finden Sie unter: [Docker Compose Override](/docs/configuration/docker_override)
+
+**Hinweise:**
+
+- Die Standardkonfiguration ist durch das Blockieren externer Portzugriffe sicher, aber wir können mit Zugangsberechtigungen noch einen Schritt weiter gehen.
+- Wie von den Entwicklern von MongoDB selbst angemerkt, ist die Authentifizierung in MongoDB ziemlich komplex. Wir werden einen einfachen Ansatz verfolgen, der für die meisten Fälle ausreicht, insbesondere für bestehende Konfigurationen von LibreChat. Um mehr darüber zu erfahren, wie die MongoDB-Authentifizierung mit Docker funktioniert, siehe hier: https://hub.docker.com/_/mongo/
+- Dieser Leitfaden konzentriert sich ausschließlich auf terminalbasierte Einrichtungsvorgänge.
+- Während die beschriebenen Schritte möglicherweise auch auf Docker Desktop-Umgebungen oder auf Nicht-Docker-, lokale MongoDB- oder andere Container-Setups anwendbar sind, werden Details, die spezifisch für diese Szenarien sind, nicht bereitgestellt.
+
+**Es gibt 3 grundlegende Schritte:**
+
+- Erstellen Sie einen Admin-Benutzer innerhalb Ihres mongodb-Containers
+- Aktiviere die Authentifizierung und erstelle einen "readWrite"-Benutzer für "LibreChat"
+- Konfigurieren Sie die MONGO_URI mit dem neu erstellten Benutzer
+
+## TL;DR [#tldr]
+
+Dies sind alle notwendigen Befehle, falls Sie diese schnell durchgehen möchten oder als Referenz:
+
+<Callout type="abstract" title="TL;DR - Alle Befehle" emoji='💻' collapsible>
+
+```bash filename="Shut down container initially"
+docker compose down
+```
+
+```bash filename="Start MongoDB container"
+docker compose up -d mongodb
+```
+
+```bash filename="Open MongoDB shell on 'chat-mongodb' container"
+docker exec -it chat-mongodb mongosh
+```
+
+```bash filename="Switch to admin database"
+use admin
+```
+
+```bash filename="Create new admin user"
+db.createUser({ user: "adminUser", pwd: "securePassword", roles: ["userAdminAnyDatabase", "readWriteAnyDatabase"] })
+```
+
+```bash filename="Exit MongoDB shell"
+exit
+```
+
+```bash filename="Shut down container after setup"
+docker compose down
+```
+
+```bash filename="Restart MongoDB container with authentication"
+docker compose up -d mongodb
+```
+
+```bash filename="Log into MongoDB shell with credentials"
+docker exec -it chat-mongodb mongosh -u adminUser -p securePassword --authenticationDatabase admin
+```
+
+```bash filename="Switch to LibreChat database"
+use LibreChat
+```
+
+```bash filename="Create user in LibreChat database"
+db.createUser({ user: 'user', pwd: 'userpasswd', roles: [ { role: "readWrite", db: "LibreChat" } ] });
+```
+
+```bash filename="Exit MongoDB shell after creating user"
+exit
+```
+
+```bash filename="Shut down container after user creation"
+docker compose down
+```
+
+```bash filename="Start all services with final settings"
+docker compose up
+```
+</Callout>
+
+### Beispiel [#example]
+
+Beispiel einer `docker-compose.override.yml`-Datei unter Verwendung der [`librechat.yaml`-Konfigurationsdatei](/docs/configuration/librechat_yaml), [MongoDB-Authentifizierung](/docs/configuration/mongodb/mongodb_auth) und `mongo-express` zur [Verwaltung Ihrer MongoDB-Datenbank](/blog/2023-11-30_mongoexpress):
+
+<Callout type="example" title="Beispiel einer `docker-compose.override.yml`-Datei" collapsible>
+
+```yaml filename="docker-compose.override.yml"
+version: '3.4'
+
+services:
+  api:
+    volumes:
+      - ./librechat.yaml:/app/librechat.yaml
+    environment:
+      - MONGO_URI=mongodb://user:userpasswd@mongodb:27017/LibreChat
+  mongodb:
+    command: mongod --auth
+  mongo-express:
+    image: mongo-express
+    container_name: mongo-express
+    environment:
+      ME_CONFIG_MONGODB_SERVER: mongodb
+      ME_CONFIG_BASICAUTH_USERNAME: admin
+      ME_CONFIG_BASICAUTH_PASSWORD: password
+      ME_CONFIG_MONGODB_URL: 'mongodb://adminUser:securePassword@mongodb:27017'
+      ME_CONFIG_MONGODB_ADMINUSERNAME: adminUser
+      ME_CONFIG_MONGODB_ADMINPASSWORD: securePassword
+    ports:
+      - '8081:8081'
+    depends_on:
+      - mongodb
+    restart: always
+```
+</Callout>
+
+<Steps>
+<Step>
+
+### Erstellen eines Admin-Benutzers [#creating-an-admin-user]
+
+Zuerst müssen wir die Standard-Container stoppen und nur den mongodb-Container ausführen.
+
+```bash filename="Stop all running containers"
+docker compose down
+```
+
+```bash filename="Start mongodb container in detached mode"
+docker compose up -d mongodb
+```
+
+> Hinweis: Das `-d` Flag trennt die aktuelle Terminal-Instanz, während der Container im Hintergrund ausgeführt wird. Wenn Sie die mongodb-Protokollausgaben sehen möchten, lassen Sie es weg und fahren Sie in einem separaten Terminal fort.
+
+Sobald es läuft, öffnen wir das Terminal des Containers und führen `mongosh` aus:
+
+```bash filename="Connect to the MongoDB shell"
+docker exec -it chat-mongodb mongosh
+```
+Sie sollten die folgende Ausgabe sehen:
+
+```bash filename="Output"
+~/LibreChat$ docker exec -it chat-mongodb mongosh
+Current Mongosh Log ID: 65bfed36f7d7e3c2b01bcc3d
+Connecting to:          mongodb://127.0.0.1:27017/?directConnection=true&serverSelectionTimeoutMS=2000&appName=mongosh+2.1.1
+Using MongoDB:          7.0.4
+Using Mongosh:          2.1.1
+
+For mongosh info see: https://docs.mongodb.com/mongodb-shell/
+
+test> 
+```
+
+Optional: Während wir hier sind, können wir bei Bedarf die Telemetrie für mongodb deaktivieren. Dabei handelt es sich um anonyme Nutzungsdaten, die regelmäßig gesammelt und an MongoDB gesendet werden:
+
+Führen Sie den folgenden Befehl aus.
+
+> Hinweise:
+> - Alle nachfolgenden Befehle sollten in der aktuellen Terminalsitzung ausgeführt werden, unabhängig von der Umgebung (Docker, Linux, `mongosh` usw.)
+> - Ich werde die tatsächliche Terminalansicht mit # Beispiel-Eingabe/Ausgabe darstellen oder in einigen Fällen einfach die Ausgabe anzeigen
+
+Befehl:
+
+```bash filename="Disable Telemetry"
+disableTelemetry()
+```
+
+Beispiel-Eingabe/-Ausgabe:
+
+```bash filename="example input/output"
+test> disableTelemetry()
+Telemetry is now disabled.
+```
+
+Jetzt müssen wir auf die Admin-Datenbank zugreifen, die mongodb standardmäßig erstellt, um unseren Admin-Benutzer anzulegen:
+
+```bash filename="Switch to Admin Database"
+use admin
+```
+
+> zu db admin gewechselt
+
+Ersetzen Sie die Anmeldedaten wie gewünscht und bewahren Sie diese für den Rest der Anleitung sicher auf.
+
+Führen Sie den Befehl aus, um den Admin-Benutzer zu erstellen:
+
+```bash filename="Create Admin User"
+db.createUser({ user: "adminUser", pwd: "securePassword", roles: ["userAdminAnyDatabase", "readWriteAnyDatabase"] })
+```
+
+Sie sollten eine "ok"-Ausgabe sehen.
+
+Sie können auch bestätigen, dass der Admin erstellt wurde, indem Sie `show users` ausführen:
+
+```bash filename="example input/output"
+admin> show users
+[
+  {
+    _id: 'admin.adminUser',
+    userId: UUID('86e90441-b5b7-4043-9662-305540dfa6cf'),
+    user: 'adminUser',
+    db: 'admin',
+    roles: [
+      { role: 'userAdminAnyDatabase', db: 'admin' },
+      { role: 'readWriteAnyDatabase', db: 'admin' }
+    ],
+    mechanisms: [ 'SCRAM-SHA-1', 'SCRAM-SHA-256' ]
+  }
+]
+```
+
+:warning: **Wichtig:** Wenn Sie `mongo-express` verwenden, um [Ihre Datenbank zu verwalten (Anleitung hier)](../../features/manage_your_database.md), benötigen Sie die zusätzlichen Berechtigungen, damit der `mongo-express`-Dienst korrekt ausgeführt werden kann:
+
+```bash filename="Grant Roles to Admin User"
+db.grantRolesToUser("adminUser", ["clusterAdmin", "readAnyDatabase"])
+```
+
+Verlassen Sie das Mongosh/Container-Terminal durch Ausführen von `exit`:
+```bash filename="Exit the Mongosh/Container Terminal"
+admin> exit
+```
+
+Und den laufenden Container herunterfahren:
+```bash filename="Shut down the running container"
+docker compose down
+```
+
+</Step>
+<Step>
+
+### Aktivieren der Authentifizierung und Erstellen eines Benutzers mit `readWrite`-Zugriff [#enabling-authentication-and-creating-a-user-with-readwrite-access]
+
+Wir müssen nun die Datei `docker-compose.override.yml` erstellen/bearbeiten, um die Authentifizierung für unseren mongodb-Container zu aktivieren. Sie können diese Konfiguration zum Starten oder als Referenz verwenden:
+
+```yaml filename="docker-compose.override.yml"
+version: '3.4'
+
+services:
+  api:
+    volumes:
+      - ./librechat.yaml:/app/librechat.yaml # Optional for using the librechat config file.
+  mongodb:
+    command: mongod --auth # <--- Add this to enable authentication
+```
+
+Nachdem Sie die Override-Datei wie oben konfiguriert haben, führen Sie den mongodb-Container erneut aus:
+
+```bash filename="Start the MongoDB container"
+docker compose up -d mongodb
+```
+
+Und greifen Sie als Admin-Benutzer auf mongosh zu:
+
+```bash filename="Connect to MongoDB container using mongo shell"
+docker exec -it chat-mongodb mongosh -u adminUser -p securePassword --authenticationDatabase admin
+```
+
+Bestätigen Sie, dass Sie authentifiziert sind:
+```bash filename="Check MongoDB Connection Status Command"
+db.runCommand({ connectionStatus: 1 })
+```
+
+```bash filename="example input/output"
+test> db.runCommand({ connectionStatus: 1 })
+{
+  authInfo: {
+    authenticatedUsers: [ { user: 'adminUser', db: 'admin' } ],
+    authenticatedUserRoles: [
+      { role: 'readWriteAnyDatabase', db: 'admin' },
+      { role: 'userAdminAnyDatabase', db: 'admin' }
+    ]
+  },
+  ok: 1
+}
+test>
+```
+
+Wechseln Sie zur "LibreChat"-Datenbank
+
+> Hinweis: Dies ist die Standarddatenbank, sofern Sie diese nicht über die MONGO_URI geändert haben; Standard-URI: `MONGO_URI=mongodb://mongodb:27017/LibreChat`
+
+```bash filename="Switch to the LibreChat database"
+use LibreChat
+```
+
+Jetzt erstellen wir die tatsächlichen Anmeldedaten, die für unseren Mongo-Verbindungs-String verwendet werden sollen. Diese werden auf Lese-/Schreibzugriff für die "LibreChat"-Datenbank beschränkt sein. Ersetzen Sie wie zuvor das Beispiel durch Ihre gewünschten Anmeldedaten:
+
+`db.createUser({ user: 'user', pwd: 'userpasswd', roles: [ { role: "readWrite", db: "LibreChat" } ] });`
+
+Du solltest wieder eine "ok"-Ausgabe sehen.
+
+Sie können die Benutzererstellung mit dem Befehl `show users` überprüfen.
+
+Verlassen Sie das Mongosh/Container-Terminal erneut mit `exit` und fahren Sie den Container herunter:
+
+```bash filename="End the current shell session"
+exit
+```
+
+```bash filename="Stop the current Docker Compose services"
+docker compose down
+```
+
+Ich hatte ein Problem, bei dem der neu erstellte Benutzer nach der Erstellung nicht dauerhaft gespeichert wurde. Um dies zu beheben, habe ich die Schritte einfach wiederholt, um sicherzustellen, dass er erstellt wurde. Hier sind sie der Einfachheit halber für Sie:
+
+```bash filename="Shut down container"
+docker compose down
+```
+
+```bash filename="Start Mongo container"
+docker compose up -d mongodb
+```
+
+```bash filename="Access MongoDB shell as admin"
+docker exec -it chat-mongodb mongosh -u adminUser -p securePassword --authenticationDatabase admin
+```
+
+```bash filename="Switch to LibreChat database"
+use LibreChat
+```
+
+```bash filename="Show current users in LibreChat database"
+show users
+```
+
+```bash filename="Create a new user in LibreChat database"
+db.createUser({ user: 'user', pwd: 'userpasswd', roles: [ { role: "readWrite", db: "LibreChat" } ] });
+```
+
+Falls es immer noch nicht dauerhaft gespeichert wird, kannst du versuchen, die Befehle auszuführen, während alle Container laufen. Beachte jedoch, dass sich der `LibreChat`-Container in einem Fehler- bzw. Wiederholungszustand befinden wird.
+
+</Step>
+<Step>
+
+### Aktualisieren Sie die `MONGO_URI`, um die neuen Anmeldedaten zu verwenden [#update-the-mongo_uri-to-use-the-new-credentials]
+
+Schließlich fügen wir den neuen Verbindungs-String mit unseren neu erstellten Anmeldedaten zu unserer `docker-compose.override.yml` Datei unter dem `api` Service hinzu:
+
+```yaml filename="docker-compose.override.yml"
+    environment:
+      - MONGO_URI=mongodb://user:userpasswd@mongodb:27017/LibreChat
+```
+
+Also sieht unsere Override-Datei jetzt so aus:
+
+```yaml filename="docker-compose.override.yml"
+version: '3.4'
+
+services:
+  api:
+    volumes:
+      - ./librechat.yaml:/app/librechat.yaml
+    environment:
+      - MONGO_URI=mongodb://user:userpasswd@mongodb:27017/LibreChat
+  mongodb:
+    command: mongod --auth
+```
+
+Sie sollten nun `docker compose up` erfolgreich mit Lese-/Schreibzugriff auf die LibreChat-Datenbank ausführen können.
+
+Beispiel für eine erfolgreiche Verbindung:
+```bash filename="successful connection example"
+LibreChat         | 2024-02-04 20:59:43 info: Server listening on all interfaces at port 3080. Use http://localhost:3080 to access it
+chat-mongodb      | {"t":{"$date":"2024-02-04T20:59:53.880+00:00"},"s":"I",  "c":"NETWORK",  "id":22943,   "ctx":"listener","msg":"Connection accepted","attr":{"remote":"192.168.160.4:58114","uuid":{"uuid":{"$uuid":"027bdc7b-a3f4-429a-80ee-36cd172058ec"}},"connectionId":17,"connectionCount":10}}
+```
+
+Wenn bei dir Authentifizierungsfehler auftreten, führe den letzten Teil von Schritt 2 erneut aus. Ich bin mir nicht sicher, warum es so empfindlich ist, aber nach ein paar Versuchen wird es funktionieren.
+
+</Step>
+</Steps>
+

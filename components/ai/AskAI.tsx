@@ -285,7 +285,9 @@ export function AskAI() {
   const [mode, setMode] = useState<'search' | 'page'>('search')
   const [shareUrl, setShareUrl] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
-  const shareTimeoutRef = useRef<ReturnType<typeof setTimeout>>()
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const prevOpenRef = useRef(false)
+  const shareTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const router = useRouter()
   const pathname = usePathname()
   const navigatedRef = useRef<Set<string>>(new Set())
@@ -336,11 +338,7 @@ export function AskAI() {
     for (const m of messages) {
       if (m.role !== 'assistant' || navigatedRef.current.has(m.id)) continue
       for (const part of m.parts ?? []) {
-        if (
-          part.type === 'tool-navigate' &&
-          'state' in part &&
-          part.state === 'output-available'
-        ) {
+        if (part.type === 'tool-navigate' && 'state' in part && part.state === 'output-available') {
           const result = part.output as { action?: string; url?: string } | undefined
           if (
             result?.action === 'navigate' &&
@@ -360,8 +358,7 @@ export function AskAI() {
     if (!text || isLoading) return
     setInput('')
     setShareUrl(null)
-    const context =
-      mode === 'search' && isDocsPage ? `[I'm currently on ${pathname}] ` : ''
+    const context = mode === 'search' && isDocsPage ? `[I'm currently on ${pathname}] ` : ''
     sendMessage({ text: context + text })
   }, [input, isLoading, sendMessage, pathname, mode, isDocsPage])
 
@@ -453,31 +450,46 @@ export function AskAI() {
     } catch {
       // invalid hash, ignore
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Keyboard shortcut: Cmd/Ctrl + .
+  // Keyboard shortcuts: Cmd/Ctrl + . toggles the panel; Escape closes it from
+  // anywhere within (WCAG 2.1.2 — no keyboard trap).
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === '.') {
         e.preventDefault()
         setOpen((o) => !o)
+      } else if (e.key === 'Escape' && open) {
+        setOpen(false)
       }
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [])
+  }, [open])
+
+  // Restore focus to the trigger when the panel closes (WCAG 2.4.3) so keyboard
+  // users are not stranded at the top of the document.
+  useEffect(() => {
+    if (prevOpenRef.current && !open) {
+      triggerRef.current?.focus()
+    }
+    prevOpenRef.current = open
+  }, [open])
 
   return (
     <>
       {/* Floating trigger */}
       <button
+        ref={triggerRef}
         onClick={() => setOpen(true)}
         className={cn(
           'fixed bottom-5 right-5 z-50 flex items-center gap-2 rounded-2xl border border-fd-border bg-fd-card px-4 py-2.5 text-sm font-medium text-fd-muted-foreground shadow-lg transition-all hover:bg-fd-accent hover:text-fd-accent-foreground',
           open && 'pointer-events-none opacity-0',
         )}
         aria-label="Ask AI (Ctrl+.)"
+        aria-haspopup="dialog"
+        aria-expanded={open}
       >
         <LCIcon className="size-5" />
         Ask AI
@@ -489,6 +501,8 @@ export function AskAI() {
       {/* Panel */}
       {open && (
         <div
+          role="dialog"
+          aria-label="Ask AI"
           className={cn(
             'fixed z-50 flex flex-col border-fd-border bg-fd-card',
             'inset-x-0 bottom-0 h-[85vh] rounded-t-2xl border-t shadow-2xl',
@@ -602,8 +616,7 @@ export function AskAI() {
                     ?.filter((p): p is { type: 'text'; text: string } => p.type === 'text')
                     .map((p) => p.text)
                     .join('')
-                  const docRefs =
-                    m.role === 'assistant' && fullText ? extractDocRefs(fullText) : []
+                  const docRefs = m.role === 'assistant' && fullText ? extractDocRefs(fullText) : []
 
                   // Collect sources from search tool results
                   const sources: { title: string; url: string }[] = []
@@ -615,9 +628,7 @@ export function AskAI() {
                         part.state === 'output-available' &&
                         'output' in part
                       ) {
-                        const output = part.output as
-                          | { title: string; url: string }[]
-                          | undefined
+                        const output = part.output as { title: string; url: string }[] | undefined
                         if (Array.isArray(output)) {
                           for (const s of output) {
                             if (s.url && s.title) sources.push({ title: s.title, url: s.url })
@@ -660,9 +671,8 @@ export function AskAI() {
                                 'state' in part &&
                                 part.state === 'output-available'
                               ) {
-                                const res = (
-                                  part as { output?: { url?: string; title?: string } }
-                                ).output
+                                const res = (part as { output?: { url?: string; title?: string } })
+                                  .output
                                 if (res?.url) {
                                   return (
                                     <Link
@@ -694,9 +704,7 @@ export function AskAI() {
                                     key={i}
                                     className="mb-1.5 flex items-center gap-1.5 text-xs text-fd-muted-foreground"
                                   >
-                                    <Search
-                                      className={cn('size-3', !isDone && 'animate-pulse')}
-                                    />
+                                    <Search className={cn('size-3', !isDone && 'animate-pulse')} />
                                     {isDone ? 'Searched docs' : 'Searching docs…'}
                                   </div>
                                 )

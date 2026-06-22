@@ -1,136 +1,59 @@
 import { test, expect, Page } from '@playwright/test'
-import path from 'path'
 
-const SCREENSHOT_DIR = 'test-results/toolkit'
-
-async function goWithDark(page: Page, url: string) {
-  await page.goto(url)
-  await page.waitForLoadState('networkidle')
-  await page.evaluate(() => {
-    localStorage.setItem('theme', 'dark')
-    document.documentElement.classList.add('dark')
-    document.documentElement.classList.remove('light')
-    document.documentElement.style.colorScheme = 'dark'
-  })
-  await page.waitForTimeout(500)
-}
-
-async function goWithLight(page: Page, url: string) {
-  await page.goto(url)
-  await page.waitForLoadState('networkidle')
-  await page.evaluate(() => {
-    localStorage.setItem('theme', 'light')
-    document.documentElement.classList.remove('dark')
-    document.documentElement.classList.add('light')
-    document.documentElement.style.colorScheme = 'light'
-  })
-  await page.waitForTimeout(400)
-}
-
-async function setAceEditorValue(page: Page, editorId: string, value: string) {
-  await page.evaluate(
-    ({ id, text }) => {
-      const editor = (window as any).ace?.edit(id)
-      if (editor) {
-        editor.setValue(text, 1)
-      }
-    },
-    { id: editorId, text: value },
-  )
-  await page.waitForTimeout(400)
-}
-
-test('yaml valid - full page light', async ({ page }) => {
-  await goWithLight(page, '/docs/toolkit/yaml-validator')
-  await page.waitForSelector('#YAML_EDITOR', { timeout: 15000 })
-  await page.locator('#YAML_EDITOR').click()
-  await setAceEditorValue(page, 'YAML_EDITOR', 'name: test\nversion: 1\nenabled: true')
-
-  await page.screenshot({
-    path: path.join(SCREENSHOT_DIR, 'full-yaml-light-valid.png'),
-    fullPage: true,
+/**
+ * Set the value of the Ace editor used by the YAML validator. Uses the editor
+ * instance Ace attaches to its container element, falling back to the global
+ * `ace` registry, so it does not depend on how the editor was constructed.
+ */
+async function setYamlEditorValue(page: Page, value: string) {
+  await page.waitForFunction(() => {
+    const el = document.getElementById('YAML_EDITOR') as (HTMLElement & { env?: unknown }) | null
+    const w = window as unknown as { ace?: { edit?: (id: string) => unknown } }
+    return Boolean(el && ((el as { env?: { editor?: unknown } }).env?.editor || w.ace?.edit))
   })
 
-  // Green banner with YAML is valid
-  const validBanner = page.locator('[role="status"]').filter({ hasText: /YAML is valid/i })
-  await expect(validBanner).toBeVisible({ timeout: 5000 })
-  console.log('Valid banner text:', await validBanner.textContent())
-})
-
-test('yaml valid - full page dark', async ({ page }) => {
-  await goWithDark(page, '/docs/toolkit/yaml-validator')
-  await page.waitForSelector('#YAML_EDITOR', { timeout: 15000 })
-  await page.locator('#YAML_EDITOR').click()
-  await setAceEditorValue(page, 'YAML_EDITOR', 'name: test\nversion: 1\nenabled: true')
-
-  await page.screenshot({
-    path: path.join(SCREENSHOT_DIR, 'full-yaml-dark-valid.png'),
-    fullPage: true,
-  })
-
-  const validBanner = page.locator('[role="status"]').filter({ hasText: /YAML is valid/i })
-  await expect(validBanner).toBeVisible({ timeout: 5000 })
-})
-
-test('yaml invalid - full page light', async ({ page }) => {
-  await goWithLight(page, '/docs/toolkit/yaml-validator')
-  await page.waitForSelector('#YAML_EDITOR', { timeout: 15000 })
-  await page.locator('#YAML_EDITOR').click()
-  await setAceEditorValue(page, 'YAML_EDITOR', 'name: test\n  bad_indent: value\n wrong: yes')
-
-  await page.screenshot({
-    path: path.join(SCREENSHOT_DIR, 'full-yaml-light-invalid.png'),
-    fullPage: true,
-  })
-
-  const errorBanner = page.locator('[role="status"]').filter({ hasText: /line/i })
-  await expect(errorBanner).toBeVisible({ timeout: 5000 })
-  console.log('Error text:', await errorBanner.textContent())
-})
-
-test('print margin check', async ({ page }) => {
-  await goWithLight(page, '/docs/toolkit/yaml-validator')
-  await page.waitForSelector('#YAML_EDITOR', { timeout: 15000 })
-
-  // Check if print margin is actually visible (has positive dimensions and is displayed)
-  const printMarginVisible = await page.evaluate(() => {
-    const el = document.querySelector('.ace_print-margin')
-    if (!el) return { exists: false }
-    const style = window.getComputedStyle(el)
-    const rect = el.getBoundingClientRect()
-    return {
-      exists: true,
-      display: style.display,
-      visibility: style.visibility,
-      width: rect.width,
-      height: rect.height,
-      left: rect.left,
-      opacity: style.opacity,
+  await page.evaluate((text) => {
+    const el = document.getElementById('YAML_EDITOR') as { env?: { editor?: unknown } } | null
+    const w = window as unknown as { ace?: { edit?: (id: string) => unknown } }
+    const editor = (el?.env?.editor ?? w.ace?.edit?.('YAML_EDITOR')) as {
+      setValue: (text: string, cursorPos?: number) => void
     }
+    editor.setValue(text, 1)
+  }, value)
+}
+
+test.describe('Toolkit — YAML validator', () => {
+  test('shows a success banner for valid YAML', async ({ page }) => {
+    await page.goto('/docs/toolkit/yaml-validator')
+    await page.waitForSelector('#YAML_EDITOR')
+
+    await setYamlEditorValue(page, 'name: test\nversion: 1\nenabled: true')
+
+    await expect(page.getByRole('status').filter({ hasText: /YAML is valid/i })).toBeVisible()
   })
-  console.log('Print margin computed style:', JSON.stringify(printMarginVisible))
+
+  test('shows an error banner for invalid YAML', async ({ page }) => {
+    await page.goto('/docs/toolkit/yaml-validator')
+    await page.waitForSelector('#YAML_EDITOR')
+
+    await setYamlEditorValue(page, 'name: test\n  bad_indent: value\n wrong: yes')
+
+    await expect(page.getByRole('status').filter({ hasText: /line/i })).toBeVisible()
+    await expect(page.locator('.ace-error-marker')).toBeVisible()
+  })
 })
 
-test('creds full page - light after generate', async ({ page }) => {
-  await goWithLight(page, '/docs/toolkit/credentials-generator')
-  const generateBtn = page.getByRole('button', { name: 'Generate new credentials' })
-  await generateBtn.click()
-  await page.waitForTimeout(500)
+test.describe('Toolkit — credentials generator', () => {
+  test('generates non-empty credentials on click', async ({ page }) => {
+    await page.goto('/docs/toolkit/credentials-generator')
 
-  await page.screenshot({
-    path: path.join(SCREENSHOT_DIR, 'full-creds-light-generated.png'),
-    fullPage: true,
-  })
-})
+    await page.getByRole('button', { name: 'Generate new credentials' }).click()
 
-test('creds full page - dark after generate', async ({ page }) => {
-  await goWithDark(page, '/docs/toolkit/credentials-generator')
-  const generateBtn = page.getByRole('button', { name: 'Generate new credentials' })
-  await generateBtn.click()
-  await page.waitForTimeout(500)
+    await expect(page.getByRole('region', { name: 'Generated credentials' })).toBeVisible()
 
-  await page.screenshot({
-    path: path.join(SCREENSHOT_DIR, 'full-creds-dark-generated.png'),
-    fullPage: true,
+    // The first field is populated with a non-empty generated value.
+    const credsKey = page.getByLabel('CREDS_KEY value')
+    await expect(credsKey).toBeVisible()
+    expect((await credsKey.inputValue()).length).toBeGreaterThan(0)
   })
 })

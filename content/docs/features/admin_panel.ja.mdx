@@ -1,0 +1,181 @@
+---
+title: 管理パネル
+icon: LayoutDashboard
+description: >-
+  LibreChatのユーザー、グループ、ロール、設定オーバーライド、システム権限を管理するためのスタンドアロンWeb
+  UI。librechat.yamlを手動で編集する必要はありません。
+---
+
+# LibreChat 管理パネル [#librechat-admin-panel]
+
+**LibreChat Admin Panel**は、LibreChatのためのスタンドアロンなブラウザベースの管理インターフェースです。LibreChat本体と同じデータベースに接続し、[granular access control](/docs/features/access_control)を支える管理タスクのためのGUIを提供します。これには、ユーザーおよびグループの管理、ロール管理、ロールやグループにスコープされた設定のオーバーライド、システムレベルの権限付与などが含まれます。
+
+<Callout type="info" title="ステータス: プレビュー">
+  管理パネルは現在テスト用として利用可能であり、[LibreChat v0.8.5](/changelog/v0.8.5) で導入された管理APIを基盤とする今後の管理インターフェースです。ソースコード、イシュー、およびリリースは [github.com/ClickHouse/librechat-admin-panel](https://github.com/ClickHouse/librechat-admin-panel) にあります。
+</Callout>
+
+## What It Does [#what-it-does]
+
+管理パネルはシンクライアントです。すべてのデータはLibreChatのデータベースに存在し、すべてのアクションはLibreChat APIサーバー上のバージョン管理された `/api/admin/*` endpoint を経由します。これにより、管理者は以下の操作を一元的に行えるようになります。
+
+- **設定の管理**: 動的でスキーマ駆動型のフォームを通じて、すべての LibreChat 設定を表示および編集できます。設定スキーマに新しいフィールドが追加されると自動的に反映されるため、管理パネルのリリースは不要です。
+- **プリンシパルごとのオーバーライドを適用**: 設定のオーバーライドを特定のロールやグループにスコープし、ログイン時に各ユーザーに適用される最終的な値を決定する優先順位ベースのカスケードを使用します。
+- **ユーザーの管理**: インスタンス上のすべてのアカウントのリスト表示、検索、および閲覧を行います。
+- **グループの管理**: グループの作成と削除、メンバーの追加と削除を行い、ACLやオーバーライドにおいてグループを第一級のプリンシパルとして使用します。
+- **ロールの管理**: 組み込みの `USER` / `ADMIN` 以外のカスタムロールを作成し、機能権限マトリックスを編集し、ユーザーにロールを割り当てます。
+- **Issue system grants**: 特定のユーザー、グループ、またはロールに対して、完全な管理者権限を付与することなく、管理機能（例: `manage:users`、`read:usage`、`manage:mcpservers`）を委任します。
+- **Authenticate**: LibreChatのローカル管理者アカウントでログインするか、LibreChatインスタンスで有効になっている場合はOpenID SSO / SAML / サポートされているOAuthプロバイダー経由でログインします。
+
+基盤となる権限モデル（プリンシパル、リソースACL、機能、およびレイヤーの構成方法）については、[Access Control](/docs/features/access_control) ページを参照してください。
+
+## アーキテクチャ [#architecture]
+
+```
+┌──────────────────┐         ┌──────────────────┐         ┌──────────────┐
+│  Admin Panel     │ ───────▶│  LibreChat API   │ ───────▶│   MongoDB    │
+│  (Bun + Vite)    │  HTTPS  │  /api/admin/*    │         │  (shared DB) │
+└──────────────────┘         └──────────────────┘         └──────────────┘
+       │                             │
+       │ OAuth/OIDC/SAML redirect    │ Verifies admin access
+       └─────────────────────────────┘
+```
+
+管理パネルは独立したサービスとして実行され、LibreChatとプロセスを共有しません。管理機能は、`access:admin` システム権限または `SystemRoles.ADMIN` ロールを通じてLibreChat側で検証されるため、パネル自体が本来持つべきでない権限を付与することはできません。
+
+LibreChat が公開する管理 API サーフェスは以下の通りです：
+
+| マウント | 目的 |
+| ----------------------------------------- | --------------------------------------------------------- |
+| `POST /api/admin/login` &nbsp; `/oauth/*` | 管理者専用の認証エンドポイント (ローカル + SSO) |
+| `GET /api/admin/verify`                   | 管理者セッションの検証 |
+| `/api/admin/users`                        | ユーザー一覧および検索 |
+| `/api/admin/groups`                       | グループのCRUD + メンバー管理 |
+| `/api/admin/roles`                        | カスタムロールのCRUD + 権限編集 + メンバー管理 |
+| `/api/admin/grants`                       | システム機能の付与 (割り当て/取り消し/一覧表示) |
+| `/api/admin/config`                       | ベース + プリンシパルごとの設定オーバーライド |
+
+## はじめに [#getting-started]
+
+### 前提条件 [#prerequisites]
+
+- **v0.8.5以降**で実行中のLibreChatインスタンス（それ以前のバージョンでは管理者APIは利用できません）
+- admin-panel コンテナ/ホストから LibreChat API へのネットワークアクセス
+- LibreChat上の管理者アカウント：最初に登録されたユーザー（自動管理者）、Mongoで `role: 'ADMIN'` が設定されたユーザー、または `access:admin` 権限が付与されたプリンシパルのいずれか。
+
+### Dockerで実行する（推奨） [#run-with-docker-recommended]
+
+GHCRから公開されているイメージを使用する場合:
+
+```bash
+# 1. Create an env file
+cp .env.example .env
+
+# 2. Edit .env and set at minimum:
+#    SESSION_SECRET=<random string, min 32 characters>
+#    VITE_API_BASE_URL=http://host.docker.internal:3080
+
+# 3. Start it
+docker compose up -d   # http://localhost:3000
+docker compose down    # stop
+```
+
+スタンドアロンの `docker run`:
+
+```bash
+docker run -p 3000:3000 \
+  --add-host=host.docker.internal:host-gateway \
+  -e SESSION_SECRET=replace-with-32-char-random-string \
+  -e VITE_API_BASE_URL=http://host.docker.internal:3080 \
+  ghcr.io/clickhouse/librechat-admin-panel:latest
+```
+
+<Callout type="warning" title="Docker ネットワーク">
+  コンテナ内では、`localhost` はホストではなくコンテナ自身を指します。LibreChat が同じホスト上で実行されている場合、`VITE_API_BASE_URL` を `http://host.docker.internal:3080` に向けてください（Linux の場合は `--add-host=host.docker.internal:host-gateway` を追加してください）。本番環境では、LibreChat API のパブリック/内部 DNS 名を使用してください。
+</Callout>
+
+### 開発用にローカルで実行する [#run-locally-for-development]
+
+```bash
+git clone https://github.com/ClickHouse/librechat-admin-panel.git
+cd librechat-admin-panel
+cp .env.example .env    # then edit
+bun install
+bun dev                 # http://localhost:3000
+```
+
+## 環境変数 [#environment-variables]
+
+| 変数 | 必須 | デフォルト | 説明 |
+| ------------------------------- | --------------------- | --------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SESSION_SECRET`                | 本番環境では**はい** | `bun dev` 実行時はハードコードされた開発用フォールバック; Dockerイメージでは**デフォルトなし** | セッション暗号化キー。32文字以上である必要があります。 |
+| `VITE_API_BASE_URL`             | Dockerでは**はい** | `http://localhost:3080` (ローカル開発のみ) | OAuthリダイレクトに使用される、ブラウザから見たLibreChat APIサーバーのURL。 |
+| `API_SERVER_URL`                | いいえ | `VITE_API_BASE_URL` にフォールバック | LibreChat API呼び出し用のサーバーサイドURL。管理パネルサーバーがブラウザとは異なるURL（例：内部Kubernetesサービス対パブリックホスト名）でLibreChatに到達する場合に便利です。 |
+| `PORT`                          | いいえ | `3000` | 管理パネルがリッスンするポート。 |
+| `ADMIN_SSO_ONLY`                | いいえ | `false` | メールアドレス/パスワードフォームを非表示にし、SSOのみのログインを強制します。 |
+| `ADMIN_SESSION_IDLE_TIMEOUT_MS` | いいえ | `1800000` (30分) | ミリ秒単位のセッションアイドルタイムアウト。 |
+| `SESSION_COOKIE_SECURE`         | いいえ | 本番環境では `true` | セッションクッキーにHTTPSが必要かどうか。 |
+| `ADMIN_PANEL_METRICS_SECRET`    | いいえ | _未設定_ | `/metrics` Prometheus endpointをスクレイピングするために必要なBearerトークン。未設定または不一致の場合、endpointは `401` を返します。 |
+
+### LibreChat リダイレクト URL [#librechat-redirect-url]
+
+管理パネルがLibreChatとは別のURLでホストされている場合は、LibreChat API環境で `ADMIN_PANEL_URL` を設定してください。パスプレフィックスを含む外部管理パネルのベースURLを使用し、末尾のスラッシュは省略してください：
+
+```bash filename=".env"
+ADMIN_PANEL_URL=https://admin.example.com/admin
+```
+
+Helmデプロイの場合は、valuesファイルで `librechat.adminPanelUrl` を設定してください。チャートはこれをLibreChatの管理用OAuthフローのために `ADMIN_PANEL_URL` としてレンダリングします：
+
+```yaml filename="values.yaml"
+librechat:
+  adminPanelUrl: https://admin.example.com/admin
+```
+
+OpenID SSOについては、`${DOMAIN_SERVER}/api/admin/oauth/openid/callback` をアイデンティティプロバイダーに登録してください。
+
+### キャッシュ制御 [#cache-controls]
+
+これらはLibreChatのキャッシュ環境変数を反映したものです。`ADMIN_PANEL_*` バリアントが優先され、設定されていない場合は共有のLibreChat相当の設定にフォールバックします。
+
+| 変数 | 目的 |
+| --------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `STATIC_CACHE_MAX_AGE` / `ADMIN_PANEL_STATIC_CACHE_MAX_AGE`     | `/assets/` 内のハッシュ化されたアセットに対するブラウザの `max-age`（秒単位、デフォルトは 172800 = 2日間）。 |
+| `STATIC_CACHE_S_MAX_AGE` / `ADMIN_PANEL_STATIC_CACHE_S_MAX_AGE` | CDN の `s-maxage`（秒単位、デフォルトは 86400 = 1日間）。 |
+| `INDEX_CACHE_CONTROL` / `ADMIN_PANEL_INDEX_CACHE_CONTROL`       | HTML インデックスレスポンス用の `Cache-Control` ヘッダー。 |
+| `INDEX_PRAGMA` / `ADMIN_PANEL_INDEX_PRAGMA`                     | HTML インデックスレスポンス用の `Pragma` ヘッダー。 |
+| `INDEX_EXPIRES` / `ADMIN_PANEL_INDEX_EXPIRES`                   | HTML インデックスレスポンス用の `Expires` ヘッダー。 |
+
+## 認証 [#authentication]
+
+管理パネルはLibreChatの認証スタックを再利用しており、独自のユーザーデータベースは持っていません。以下の2つのログインパスがサポートされています：
+
+- **ローカルアカウント**: 管理者アクセスチェックを通過したLibreChatユーザーに対するユーザー名/パスワード。
+- **シングルサインオン**: OpenID Connect、SAML、およびLibreChatインスタンス上で既に設定済みのソーシャルOAuthプロバイダー。`ADMIN_SSO_ONLY=true`を設定すると、パスワードフォームを完全に非表示にできます。
+
+LibreChatは、すべてのリクエストに対してサーバーサイドで管理者アクセスを検証します。アカウントは以下のいずれかの条件を満たしている必要があります。
+
+1. MongoDBで `role: 'ADMIN'` を持つか、**または**
+2. `access:admin` システム権限を保持していること（管理パネル自体を通じて別のプリンシパルに割り当てられます。詳細は [System Grants](/docs/features/access_control#layer-3-system-grants-admin-capabilities) を参照してください）。
+
+セッションはクッキーベースであり、`SESSION_SECRET` で暗号化され、`ADMIN_SESSION_IDLE_TIMEOUT_MS` に基づいてアイドル状態での有効期限が切れます。
+
+## 設定管理 [#configuration-management]
+
+このパネルは、LibreChatの設定をconfig schemaによって駆動される動的なフォームとしてレンダリングします。これには2つの有用な特性があります：
+
+- **前方互換性**: LibreChatが新しい設定フィールドをリリースした際、パネルはスキーマから自動的にそれを取得します。管理パネルのアップグレードや再デプロイは不要です。
+- **階層化されたオーバーライド**: ベース設定（`librechat.yaml` からの読み込み）は、ロールやグループごとにスコープ設定されたプリンシパル単位のオーバーライドによって上書き（シャドウイング）される場合があります。ユーザーがログインすると、オーバーライドは優先順位に従って解決され、ベース設定にマージされることで、そのユーザーに適用される有効な設定が生成されます。
+
+これはLibreChatの[DB-backed per-principal configuration override system](https://github.com/danny-avila/LibreChat/pull/12354)の背後にあるインターフェースです。一般的な使用例：
+
+- 「Research」グループに、より高い `recursionLimit` と追加の endpoint を付与する
+- 「FinanceAdmins」ロールにMCPサーバーの管理を許可し、通常のユーザーには利用のみを許可します
+- 外部委託業者グループに対して、より厳格な `interface` 権限を適用する
+
+## 関連情報 [#related]
+
+- [Access Control](/docs/features/access_control): 管理パネルの基盤となる権限モデル
+- [Interface Configuration](/docs/configuration/librechat_yaml/object_structure/interface): パネルが編集する機能フラグ
+- [Authentication](/docs/features/authentication): LibreChatにおけるユーザー認証
+- [v0.8.5 changelog](/changelog/v0.8.5): 管理者APIの基盤
+- [GitHub: ClickHouse/librechat-admin-panel](https://github.com/ClickHouse/librechat-admin-panel): ソース、イシュー、リリース

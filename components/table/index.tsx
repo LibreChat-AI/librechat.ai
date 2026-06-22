@@ -18,7 +18,10 @@ export function OptionTable({ options }: { options: [string, string, any, string
         </thead>
         <tbody className="align-baseline text-gray-900 dark:text-gray-100">
           {options.map(([key, type, description, example], index) => (
-            <tr key={`${key}-${index}`} className="border-b border-gray-100 dark:border-neutral-700/50">
+            <tr
+              key={`${key}-${index}`}
+              className="border-b border-gray-100 dark:border-neutral-700/50"
+            >
               <td className="whitespace-pre py-2 font-mono text-xs font-semibold leading-6 text-foreground">
                 {key}
               </td>

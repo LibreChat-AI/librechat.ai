@@ -1,0 +1,275 @@
+---
+title: 使用 S3 的 CloudFront
+icon: AWS
+description: >-
+  配置 Amazon CloudFront 作为存储在 S3 中的 LibreChat 文件的 CDN 层，包括稳定的媒体链接、签名 Cookie 和签名下载
+  URL。
+---
+
+CloudFront 让 LibreChat 能够在 S3 中保留文件的同时，通过稳定的 CDN URL 提供图像、头像和下载服务。当您希望利用 S3 的持久性，同时又不想让用户接触到会过期的 S3 预签名图像 URL 时，这是推荐的 AWS 设置方式。
+
+## 何时使用 CloudFront [#when-to-use-cloudfront]
+
+当您需要以下功能时，请使用 CloudFront：
+
+- 在整个 UI 中持续渲染的稳定头像和图片 URL
+- 在 S3 存储桶前端的全局边缘缓存
+- 用于私有内联图像和头像的签名 Cookie
+- 后端授权的下载签名 URL
+- 删除文件时可选的缓存失效
+
+<Callout type="info" title="仍然需要 S3">
+  `cloudfront` 文件策略将对象存储在 S3 中并返回 CloudFront URL。请先配置 S3 环境变量，然后在 `librechat.yaml` 中添加 `cloudfront` 代码块。
+</Callout>
+
+## 要求 [#requirements]
+
+- 一个私有的 S3 存储桶
+- 一个以 S3 存储桶作为源站的 CloudFront 分发
+- 一个源访问控制 (OAC) 或等效的源访问策略，以便 CloudFront 可以从 S3 读取数据
+- `AWS_REGION` 和 `AWS_BUCKET_NAME`
+- `AWS_ACCESS_KEY_ID` 和 `AWS_SECRET_ACCESS_KEY`，除非您的部署使用了 AWS 身份提供商（例如 IRSA）
+- 当使用签名 Cookie 或签名下载 URL 时，需要 `CLOUDFRONT_KEY_PAIR_ID` 和 `CLOUDFRONT_PRIVATE_KEY`
+
+## 环境变量 [#environment-variables]
+
+```bash filename=".env"
+AWS_ACCESS_KEY_ID=your_access_key_id
+AWS_SECRET_ACCESS_KEY=your_secret_access_key
+AWS_REGION=us-east-1
+AWS_BUCKET_NAME=your_bucket_name
+
+# Required for signed cookies and signed CloudFront download URLs
+CLOUDFRONT_KEY_PAIR_ID=K1234567890ABC
+CLOUDFRONT_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----"
+```
+
+`CLOUDFRONT_PRIVATE_KEY` 必须包含完整的 PEM 私钥。在 `.env` 中，请将其用引号括起来并保留换行符，或者从您的平台密钥管理器中注入。
+
+## 基本配置 [#basic-configuration]
+
+当你想要使用 CloudFront 处理图片和头像，同时将文档保留在 S3 签名 URL 上时，请使用 `fileStrategies`：
+
+```yaml filename="librechat.yaml"
+version: 1.3.11
+
+fileStrategies:
+  avatar: 'cloudfront'
+  image: 'cloudfront'
+  document: 's3'
+
+cloudfront:
+  domain: 'https://cdn.example.com'
+  imageSigning: 'none'
+  urlExpiry: 3600
+```
+
+如果每种文件类型都应使用 CloudFront，请使用 `fileStrategy`：
+
+```yaml filename="librechat.yaml"
+fileStrategy: 'cloudfront'
+
+cloudfront:
+  domain: 'https://cdn.example.com'
+```
+
+## 签名 Cookie [#signed-cookies]
+
+签名 Cookie 是私有内联图像和头像的安全模式。它们允许 LibreChat 在消息和记录中保持稳定的 CloudFront URL，同时通过短效 Cookie 授权访问。
+
+```yaml filename="librechat.yaml"
+fileStrategies:
+  avatar: 'cloudfront'
+  image: 'cloudfront'
+  document: 's3'
+
+cloudfront:
+  domain: 'https://cdn.example.com'
+  imageSigning: 'cookies'
+  cookieDomain: '.example.com'
+  cookieExpiry: 1800
+  urlExpiry: 3600
+  requireSignedAccess: true
+```
+
+### 域名要求 [#domain-requirements]
+
+对于签名 cookie，LibreChat API 和 CloudFront 主机名必须共享同一个父域：
+
+- API: `https://api.example.com`
+- CloudFront CNAME: `https://cdn.example.com`
+- `cookieDomain: ".example.com"`
+
+`cookieDomain` 必须以点号开头。浏览器不会将 CloudFront cookie 发送到不相关的域名。
+
+### Cookie 的保护内容 [#what-cookies-protect]
+
+LibreChat 将签名 cookie 的作用域限定为内联媒体路径：
+
+- `/i/...` 私有的已上传或生成的图片，作用域限定为用户个人
+- `/a/...` 头像资源，当存在 `tenantId` 时，其作用域限定为该租户
+
+文档、常规上传和代码输出保留在这些内联媒体路径之外。下载由后端授权，并以签名的 CloudFront URL 形式返回。
+
+### Cookie Refresh [#cookie-refresh]
+
+当 signed-cookie 模式处于激活状态时，LibreChat 会在启动配置中发布一个 cookie 刷新 endpoint：
+
+```text
+POST /api/auth/cloudfront/refresh
+```
+
+已验证的会话会在身份验证流程、令牌刷新以及 CloudFront 图像重试路径期间刷新 cookie。刷新响应包含 cookie 的生命周期以及建议的刷新时间。
+
+## 签名下载 [#signed-downloads]
+
+LibreChat 使用签名的 CloudFront URL 进行授权下载。`urlExpiry` 设置以秒为单位控制其有效期：
+
+```yaml filename="librechat.yaml"
+cloudfront:
+  domain: 'https://cdn.example.com'
+  imageSigning: 'cookies'
+  cookieDomain: '.example.com'
+  urlExpiry: 3600
+```
+
+若要覆盖直接下载的文件名和内容类型 (content-type)，请配置 CloudFront 缓存/源请求策略，将这些查询字符串转发给 S3：
+
+- `response-content-disposition`
+- `response-content-type`
+
+对于下载路径，请附加一个响应头策略，其中包含：
+
+- `X-Content-Type-Options: nosniff`
+- 限制性的内容安全策略（Content Security Policy），例如 `default-src 'none'`
+
+## 缓存失效 (Cache Invalidation) [#cache-invalidation]
+
+默认情况下，LibreChat 会删除 S3 对象，但不会创建 CloudFront 失效请求。当被删除的文件必须立即从边缘缓存中消失时，请启用失效请求：
+
+```yaml filename="librechat.yaml"
+cloudfront:
+  domain: 'https://cdn.example.com'
+  distributionId: 'E1234ABCD'
+  invalidateOnDelete: true
+```
+
+当 `invalidateOnDelete` 为 `true` 时，`distributionId` 是必需的。LibreChat 所使用的 AWS 身份也需要具备 `cloudfront:CreateInvalidation` 权限。
+
+## 多区域对象路径 [#multi-region-object-paths]
+
+`includeRegionInPath` 会将存储区域添加到新生成的对象键中：
+
+```yaml filename="librechat.yaml"
+cloudfront:
+  domain: 'https://cdn.example.com'
+  storageRegion: 'us-east-2'
+  includeRegionInPath: true
+```
+
+启用后，新密钥将包含区域感知路径段，例如：
+
+```text
+/i/r/us-east-2/t/tenantId/images/userId/file.png
+/a/r/us-east-2/t/tenantId/avatars/userId/avatar.png
+/r/us-east-2/t/tenantId/images/userId/file.pdf
+```
+
+这仅影响新生成的密钥。现有文件不会被移动。LibreChat 不会为您配置 CloudFront 源站、Route 53 或区域路由。
+
+## CloudFront 拦截参考 [#cloudfront-block-reference]
+
+<OptionTable
+  options={[
+    [
+      'domain',
+      'string',
+      'CloudFront 分发域名或 CNAME。必填。',
+      'domain: "https://cdn.example.com"',
+    ],
+    [
+      'distributionId',
+      'string',
+      '用于缓存失效的分发 ID。',
+      'distributionId: "E1234ABCD"',
+    ],
+    [
+      'invalidateOnDelete',
+      'boolean',
+      '当文件被删除时创建 CloudFront 失效请求。默认值：false。',
+      'invalidateOnDelete: false',
+    ],
+    [
+      'imageSigning',
+      'string',
+      '内联媒体访问模式。使用 `"none"` 进行公共 CloudFront 访问，或使用 `"cookies"` 进行签名 Cookie 访问。`"url"` 为预留项，目前未针对图像实现。',
+      'imageSigning: "cookies"',
+    ],
+    [
+      'cookieDomain',
+      'string',
+      '用于签名 cookie 的共享父域。当 `imageSigning` 设置为 `"cookies"` 时必需。',
+      'cookieDomain: ".example.com"',
+    ],
+    [
+      'cookieExpiry',
+      'number',
+      '签名 cookie 的有效期（以秒为单位）。默认值：1800。最大值：604800。',
+      'cookieExpiry: 1800',
+    ],
+    [
+      'urlExpiry',
+      'number',
+      '已签名下载 URL 的有效期（秒）。默认值：3600。',
+      'urlExpiry: 3600',
+    ],
+    [
+      'storageRegion',
+      'string',
+      '用于区域感知对象路径的可选区域标签。',
+      'storageRegion: "us-east-2"',
+    ],
+    [
+      'includeRegionInPath',
+      'boolean',
+      '在新建的对象键中包含 `storageRegion`。默认值：false。',
+      'includeRegionInPath: false',
+    ],
+    [
+      'requireSignedAccess',
+      'boolean',
+      '如果无法初始化签名 cookie CloudFront 访问，则启动失败。默认值：false。',
+      'requireSignedAccess: true',
+    ],
+  ]}
+/>
+
+## 建议的 AWS 权限 [#suggested-aws-permissions]
+
+为 S3 存储桶使用最小权限的 IAM 权限。仅在启用了 `invalidateOnDelete` 时添加 CloudFront 失效（invalidation）权限。
+
+```json filename="iam-policy.json"
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["s3:PutObject", "s3:GetObject", "s3:DeleteObject", "s3:ListBucket"],
+      "Resource": ["arn:aws:s3:::my-librechat-bucket", "arn:aws:s3:::my-librechat-bucket/*"]
+    },
+    {
+      "Effect": "Allow",
+      "Action": "cloudfront:CreateInvalidation",
+      "Resource": "arn:aws:cloudfront::123456789012:distribution/E1234ABCD"
+    }
+  ]
+}
+```
+
+## 故障排除 [#troubleshooting]
+
+- 启动日志 `CloudFront domain is required`：添加 `cloudfront.domain`。
+- 启动日志 `S3 must be initialized`：请先配置 S3 环境变量。
+- 未设置签名 Cookie：请确认 `imageSigning: "cookies"`、`cookieDomain`、`CLOUDFRONT_KEY_PAIR_ID` 和 `CLOUDFRONT_PRIVATE_KEY`。
+- 浏览器仍然无法加载图片：请确认 API 和 CDN 主机名共享配置的父域名，并确认已允许 `Secure` 和 `SameSite=None` 的 Cookie。
+- 下载忽略文件名/内容类型：更新 CloudFront 缓存/源请求策略以转发响应覆盖查询字符串。

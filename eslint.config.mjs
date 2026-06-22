@@ -1,18 +1,17 @@
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { includeIgnoreFile } from '@eslint/compat';
-import js from '@eslint/js';
-import nextPlugin from '@next/eslint-plugin-next';
-import eslintConfigPrettier from 'eslint-config-prettier';
-import importPlugin from 'eslint-plugin-import';
-import react from 'eslint-plugin-react';
-import reactHooks from 'eslint-plugin-react-hooks';
-import tailwindcss from 'eslint-plugin-tailwindcss';
-import unicorn from 'eslint-plugin-unicorn';
-import globals from 'globals';
-import tseslint from 'typescript-eslint';
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { includeIgnoreFile } from '@eslint/compat'
+import js from '@eslint/js'
+import nextPlugin from '@next/eslint-plugin-next'
+import eslintConfigPrettier from 'eslint-config-prettier'
+import importPlugin from 'eslint-plugin-import'
+import react from 'eslint-plugin-react'
+import reactHooks from 'eslint-plugin-react-hooks'
+import unicorn from 'eslint-plugin-unicorn'
+import globals from 'globals'
+import tseslint from 'typescript-eslint'
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 export default tseslint.config(
   // ── 1. Global ignores ──────────────────────────────────────────────
@@ -124,51 +123,10 @@ export default tseslint.config(
   },
 
   // ── 7. Tailwind CSS ────────────────────────────────────────────────
-  {
-    files: ['app/**/*.{tsx,jsx}', 'components/**/*.{tsx,jsx}', 'lib/**/*.{tsx,jsx}'],
-    ...tailwindcss.configs['flat/recommended'][0],
-    settings: {
-      tailwindcss: {
-        callees: ['cn'],
-        whitelist: [
-          'dash-ring',
-          'theme-\\d+',
-          'nextra-[\\w-]+',
-          'blog-card',
-          'glide(__.+)?',
-          'credentials-\\w+',
-          'input-container',
-          'copy-button',
-          'generate-button',
-          'tooltip',
-          'card',
-          'cards',
-          'file',
-          'file-tree',
-          'folder',
-          'carousel',
-          'frame',
-          'btn(-.+)?',
-          'rounded-box',
-          'rounded-square',
-          'bg-blackish',
-          'clickhouse-highlight',
-          'text-base-content\\/\\d+',
-          'origin-\\(.+\\)',
-          'max-h-\\(.+\\)',
-          'subheading-\\w*',
-          'post-item(-.+)?',
-        ],
-      },
-    },
-    rules: {
-      'tailwindcss/classnames-order': 'off',
-      'tailwindcss/enforces-negative-arbitrary-values': 'error',
-      'tailwindcss/enforces-shorthand': 'error',
-      'tailwindcss/migration-from-tailwind-2': 'error',
-      'tailwindcss/no-custom-classname': 'error',
-    },
-  },
+  // eslint-plugin-tailwindcss is v3-only (it imports tailwindcss/resolveConfig,
+  // removed in Tailwind v4) and has no stable v4 release, so its lint rules are
+  // dropped with the Tailwind v4 upgrade. Class ordering is handled by
+  // prettier-plugin-tailwindcss if/when added.
 
   // ── 8. Node / CJS config files ─────────────────────────────────────
   {
@@ -178,6 +136,7 @@ export default tseslint.config(
       'prettier.config.*',
       '.prettierrc.{js,cjs}',
       '**/*.cjs',
+      'scripts/**/*.{js,mjs}',
     ],
     languageOptions: {
       globals: globals.node,
@@ -203,4 +162,4 @@ export default tseslint.config(
 
   // ── 11. Prettier (must be last) ────────────────────────────────────
   eslintConfigPrettier,
-);
+)

@@ -1,6 +1,7 @@
 import Image from 'next/image'
 import Link from 'next/link'
 import { authors } from '@/lib/authors'
+import { ogImageUrl } from '@/lib/og'
 import type { Metadata } from 'next'
 
 export const metadata: Metadata = {
@@ -9,12 +10,13 @@ export const metadata: Metadata = {
   openGraph: {
     title: 'Authors | LibreChat',
     description: 'Get to know the talented people behind LibreChat.',
+    images: [ogImageUrl({ title: 'Authors' })],
   },
 }
 
 export default function AuthorsPage() {
   return (
-    <main className="mx-auto max-w-4xl px-4 py-16">
+    <main id="main-content" tabIndex={-1} className="mx-auto max-w-4xl px-4 py-16">
       <header className="mb-12 text-center">
         <h1 className="text-4xl font-bold tracking-tight">Our Authors</h1>
         <p className="mt-3 text-fd-muted-foreground">

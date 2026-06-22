@@ -1,0 +1,127 @@
+---
+title: Flux reprenables
+icon: Zap
+description: >-
+  Récupérez les réponses de l'IA en cours après une perte de connexion,
+  synchronisez la même discussion entre les onglets et les appareils, et
+  maintenez les flux actifs sur des instances mises à l'échelle.
+---
+
+Les flux reprenables permettent à une réponse IA en cours de survivre à une perte de connexion. Si le réseau tombe, que le navigateur s'actualise, ou que vous changez d'onglet ou d'appareil, LibreChat reconstruit le contenu déjà diffusé et reprend là où il s'était arrêté. Le même mécanisme permet de maintenir synchronisés plusieurs spectateurs d'une même conversation.
+
+## Ce que vous obtenez [#what-you-get]
+
+- **Aucune réponse perdue.** Les coupures réseau, les rafraîchissements de navigateur et les redémarrages de serveur ne suppriment pas le contenu diffusé en continu.
+- **Les onglets restent synchronisés.** Ouvrez une même conversation dans deux onglets de navigateur et les deux recevront les mêmes mises à jour en temps réel.
+- **Changez d'appareil en cours de route.** Lancez une génération sur votre ordinateur et récupérez le résultat sur votre téléphone.
+- **Générations en arrière-plan.** Lancez une réponse longue, passez à un autre onglet ou une autre application, et la réponse complète sera là à votre retour.
+- **Conversations partagées.** Chaque personne consultant une conversation partagée voit le contenu s'afficher en temps réel.
+
+## Comment ça fonctionne [#how-it-works]
+
+Lorsque vous envoyez un message, LibreChat crée une tâche de génération qui enregistre chaque delta diffusé. Si la connexion est interrompue :
+
+1. Le client détecte la déconnexion.
+2. Lors de la reconnexion, le serveur reconstruit le contenu diffusé jusqu'à présent à partir des deltas enregistrés de la tâche.
+3. Le contenu manquant est délivré en un seul événement de synchronisation.
+4. Le streaming se poursuit à partir de la position actuelle.
+
+Ceci s'exécute automatiquement et ne nécessite aucune intervention de l'utilisateur.
+
+## Modes de déploiement [#deployment-modes]
+
+LibreChat est fourni avec deux backends pour les flux reprenables.
+
+### Mode instance unique (par défaut) [#single-instance-mode-default]
+
+Stocke l'état du flux en mémoire et utilise un `EventEmitter` Node.js pour le pub/sub. Il s'agit de l'option par défaut qui ne nécessite aucune configuration. Elle couvre le développement local, les déploiements sur serveur unique et les configurations Docker Compose.
+
+### Mode Redis (production) [#redis-mode-production]
+
+Utilise Redis Streams et Pub/Sub afin que l'état du flux soit partagé entre les instances. Utilisez-le pour des déploiements à mise à l'échelle horizontale, équilibrés en charge ou à haute disponibilité, y compris les clusters Kubernetes. Avec Redis, une génération commencée sur une instance peut reprendre sur une autre, ce qui maintient les flux actifs pendant les déploiements progressifs et la mise à l'échelle automatique.
+
+<Callout type="info" title="Instance unique ? Vous n'avez probablement pas besoin de Redis ici">
+Le mode en mémoire gère tout pour une instance unique de LibreChat. Redis devient pertinent une fois que vous exécutez plusieurs instances derrière un équilibreur de charge. Redis reste utile pour la mise en cache et le stockage de sessions dans les déploiements à instance unique, mais pas spécifiquement pour les flux reprenables.
+</Callout>
+
+## Configuration [#configuration]
+
+### Activer Redis Streams [#enable-redis-streams]
+
+Définir `USE_REDIS=true` permet aux flux reprenables d'utiliser Redis automatiquement. Utilisez `USE_REDIS_STREAMS` pour le contrôler explicitement.
+
+```bash filename=".env"
+USE_REDIS=true
+REDIS_URI=redis://localhost:6379
+# Resumable streams use Redis automatically when USE_REDIS=true.
+# Set USE_REDIS_STREAMS to control it explicitly:
+USE_REDIS_STREAMS=true
+```
+
+### Cluster Redis [#redis-cluster]
+
+Pour un Redis Cluster, activez le mode cluster et listez les nœuds dans `REDIS_URI`.
+
+```bash filename=".env"
+USE_REDIS_STREAMS=true
+USE_REDIS_CLUSTER=true
+REDIS_URI=redis://node1:7001,redis://node2:7002,redis://node3:7003
+```
+
+LibreChat utilise des clés avec des hashtags afin que les opérations multi-clés aboutissent sur le même slot de cluster.
+
+## Ce qui est reconstruit [#what-gets-reconstructed]
+
+Lors de la reconnexion, LibreChat agrège les événements delta enregistrés pour reconstruire :
+
+- Contenu du message (texte, appels d'outils, citations)
+- Étapes d'exécution de l'agent et raisonnement intermédiaire
+- Métadonnées et informations d'état
+
+Le mécanisme de stockage dépend du mode de déploiement :
+
+| Composant | Mécanisme de stockage |
+|-----------|-------------------|
+| Chunks | Redis Streams (`XADD`/`XRANGE`) |
+| Métadonnées de tâche | Structures Redis Hash |
+| Événements en temps réel | Canaux Redis Pub/Sub |
+| Expiration | TTL automatique après la fin du flux |
+
+LibreChat applique quelques optimisations pour réduire les coûts :
+
+- **Récupération axée sur la mémoire.** La reconnexion à la même instance effectue une lecture depuis le cache local, évitant ainsi un aller-retour vers Redis.
+- **Nettoyage lors de l'accès.** Les entrées de tâches obsolètes sont supprimées lors des requêtes, et les flux terminés expirent automatiquement.
+- **Stockage avec ramasse-miettes.** Le mode en mémoire stocke les graphes de flux avec `WeakRef`, afin qu'ils soient collectés une fois qu'une conversation est terminée.
+
+## Test [#testing]
+
+Pour confirmer que la fonctionnalité fonctionne, démarrez une conversation en streaming avec n'importe quel modèle, puis essayez l'une des options suivantes :
+
+- **Onglets.** Ouvrez la même discussion dans un second onglet ; les deux devraient se synchroniser.
+- **Déconnecter.** Coupez brièvement le réseau, puis reconnectez-vous.
+- **Navigation.** Naviguez ailleurs pendant le flux, puis revenez.
+
+Chaque cas doit produire la réponse complète sans aucun contenu manquant.
+
+## Dépannage [#troubleshooting]
+
+**Les flux ne reprennent pas.** Confirmez que Redis est accessible et que `USE_REDIS_STREAMS` est défini.
+
+```bash
+docker exec -it librechat-redis redis-cli ping
+# Expected: PONG
+
+echo $USE_REDIS_STREAMS
+```
+
+**Le contenu semble dupliqué.** Cela signifie généralement une incompatibilité de version du client. Mettez à jour vers la dernière version de LibreChat.
+
+**Utilisation élevée de la mémoire en mode instance unique.** Les flux terminés sont collectés par le ramasse-miettes (garbage collected). Si la mémoire reste élevée, recherchez les flux de très longue durée qui ne se terminent jamais ou les flux qui ont rencontré une erreur sans être nettoyés.
+
+## Documentation associée [#related-documentation]
+
+- [Configuration de Redis](/docs/configuration/redis) : configuration de Redis pour la mise en cache et la mise à l'échelle horizontale
+- [Agents](/docs/features/agents) : Agents IA avec utilisation d'outils
+- [Déploiement Docker](/docs/local/docker) : déploiement basé sur des conteneurs
+
+Pour les détails de l'implémentation, voir [PR #10926](https://github.com/danny-avila/LibreChat/pull/10926).

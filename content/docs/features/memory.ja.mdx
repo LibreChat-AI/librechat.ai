@@ -1,0 +1,273 @@
+---
+title: ユーザーメモリ
+icon: Bookmark
+description: LibreChatのすべてのチャットリクエストで実行されるユーザーメモリ用のキー/値ストア
+---
+
+## 概要 [#overview]
+
+LibreChatにおけるUser Memoryは、会話全体を通じてユーザー固有の情報を保持する**キー/バリュー（key/value）ストア**です。専用のメモリ・エージェントが**すべてのチャットリクエスト**の開始時に実行され、このストアに対して読み書きを行うことで、メインのAI応答にパーソナライズされたコンテキストを提供します。
+
+<Callout type="info" title="キー/バリュー・ストア（会話メモリではありません）">
+これは、会話履歴全体に対するセマンティックメモリでは**ありません**。過去の会話をインデックス化、埋め込み、検索するものではありません。その代わり、各リクエストにコンテキストとして注入されるキーと値のペア（例: `user_preferences`、`learned_facts`）の構造化されたセットを保持します。AIが応答するたびに読み込む、永続的なメモ帳のようなものだと考えてください。
+
+単一の会話内における以前のメッセージのコンテキストについては、LibreChatはすでに標準のメッセージ履歴ウィンドウを使用しており、これは本機能とは別個のものです。
+
+</Callout>
+
+<Callout type="important" title="⚠️ 設定が必要です">
+  Memory機能が動作するためには、`librechat.yaml`ファイルで明示的に設定する必要があります。デフォルトでは有効になっていません。
+</Callout>
+
+## 主な機能 [#key-features]
+
+- **すべてのリクエストで実行**: メモリエージェントは各チャットリクエストの開始時に実行され、保存されたコンテキストが常に利用可能であることを保証します。
+- **Key/Value Storage**: 情報は生の会話ログとしてではなく、構造化されたキー/値ペアとして保存されます
+- **手動エントリ**: ユーザーはメモリのエントリを直接追加、編集、削除できるため、AIが何を記憶するかを完全に制御できます。
+- **ユーザーコントロール**: 有効にすると、ユーザーは個々のチャットでメモリのオン/オフを切り替えることができます
+- **カスタマイズ可能なキー**: `validKeys` を使用して、保存可能な情報のカテゴリを制限します。
+- **トークン管理**: メモリ使用量に制限を設定してコストを管理します
+- **Agent Integration**: AIエージェントを使用して、何を記憶するかをインテリジェントに管理します
+
+## 設定 [#configuration]
+
+メモリ機能を有効にするには、`librechat.yaml`ファイルに`memory`設定を追加する必要があります。
+
+```yaml filename="librechat.yaml"
+version: 1.3.5
+cache: true
+
+memory:
+  disabled: false # Set to true to completely disable memory
+  personalize: true # Gives users the ability to toggle memory on/off, true by default
+  tokenLimit: 2000 # Maximum tokens for memory storage
+  maxInputTokens: 12000 # Maximum recent-chat tokens sent to the memory agent
+  messageWindowSize: 5 # Number of recent messages to consider
+  agent:
+    provider: 'openAI'
+    model: 'gpt-4'
+```
+
+provider フィールドは、[Model Spec Guide](/docs/configuration/librechat_yaml/object_structure/model_specs#endpoint) で定義されている許容値と一致している必要があります。
+
+**注:** カスタム endpoint を使用している場合、endpoint の値は定義されたカスタム endpoint 名と完全に一致している必要があります。
+
+詳細な設定オプションについては、[Memory Configuration Guide](/docs/configuration/librechat_yaml/object_structure/memory) を参照してください。
+
+## 仕組み [#how-it-works]
+
+<Callout type="note" title="Memory Agentの実行">
+メモリが有効な場合、メモリ・エージェントは**すべてのチャットリクエスト**で実行されます。これはメインのチャット応答と並行して実行されます。メインの応答が開始される前に開始され、メインのリクエストが終了してから最大3秒後までの期間に制限されます。
+
+これは、送信するすべてのメッセージがメモリ・エージェントをトリガーし、以下の処理を行うことを意味します：
+
+<ol>
+  <li>
+    <strong>Read</strong>（読み取り）現在のキー/値ストアを実行し、関連するエントリをコンテキストとして注入します
+  </li>
+  <li>
+    <strong>Analyze</strong> the recent message window for information worth storing or updating
+  </li>
+  <li>
+    <strong>書き込み</strong>：新規または変更されたエントリをストアに書き戻します
+  </li>
+</ol>
+</Callout>
+
+### 1. Key/Value Storage [#1-keyvalue-storage]
+
+Memory エントリはキー/値ペアとして保存されます。Memory が有効な場合、システムは以下のようなエントリを保存できます。
+
+- ユーザー設定（コミュニケーションスタイル、関心のあるトピック）
+- ユーザーによって明示的に共有された重要な事実
+- 言及されている進行中のプロジェクトやタスク
+- `validKeys` を介して定義する任意のカテゴリ
+
+ユーザーはインターフェースを通じてメモリのエントリを**手動で作成、編集、削除**することもでき、AIが自分自身について知っている内容を直接制御できます。
+
+### 2. コンテキストウィンドウ [#2-context-window]
+
+`messageWindowSize` パラメータは、メモリ更新のために分析される直近のメッセージ数を決定します。これは、メモリ・エージェントがどの情報をキー/値ストアに保存または更新する価値があるかを判断するのに役立ちます。
+
+`maxInputTokens` パラメータは、抽出前に自動メモリ・エージェントへ送信される直近のチャットテキストの上限を設定します。選択されたメッセージウィンドウが依然として大きすぎる場合、LibreChat は最新のコンテキストを保持し、メモリ・エージェントを呼び出す前にそれ以前のチャット内容を省略します。
+
+### 3. ユーザーコントロール [#3-user-control]
+
+`personalize` が `true` に設定されている場合：
+
+- ユーザーはチャットインターフェースでメモリのトグルを確認できます
+- 個々の会話に対してメモリの有効化/無効化を切り替えることができます。
+- メモリ設定はセッション間で保持されます
+
+### 4. 有効なキー [#4-valid-keys]
+
+`validKeys` を指定することで、保存される情報のカテゴリを制限できます：
+
+```yaml filename="memory / validKeys"
+memory:
+  validKeys:
+    - 'user_preferences'
+    - 'conversation_context'
+    - 'learned_facts'
+    - 'personal_information'
+```
+
+## ベストプラクティス [#best-practices]
+
+### 1. トークン制限 [#1-token-limits]
+
+機能とコストのバランスを取るために、適切なトークン制限を設定してください：
+
+- より高い制限を設定することで、より包括的なメモリが可能になります
+- 下限値を設定することで処理コストを削減できます
+- 利用パターンと予算を考慮してください
+
+### 2. Custom Instructions [#2-custom-instructions]
+
+`validKeys` を使用する際は、memory agent に対してカスタム指示を提供してください：
+
+```yaml filename="memory / agent with instructions"
+memory:
+  agent:
+    provider: 'openAI'
+    model: 'gpt-4'
+    instructions: |
+      Store information only in the specified validKeys categories.
+      Focus on explicitly stated preferences and important facts.
+      Delete outdated or corrected information promptly.
+```
+
+### 3. プライバシーに関する考慮事項 [#3-privacy-considerations]
+
+- Memoryは会話全体を通してユーザー情報を保存します
+- ユーザーがどのような情報が保存されているかを理解できるようにしてください
+- データ保持ポリシーの実装を検討してください
+- メモリ使用量に関する明確なドキュメントを提供する
+
+## 例 [#examples]
+
+### 基本設定 [#basic-configuration]
+
+デフォルト設定でメモリを有効にする:
+
+```yaml filename="Basic memory config"
+memory:
+  tokenLimit: 2000
+  maxInputTokens: 12000
+  agent:
+    provider: 'openAI'
+    model: 'gpt-4.1-mini'
+```
+
+### 高度な設定 [#advanced-configuration]
+
+すべてのオプションを含む完全な設定:
+
+```yaml filename="Advanced memory config"
+memory:
+  disabled: false
+  validKeys: ['preferences', 'context', 'facts']
+  tokenLimit: 3000
+  maxInputTokens: 12000
+  personalize: true
+  messageWindowSize: 10
+  agent:
+    provider: 'anthropic'
+    model: 'claude-3-opus-20240229'
+    instructions: 'Remember only explicitly stated preferences and key facts.'
+    model_parameters:
+      temperature: 0.3
+```
+
+プロバイダーごとの有効なモデルパラメータについては、[Model Spec Preset Fields](/docs/configuration/librechat_yaml/object_structure/model_specs#preset-fields) を参照してください。
+
+### 事前定義されたエージェントの使用 [#using-predefined-agents]
+
+IDで既存のAgentを参照する:
+
+```yaml filename="Memory with agent ID"
+memory:
+  agent:
+    id: 'memory-specialist-001'
+```
+
+### メモリ機能付きカスタム endpoint [#custom-endpoints-with-memory]
+
+Memoryは、カスタムヘッダーや環境変数を含むカスタムendpointを完全にサポートしています。カスタムendpointを使用する場合、ヘッダーのプレースホルダーや環境変数は、Memoryの処理中に適切に解決されます。
+
+```yaml filename="librechat.yaml with custom endpoint for memory"
+
+endpoints:
+    custom:
+        - name: 'Custom Memory Endpoint'
+           apiKey: 'dummy'
+           baseURL: 'https://api.gateway.ai/v1'
+           headers:
+             x-gateway-api-key: '${GATEWAY_API_KEY}'
+             x-gateway-virtual-key: '${GATEWAY_OPENAI_VIRTUAL_KEY}'
+             X-User-Identifier: '{{LIBRECHAT_USER_EMAIL}}'
+             X-Application-Identifier: 'LibreChat - Test'
+             api-key: '${TEST_CUSTOM_API_KEY}'
+           models:
+             default:
+               - 'gpt-4o-mini'
+               - 'gpt-4o'
+             fetch: false
+
+memory:
+  disabled: false
+  tokenLimit: 3000
+  maxInputTokens: 12000
+  personalize: true
+  messageWindowSize: 10
+  agent:
+    provider: 'Custom Memory Endpoint'
+    model: 'gpt-4o-mini'
+```
+
+- すべての [custom endpoint headers](/docs/configuration/librechat_yaml/object_structure/custom_endpoint#headers) がサポートされています。
+
+## トラブルシューティング [#troubleshooting]
+
+### Memory が動作しない場合 [#memory-not-working]
+
+1. `librechat.yaml` でメモリが設定されていることを確認してください。
+2. `disabled` が `false` に設定されていることを確認してください
+3. 設定されたエージェント/モデルが利用可能であることを確認してください
+4. ユーザーがチャットインターフェースでメモリを有効にしていることを確認してください
+5. カスタムエンドポイントの場合: `provider` 名がカスタムエンドポイントの `name` と完全に一致していることを確認してください。
+
+### 高いトークン使用量 [#high-token-usage]
+
+1. `tokenLimit` を減らしてコストを管理する
+2. `maxInputTokens` を減らして、メモリ管理エージェントに送信される最近のチャットの量を制限します。
+3. `messageWindowSize` を減らして、分析するメッセージ数を少なくします
+4. `validKeys` を使用して、保存される内容を制限します
+5. エージェントの指示をレビューして最適化する
+
+### メモリの不整合 [#inconsistent-memory]
+
+1. ユーザーがメモリのオン/オフを切り替えているか確認する
+2. トークン制限を超えていないことを確認する
+3. 一貫したエージェント設定を維持する
+4. 保存されたメモリの競合を確認する
+
+### カスタム endpoint の認証に関する問題 [#custom-endpoint-authentication-issues]
+
+1. `.env` ファイル内の環境変数が正しく設定されていることを確認してください。
+2. カスタムヘッダーが正しい構文（環境変数の場合は `${ENV_VAR}`、ユーザープレースホルダーの場合は `{{LIBRECHAT_USER_*}}`）を使用していることを確認してください。
+3. メモリでテストする前に、カスタムendpointが通常のチャット補完で動作することを確認してください。
+4. カスタム endpoint API からの認証エラーについて、サーバーログを確認してください。
+
+## 今後の改善点 [#future-improvements]
+
+現在の実装では、すべてのチャットリクエストに対して無条件でメモリ・エージェントを実行しています。計画されている改善点は以下の通りです：
+
+- **書き込みのセマンティックトリガー**: ユーザーがモデルに対して明示的に何かを記憶するように依頼したとき（例：「私がPythonを好むことを覚えておいて」）のみメモリ書き込みエージェントを実行するように検出し、日常的なメッセージに対する不要な処理を削減します。
+- **Vector Similarity Recall**: すべての保存済みメモリをすべてのリクエストに注入する代わりに、ベクトル埋め込みを使用して現在の会話コンテキストに最も関連性の高いエントリのみを検索することで、効率性と関連性の両方を向上させます。
+
+## 関連機能 [#related-features]
+
+- [Agents](/docs/features/agents) - カスタムAIアシスタントの構築
+- [Presets](/docs/user_guides/presets) - 会話設定を保存
+- [Fork Messages](/docs/features/fork) - コンテキストを維持したまま会話を分岐させる

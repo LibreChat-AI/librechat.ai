@@ -1,0 +1,127 @@
+---
+title: Fortsetzbare Streams
+icon: Zap
+description: >-
+  Stellen Sie laufende KI-Antworten nach einem Verbindungsabbruch wieder her,
+  synchronisieren Sie denselben Chat über Tabs und Geräte hinweg und halten Sie
+  Streams über skalierte Instanzen hinweg aktiv.
+---
+
+Fortsetzbare Streams ermöglichen es, dass eine laufende KI-Antwort eine unterbrochene Verbindung übersteht. Wenn das Netzwerk abbricht, der Browser aktualisiert wird oder Sie den Tab oder das Gerät wechseln, rekonstruiert LibreChat den bereits gestreamten Inhalt und fährt dort fort, wo er aufgehört hat. Derselbe Mechanismus hält mehrere Betrachter einer Unterhaltung synchron.
+
+## Was Sie erhalten [#what-you-get]
+
+- **Keine verlorenen Antworten.** Netzwerkabbrüche, Browser-Aktualisierungen und Server-Neustarts führen nicht zum Verlust von gestreamten Inhalten.
+- **Tabs bleiben synchron.** Öffnen Sie eine Konversation in zwei Browser-Tabs und beide erhalten dieselben Aktualisierungen in Echtzeit.
+- **Geräte mitten im Stream wechseln.** Starten Sie eine Generierung auf Ihrem Desktop und rufen Sie das Ergebnis auf Ihrem Smartphone ab.
+- **Hintergrundgenerierungen.** Starten Sie eine lange Antwort, wechseln Sie zu einem anderen Tab oder einer anderen App, und die vollständige Antwort ist bei Ihrer Rückkehr bereits vorhanden.
+- **Geteilte Konversationen.** Jeder Betrachter eines geteilten Chats sieht, wie die Inhalte gleichzeitig gestreamt werden.
+
+## Funktionsweise [#how-it-works]
+
+Wenn Sie eine Nachricht senden, erstellt LibreChat einen Generierungsauftrag, der jedes gestreamte Delta aufzeichnet. Wenn die Verbindung unterbrochen wird:
+
+1. Der Client erkennt die Trennung.
+2. Beim erneuten Verbinden baut der Server den bisher gestreamten Inhalt aus den aufgezeichneten Deltas des Jobs wieder auf.
+3. Der fehlende Inhalt wird in einem einzigen Sync-Ereignis bereitgestellt.
+4. Das Streaming wird von der aktuellen Position fortgesetzt.
+
+Dies wird automatisch ausgeführt und erfordert keine Benutzeraktion.
+
+## Bereitstellungsmodi [#deployment-modes]
+
+LibreChat wird mit zwei Backends für fortsetzbare Streams ausgeliefert.
+
+### Single-Instance-Modus (Standard) [#single-instance-mode-default]
+
+Speichert den Stream-Status im Arbeitsspeicher und verwendet einen Node.js `EventEmitter` für Pub/Sub. Dies ist die Standardeinstellung und erfordert keine Konfiguration. Sie deckt die lokale Entwicklung, Bereitstellungen auf einem einzelnen Server sowie Docker Compose-Setups ab.
+
+### Redis-Modus (Produktion) [#redis-mode-production]
+
+Nutzt Redis Streams und Pub/Sub, sodass der Stream-Status über Instanzen hinweg geteilt wird. Verwenden Sie es für horizontal skalierte, lastverteilte oder hochverfügbare Bereitstellungen, einschließlich Kubernetes-Clustern. Mit Redis kann eine auf einer Instanz gestartete Generierung auf einer anderen fortgesetzt werden, wodurch aktive Streams bei Rolling Deployments und Auto-Scaling am Leben erhalten bleiben.
+
+<Callout type="info" title="Einzelne Instanz? Hier benötigen Sie wahrscheinlich kein Redis">
+Der In-Memory-Modus erledigt alles für eine einzelne LibreChat-Instanz. Redis wird relevant, sobald Sie mehrere Instanzen hinter einem Load Balancer betreiben. Redis ist auch bei Bereitstellungen mit nur einer Instanz für Caching und Sitzungsspeicherung nützlich, jedoch nicht speziell für fortsetzbare Streams.
+</Callout>
+
+## Konfiguration [#configuration]
+
+### Redis Streams aktivieren [#enable-redis-streams]
+
+Das Setzen von `USE_REDIS=true` bewirkt, dass fortsetzbare Streams automatisch Redis verwenden. Verwenden Sie `USE_REDIS_STREAMS`, um dies explizit zu steuern.
+
+```bash filename=".env"
+USE_REDIS=true
+REDIS_URI=redis://localhost:6379
+# Resumable streams use Redis automatically when USE_REDIS=true.
+# Set USE_REDIS_STREAMS to control it explicitly:
+USE_REDIS_STREAMS=true
+```
+
+### Redis Cluster [#redis-cluster]
+
+Für einen Redis Cluster aktivieren Sie den Clustermodus und listen Sie die Knoten in `REDIS_URI` auf.
+
+```bash filename=".env"
+USE_REDIS_STREAMS=true
+USE_REDIS_CLUSTER=true
+REDIS_URI=redis://node1:7001,redis://node2:7002,redis://node3:7003
+```
+
+LibreChat verwendet Hash-Tag-Schlüssel, damit Multi-Key-Operationen auf demselben Cluster-Slot landen.
+
+## Was rekonstruiert wird [#what-gets-reconstructed]
+
+Beim erneuten Verbinden aggregiert LibreChat die aufgezeichneten Delta-Ereignisse, um Folgendes wiederherzustellen:
+
+- Nachrichteninhalt (Text, Tool-Aufrufe, Zitate)
+- Agent-Ausführungsschritte und Zwischenüberlegungen
+- Metadaten und Statusinformationen
+
+Der Speichermechanismus hängt vom Bereitstellungsmodus ab:
+
+| Komponente | Speichermechanismus |
+|-----------|-------------------|
+| Chunks | Redis Streams (`XADD`/`XRANGE`) |
+| Job-Metadaten | Redis Hash-Strukturen |
+| Echtzeit-Ereignisse | Redis Pub/Sub-Kanäle |
+| Ablauf | Automatisches TTL nach Abschluss des Streams |
+
+LibreChat wendet einige Optimierungen an, um dies kostengünstig zu halten:
+
+- **Memory-first-Wiederherstellung.** Die erneute Verbindung mit derselben Instanz liest aus dem lokalen Cache und vermeidet so einen Redis-Roundtrip.
+- **Bereinigung beim Zugriff.** Veraltete Job-Einträge werden bei Abfragen entfernt und abgeschlossene Streams laufen automatisch ab.
+- **Garbage-collected storage.** Der In-Memory-Modus speichert Stream-Graphen mit `WeakRef`, sodass sie bereinigt werden, sobald eine Konversation endet.
+
+## Testen [#testing]
+
+Um zu bestätigen, dass die Funktion funktioniert, starten Sie eine Streaming-Konversation mit einem beliebigen Modell und versuchen Sie dann eines der folgenden Dinge:
+
+- **Tabs.** Öffnen Sie denselben Chat in einem zweiten Tab; beide sollten synchronisiert werden.
+- **Verbindung trennen.** Unterbrechen Sie kurz das Netzwerk und stellen Sie die Verbindung dann wieder her.
+- **Navigation.** Navigieren Sie während des Streams weg und kehren Sie dann zurück.
+
+Jeder Fall sollte die vollständige Antwort ohne fehlende Inhalte liefern.
+
+## Fehlerbehebung [#troubleshooting]
+
+**Streams werden nicht fortgesetzt.** Bestätigen Sie, dass Redis erreichbar ist und `USE_REDIS_STREAMS` gesetzt ist.
+
+```bash
+docker exec -it librechat-redis redis-cli ping
+# Expected: PONG
+
+echo $USE_REDIS_STREAMS
+```
+
+**Inhalt erscheint dupliziert.** Dies deutet normalerweise auf eine Diskrepanz der Client-Version hin. Aktualisieren Sie auf die neueste Version von LibreChat.
+
+**Hohe Speicherauslastung im Single-Instance-Modus.** Abgeschlossene Streams werden durch die Garbage Collection bereinigt. Wenn die Speicherauslastung hoch bleibt, suchen Sie nach sehr langlebigen Streams, die nie abgeschlossen werden, oder nach Streams, die mit einem Fehler abgebrochen wurden, ohne bereinigt zu werden.
+
+## Zugehörige Dokumentation [#related-documentation]
+
+- [Redis-Konfiguration](/docs/configuration/redis): Einrichten von Redis für Caching und horizontale Skalierung
+- [Agents](/docs/features/agents): KI-Agenten mit Werkzeugnutzung
+- [Docker Deployment](/docs/local/docker): container-basierte Bereitstellung
+
+Für Implementierungsdetails siehe [PR #10926](https://github.com/danny-avila/LibreChat/pull/10926).

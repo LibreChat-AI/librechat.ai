@@ -2,7 +2,11 @@ import Link from 'next/link'
 
 export default function NotFound() {
   return (
-    <main className="flex min-h-[50vh] flex-col items-center justify-center gap-4 px-4">
+    <main
+      id="main-content"
+      tabIndex={-1}
+      className="flex min-h-[50vh] flex-col items-center justify-center gap-4 px-4"
+    >
       <h1 className="text-6xl font-bold">404</h1>
       <h2 className="text-xl text-fd-muted-foreground">Page not found</h2>
       <p className="max-w-md text-center text-sm text-fd-muted-foreground">

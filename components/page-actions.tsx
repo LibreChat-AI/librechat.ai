@@ -1,15 +1,16 @@
 'use client'
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useMemo, useRef, useState, type JSX } from 'react'
 import { Check, ChevronDown, Copy, ExternalLinkIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { cva } from 'class-variance-authority'
+import { getUI } from '@/lib/ui-i18n'
 
 function useCopyButton(
   onCopy: () => Promise<void> | void,
 ): [checked: boolean, onClick: () => void] {
   const [checked, setChecked] = useState(false)
-  const timeoutRef = useRef<ReturnType<typeof setTimeout>>()
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   const onClick = useCallback(() => {
     void Promise.resolve(onCopy()).then(() => {
@@ -39,7 +40,8 @@ const fdButtonVariants = cva(
 
 const cache = new Map<string, string>()
 
-export function LLMCopyButton({ markdownUrl }: { markdownUrl: string }) {
+export function LLMCopyButton({ markdownUrl, lang }: { markdownUrl: string; lang?: string }) {
+  const t = getUI(lang).pageActions
   const [isLoading, setLoading] = useState(false)
   const [checked, onClick] = useCopyButton(async () => {
     const cached = cache.get(markdownUrl)
@@ -74,10 +76,10 @@ export function LLMCopyButton({ markdownUrl }: { markdownUrl: string }) {
         }),
       )}
       onClick={onClick}
-      aria-label="Copy page as Markdown"
+      aria-label={t.copyMarkdownAria}
     >
       {checked ? <Check /> : <Copy />}
-      Copy Markdown
+      {t.copyMarkdown}
     </button>
   )
 }
@@ -98,10 +100,13 @@ const LIBRECHAT_DEMO = 'https://chat.librechat.ai'
 export function ViewOptions({
   markdownUrl,
   githubUrl,
+  lang,
 }: {
   markdownUrl: string
   githubUrl?: string
+  lang?: string
 }) {
+  const t = getUI(lang).pageActions
   const resolvedGithubUrl = githubUrl ?? DOCS_REPO
   const items = useMemo(() => {
     const fullMarkdownUrl =
@@ -110,7 +115,7 @@ export function ViewOptions({
 
     const projectItems: DropdownItem[] = [
       {
-        title: 'Open in GitHub',
+        title: t.openInGitHub,
         href: resolvedGithubUrl,
         icon: (
           <svg fill="currentColor" role="img" viewBox="0 0 24 24">
@@ -120,7 +125,7 @@ export function ViewOptions({
         ),
       },
       {
-        title: 'Open in LibreChat',
+        title: t.openInLibreChat,
         href: `${LIBRECHAT_DEMO}/c/new?${new URLSearchParams({ prompt: q })}`,
         icon: (
           // eslint-disable-next-line @next/next/no-img-element
@@ -131,7 +136,7 @@ export function ViewOptions({
 
     const aiItems: DropdownItem[] = [
       {
-        title: 'Open in ChatGPT',
+        title: t.openInChatGPT,
         href: `https://chatgpt.com/?${new URLSearchParams({ hints: 'search', q })}`,
         icon: (
           <svg fill="currentColor" role="img" viewBox="0 0 24 24">
@@ -141,7 +146,7 @@ export function ViewOptions({
         ),
       },
       {
-        title: 'Open in Claude',
+        title: t.openInClaude,
         href: `https://claude.ai/new?${new URLSearchParams({ q })}`,
         icon: (
           <svg fill="currentColor" role="img" viewBox="0 0 24 24">
@@ -151,7 +156,7 @@ export function ViewOptions({
         ),
       },
       {
-        title: 'Open in Gemini',
+        title: t.openInGemini,
         href: `https://gemini.google.com/app?${new URLSearchParams({ q })}`,
         icon: (
           <svg fill="currentColor" role="img" viewBox="0 0 24 24">
@@ -161,7 +166,7 @@ export function ViewOptions({
         ),
       },
       {
-        title: 'Open in Perplexity',
+        title: t.openInPerplexity,
         href: `https://www.perplexity.ai/search?${new URLSearchParams({ q })}`,
         icon: (
           <svg fill="currentColor" role="img" viewBox="0 0 24 24">
@@ -174,7 +179,7 @@ export function ViewOptions({
 
     const ideItems: DropdownItem[] = [
       {
-        title: 'Open in Cursor',
+        title: t.openInCursor,
         href: `https://cursor.com/link/prompt?${new URLSearchParams({ text: q })}`,
         icon: (
           <svg fill="currentColor" role="img" viewBox="0 0 24 24">
@@ -186,7 +191,7 @@ export function ViewOptions({
     ]
 
     return { projectItems, aiItems, ideItems }
-  }, [markdownUrl, resolvedGithubUrl])
+  }, [markdownUrl, resolvedGithubUrl, t])
 
   return (
     <Popover>
@@ -198,9 +203,9 @@ export function ViewOptions({
             className: 'gap-2',
           }),
         )}
-        aria-label="Open page in external tools"
+        aria-label={t.openAria}
       >
-        Open
+        {t.open}
         <ChevronDown className="size-3.5 text-fd-muted-foreground" />
       </PopoverTrigger>
       <PopoverContent className="flex flex-col">

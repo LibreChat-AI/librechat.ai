@@ -20,12 +20,19 @@ import { baseOptions } from '@/app/layout.config'
 import FooterMenu from '@/components/FooterMenu'
 import Discord from '@/components/icons/discord'
 import X from '@/components/icons/x'
+import { ogImageUrl } from '@/lib/og'
 import type { Metadata } from 'next'
 
 export const metadata: Metadata = {
   title: 'About LibreChat',
   description:
     'LibreChat is a free, open-source AI platform that brings together all your AI conversations in one unified, customizable interface.',
+  openGraph: {
+    title: 'About LibreChat',
+    description:
+      'LibreChat is a free, open-source AI platform that brings together all your AI conversations in one unified, customizable interface.',
+    images: [ogImageUrl({ title: 'About LibreChat' })],
+  },
 }
 
 async function getGitHubData(): Promise<{
@@ -476,7 +483,7 @@ export default async function AboutPage() {
 
   return (
     <HomeLayout {...baseOptions}>
-      <main className="min-h-screen">
+      <main id="main-content" tabIndex={-1} className="min-h-screen">
         <HeroSection />
         <StatsSection stars={stars} forks={forks} contributors={contributors} />
         <ValuesSection />

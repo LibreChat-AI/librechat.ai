@@ -1,0 +1,106 @@
+name: Translate Docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'content/docs/**'
+      # Exclude generated translations of any locale. A `*.<xx>.mdx` or
+      # `meta.<xx>.json` file is bot output, never a translation source, so it must
+      # not retrigger this workflow. `[a-z][a-z]` matches any two-letter locale code,
+      # so adding a language needs no change here — TARGET_LOCALES in
+      # lib/i18n/config.ts stays the single source of truth. (Note: GitHub filter
+      # patterns treat `?` as a regex-style "zero or one of the preceding character"
+      # quantifier, not a single-char wildcard, so a character class is required.)
+      - '!content/docs/**/*.[a-z][a-z].mdx'
+      - '!content/docs/**/meta.[a-z][a-z].json'
+  # Convergence sweep. A push only translates after a content change, and adding a
+  # new language doesn't touch content/docs at all — so a big batch (several new
+  # locales and/or long files) can't fully land in the single push-triggered run
+  # under the flex-tier rate limit; the overflow is skipped and, because the bot
+  # commit carries [skip ci], nothing re-runs to finish it. This half-hourly run
+  # resumes from the translation cache (content/.i18n-cache) and translates whatever is
+  # still missing, converging large batches over successive runs. It is a cheap
+  # no-op once everything is translated (every block is a cache hit → zero API
+  # calls → no commit). The `translate-docs` concurrency group keeps it from
+  # overlapping a push-triggered run.
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Retranslate everything (ignore the cache)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: translate-docs
+  cancel-in-progress: false
+
+jobs:
+  translate:
+    runs-on: ubuntu-latest
+    environment: Production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so the bot commit can be rebased onto an advanced main
+          # before pushing (see the Commit step's rebase-and-retry loop).
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Translate docs
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_TRANSLATE_MODEL: ${{ secrets.OPENROUTER_TRANSLATE_MODEL }}
+        run: |
+          FLAGS=""
+          if [ "${{ inputs.force }}" = "true" ]; then
+            FLAGS="--force"
+          fi
+          npx tsx scripts/translate.ts $FLAGS
+
+      - name: Commit translations
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add content/docs content/.i18n-cache
+          if git diff --cached --quiet; then
+            echo "No translation changes to commit"
+          else
+            # [skip ci] so this bot commit doesn't re-trigger the push-on-main
+            # workflows (ci, bundle analysis, embeddings, links). Without it, every
+            # translation commit fans out a redundant ~4-workflow cascade.
+            git commit --no-verify -m "chore: update docs translations [skip ci]"
+            # main may have advanced while translating (e.g. an unrelated non-docs
+            # commit that does not queue another translate run). Rebase the bot
+            # commit onto the latest main and retry so a non-fast-forward rejection
+            # doesn't silently drop the generated translations. Only locale files
+            # and the cache are touched here, so a rebase onto other changes is
+            # conflict-free in practice.
+            pushed=false
+            for attempt in 1 2 3 4 5; do
+              git pull --rebase origin main
+              if git push; then
+                pushed=true
+                break
+              fi
+              echo "push attempt $attempt rejected (remote advanced); retrying"
+              sleep 5
+            done
+            if [ "$pushed" != "true" ]; then
+              echo "::error::failed to push translations after 5 attempts"
+              exit 1
+            fi
+          fi

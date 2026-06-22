@@ -1,0 +1,135 @@
+---
+title: Actions 对象结构
+icon: Webhook
+---
+
+Actions 可用于根据 OpenAPI 规范动态创建工具。`actions` 对象结构允许您为 agent/assistant 的操作指定允许的域名。
+
+更多信息：[Agents - Actions](/docs/features/agents#actions)
+
+## 示例 [#example]
+
+```yaml filename="Actions Object Structure"
+# Example Actions Object Structure
+actions:
+  # Strict whitelist mode:
+  # allowedDomains:
+  #   - "swapi.dev"
+  #   - "librechat.ai"
+  #   - "google.com"
+  #   - "https://api.example.com:8443"  # With protocol and port
+
+  # Default SSRF mode with private service exemptions:
+  allowedAddresses:
+    - "host.docker.internal:11434"    # Permit one private host on one port
+    - "10.0.0.5:8080"                 # Permit one private IP on one port
+```
+
+## allowedDomains
+
+**密钥：**
+<OptionTable
+  options={[
+    ['allowedDomains', 'Array of Strings', '指定允许用于 agent/assistant 操作的域名的列表。', 'When configured, only listed domains are allowed. When not configured, SSRF targets are blocked but all other domains are allowed.'],
+  ]}
+/>
+
+**可选**
+
+### 安全上下文 (SSRF 保护) [#security-context-ssrf-protection]
+
+LibreChat 包含 SSRF (Server-Side Request Forgery) 保护，其行为如下：
+
+**当未配置 `allowedDomains` 时：**
+- 容易受到 SSRF 攻击的目标**默认被阻止**
+- 所有其他外部域名均被**允许**
+
+**当配置了 `allowedDomains` 时：**
+- **仅**允许列表中的域名
+- 可以通过显式地将内部/SSRF目标添加到列表中来允许它们。
+
+**被阻止的 SSRF 目标包括：**
+- **Localhost** 地址 (`localhost`, `127.0.0.1`, `::1`)
+- **私有 IP 地址范围** (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`)
+- **链路本地地址** (`169.254.0.0/16`，包含云元数据 IP)
+- **内部 TLD** (`.internal`, `.local`, `.localhost`)
+- **常见的内部服务名称** (`redis`, `mongodb`, `postgres`, `api` 等)
+
+如果您的操作需要访问内部服务，请将其添加到严格的 `allowedDomains` 白名单中，或者将 `allowedDomains` 留空并将具体的私有服务添加到 `allowedAddresses` 中。
+
+### 模式格式 [#pattern-formats]
+
+`allowedDomains` 数组支持多种格式：
+
+1. **仅域名** - 允许所有协议和端口：
+   ```yaml
+   allowedDomains:
+     - "api.example.com"
+   ```
+
+2. **With protocol** - 限制为特定协议：
+   ```yaml
+   allowedDomains:
+     - "https://api.example.com"
+   ```
+
+3. **带有协议和端口** - 限制为特定的协议和端口：
+   ```yaml
+   allowedDomains:
+     - "https://api.example.com:8443"
+   ```
+
+4. **内部地址**（必须明确允许）：
+   ```yaml
+   allowedDomains:
+     - "192.168.1.100"
+     - "internal-api.local"
+   ```
+
+**示例：**
+```yaml filename="actions / allowedDomains"
+allowedDomains:
+  - "swapi.dev"
+  - "librechat.ai"
+  - "google.com"
+  - "https://secure-api.example.com:443"
+  - "192.168.1.50"  # Internal service (explicitly allowed)
+```
+
+## allowedAddresses
+
+`allowedAddresses` 是针对 SSRF 私有 IP 拦截的**豁免列表**，而非域名白名单。当您希望允许访问一两个特定的私有/内部服务，同时又不限制 Actions 对公共互联网的访问范围时，它是最合适的工具。
+
+### 何时使用它来代替 `allowedDomains` [#when-to-use-it-instead-of-alloweddomains]
+
+`allowedDomains` 是一个严格的白名单：当设置该项时，**只有**列出的条目是可以访问的。在此处添加一个私有 IP 以允许（例如）自托管的内部 API，也会同时阻止所有你未列出的公共操作 endpoint。
+
+`allowedAddresses` 仅在未配置 `allowedDomains` 时使用。它允许特定的私有 `host:port` 目标，同时允许通过默认的 SSRF 策略访问其余的公共互联网。
+
+```yaml filename="default SSRF + permitted private host"
+actions:
+  allowedAddresses:
+    - "host.docker.internal:11434"
+    - "10.0.0.5:8080"
+  # allowedDomains is intentionally not set — public destinations
+  # remain reachable, only listed private host:port services are exempted.
+```
+
+如果配置了 `allowedDomains`，它将具有权威性：私有服务必须列在其中，而不能仅依赖 `allowedAddresses`。
+
+### 可接受的条目 [#acceptable-entries]
+
+- **带端口的主机名**: `host.docker.internal:11434`, `ollama.internal:8080`, `localhost:11434`
+- **带有端口的私有 IPv4 字面量**: `10.0.0.5:8080`, `127.0.0.1:11434`, `192.168.1.10:443`, `169.254.169.254:80`
+- **带端口的方括号私有 IPv6 字面量**: `[::1]:11434`, `[fc00::1]:8080`, `[fe80::1]:8080`
+
+### 被拒绝的条目（在配置加载时验证） [#rejected-entries-validated-at-config-load]
+
+- **URLs / paths / CIDR ranges**: `http://10.0.0.5`, `10.0.0.0/24`, `/path`
+- **裸主机名或 IP**：`localhost`、`10.0.0.5`、`::1`、`[::1]` — 每个条目都必须包含端口
+- **无效端口**: `localhost:0`, `localhost:65536`, `localhost:http`
+- **公网 IP 字面量**: `8.8.8.8:53`, `1.1.1.1:53`, `[2001:4860::8888]:443` — 该字段的作用域仅限于私有 IP 空间；公网 IP 不属于 SSRF 攻击目标，且公网 IP 免除规则不具备防御意义。
+
+### Hostname trust [#hostname-trust]
+
+主机名条目会信任该主机名在运行时解析到的任何 IP 地址（在指定的端口上）。如果所列主机名的 DNS 被轮换或劫持以指向不同的私有 IP，则该豁免也会随之生效。请仅列出您拥有 DNS 控制权的主机名。**在可能的情况下，优先使用具体的 IP 地址。**

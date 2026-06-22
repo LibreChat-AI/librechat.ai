@@ -1,0 +1,375 @@
+---
+title: MongoDB 身份验证
+icon: MongoDB
+description: 使用 docker-compose.override.yml 文件为您的 Docker MongoDB 设置身份验证
+---
+
+本指南将演示如何使用 `docker-compose.override.yml` 文件来为 MongoDB 启用显式身份验证。
+
+有关覆盖文件的更多信息，请参阅：[Docker Compose Override](/docs/configuration/docker_override)
+
+**注意：**
+
+- 默认配置通过阻止外部端口访问来确保安全，但我们可以通过访问凭据进一步加强安全性。
+- 正如 MongoDB 开发人员所指出的，MongoDB 中的身份验证相当复杂。我们将采用一种简单的方法，这对大多数情况（尤其是 LibreChat 的现有配置）来说已经足够了。要了解有关 mongodb 身份验证如何与 Docker 配合使用的更多信息，请参阅此处：https://hub.docker.com/_/mongo/
+- 本指南仅专注于基于终端的设置流程。
+- 虽然所概述的步骤也可能适用于 Docker Desktop 环境，或非 Docker、本地 MongoDB 或其他容器设置，但并未提供针对这些场景的具体细节。
+
+**共有 3 个基本步骤：**
+
+- 在您的 mongodb 容器内创建一个管理员用户
+- 启用身份验证并为 "LibreChat" 创建一个 "readWrite" 用户
+- 使用新创建的用户配置 MONGO_URI
+
+## 简而言之 [#tldr]
+
+如果您想快速执行这些操作或作为参考，以下是所有必要的命令：
+
+<Callout type="abstract" title="TL;DR - 所有命令" emoji='💻' collapsible>
+
+```bash filename="Shut down container initially"
+docker compose down
+```
+
+```bash filename="Start MongoDB container"
+docker compose up -d mongodb
+```
+
+```bash filename="Open MongoDB shell on 'chat-mongodb' container"
+docker exec -it chat-mongodb mongosh
+```
+
+```bash filename="Switch to admin database"
+use admin
+```
+
+```bash filename="Create new admin user"
+db.createUser({ user: "adminUser", pwd: "securePassword", roles: ["userAdminAnyDatabase", "readWriteAnyDatabase"] })
+```
+
+```bash filename="Exit MongoDB shell"
+exit
+```
+
+```bash filename="Shut down container after setup"
+docker compose down
+```
+
+```bash filename="Restart MongoDB container with authentication"
+docker compose up -d mongodb
+```
+
+```bash filename="Log into MongoDB shell with credentials"
+docker exec -it chat-mongodb mongosh -u adminUser -p securePassword --authenticationDatabase admin
+```
+
+```bash filename="Switch to LibreChat database"
+use LibreChat
+```
+
+```bash filename="Create user in LibreChat database"
+db.createUser({ user: 'user', pwd: 'userpasswd', roles: [ { role: "readWrite", db: "LibreChat" } ] });
+```
+
+```bash filename="Exit MongoDB shell after creating user"
+exit
+```
+
+```bash filename="Shut down container after user creation"
+docker compose down
+```
+
+```bash filename="Start all services with final settings"
+docker compose up
+```
+</Callout>
+
+### 示例 [#example]
+
+使用 [`librechat.yaml` 配置文件](/docs/configuration/librechat_yaml)、[MongoDB 身份验证](/docs/configuration/mongodb/mongodb_auth) 以及用于[管理 MongoDB 数据库](/blog/2023-11-30_mongoexpress)的 `mongo-express` 的 `docker-compose.override.yml` 示例文件：
+
+<Callout type="example" title="示例 `docker-compose.override.yml` 文件" collapsible>
+
+```yaml filename="docker-compose.override.yml"
+version: '3.4'
+
+services:
+  api:
+    volumes:
+      - ./librechat.yaml:/app/librechat.yaml
+    environment:
+      - MONGO_URI=mongodb://user:userpasswd@mongodb:27017/LibreChat
+  mongodb:
+    command: mongod --auth
+  mongo-express:
+    image: mongo-express
+    container_name: mongo-express
+    environment:
+      ME_CONFIG_MONGODB_SERVER: mongodb
+      ME_CONFIG_BASICAUTH_USERNAME: admin
+      ME_CONFIG_BASICAUTH_PASSWORD: password
+      ME_CONFIG_MONGODB_URL: 'mongodb://adminUser:securePassword@mongodb:27017'
+      ME_CONFIG_MONGODB_ADMINUSERNAME: adminUser
+      ME_CONFIG_MONGODB_ADMINPASSWORD: securePassword
+    ports:
+      - '8081:8081'
+    depends_on:
+      - mongodb
+    restart: always
+```
+</Callout>
+
+<Steps>
+<Step>
+
+### 创建管理员用户 [#creating-an-admin-user]
+
+首先，我们必须停止默认容器的运行，并仅运行 mongodb 容器。
+
+```bash filename="Stop all running containers"
+docker compose down
+```
+
+```bash filename="Start mongodb container in detached mode"
+docker compose up -d mongodb
+```
+
+> 注意：`-d` 标志会在容器于后台运行时分离当前的终端实例。如果您希望查看 mongodb 的日志输出，请省略该标志并在另一个终端中继续操作。
+
+运行后，我们将进入容器的终端并执行 `mongosh`：
+
+```bash filename="Connect to the MongoDB shell"
+docker exec -it chat-mongodb mongosh
+```
+你应该看到以下输出：
+
+```bash filename="Output"
+~/LibreChat$ docker exec -it chat-mongodb mongosh
+Current Mongosh Log ID: 65bfed36f7d7e3c2b01bcc3d
+Connecting to:          mongodb://127.0.0.1:27017/?directConnection=true&serverSelectionTimeoutMS=2000&appName=mongosh+2.1.1
+Using MongoDB:          7.0.4
+Using Mongosh:          2.1.1
+
+For mongosh info see: https://docs.mongodb.com/mongodb-shell/
+
+test> 
+```
+
+可选：如果需要，我们可以在此禁用 mongodb 的遥测功能，该功能会定期收集匿名使用数据并发送给 MongoDB：
+
+执行以下命令。
+
+> 注意：
+> - 后续所有命令都应在当前终端会话中运行，无论环境如何（Docker、Linux、`mongosh` 等）。
+> - 我将用 # 示例输入/输出或在某些情况下仅显示输出来表示实际的终端视图。
+
+命令：
+
+```bash filename="Disable Telemetry"
+disableTelemetry()
+```
+
+示例输入/输出：
+
+```bash filename="example input/output"
+test> disableTelemetry()
+Telemetry is now disabled.
+```
+
+现在，我们必须访问 mongodb 默认创建的 admin 数据库，以创建我们的管理员用户：
+
+```bash filename="Switch to Admin Database"
+use admin
+```
+
+> 已切换至 db admin
+
+根据需要替换凭据，并将其保存在您的安全记录中，以供本指南后续步骤使用。
+
+运行命令以创建管理员用户：
+
+```bash filename="Create Admin User"
+db.createUser({ user: "adminUser", pwd: "securePassword", roles: ["userAdminAnyDatabase", "readWriteAnyDatabase"] })
+```
+
+你应该会看到一个 "ok" 输出。
+
+您也可以通过运行 `show users` 来确认管理员是否已创建：
+
+```bash filename="example input/output"
+admin> show users
+[
+  {
+    _id: 'admin.adminUser',
+    userId: UUID('86e90441-b5b7-4043-9662-305540dfa6cf'),
+    user: 'adminUser',
+    db: 'admin',
+    roles: [
+      { role: 'userAdminAnyDatabase', db: 'admin' },
+      { role: 'readWriteAnyDatabase', db: 'admin' }
+    ],
+    mechanisms: [ 'SCRAM-SHA-1', 'SCRAM-SHA-256' ]
+  }
+]
+```
+
+:warning: **重要：** 如果您正在使用 `mongo-express` 来[管理您的数据库（指南在此）](../../features/manage_your_database.md)，您需要额外的权限才能使 `mongo-express` 服务正常运行：
+
+```bash filename="Grant Roles to Admin User"
+db.grantRolesToUser("adminUser", ["clusterAdmin", "readAnyDatabase"])
+```
+
+通过运行 `exit` 退出 Mongosh/容器终端：
+```bash filename="Exit the Mongosh/Container Terminal"
+admin> exit
+```
+
+并停止正在运行的容器：
+```bash filename="Shut down the running container"
+docker compose down
+```
+
+</Step>
+<Step>
+
+### 启用身份验证并创建具有 `readWrite` 权限的用户 [#enabling-authentication-and-creating-a-user-with-readwrite-access]
+
+我们现在必须创建/编辑 `docker-compose.override.yml` 文件，以便为我们的 mongodb 容器启用身份验证。您可以使用此配置来启动或参考：
+
+```yaml filename="docker-compose.override.yml"
+version: '3.4'
+
+services:
+  api:
+    volumes:
+      - ./librechat.yaml:/app/librechat.yaml # Optional for using the librechat config file.
+  mongodb:
+    command: mongod --auth # <--- Add this to enable authentication
+```
+
+按照上述方式配置覆盖文件后，再次运行 mongodb 容器：
+
+```bash filename="Start the MongoDB container"
+docker compose up -d mongodb
+```
+
+并以管理员用户身份访问 mongosh：
+
+```bash filename="Connect to MongoDB container using mongo shell"
+docker exec -it chat-mongodb mongosh -u adminUser -p securePassword --authenticationDatabase admin
+```
+
+确认您已通过身份验证：
+```bash filename="Check MongoDB Connection Status Command"
+db.runCommand({ connectionStatus: 1 })
+```
+
+```bash filename="example input/output"
+test> db.runCommand({ connectionStatus: 1 })
+{
+  authInfo: {
+    authenticatedUsers: [ { user: 'adminUser', db: 'admin' } ],
+    authenticatedUserRoles: [
+      { role: 'readWriteAnyDatabase', db: 'admin' },
+      { role: 'userAdminAnyDatabase', db: 'admin' }
+    ]
+  },
+  ok: 1
+}
+test>
+```
+
+切换到 "LibreChat" 数据库
+
+> 注意：除非您通过 MONGO_URI 进行了更改，否则这是默认数据库；默认 URI 为：`MONGO_URI=mongodb://mongodb:27017/LibreChat`
+
+```bash filename="Switch to the LibreChat database"
+use LibreChat
+```
+
+现在我们将创建用于 MongoDB 连接字符串的实际凭据，这些凭据将仅限于对 "LibreChat" 数据库的读/写访问权限。和之前一样，请将示例替换为您所需的凭据：
+
+`db.createUser({ user: 'user', pwd: 'userpasswd', roles: [ { role: "readWrite", db: "LibreChat" } ] });`
+
+你应该会再次看到 "ok" 输出。
+
+您可以使用 `show users` 命令来验证用户创建情况。
+
+再次使用 `exit` 退出 Mongosh/容器终端，并停止容器：
+
+```bash filename="End the current shell session"
+exit
+```
+
+```bash filename="Stop the current Docker Compose services"
+docker compose down
+```
+
+我之前遇到了一个问题，即新创建的用户在创建后无法持久化。为了解决这个问题，我简单地重复了这些步骤以确保其创建成功。为了方便起见，步骤如下：
+
+```bash filename="Shut down container"
+docker compose down
+```
+
+```bash filename="Start Mongo container"
+docker compose up -d mongodb
+```
+
+```bash filename="Access MongoDB shell as admin"
+docker exec -it chat-mongodb mongosh -u adminUser -p securePassword --authenticationDatabase admin
+```
+
+```bash filename="Switch to LibreChat database"
+use LibreChat
+```
+
+```bash filename="Show current users in LibreChat database"
+show users
+```
+
+```bash filename="Create a new user in LibreChat database"
+db.createUser({ user: 'user', pwd: 'userpasswd', roles: [ { role: "readWrite", db: "LibreChat" } ] });
+```
+
+如果问题仍然无法解决，您可以尝试在所有容器运行的情况下执行这些命令，但请注意 `LibreChat` 容器将处于错误/重试状态。
+
+</Step>
+<Step>
+
+### 更新 `MONGO_URI` 以使用新凭据 [#update-the-mongo_uri-to-use-the-new-credentials]
+
+最后，我们将带有新创建凭据的连接字符串添加到 `docker-compose.override.yml` 文件中 `api` 服务下：
+
+```yaml filename="docker-compose.override.yml"
+    environment:
+      - MONGO_URI=mongodb://user:userpasswd@mongodb:27017/LibreChat
+```
+
+所以我们的覆盖文件现在看起来是这样的：
+
+```yaml filename="docker-compose.override.yml"
+version: '3.4'
+
+services:
+  api:
+    volumes:
+      - ./librechat.yaml:/app/librechat.yaml
+    environment:
+      - MONGO_URI=mongodb://user:userpasswd@mongodb:27017/LibreChat
+  mongodb:
+    command: mongod --auth
+```
+
+现在你应该可以成功运行 `docker compose up`，并获得对 LibreChat 数据库的读/写访问权限。
+
+连接成功的示例：
+```bash filename="successful connection example"
+LibreChat         | 2024-02-04 20:59:43 info: Server listening on all interfaces at port 3080. Use http://localhost:3080 to access it
+chat-mongodb      | {"t":{"$date":"2024-02-04T20:59:53.880+00:00"},"s":"I",  "c":"NETWORK",  "id":22943,   "ctx":"listener","msg":"Connection accepted","attr":{"remote":"192.168.160.4:58114","uuid":{"uuid":{"$uuid":"027bdc7b-a3f4-429a-80ee-36cd172058ec"}},"connectionId":17,"connectionCount":10}}
+```
+
+如果您遇到身份验证错误，请再次运行第 2 步的最后一部分。我不确定为什么它会不稳定，但尝试几次后它就能正常工作了。
+
+</Step>
+</Steps>
+
