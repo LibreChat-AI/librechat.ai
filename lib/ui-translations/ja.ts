@@ -245,6 +245,10 @@ export const ja: UIStrings = {
             title: '認証',
             description: 'OAuth2、SAML、LDAP などによるマルチユーザー認証',
           },
+          adminPanel: {
+            title: '管理パネル',
+            description: 'ユーザー、ロール、設定オーバーライドを管理するブラウザ UI',
+          },
           passwordReset: {
             title: 'パスワードのリセット',
             description: 'メールによるパスワード復旧',
