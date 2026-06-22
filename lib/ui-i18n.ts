@@ -1,4 +1,5 @@
-import { i18n } from '@/lib/i18n'
+import { defineI18nUI } from 'fumadocs-ui/i18n'
+import { i18n, LOCALE_NAMES } from '@/lib/i18n'
 import { zh } from '@/lib/ui-translations/zh'
 import { es } from '@/lib/ui-translations/es'
 import { fr } from '@/lib/ui-translations/fr'
@@ -434,89 +435,154 @@ export function fmt(template: string, vars: Record<string, string | number>): st
 }
 
 /**
- * Translations for Fumadocs' own UI chrome (search, table of contents, page
- * navigation, "Edit on GitHub", …). Passed to the I18nProvider so the built-in
- * layout text follows the docs / landing locale. English is Fumadocs' default,
- * so only the non-default locales are listed; getFumadocsText returns undefined
- * for English and lets Fumadocs use its own defaults.
+ * Translations for Fumadocs' own UI chrome — the search dialog/trigger, table
+ * of contents, pagination, language switcher, theme switch, sidebar, banner and
+ * code-block controls, including their `aria-label`s.
+ *
+ * Fumadocs 15+ keys every string (visible text AND accessibility labels) by its
+ * descriptive English string with a `(context)` suffix; the English value is the
+ * key itself, so only the non-default locales need entries and any key we omit
+ * falls back to English. `defineI18nUI(...).provider(locale)` builds the
+ * `I18nProviderProps` (locale + locales + translations) we hand to the
+ * RootProvider and the per-page language-switcher providers.
+ *
+ * `displayName` is what the language switcher shows for each locale.
  */
-type FumadocsText = {
-  search: string
-  searchNoResult: string
-  toc: string
-  tocNoHeadings: string
-  lastUpdate: string
-  chooseLanguage: string
-  nextPage: string
-  previousPage: string
-  chooseTheme: string
-  editOnGithub: string
-}
-
-const fumadocsText: Record<string, FumadocsText> = {
-  zh: {
-    search: '搜索',
-    searchNoResult: '未找到结果',
-    toc: '本页内容',
-    tocNoHeadings: '无标题',
-    lastUpdate: '最后更新于',
-    chooseLanguage: '选择语言',
-    nextPage: '下一页',
-    previousPage: '上一页',
-    chooseTheme: '主题',
-    editOnGithub: '在 GitHub 上编辑',
-  },
-  es: {
-    search: 'Buscar',
-    searchNoResult: 'No se encontraron resultados',
-    toc: 'En esta página',
-    tocNoHeadings: 'Sin encabezados',
-    lastUpdate: 'Última actualización el',
-    chooseLanguage: 'Elegir idioma',
-    nextPage: 'Siguiente',
-    previousPage: 'Anterior',
-    chooseTheme: 'Tema',
-    editOnGithub: 'Editar en GitHub',
-  },
-  fr: {
-    search: 'Rechercher',
-    searchNoResult: 'Aucun résultat trouvé',
-    toc: 'Sur cette page',
-    tocNoHeadings: 'Aucun titre',
-    lastUpdate: 'Dernière mise à jour le',
-    chooseLanguage: 'Choisir la langue',
-    nextPage: 'Suivant',
-    previousPage: 'Précédent',
-    chooseTheme: 'Thème',
-    editOnGithub: 'Modifier sur GitHub',
-  },
-  de: {
-    search: 'Suche',
-    searchNoResult: 'Keine Ergebnisse gefunden',
-    toc: 'Auf dieser Seite',
-    tocNoHeadings: 'Keine Überschriften',
-    lastUpdate: 'Zuletzt aktualisiert am',
-    chooseLanguage: 'Sprache auswählen',
-    nextPage: 'Weiter',
-    previousPage: 'Zurück',
-    chooseTheme: 'Design',
-    editOnGithub: 'Auf GitHub bearbeiten',
-  },
-  ja: {
-    search: '検索',
-    searchNoResult: '結果が見つかりません',
-    toc: 'このページの内容',
-    tocNoHeadings: '見出しなし',
-    lastUpdate: '最終更新日',
-    chooseLanguage: '言語を選択',
-    nextPage: '次へ',
-    previousPage: '前へ',
-    chooseTheme: 'テーマ',
-    editOnGithub: 'GitHub で編集',
-  },
-}
-
-/** Fumadocs UI translations for a locale, or undefined to use Fumadocs' English defaults. */
-export function getFumadocsText(lang?: string): FumadocsText | undefined {
-  return lang ? fumadocsText[lang] : undefined
-}
+export const uiI18n = defineI18nUI(i18n, {
+  en: { displayName: LOCALE_NAMES.en },
+    zh: {
+      displayName: LOCALE_NAMES.zh,
+      'Search(search dialog)': '搜索',
+      'Search(search trigger)': '搜索',
+      'No results found(search dialog)': '未找到结果',
+      'On this page(table of contents)': '本页内容',
+      'No Headings(table of contents)': '无标题',
+      'Last updated on(page footer)': '最后更新于',
+      'Choose a language(language switcher)': '选择语言',
+      'Choose a language(language switcher)(aria-label)': '选择语言',
+      'Next Page(pagination)': '下一页',
+      'Previous Page(pagination)': '上一页',
+      'Edit on GitHub(edit page)': '在 GitHub 上编辑',
+      'Open Search(search trigger)(aria-label)': '开启搜索',
+      'Close Search(search dialog)(aria-label)': '关闭搜索',
+      'Open Sidebar(sidebar)(aria-label)': '开启侧边栏',
+      'Collapse Sidebar(sidebar)(aria-label)': '收起侧边栏',
+      'Toggle Theme(theme switcher)(aria-label)': '切换主题',
+      'Toggle Menu(mobile menu)(aria-label)': '切换菜单',
+      'Close Banner(banner)(aria-label)': '关闭横幅',
+      'Copy Text(code block)(aria-label)': '复制文字',
+      'Copied Text(code block)(aria-label)': '已复制文字',
+      'Copy Anchor Link(heading anchor)(aria-label)': '复制锚点链接',
+      'Dark(theme switcher)(aria-label)': '深色',
+      'Light(theme switcher)(aria-label)': '浅色',
+      'System(theme switcher)(aria-label)': '系统',
+    },
+    es: {
+      displayName: LOCALE_NAMES.es,
+      'Search(search dialog)': 'Buscar',
+      'Search(search trigger)': 'Buscar',
+      'No results found(search dialog)': 'No se encontraron resultados',
+      'On this page(table of contents)': 'En esta página',
+      'No Headings(table of contents)': 'Sin encabezados',
+      'Last updated on(page footer)': 'Última actualización el',
+      'Choose a language(language switcher)': 'Elegir idioma',
+      'Choose a language(language switcher)(aria-label)': 'Elegir idioma',
+      'Next Page(pagination)': 'Siguiente',
+      'Previous Page(pagination)': 'Anterior',
+      'Edit on GitHub(edit page)': 'Editar en GitHub',
+      'Open Search(search trigger)(aria-label)': 'Abrir búsqueda',
+      'Close Search(search dialog)(aria-label)': 'Cerrar búsqueda',
+      'Open Sidebar(sidebar)(aria-label)': 'Abrir barra lateral',
+      'Collapse Sidebar(sidebar)(aria-label)': 'Contraer barra lateral',
+      'Toggle Theme(theme switcher)(aria-label)': 'Cambiar tema',
+      'Toggle Menu(mobile menu)(aria-label)': 'Alternar menú',
+      'Close Banner(banner)(aria-label)': 'Cerrar banner',
+      'Copy Text(code block)(aria-label)': 'Copiar texto',
+      'Copied Text(code block)(aria-label)': 'Texto copiado',
+      'Copy Anchor Link(heading anchor)(aria-label)': 'Copiar enlace de anclaje',
+      'Dark(theme switcher)(aria-label)': 'Oscuro',
+      'Light(theme switcher)(aria-label)': 'Claro',
+      'System(theme switcher)(aria-label)': 'Sistema',
+    },
+    fr: {
+      displayName: LOCALE_NAMES.fr,
+      'Search(search dialog)': 'Rechercher',
+      'Search(search trigger)': 'Rechercher',
+      'No results found(search dialog)': 'Aucun résultat trouvé',
+      'On this page(table of contents)': 'Sur cette page',
+      'No Headings(table of contents)': 'Aucun titre',
+      'Last updated on(page footer)': 'Dernière mise à jour le',
+      'Choose a language(language switcher)': 'Choisir la langue',
+      'Choose a language(language switcher)(aria-label)': 'Choisir la langue',
+      'Next Page(pagination)': 'Suivant',
+      'Previous Page(pagination)': 'Précédent',
+      'Edit on GitHub(edit page)': 'Modifier sur GitHub',
+      'Open Search(search trigger)(aria-label)': 'Ouvrir la recherche',
+      'Close Search(search dialog)(aria-label)': 'Fermer la recherche',
+      'Open Sidebar(sidebar)(aria-label)': 'Ouvrir la barre latérale',
+      'Collapse Sidebar(sidebar)(aria-label)': 'Réduire la barre latérale',
+      'Toggle Theme(theme switcher)(aria-label)': 'Changer de thème',
+      'Toggle Menu(mobile menu)(aria-label)': 'Basculer le menu',
+      'Close Banner(banner)(aria-label)': 'Fermer la bannière',
+      'Copy Text(code block)(aria-label)': 'Copier le texte',
+      'Copied Text(code block)(aria-label)': 'Texte copié',
+      'Copy Anchor Link(heading anchor)(aria-label)': "Copier le lien d'ancrage",
+      'Dark(theme switcher)(aria-label)': 'Sombre',
+      'Light(theme switcher)(aria-label)': 'Clair',
+      'System(theme switcher)(aria-label)': 'Système',
+    },
+    de: {
+      displayName: LOCALE_NAMES.de,
+      'Search(search dialog)': 'Suche',
+      'Search(search trigger)': 'Suche',
+      'No results found(search dialog)': 'Keine Ergebnisse gefunden',
+      'On this page(table of contents)': 'Auf dieser Seite',
+      'No Headings(table of contents)': 'Keine Überschriften',
+      'Last updated on(page footer)': 'Zuletzt aktualisiert am',
+      'Choose a language(language switcher)': 'Sprache auswählen',
+      'Choose a language(language switcher)(aria-label)': 'Sprache auswählen',
+      'Next Page(pagination)': 'Weiter',
+      'Previous Page(pagination)': 'Zurück',
+      'Edit on GitHub(edit page)': 'Auf GitHub bearbeiten',
+      'Open Search(search trigger)(aria-label)': 'Suche öffnen',
+      'Close Search(search dialog)(aria-label)': 'Suche schließen',
+      'Open Sidebar(sidebar)(aria-label)': 'Seitenleiste öffnen',
+      'Collapse Sidebar(sidebar)(aria-label)': 'Seitenleiste einklappen',
+      'Toggle Theme(theme switcher)(aria-label)': 'Design wechseln',
+      'Toggle Menu(mobile menu)(aria-label)': 'Menü umschalten',
+      'Close Banner(banner)(aria-label)': 'Banner schließen',
+      'Copy Text(code block)(aria-label)': 'Text kopieren',
+      'Copied Text(code block)(aria-label)': 'Text kopiert',
+      'Copy Anchor Link(heading anchor)(aria-label)': 'Ankerlink kopieren',
+      'Dark(theme switcher)(aria-label)': 'Dunkel',
+      'Light(theme switcher)(aria-label)': 'Hell',
+      'System(theme switcher)(aria-label)': 'System',
+    },
+    ja: {
+      displayName: LOCALE_NAMES.ja,
+      'Search(search dialog)': '検索',
+      'Search(search trigger)': '検索',
+      'No results found(search dialog)': '結果が見つかりません',
+      'On this page(table of contents)': 'このページの内容',
+      'No Headings(table of contents)': '見出しなし',
+      'Last updated on(page footer)': '最終更新日',
+      'Choose a language(language switcher)': '言語を選択',
+      'Choose a language(language switcher)(aria-label)': '言語を選択',
+      'Next Page(pagination)': '次へ',
+      'Previous Page(pagination)': '前へ',
+      'Edit on GitHub(edit page)': 'GitHub で編集',
+      'Open Search(search trigger)(aria-label)': '検索を開く',
+      'Close Search(search dialog)(aria-label)': '検索を閉じる',
+      'Open Sidebar(sidebar)(aria-label)': 'サイドバーを開く',
+      'Collapse Sidebar(sidebar)(aria-label)': 'サイドバーを閉じる',
+      'Toggle Theme(theme switcher)(aria-label)': 'テーマを切り替え',
+      'Toggle Menu(mobile menu)(aria-label)': 'メニューを切り替え',
+      'Close Banner(banner)(aria-label)': 'バナーを閉じる',
+      'Copy Text(code block)(aria-label)': 'テキストをコピー',
+      'Copied Text(code block)(aria-label)': 'コピーしました',
+      'Copy Anchor Link(heading anchor)(aria-label)': 'アンカーリンクをコピー',
+      'Dark(theme switcher)(aria-label)': 'ダーク',
+      'Light(theme switcher)(aria-label)': 'ライト',
+      'System(theme switcher)(aria-label)': 'システム',
+    },
+})

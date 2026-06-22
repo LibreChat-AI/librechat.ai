@@ -38,5 +38,10 @@ export default defineConfig({
   mdxOptions: {
     remarkCodeTabOptions: false,
     remarkNpmOptions: false,
+    // fumadocs-core 16's remark-image fetches dimensions for external images at
+    // build time and hard-errors when a remote URL can't be sized (and it would
+    // make builds depend on third-party hosts). Leave external images untouched;
+    // only local images under /public get build-time sizing.
+    remarkImageOptions: { external: false },
   },
 })

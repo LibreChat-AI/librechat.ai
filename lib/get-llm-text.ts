@@ -71,7 +71,7 @@ export function absoluteUrl(path: string): string {
 }
 
 export async function getLLMText(page: InferPageType<typeof docsSource>): Promise<string> {
-  const filePath = join(process.cwd(), 'content/docs', page.file.path)
+  const filePath = page.absolutePath ?? join(process.cwd(), 'content/docs', page.path)
   const raw = await readFile(filePath, 'utf-8')
 
   // Strip frontmatter

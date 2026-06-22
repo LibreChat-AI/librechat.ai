@@ -1,10 +1,10 @@
 'use client'
 
-import { I18nProvider } from 'fumadocs-ui/i18n'
+import { I18nProvider } from 'fumadocs-ui/contexts/i18n'
 import { usePathname, useRouter } from 'next/navigation'
 import type { ReactNode } from 'react'
 import { i18n, LOCALE_NAMES, rememberLocale } from '@/lib/i18n'
-import { getFumadocsText } from '@/lib/ui-i18n'
+import { uiI18n } from '@/lib/ui-i18n'
 
 const allLocales = i18n.languages.map((locale) => ({
   locale,
@@ -14,7 +14,7 @@ const allLocales = i18n.languages.map((locale) => ({
 /**
  * Wraps Fumadocs' I18nProvider with two changes to the language switcher:
  *
- * 1. Custom `onChange`: Fumadocs' default does `router.push()` AND
+ * 1. Custom `onLocaleChange`: Fumadocs' default does `router.push()` AND
  *    `router.refresh()`. The refresh wipes the client Router Cache and forces a
  *    second, full server round-trip on every switch. It also always prefixes the
  *    locale, producing `/en/docs/...` for the default language — a non-canonical
@@ -27,6 +27,10 @@ const allLocales = i18n.languages.map((locale) => ({
  *    current locale as a safety net. Without this the switcher lists every
  *    language and most pages are untranslated, so the choice just bounces the
  *    reader straight back to English.
+ *
+ * Translations are spread from `uiI18n.provider(locale)` so the chrome inside the
+ * docs subtree (TOC, pagination, sidebar/aria-labels) stays localized; the search
+ * dialog reads the root provider in components/provider.tsx.
  */
 export function DocsI18nProvider({
   locale,
@@ -52,7 +56,7 @@ export function DocsI18nProvider({
     (item) => available.includes(item.locale) || item.locale === locale,
   )
 
-  const onChange = (next: string) => {
+  const onLocaleChange = (next: string) => {
     // Record the explicit choice so the `/` auto-detect honors it next time.
     rememberLocale(next)
     const segs = pathname.split('/').filter(Boolean)
@@ -62,12 +66,7 @@ export function DocsI18nProvider({
   }
 
   return (
-    <I18nProvider
-      locale={locale}
-      locales={locales}
-      onChange={onChange}
-      translations={getFumadocsText(locale)}
-    >
+    <I18nProvider {...uiI18n.provider(locale)} locales={locales} onLocaleChange={onLocaleChange}>
       {children}
     </I18nProvider>
   )

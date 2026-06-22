@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse, type NextFetchEvent } from 'next/server'
-import { createI18nMiddleware } from 'fumadocs-core/i18n'
+import { createI18nMiddleware } from 'fumadocs-core/i18n/middleware'
 import { i18n, LOCALE_COOKIE } from '@/lib/i18n'
 
 const i18nMiddleware = createI18nMiddleware(i18n)

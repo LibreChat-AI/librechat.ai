@@ -18,7 +18,7 @@ function getSlug(path: string): string {
 }
 
 function findPost(slug: string) {
-  return blog.find((post) => getSlug(post._file.path) === slug)
+  return blog.find((post) => getSlug(post.info.path) === slug)
 }
 
 export default async function BlogPostPage(props: PageProps) {
@@ -100,7 +100,7 @@ export default async function BlogPostPage(props: PageProps) {
 
 export function generateStaticParams(): { slug: string }[] {
   return blog.map((post) => ({
-    slug: getSlug(post._file.path),
+    slug: getSlug(post.info.path),
   }))
 }
 

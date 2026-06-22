@@ -16,7 +16,7 @@ function getSlug(path: string): string {
 }
 
 function findEntry(slug: string) {
-  return changelog.find((entry) => getSlug(entry._file.path) === slug)
+  return changelog.find((entry) => getSlug(entry.info.path) === slug)
 }
 
 export default async function ChangelogDetailPage(props: PageProps) {
@@ -84,7 +84,7 @@ export default async function ChangelogDetailPage(props: PageProps) {
 
 export function generateStaticParams(): { slug: string }[] {
   return changelog.map((entry) => ({
-    slug: getSlug(entry._file.path),
+    slug: getSlug(entry.info.path),
   }))
 }
 

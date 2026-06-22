@@ -22,7 +22,7 @@ interface ChangelogEntry {
 
 export default function ChangelogPage() {
   const entries: ChangelogEntry[] = changelog.map((entry) => {
-    const slug = getSlug(entry._file.path)
+    const slug = getSlug(entry.info.path)
     const date =
       typeof entry.date === 'string' ? entry.date : new Date(entry.date).toISOString().split('T')[0]
 

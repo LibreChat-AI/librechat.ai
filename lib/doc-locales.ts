@@ -26,7 +26,7 @@ export function getAvailableLocalesBySlug(): Record<string, string[]> {
     const locales = [i18n.defaultLanguage]
     for (const locale of nonDefault) {
       const translated = docsSource.getPage(page.slugs, locale)
-      if (translated?.file.path.endsWith(`.${locale}.mdx`)) locales.push(locale)
+      if (translated?.path.endsWith(`.${locale}.mdx`)) locales.push(locale)
     }
     if (locales.length > 1) map[page.slugs.join('/')] = locales
   }

@@ -41,7 +41,7 @@ export default function BlogPage() {
       description: post.description,
       date: iso,
       dateFormatted: dateFormatter.format(new Date(iso + 'T00:00:00Z')),
-      url: `/blog/${getSlug(post._file.path)}`,
+      url: `/blog/${getSlug(post.info.path)}`,
       author: post.author,
       ogImage: post.ogImage,
       ogImagePosition: post.ogImagePosition,
