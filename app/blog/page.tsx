@@ -79,7 +79,7 @@ export default function BlogPage() {
               href={entry.url}
               className={cn(
                 'group flex h-full flex-col rounded-lg border border-border overflow-hidden transition-colors hover:bg-muted',
-                entry.featured && 'border-primary/40 ring-1 ring-primary/20',
+                entry.featured && 'border-primary/20',
               )}
             >
               <div
