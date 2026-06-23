@@ -225,6 +225,10 @@ export const zh: UIStrings = {
             title: '身份认证',
             description: '支持 OAuth2、SAML、LDAP 等的多用户认证',
           },
+          adminPanel: {
+            title: '管理面板',
+            description: '用于管理用户、角色和配置覆盖的网页界面',
+          },
           passwordReset: {
             title: '密码重置',
             description: '基于邮件的密码找回',

@@ -258,6 +258,10 @@ const en = {
             title: 'Authentication',
             description: 'Multi-user auth with OAuth2, SAML, LDAP, and more',
           },
+          adminPanel: {
+            title: 'Admin Panel',
+            description: 'Browser UI for users, roles, and config overrides',
+          },
           passwordReset: {
             title: 'Password Reset',
             description: 'Email-based password recovery',

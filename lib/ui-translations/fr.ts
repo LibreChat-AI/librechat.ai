@@ -253,6 +253,11 @@ export const fr: UIStrings = {
             description:
               'Authentification multi-utilisateurs avec OAuth2, SAML, LDAP et plus encore',
           },
+          adminPanel: {
+            title: 'Panneau d’administration',
+            description:
+              'Interface web pour les utilisateurs, les rôles et les remplacements de configuration',
+          },
           passwordReset: {
             title: 'Réinitialisation du mot de passe',
             description: 'Récupération du mot de passe par e-mail',

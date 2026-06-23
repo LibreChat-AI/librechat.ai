@@ -20,6 +20,7 @@ import {
   RefreshCw,
   Shield,
   KeyRound,
+  LayoutDashboard,
   ShieldCheck,
   ArrowRight,
   ChevronRight,
@@ -93,6 +94,7 @@ const categories: {
     layout: 'list',
     items: [
       { icon: Shield, key: 'authentication', href: '/docs/features/authentication' },
+      { icon: LayoutDashboard, key: 'adminPanel', href: '/docs/features/admin_panel' },
       { icon: KeyRound, key: 'passwordReset', href: '/docs/features/password_reset' },
       { icon: ShieldCheck, key: 'moderation', href: '/docs/features/mod_system' },
     ],

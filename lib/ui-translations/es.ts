@@ -255,6 +255,10 @@ export const es: UIStrings = {
             title: 'Autenticación',
             description: 'Autenticación multiusuario con OAuth2, SAML, LDAP y más',
           },
+          adminPanel: {
+            title: 'Panel de administración',
+            description: 'Interfaz web para usuarios, roles y anulaciones de configuración',
+          },
           passwordReset: {
             title: 'Restablecimiento de contraseña',
             description: 'Recuperación de contraseña por correo electrónico',
