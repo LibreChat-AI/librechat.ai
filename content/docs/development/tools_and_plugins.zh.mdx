@@ -1,0 +1,358 @@
+---
+title: 工具与插件
+icon: Wrench
+description: >-
+  本文档介绍了如何通过扩展 LangChain `Tool` 类来为 LibreChat 创建自定义插件。你将学习如何将不同的 API
+  和函数与插件结合使用，以及如何将它们集成到 LangChain 框架中。
+---
+
+**此页面已弃用。请参阅 [Agents Guide](/docs/features/agents) 以获取关于使用工具的最新信息。**
+
+**强烈建议使用 [Model Context Protocol](/docs/features/agents#model-context-protocol-mcp) 或 [OpenAPI Actions](/docs/features/agents#actions) 来集成自定义工具**
+
+# 创建您自己的 Tools/Plugins [#making-your-own-toolsplugins]
+
+<Callout type="warning" title="警告">
+  请参考 `api/app/clients/tools/structured/` 中与 assistants 一起使用的最新工具，因为插件在不久的将来将被工具所取代。
+</Callout>
+
+为本项目创建自定义插件涉及扩展 `langchain/tools` 模块中的 `Tool` 类。
+
+**注意：** 我将交替使用 plugin 和 tool 这两个词，因为后者是 LangChain 特有的术语，而我们主要遵循该库的规范。
+
+从 LangChain 的角度来看，你本质上是在创建 DynamicTools。更多信息请参阅 **[LangChainJS docs](https://js.langchain.com/docs/how_to/custom_tools/)**。
+
+本指南将引导您完成创建自定义插件的过程，并以 `StableDiffusionAPI` 和 `WolframAlphaAPI` 工具为例进行说明。
+
+当使用 Functions Agent（插件的默认模式）时，工具会被转换为 **[OpenAI functions](https://openai.com/blog/function-calling-and-other-api-updates)**；无论哪种情况，插件/工具都是根据 LLM 生成我们所解析的特定格式来有条件地调用的。
+
+插件最常见的实现方式是根据 AI 的自然语言输入进行 API 调用，但在程序化用例方面几乎没有限制。
+
+---
+
+## 关键要点 [#key-takeaways]
+
+以下是创建您自己的插件的关键要点：
+
+**1.** [**导入所需模块：**](#step-1-import-required-modules) 为您的插件导入必要的模块，包括来自 `langchain/tools` 的 `Tool` 类以及您的插件可能需要的任何其他模块。
+
+**2.** [**定义您的插件类：**](#step-2-define-your-tool-class) 为您的插件定义一个继承自 `Tool` 类的类。在构造函数中设置 `name` 和 `description` 属性。如果您的插件需要凭据或其他变量，请从 fields 参数中设置它们，或者通过从进程环境中检索它们的方法进行设置。注意：如果您的插件需要冗长、详细的说明，您可以添加一个 `description_for_model` 属性，并将 `description` 设置得更通用一些。
+
+**3.** [**定义辅助方法：**](#step-3-define-helper-methods) 如果需要，在类中定义辅助方法来处理特定任务。
+
+**4.** [**实现 `_call` 方法：**](#step-4-implement-the-_call-method) 实现定义插件主要功能的 `_call` 方法。当语言模型决定使用您的插件时，会调用此方法。它应接收一个 `input` 参数并返回结果。如果发生错误，该函数应返回一个表示错误的字符串，而不是抛出错误。如果您的插件需要来自 LLM 的多个输入，请阅读 [StructuredTools](#StructuredTools) 部分。
+
+**5.** [**导出您的插件并导入到 handleTools.js：**](#step-5-export-your-plugin-and-import-into-handletoolsjs) 导出您的插件并将其导入到 `handleTools.js` 中。将您的插件添加到 `loadTools` 函数中的 `toolConstructors` 对象内。如果您的插件需要更高级的初始化，请将其添加到 `customConstructors` 对象中。
+
+**6.** [**将插件导出到 index.js：**](#step-6-export-your-plugin-into-indexjs) 将你的插件导出到 `tools` 下的 `index.js` 中。将你的插件添加到 `index.js` 的 `module.exports` 中，因此你还需要在此文件中将其声明为 `const`。
+
+**7.** [**将您的插件添加到 manifest.json：**](#step-7-add-your-plugin-to-manifestjson) 将您的插件添加到 `manifest.json`。请遵循“plugin”对象中每个字段的严格格式。如果您的插件需要身份验证，请将这些详细信息作为数组添加到 `authConfig` 下。`pluginKey` 应与您创建的 Tool 类的 `name` 相匹配，并且 `authField` 属性必须与 process.env 变量名称相匹配。
+
+请记住，创建自定义插件的关键在于扩展 `Tool` 类并实现 `_call` 方法。`_call` 方法是您定义插件功能的地方。您还可以在类中定义辅助方法和属性，以支持插件的功能。
+
+**注意：您可以在 `.\api\app\langchain\tools` 文件夹中找到本指南中提到的所有文件。**
+
+---
+
+## StructuredTools [#structuredtools]
+
+**多输入插件**
+
+如果您希望创建一个能够从 LLM 获取多个输入（而不是我们即将回顾的单一输入字符串）的插件，则需要改为创建一个 LangChain **[StructuredTool](https://blog.langchain.dev/structured-tools/)**。关于此内容的详细指南正在编写中，但目前您可以参考我在此目录中创建 StructuredTools 的方式：`api\app\clients\tools\structured\`。本指南是理解 StructuredTools 的基础，建议您先继续阅读以更好地理解 LangChain 工具。在阅读完本指南后，上述链接的博客文章也会对您有所帮助。
+
+---
+
+## 第一步：导入所需模块 [#step-1-import-required-modules]
+
+首先导入必要的模块。这包括来自 `langchain/tools` 的 `Tool` 类以及您的工具可能需要的任何其他模块。例如：
+
+```javascript
+const { Tool } = require('langchain/tools')
+// ... whatever else you need
+```
+
+## 第 2 步：定义您的工具类 [#step-2-define-your-tool-class]
+
+接下来，为你的插件定义一个继承自 `Tool` 类的类。该类应包含一个调用 `super()` 方法的构造函数，并设置 `name` 和 `description` 属性。语言模型将使用这些属性来确定何时调用你的工具以及使用哪些参数。
+
+**重要提示：** 您应该从 fields 参数中设置凭据/必要的变量，或者通过从您的进程环境中获取这些变量的方法来设置。
+
+```javascript
+class StableDiffusionAPI extends Tool {
+  constructor(fields) {
+    super();
+    this.name = 'stable-diffusion';
+    this.url = fields.SD_WEBUI_URL || this.getServerURL(); // <--- important!
+    this.description = `You can generate images with 'stable-diffusion'. This tool is exclusively for visual content...`;
+  }
+  ...
+}
+```
+
+**可选：** 从 v0.5.8 版本开始，在使用 Functions 时，你可以通过 `description_for_model` 属性添加更长、更详细的指令。执行此操作时，建议将 `description` 属性设置得更通用，以优化 token 使用。此属性中的每一行都以 `// ` 为前缀，以模拟为 ChatGPT (chat.openai.com) 生成 prompt 的方式。这种格式与官方 ChatGPT 插件的提示工程（prompt engineering）更为一致。
+
+```js
+// ...
+this.description_for_model = `// Generate images and visuals using text with 'stable-diffusion'.
+// Guidelines:
+// - ALWAYS use {{"prompt": "7+ detailed keywords", "negative_prompt": "7+ detailed keywords"}} structure for queries.
+// - Visually describe the moods, details, structures, styles, and/or proportions of the image. Remember, the focus is on visual attributes.
+// - Craft your input by "showing" and not "telling" the imagery. Think in terms of what you'd want to see in a photograph or a painting.
+// - Here's an example for generating a realistic portrait photo of a man:
+// "prompt":"photo of a man in black clothes, half body, high detailed skin, coastline, overcast weather, wind, waves, 8k uhd, dslr, soft lighting, high quality, film grain, Fujifilm XT3"
+// "negative_prompt":"semi-realistic, cgi, 3d, render, sketch, cartoon, drawing, anime, out of frame, low quality, ugly, mutation, deformed"
+// - Generate images only once per human query unless explicitly requested by the user`
+this.description =
+  "You can generate images using text with 'stable-diffusion'. This tool is exclusively for visual content."
+// ...
+```
+
+在构造函数中，请注意我们是从 fields 对象或我们定义的用于访问环境变量的 **getServerURL** 方法中获取敏感变量的。
+
+```js
+this.url = fields.SD_WEBUI_URL || this.getServerURL()
+```
+
+任何必要的凭据都会在用户从前端提供时通过 `fields` 传递；否则，管理员可以通过环境变量为所有用户“授权”该插件。所有从前端传递的凭据均已加密。
+
+```js
+// It's recommended you follow this convention when accessing environment variables.
+  getServerURL() {
+    const url = process.env.SD_WEBUI_URL || '';
+    if (!url) {
+      throw new Error('Missing SD_WEBUI_URL environment variable.');
+    }
+    return url;
+  }
+```
+
+## 步骤 3：定义辅助方法 [#step-3-define-helper-methods]
+
+如果需要，你可以在类中定义辅助方法来处理特定任务。例如，`StableDiffusionAPI` 类包含了 `replaceNewLinesWithSpaces`、`getMarkdownImageUrl` 和 `getServerURL` 等方法，用于处理各种任务。
+
+```javascript
+class StableDiffusionAPI extends Tool {
+  ...
+  replaceNewLinesWithSpaces(inputString) {
+    return inputString.replace(/\r\n|\r|\n/g, ' ');
+  }
+  ...
+}
+```
+
+## 第 4 步：实现 `_call` 方法 [#step-4-implement-the-_call-method]
+
+`_call` 方法是实现插件主要功能的地方。当语言模型决定使用您的插件时，会调用此方法。它应该接收一个 `input` 参数并返回一个结果。
+
+> 在基础 Tool 中，LLM 将生成一个字符串值作为输入。如果您的插件需要 LLM 提供多个输入，请阅读 **[StructuredTools](#StructuredTools)** 部分。
+
+```javascript
+class StableDiffusionAPI extends Tool {
+  ...
+  async _call(input) {
+    // Your tool's functionality goes here
+    ...
+    return this.result;
+  }
+}
+```
+
+**Important:** The \_call function is what will the agent will actually call. When an error occurs, the function should, when possible, return a string representing an error, rather than throwing an error. This allows the error to be passed to the LLM and the LLM can decide how to handle it. If an error is thrown, then execution of the agent will stop.
+
+## 第 5 步：导出您的插件并导入到 handleTools.js [#step-5-export-your-plugin-and-import-into-handletoolsjs]
+
+**只要您的插件/工具位于 `api\app\langchain\tools` 中，此过程在未来将实现一定程度的自动化。**
+
+```javascript
+// Export
+module.exports = StableDiffusionAPI
+```
+
+```js
+/* api\app\langchain\tools\handleTools.js */
+const StableDiffusionAPI = require('./StableDiffusion');
+...
+```
+
+在 handleTools.js 中，找到 `loadTools` 函数的开头，并将你的插件/工具添加到 toolConstructors 对象中。
+
+```js
+const loadTools = async ({ user, model, tools = [], options = {} }) => {
+  const toolConstructors = {
+    calculator: Calculator,
+    google: GoogleSearchAPI,
+    wolfram: WolframAlphaAPI,
+    'dall-e': OpenAICreateImage,
+    'stable-diffusion': StableDiffusionAPI // <----- Newly Added. Note: the key is the 'name' provided in the class.
+    // We will now refer to this name as the `pluginKey`
+  };
+```
+
+如果您的 Tool 类需要更高级的初始化，您可以将其添加到 customConstructors 对象中。
+
+默认初始化可以在 `loadToolWithAuth` 函数中看到，大多数自定义插件都应以这种方式进行初始化。
+
+以下是几个 customConstructors，它们具有不同的初始化方式
+
+```javascript
+const customConstructors = {
+  browser: async () => {
+    let openAIApiKey = process.env.OPENAI_API_KEY
+    if (!openAIApiKey) {
+      openAIApiKey = await getUserPluginAuthValue(user, 'OPENAI_API_KEY')
+    }
+    return new WebBrowser({ model, embeddings: new OpenAIEmbeddings({ openAIApiKey }) })
+  },
+  // ...
+  plugins: async () => {
+    return [
+      new HttpRequestTool(),
+      await AIPluginTool.fromPluginUrl(
+        'https://www.klarna.com/.well-known/ai-plugin.json',
+        new ChatOpenAI({ openAIApiKey: options.openAIApiKey, temperature: 0 }),
+      ),
+    ]
+  },
+}
+```
+
+## 第 6 步：将插件导出到 index.js [#step-6-export-your-plugin-into-indexjs]
+
+在 `api/app/clients/tools` 下找到 `index.js`。你需要将你的插件放入 `module.exports` 中，为了使其能够编译，你还需要将你的插件声明为 `consts`：
+
+```js
+const StructuredSD = require('./structured/StableDiffusion');
+const StableDiffusionAPI = require('./StableDiffusion');
+...
+module.exports = {
+  ...
+  StableDiffusionAPI,
+  StructuredSD,
+  ...
+}
+```
+
+## 第 7 步：将您的插件添加到 manifest.json [#step-7-add-your-plugin-to-manifestjson]
+
+**只要您的插件/工具位于 `api\app\langchain\tools` 中，且可以通过默认方法进行初始化，此过程以及第 5 步在未来将会实现一定程度的自动化。**
+
+```json
+  {
+    "name": "Calculator",
+    "pluginKey": "calculator",
+    "description": "Perform simple and complex mathematical calculations.",
+    "icon": "https://i.imgur.com/RHsSG5h.png",
+    "isAuthRequired": "false",
+    "authConfig": []
+  },
+  {
+    "name": "Stable Diffusion",
+    "pluginKey": "stable-diffusion",
+    "description": "Generate photo-realistic images given any text input.",
+    "icon": "https://i.imgur.com/Yr466dp.png",
+    "authConfig": [
+      {
+        "authField": "SD_WEBUI_URL",
+        "label": "Your Stable Diffusion WebUI API URL",
+        "description": "You need to provide the URL of your Stable Diffusion WebUI API. For instructions on how to obtain this, see <a href='url'>Our Docs</a>."
+      }
+    ]
+  },
+```
+
+“plugin”对象中的每个字段都很重要。请严格遵循此格式。如果您的插件需要身份验证，您需要将这些详细信息以数组形式添加到 `authConfig` 下，因为可能存在多个身份验证变量。请参阅 Calculator 插件，这是一个不需要身份验证的示例，其中 authConfig 为空数组（始终需要一个数组）。
+
+**Note:** as mentioned earlier, the `pluginKey` matches the class `name` of the Tool class you made.
+**Note:** the `authField` prop must match the process.env variable name
+**Note:** `authConfig` entries can include `sensitive`. Omit it or set it to `true` for API keys and secrets. Set `sensitive: false` for non-secret setup values such as URLs, usernames, deployment names, or project IDs so the UI renders a plain text field instead of a secret input.
+
+这是一个包含多个凭据变量的插件示例
+
+```json
+  [
+  {
+    "name": "Google",
+    "pluginKey": "google",
+    "description": "Use Google Search to find information about the weather, news, sports, and more.",
+    "icon": "https://i.imgur.com/SMmVkNB.png",
+    "authConfig": [
+      {
+        "authField": "GOOGLE_CSE_ID",
+        "label": "Google CSE ID",
+        "description": "This is your Google Custom Search Engine ID. For instructions on how to obtain this, see <a href='https://github.com/danny-avila/LibreChat/blob/main/docs/features/plugins/google_search.md'>Our Docs</a>.",
+        "sensitive": false
+      },
+      {
+        "authField": "GOOGLE_SEARCH_API_KEY",
+        "label": "Google API Key",
+        "description": "This is your Google Custom Search API Key. For instructions on how to obtain this, see <a href='https://github.com/danny-avila/LibreChat/blob/main/docs/features/plugins/google_search.md'>Our Docs</a>.",
+        "sensitive": true
+      }
+    ]
+  },
+```
+
+## 示例：WolframAlphaAPI 工具 [#example-wolframalphaapi-tool]
+
+这是另一个自定义工具的示例，即 `WolframAlphaAPI` 工具。该工具使用 `axios` 模块向 Wolfram Alpha API 发起 HTTP 请求。
+
+```javascript
+const axios = require('axios')
+const { Tool } = require('langchain/tools')
+
+class WolframAlphaAPI extends Tool {
+  constructor(fields) {
+    super()
+    this.name = 'wolfram'
+    this.apiKey = fields.WOLFRAM_APP_ID || this.getAppId()
+    this.description = `Access computation, math, curated knowledge & real-time data through wolframAlpha...`
+  }
+
+  async fetchRawText(url) {
+    try {
+      const response = await axios.get(url, { responseType: 'text' })
+      return response.data
+    } catch (error) {
+      console.error(`Error fetching raw text: ${error}`)
+      throw error
+    }
+  }
+
+  getAppId() {
+    const appId = process.env.WOLFRAM_APP_ID || ''
+    if (!appId) {
+      throw new Error('Missing WOLFRAM_APP_ID environment variable.')
+    }
+    return appId
+  }
+
+  createWolframAlphaURL(query) {
+    const formattedQuery = query.replaceAll(/`/g, '').replaceAll(/\n/g, ' ')
+    const baseURL = 'https://www.wolframalpha.com/api/v1/llm-api'
+    const encodedQuery = encodeURIComponent(formattedQuery)
+    const appId = this.apiKey || this.getAppId()
+    const url = `${baseURL}?input=${encodedQuery}&appid=${appId}`
+    return url
+  }
+
+  async _call(input) {
+    try {
+      const url = this.createWolframAlphaURL(input)
+      const response = await this.fetchRawText(url)
+      return response
+    } catch (error) {
+      if (error.response && error.response.data) {
+        console.log('Error data:', error.response.data)
+        return error.response.data
+      } else {
+        console.log(`Error querying Wolfram Alpha`, error.message)
+        return 'There was an error querying Wolfram Alpha.'
+      }
+    }
+  }
+}
+
+module.exports = WolframAlphaAPI
+```
+
+在此示例中，`WolframAlphaAPI` 类具有诸如 `fetchRawText`、`getAppId` 和 `createWolframAlphaURL` 等辅助方法来处理特定任务。`_call` 方法向 Wolfram Alpha API 发出 HTTP 请求并返回响应。

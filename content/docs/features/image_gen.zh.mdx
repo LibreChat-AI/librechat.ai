@@ -1,0 +1,398 @@
+---
+title: 图像生成与编辑
+icon: Image
+description: LibreChat 内置图像生成与编辑工具的综合指南
+---
+
+LibreChat 附带了内置的图像工具，您可以将其添加到 [Agent](/docs/features/agents) 中。每个工具都有其自己的模型、价格点和设置，通常只需要一个 API 密钥或 URL。没有单独的图像页面：您可以通过与启用了图像工具的 Agent 聊天来生成或编辑图像。
+
+<Callout type="info" title="图像生成的工作原理">
+当您想要编辑图片时，请上传一张图片；当您想要生成新图片时，请发送一段纯文本提示词。生成的图片遵循配置的 [`fileStrategy`](/docs/configuration/librechat_yaml/object_structure/config#filestrategy)，且工具输出会在生成后立即作为聊天上下文的一部分发送给 LLM。
+</Callout>
+
+## 快速开始 [#quick-start]
+
+使用 OpenAI Image Tools 在几分钟内完成图像生成功能的配置。
+
+<Steps>
+<Step>
+
+**创建 Agent。** 从 endpoint 菜单中选择 **Agents**，从侧边栏打开 Agent Builder，然后创建一个新的 Agent。为其命名，例如“Image Creator”。
+
+</Step>
+<Step>
+
+**添加 OpenAI Image Tools。** 打开智能体的 **Tools** 列表，选择 **OpenAI Image Tools**，然后保存智能体。这将同时添加图像生成和图像编辑功能。
+
+</Step>
+<Step>
+
+**设置您的 API key。** 将以下内容添加到您的 `.env` 文件中：
+
+```bash filename=".env"
+IMAGE_GEN_OAI_API_KEY=sk-your-openai-api-key
+# Optional; defaults to gpt-image-1
+IMAGE_GEN_OAI_MODEL=gpt-image-1
+```
+
+</Step>
+<Step>
+
+**重启并测试。** 重启 LibreChat，然后向你的智能体发送一条消息，例如 “Generate an image of a sunset over mountains”。
+
+| 部署方式 | 命令 |
+| ---------- | --------------------------------------------- |
+| Docker     | `docker compose down && docker compose up -d` |
+| 本地       | 停止 (Ctrl+C) 然后运行 `npm run backend` |
+
+</Step>
+</Steps>
+
+<Callout type="info" title="值得了解的信息">
+- 可以省略 API keys，让用户从 UI 输入他们自己的 key。
+- 图像输出仅在生成后立即发送给 LLM，而不是在每条消息中发送。除此之外，LLM 仅从用户消息中附加的图像获取视觉上下文。请参阅 [Image Storage and Handling](#image-storage-and-handling)。
+- MCP server 工具也可以输出图像，尽管它们可能并不总是使用正确的格式。请参阅 [MCP 部分](#model-context-protocol-mcp)。
+</Callout>
+
+## OpenAI 图像工具 [#openai-image-tools]
+
+“OpenAI Image Tools” 是一个由两个独立工具组成的智能体工具包：
+
+- **图像生成** (Image Generation) 可根据文本提示词创建全新的图像（无需上传）。
+- **图像编辑**功能可以编辑或重混您上传的图像：更改颜色、添加对象、扩展画布等。
+
+两者默认均使用 **GPT-Image-1** 来进行指令遵循、文本渲染、详细编辑和现实世界知识处理。当您的部署支持时，请使用 `IMAGE_GEN_OAI_MODEL` 来选择其他 OpenAI 图像模型。有关更多详细信息，请参阅 OpenAI 的 [Image Generation documentation](https://platform.openai.com/docs/guides/image-generation?image-generation-model=gpt-image-1)。
+
+### 生成与编辑 [#generation-vs-editing]
+
+| 用例 | 调用 |
+| ----------------------- | -------------------- |
+| "Start from scratch"    | **Image Generation** |
+| "Use existing image(s)" | **Image Editing**    |
+
+这两个工具始终可用，代理会根据请求选择合适的工具：
+
+- **图像生成 (Image Generation)** 仅根据文本描述创建新图像。
+- **图像编辑 (Image Editing)** 使用图像 ID 来修改或重混现有图像。这些图像可以是当前消息中的图像，也可以是之前生成并引用的图像。只要图像 ID 保留在上下文窗口中，LLM 就会对其进行追踪，并将其包含在工具输出中。
+
+<Callout type="warning" title="图像编辑依赖于图像 ID">
+- 图像 ID 会保留在聊天记录中。当文件上传到当前请求时，它们的 ID 会在生成任何 token 之前被添加到 LLM 的上下文中。
+- 只要之前引用或生成的图像 ID 仍在上下文窗口内，就可以用于编辑。当调用编辑工具时，LLM 会将任何相关的 ID 包含在 `image_ids` 数组中。
+- 您可以从侧边栏附加之前上传的图片，而无需再次上传。这还能为视觉模型提供图片上下文，从而有助于为编辑工具提供 `prompt` 信息。
+</Callout>
+
+### 参数 [#parameters]
+
+**图像生成**
+
+- **prompt**: 文本描述（必填）
+- **size**: `auto`（默认值）、`1024x1024`（正方形）、`1536x1024`（横向）或 `1024x1536`（纵向）
+- **quality**: `auto` (默认), `high`, `medium` 或 `low`
+- **background**: `auto` (default), `transparent`, or `opaque` (transparent requires PNG or WebP format)
+
+**图像编辑**
+
+- **image_ids**: 用作编辑参考的图像 ID 数组（必需）
+- **prompt**: 变更的文本描述（必填）
+- **size**: `auto`（默认值）、`1024x1024`、`1536x1024`、`1024x1536`、`256x256` 或 `512x512`
+- **quality**: `auto` (默认), `high`, `medium` 或 `low`
+
+### 设置 [#setup]
+
+创建或复用一个 OpenAI key 并将其添加到 `.env`，然后在您的 agent 的 **Tools** 列表中添加 "OpenAI Image Tools"：
+
+```bash filename=".env"
+IMAGE_GEN_OAI_API_KEY=sk-...
+# optional extras
+IMAGE_GEN_OAI_MODEL=gpt-image-1
+IMAGE_GEN_OAI_BASEURL=https://...
+```
+
+对于 Azure OpenAI 部署，请先在 https://aka.ms/oai/gptimage1access 申请访问权限，然后将您的凭据添加到 `.env`：
+
+```bash filename=".env"
+IMAGE_GEN_OAI_API_KEY=your-api-key
+# optional extras
+IMAGE_GEN_OAI_MODEL=gpt-image-1
+IMAGE_GEN_OAI_BASEURL=https://deploymentname.openai.azure.com/openai/deployments/gpt-image-1/
+IMAGE_GEN_OAI_AZURE_API_VERSION=2025-04-01-preview
+```
+
+### 高级配置 [#advanced-configuration]
+
+使用以下环境变量自定义工具描述和提示词引导：
+
+```bash filename=".env"
+# Image Model
+IMAGE_GEN_OAI_MODEL=gpt-image-1
+
+# Image Generation Tool Descriptions
+IMAGE_GEN_OAI_DESCRIPTION=...
+IMAGE_GEN_OAI_PROMPT_DESCRIPTION=...
+
+# Image Editing Tool Descriptions
+IMAGE_EDIT_OAI_DESCRIPTION=...
+IMAGE_EDIT_OAI_PROMPT_DESCRIPTION=...
+```
+
+### 定价 [#pricing]
+
+请参阅 [GPT-Image-1 定价页面](https://platform.openai.com/docs/models/gpt-image-1) 和 [图像生成文档](https://platform.openai.com/docs/guides/image-generation?image-generation-model=gpt-image-1#cost-and-latency) 以了解图像生成的费用。
+
+## Gemini 图像工具 [#gemini-image-tools]
+
+Gemini Image Tools 集成了 Google 最新的图像生成模型，支持文本生成图像以及基于图像上下文的编辑功能。
+
+- **文本生成图像 (Text-to-image generation)**：根据详细的文本描述创建高质量图像。
+- **图像上下文支持**：使用现有图像作为新生成的上下文或灵感。
+- **图像编辑**：基于对现有图像的修改生成新图像（包含原始图像 ID）。
+- **多个模型**：选择 `gemini-2.5-flash-image`（默认）或 `gemini-3-pro-image-preview`。
+- **双 API 支持**：同时支持简单的 Gemini API 密钥和 Google Cloud Vertex AI。
+
+### 参数 [#parameters-1]
+
+- **prompt**: 所需图像的详细文本描述（必填，最多 32,000 个字符）
+- **image_ids**: 可选的图像 ID 数组，用作生成的视觉上下文
+
+### 设置 [#setup-1]
+
+对于 Gemini API，请从 [Google AI Studio](https://aistudio.google.com/app/apikey) 获取密钥：
+
+```bash filename=".env"
+GEMINI_API_KEY=your_api_key_here
+```
+
+对于 Vertex AI（拥有 Vertex AI 访问权限的 Google Cloud 用户）：
+
+```bash filename=".env"
+GOOGLE_SERVICE_KEY_FILE=/path/to/service-account.json
+GOOGLE_CLOUD_LOCATION=us-central1  # optional, default: global
+```
+
+### 模型选择 [#model-selection]
+
+```bash filename=".env"
+# Default model (fast and efficient)
+GEMINI_IMAGE_MODEL=gemini-2.5-flash-image
+
+# Higher quality model
+GEMINI_IMAGE_MODEL=gemini-3-pro-image-preview
+```
+
+### 高级配置 [#advanced-configuration-1]
+
+通过环境变量自定义工具描述：
+
+```bash filename=".env"
+GEMINI_IMAGE_GEN_DESCRIPTION=...
+GEMINI_IMAGE_GEN_PROMPT_DESCRIPTION=...
+GEMINI_IMAGE_IDS_DESCRIPTION=...
+```
+
+更多详细信息请参阅专门的 [Gemini Image Gen 指南](/docs/configuration/tools/gemini_image_gen)。
+
+## DALL·E (旧版) [#dalle-legacy]
+
+DALL·E 使用 OpenAI 的 `dall-e-3` 图像模型提供传统的图像生成功能。
+
+### 参数 [#parameters-2]
+
+- **prompt**: 所需图像的文本描述（必填，最多 4000 个字符）
+- **style**: `vivid`（超现实、戏剧化，默认）或 `natural`（非超现实）
+- **quality**: `standard` (默认) 或 `hd`
+- **size**: `1024x1024`（默认，正方形）、`1792x1024`（宽屏）或 `1024x1792`（竖屏）
+
+### 设置 [#setup-2]
+
+```bash filename=".env"
+# Required
+DALLE_API_KEY=sk-...  # or DALLE3_API_KEY=sk-...
+
+# Optional
+DALLE_REVERSE_PROXY=https://...  # Alternative endpoint
+DALLE3_BASEURL=https://...  # For Azure or custom endpoints
+DALLE3_AZURE_API_VERSION=2023-12-01-preview  # For Azure deployments
+DALLE3_SYSTEM_PROMPT=...  # Custom system prompt for DALL·E
+```
+
+为智能体启用 **DALL·E** 工具并开始提示。
+
+### 高级配置 [#advanced-configuration-2]
+
+对于 Azure OpenAI 部署，请配置 base URL 和 API version：
+
+```bash filename=".env"
+DALLE3_BASEURL=https://your-resource-name.openai.azure.com/openai/deployments/your-deployment-name
+DALLE3_AZURE_API_VERSION=2023-12-01-preview
+DALLE3_API_KEY=your-azure-api-key
+```
+
+### 定价 [#pricing-1]
+
+请参阅 [DALL-E 定价页面](https://platform.openai.com/docs/models/dall-e-3) 和 [图像生成文档](https://platform.openai.com/docs/guides/image-generation?image-generation-model=dall-e-3) 以了解图像生成的费用。
+
+## Stable Diffusion (本地) [#stable-diffusion-local]
+
+完全在您自己的机器或服务器上运行图像。将 LibreChat 指向任何 Automatic1111（或兼容的）endpoint，即可完成设置。
+
+### 参数 [#parameters-3]
+
+- **prompt**: 描述图像中所需元素的详细关键词（必填）
+- **negative_prompt**: 描述要从图像中排除的元素的关键词（必需）
+
+Stable Diffusion 的实现使用了这些固定的默认参数，它们在大多数用例中都能产生良好的效果：
+
+- cfg_scale: 4.5
+- steps: 22
+- width: 1024
+- height: 1024
+
+### 设置 [#setup-3]
+
+无需 API 密钥，只需提供您 Automatic1111 WebUI 可访问的 URL：
+
+```bash filename=".env"
+SD_WEBUI_URL=http://127.0.0.1:7860  # URL to your Automatic1111 WebUI
+```
+
+有关设置 Automatic1111 的更多详细信息，请参阅专门的 [Stable Diffusion 指南](/docs/configuration/tools/stable_diffusion)。
+
+## Flux [#flux]
+
+专注于速度并提供可选微调模型的云生成器。
+
+- 基于云的快速图像生成
+- 支持微调模型
+- 多种质量级别和长宽比
+- Raw 模式，用于生成处理痕迹更少、更自然的图像
+
+### 参数 [#parameters-4]
+
+Flux 工具支持三个主要操作：
+
+1. **generate**: 根据文本提示词创建新图像
+2. **generate_finetuned**: 使用微调模型生成图像
+3. **list_finetunes**: 列出用户可用的自定义模型
+
+更多详细信息请参阅专门的 [Flux 指南](/docs/configuration/tools/flux#parameters)。
+
+### 设置 [#setup-4]
+
+在智能体中选择 **Flux** 工具。提示词为纯文本，每次调用生成一张图像。
+
+```bash filename=".env"
+FLUX_API_KEY=flux_live_...
+FLUX_API_BASE_URL=https://api.us1.bfl.ai   # default is fine for most users
+```
+
+### 定价 [#pricing-2]
+
+请参阅 [Flux 定价页面](https://docs.bfl.ml/pricing/) 以了解图像生成的费用。
+
+## Model Context Protocol (MCP) [#model-context-protocol-mcp]
+
+MCP 服务器支持图像输出。例如，[Puppeteer MCP Server](https://github.com/modelcontextprotocol/servers-archived/tree/main/src/puppeteer) 可以生成网页截图，它以预期的格式输出图像，并被视为与 LibreChat 内置图像工具相同。
+
+<Callout type="warning" title="MCP 图像支持尚处于起步阶段">
+- 以下示例假设 LibreChat 在 Docker 之外运行，直接使用 Node.js。Model Context Protocol 是一个相对较新的框架，许多开发者仍在学习如何使用 uv/node 为其系统提供服务，以实现可扩展的部署。
+- 目前存在的图像生成服务器较少，且许多服务器尚未采用正确的图像响应格式。
+- 虽然许多 MCP 服务器在 Docker 中运行良好，但以下示例则不然，或者需要更高级的配置才能运行，这反映了目前 MCP 服务器之间存在的一些不一致性。
+</Callout>
+
+```yaml filename="librechat.yaml"
+mcpServers:
+  puppeteer:
+    command: npx
+    args:
+      - -y
+      - '@modelcontextprotocol/server-puppeteer'
+```
+
+以下是一个 [Image Generation server](https://github.com/GongRzhe/Image-Generation-MCP-Server) 的示例，它使用 [Replicate API](https://replicate.com/account/api-tokens) 输出图像，但返回的是图像的 URL，这不符合 MCP 的图像响应标准。
+
+<Callout type="info" title="需要全局安装">
+对于此特定服务器，请使用 `npm install -g @gongrzhe/image-gen-server` 全局安装 `@gongrzhe/image-gen-server` 包，然后按下文所示指向该包的编译文件。
+</Callout>
+
+```yaml filename="librechat.yaml"
+mcpServers:
+  image-gen:
+    command: 'node'
+    # First, install the package globally using npm:
+    # `npm install -g @gongrzhe/image-gen-server`
+    # Then, point to the location of the installed package,
+    # which you can find by running `npm root -g`
+    args:
+      - '{REPLACE_WITH_NODE_MODULES_LOCATION}/@gongrzhe/image-gen-server/build/index.js'
+      # Example with output from `npm root -g`:
+      # - "/home/danny/.nvm/versions/node/v24.16.0/lib/node_modules/@gongrzhe/image-gen-server/build/index.js"
+    env:
+      # Do not hardcode the API token here, use the environment variable instead
+      # The following will pick up the token from your .env file or environment
+      REPLICATE_API_TOKEN: '${REPLICATE_API_TOKEN}'
+      MODEL: 'google/imagen-3'
+```
+
+## 图像存储与处理 [#image-storage-and-handling]
+
+所有生成的图像均为：
+
+1. 根据配置的 [`fileStrategy`](/docs/configuration/librechat_yaml/object_structure/config#filestrategy) 进行保存
+2. 直接显示在聊天界面中
+3. 在生成后作为即时聊天上下文的一部分发送给 LLM
+
+关于最后一点，有几点注意事项：
+
+- 这可能会导致不支持图像输入功能的 LLM 出现问题。我们计划在每个 agent 的设置中增加一个禁用此行为的选项。
+- 输出仅在生成时发送给 LLM，而不是在每条消息发送时。
+- 若要在后续对话中包含图片，请将其从侧边栏附加到消息中。
+- 简而言之，LLM 仅从用户消息中附加的图像，以及紧随其后发生的生成或编辑操作中获取视觉上下文。
+
+## 代理支持 [#proxy-support]
+
+所有图像生成工具都支持通过 `PROXY` 环境变量进行代理配置：
+
+```bash filename=".env"
+PROXY=http://proxy-url:port
+```
+
+当 `PROXY` 未设置时，受支持的服务器端客户端会遵循 `HTTP_PROXY`、`HTTPS_PROXY` 和 `NO_PROXY`/`no_proxy`。
+
+## 错误处理 [#error-handling]
+
+如果工具遇到错误，它会返回一条消息，解释出错的原因。常见问题包括：
+
+- 无效的 API key
+- API 不可用
+- 违反内容政策
+- 代理/网络问题
+- 无效参数
+- 不支持的图像负载（请参阅上方的 [Image Storage and Handling](#image-storage-and-handling)）
+
+## 提示词 (Prompting) [#prompting]
+
+您可以自定义 [OpenAI Image Tools](#advanced-configuration) 和 [DALL·E](#advanced-configuration-2) 的提示词，但以下提示说明了工具所提供的默认提示词，了解这些内容对您自己的编写工作很有帮助：
+
+1. 从**主题**和**风格**（照片、油画等）开始。
+2. 添加 **构图 (composition)** 和 **镜头/媒介 (camera/medium)**（例如：“wide-angle shot of…”、“watercolour…”）。
+3. 提及**光照和氛围**（“黄金时刻”、“戏剧性阴影”）。
+4. 最后以**细节关键词**（纹理、颜色、表情）收尾。
+5. 保持否定为肯定：描述应该包含的内容，而不是要避免的内容。
+
+示例：
+
+> 一张电影质感的照片，展示了一座沐浴在午后暖阳下的古老图书馆。高大的木制书架上堆满了皮质封面的书籍，尘埃在光线中闪烁。前景中，一盏绿罩银行家台灯照亮了抛光红木书桌上一本打开的地图集。85mm 镜头，浅景深，浓郁的琥珀色调，超高细节。
+
+## 相关页面 [#related-pages]
+
+<Cards num={3}>
+  <Cards.Card title="智能体" href="/docs/features/agents" arrow>
+    创建并配置带有自定义工具的 AI 智能体
+  </Cards.Card>
+  <Cards.Card title="MCP 服务器" href="/docs/features/mcp" arrow>
+    通过 Model Context Protocol 自带工具
+  </Cards.Card>
+  <Cards.Card title="Gemini 图像工具" href="/docs/configuration/tools/gemini_image_gen" arrow>
+    Google Gemini 图像生成详细设置指南
+  </Cards.Card>
+</Cards>

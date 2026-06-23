@@ -1,0 +1,121 @@
+---
+title: Modération automatisée
+icon: Shield
+description: >-
+  Le système de modération automatisé utilise un mécanisme de score pour suivre
+  les violations des utilisateurs. Lorsque les utilisateurs effectuent des
+  actions telles que des connexions, des inscriptions ou des envois de messages
+  excessifs, ils accumulent des scores de violation. Une fois un seuil défini
+  atteint, l'utilisateur et son adresse IP sont temporairement bannis. Ce
+  système garantit la sécurité de la plateforme en surveillant et en pénalisant
+  les activités rapides ou suspectes.
+---
+
+## Système de modération automatisé (optionnel) [#automated-moderation-system-optional]
+Le système de modération automatisé utilise un mécanisme de score pour suivre les violations des utilisateurs. Lorsque les utilisateurs effectuent des actions telles que des connexions, des inscriptions ou des envois de messages excessifs, ils accumulent des scores de violation. Une fois un seuil défini atteint, l'utilisateur et son IP sont temporairement bannis. Ce système garantit la sécurité de la plateforme en surveillant et en pénalisant les activités rapides ou suspectes.
+
+En production, vous devriez mettre en place Cloudflare ou une autre protection DDoS pour protéger réellement le serveur contre les requêtes excessives, mais ces changements vous protégeront en grande partie contre un ou plusieurs acteurs malveillants ciblant votre instance déployée pour le proxying.
+
+### Notes [#notes]
+
+- Utilise la mise en cache pour la sécurité de base et la journalisation des violations (bannissements, messages simultanés, dépassement des limites de débit)
+    - Dans un futur proche, j'ajouterai la prise en charge de **Redis** pour les instances de production, qui pourra être facilement injectée dans la configuration de mise en cache actuelle.
+- Le dépassement de l'une des limites de débit (connexion/inscription/messagerie) est considéré comme une violation, le score par défaut est 1
+- L'origine non-navigateur est une violation
+- Le score par défaut pour chaque violation est configurable
+- L'activation de l'un des limiteurs et/ou des bannissements active la mise en cache/la journalisation
+- Les journaux de violation se trouvent dans le dossier data, qui est créé lorsque la journalisation commence : `librechat/data`
+  - **Seules les violations sont journalisées**
+  - `violations.json` assure le suivi du nombre total de chaque violation par utilisateur
+  - `logs.json` enregistre chaque violation individuelle par utilisateur
+- Les journaux de bannissement sont stockés dans MongoDB sous la collection `logs`. Ils sont transitoires car ils n'existent que pour la durée du bannissement.
+    - Si vous souhaitez supprimer un bannissement manuellement, vous devrez les supprimer de la base de données manuellement et redémarrer le serveur.
+    - Le support de **Redis** est également prévu pour cela.
+
+### Types de limiteur de débit [#rate-limiter-types]
+
+#### Limitation du taux de connexion et d'inscription [#login-and-registration-rate-limiting]
+Empêche les attaques par force brute et les inscriptions de spam en limitant le nombre de tentatives de connexion ou de nouvelles inscriptions de compte pouvant être effectuées à partir d'une seule adresse IP dans un intervalle de temps donné.
+
+#### Limitation du débit des messages [#message-rate-limiting]
+Contrôle la fréquence à laquelle les utilisateurs peuvent envoyer des messages afin de prévenir le spam et les abus :
+- **Limitation des messages simultanés** : Limite le nombre de messages qu'un utilisateur peut envoyer simultanément (empêche les utilisateurs d'ouvrir plusieurs onglets pour contourner les limites)
+- **Limitation de la fréquence des messages** : Contrôle la fréquence à laquelle les messages peuvent être envoyés, configurable à la fois par adresse IP et par utilisateur individuel
+
+#### Limitation du taux d'importation de conversations [#import-conversation-rate-limiting]
+Empêche l'abus de la fonctionnalité d'importation de conversations en limitant le nombre de conversations pouvant être importées dans une fenêtre de temps donnée. Cela aide à prévenir :
+- Importations massives de données susceptibles de surcharger le serveur
+- Scripts automatisés tentant d'inonder le système avec des données importées
+- Épuisement des ressources dû au traitement d'un grand nombre d'importations
+
+Limites par défaut :
+- Basé sur l'IP : 100 importations par minute
+- Basé sur l'utilisateur : 50 importations par minute (désactivé par défaut)
+
+#### Limitation du taux de bifurcation des conversations [#conversation-forking-rate-limiting]
+Contrôle la fréquence à laquelle les utilisateurs peuvent créer des forks (copies) de conversations existantes. Cela permet d'éviter :
+- Croissance excessive de la base de données due à la duplication massive de conversations
+- Épuisement des ressources dû aux opérations de fork
+- Abus de la fonctionnalité de forking pour le spam ou la collecte de données
+
+Limites par défaut :
+- Basé sur l'IP : 30 requêtes par minute
+- Basé sur l'utilisateur : 7 forks par minute (désactivé par défaut)
+
+#### Limitation du taux de téléchargement de fichiers [#file-upload-rate-limiting]
+Configuré via le fichier librechat.yaml, ceci contrôle la fréquence à laquelle les utilisateurs peuvent télécharger des fichiers afin de prévenir les abus de stockage et l'épuisement de la bande passante.
+
+#### Limitation de débit Text-to-Speech (TTS) [#text-to-speech-tts-rate-limiting]
+Contrôle la fréquence à laquelle les utilisateurs peuvent demander des conversions de texte en parole. Cela permet d'éviter :
+- Coûts excessifs d'utilisation de l'API
+- Épuisement des ressources serveur dû à la génération audio
+- Abus de la fonctionnalité TTS pour la collecte de données
+
+Configuré via le fichier librechat.yaml avec des limites personnalisables par IP et par utilisateur.
+
+#### Limitation de débit de la synthèse vocale (STT) [#speech-to-text-stt-rate-limiting]
+Contrôle la fréquence à laquelle les utilisateurs peuvent soumettre de l'audio pour transcription. Cela permet d'éviter :
+- Coûts excessifs d'utilisation de l'API
+- Épuisement des ressources serveur dû au traitement audio
+- Abus de la fonctionnalité STT pour des services de transcription non autorisés
+
+Configuré via le fichier librechat.yaml avec des limites personnalisables par IP et par utilisateur.
+
+#### Limitation du taux de réinitialisation de mot de passe [#password-reset-rate-limiting]
+Contrôle la fréquence à laquelle les utilisateurs peuvent demander des e-mails de réinitialisation de mot de passe. Cela permet d'éviter :
+- Attaques par bombardement d'e-mails
+- Abus du système de réinitialisation de mot de passe
+- Utilisation excessive du service de messagerie
+
+#### Limitation du taux de vérification par e-mail [#email-verification-rate-limiting]
+Contrôle la fréquence à laquelle les utilisateurs peuvent demander des e-mails de vérification. Cela permet d'éviter :
+- Attaques par spam via le système de vérification
+- Abus du service de messagerie
+- Épuisement des ressources dû aux demandes de vérification
+
+#### Limitation du taux d'appel d'outils [#tool-call-rate-limiting]
+Contrôle la fréquence à laquelle les utilisateurs peuvent effectuer des appels d'outils/plugins. Cela permet d'éviter :
+- Utilisation excessive de l'API par les outils intégrés
+- Abus des intégrations de services externes
+- Épuisement des ressources dû au traitement des outils
+
+#### Limitation du taux d'accès aux conversations [#conversation-access-rate-limiting]
+Contrôle la fréquence à laquelle les utilisateurs peuvent accéder ou tenter d'accéder aux conversations. Cela permet d'éviter :
+- Tentatives d'accès non autorisées
+- Attaques par scraping de données
+- Requêtes de base de données excessives
+
+### Limiteurs de débit [#rate-limiters]
+
+Les limiteurs de débit actuels du projet sont les suivants (voir ci-dessous dans la configuration pour les valeurs par défaut) :
+
+- Limitation du taux de connexion et d'inscription
+- `Optional:` Concurrent Message limiting (only X messages at a time per user)
+- `Optional:` Message limiting (how often a user can send a message, configurable by IP and User)
+- `Optional:` Import conversation limiting (how often a user can import conversations, configurable by IP and User)
+- `Optional:` Conversation forking limiting (how often a user can fork conversations, configurable by IP and User)
+- `Optional:` Text-to-Speech (TTS) limiting (configurable through [`librechat.yaml` config file](/docs/configuration/librechat_yaml/object_structure/config#ratelimits))
+- `Optional:` Speech-to-Text (STT) limiting (configurable through [`librechat.yaml` config file](/docs/configuration/librechat_yaml/object_structure/config#ratelimits))
+- `Optional:` File Upload limiting (configurable through [`librechat.yaml` config file](/docs/configuration/librechat_yaml/object_structure/config#ratelimits))
+
+Pour plus de détails, veuillez consulter le guide de configuration fourni ici : [Modération automatisée](/docs/configuration/mod_system)

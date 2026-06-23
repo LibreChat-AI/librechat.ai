@@ -1,0 +1,398 @@
+---
+title: 画像生成と編集
+icon: Image
+description: LibreChatの組み込み画像生成および編集ツールに関する包括的ガイド
+---
+
+LibreChatには、[Agent](/docs/features/agents)に追加できる画像ツールが組み込まれています。各ツールには独自のモデル、価格設定、セットアップがあり、通常はAPIキーやURLのみが必要です。独立した画像生成ページは存在しません。画像ツールが有効になっているAgentとチャットすることで、画像の生成や編集を行います。
+
+<Callout type="info" title="画像生成の仕組み">
+編集が必要な場合は画像をアップロードし、新しい画像が必要な場合はプレーンテキストのプロンプトを送信してください。生成された画像は設定された [`fileStrategy`](/docs/configuration/librechat_yaml/object_structure/config#filestrategy) に従い、ツール出力は生成直後にチャットコンテキストの一部としてLLMに送信されます。
+</Callout>
+
+## クイックスタート [#quick-start]
+
+OpenAI Image Toolsを使用して、数分で画像生成機能を有効にしましょう。
+
+<Steps>
+<Step>
+
+**エージェントを作成します。** endpoint メニューから **Agents** を選択し、サイドパネルから Agent Builder を開き、新しいエージェントを作成します。「Image Creator」のような名前を付けてください。
+
+</Step>
+<Step>
+
+**OpenAI Image Toolsを追加する。** エージェントの**Tools**リストを開き、**OpenAI Image Tools**を選択して、エージェントを保存します。これにより、画像生成と画像編集の両方の機能が追加されます。
+
+</Step>
+<Step>
+
+**APIキーを設定します。** `.env` ファイルに以下を追加してください：
+
+```bash filename=".env"
+IMAGE_GEN_OAI_API_KEY=sk-your-openai-api-key
+# Optional; defaults to gpt-image-1
+IMAGE_GEN_OAI_MODEL=gpt-image-1
+```
+
+</Step>
+<Step>
+
+**再起動してテストします。** LibreChatを再起動し、「山に沈む夕日の画像を生成して」のようなメッセージをエージェントに送信してください。
+
+| デプロイ | コマンド |
+| ---------- | --------------------------------------------- |
+| Docker     | `docker compose down && docker compose up -d` |
+| Local      | 停止 (Ctrl+C) 後に `npm run backend` |
+
+</Step>
+</Steps>
+
+<Callout type="info" title="知っておくと便利な情報">
+- API keysは省略可能であり、ユーザーがUIから自身のキーを入力できるようにすることができます。
+- 画像出力は生成直後にのみLLMへ送信され、すべてのメッセージで送信されるわけではありません。それ以外の場合、LLMはユーザーメッセージに添付された画像からのみ視覚的なコンテキストを取得します。[Image Storage and Handling](#image-storage-and-handling) を参照してください。
+- MCP server toolsは画像を出力することもできますが、常に正しい形式が使用されるとは限りません。[MCPセクション](#model-context-protocol-mcp)を参照してください。
+</Callout>
+
+## OpenAI 画像ツール [#openai-image-tools]
+
+「OpenAI Image Tools」は、2つの独立したツールで構成されるエージェントツールキットです：
+
+- **Image Generation**は、テキストプロンプトから全く新しい画像を生成します（アップロードは不要です）。
+- **Image Editing** は、アップロードした画像を編集またはリミックスします。色の変更、オブジェクトの追加、キャンバスの拡張などを行うことができます。
+
+どちらも、指示への追従、テキストレンダリング、詳細な編集、および実世界の知識についてはデフォルトで **GPT-Image-1** を使用します。デプロイメントがサポートしている場合に別のOpenAI画像モデルを選択するには、`IMAGE_GEN_OAI_MODEL` を使用してください。詳細については、OpenAIの [Image Generation documentation](https://platform.openai.com/docs/guides/image-generation?image-generation-model=gpt-image-1) を参照してください。
+
+### 生成 vs. 編集 [#generation-vs-editing]
+
+| ユースケース | 呼び出し |
+| ----------------------- | -------------------- |
+| "Start from scratch" | **Image Generation** |
+| "Use existing image(s)" | **Image Editing** |
+
+両方のツールは常に利用可能であり、エージェントはリクエストに基づいて適切なものを選択します：
+
+- **Image Generation**は、テキストによる説明のみから新しい画像を生成します。
+- **画像編集 (Image Editing)** は、画像IDを使用して既存の画像を修正またはリミックスします。これには、現在のメッセージ内の画像や、以前に生成され参照された画像が含まれます。LLMは、画像がコンテキストウィンドウ内に留まっている限り画像IDを追跡し、それらをツール出力に含めます。
+
+<Callout type="warning" title="画像編集は画像IDに依存します">
+- 画像IDはチャット履歴に保持されます。現在のリクエストにファイルがアップロードされると、トークンが生成される前に、それらのIDがLLMのコンテキストに追加されます。
+- 以前に参照または生成された画像IDは、コンテキストウィンドウ内に残っている限り、編集に使用できます。LLMは編集ツールを呼び出す際、関連するIDを `image_ids` 配列に含めます。
+- 以前アップロードした画像を、再度アップロードすることなくサイドパネルから添付できます。これにより、ビジョンモデルに画像コンテキストが提供され、編集ツールの `prompt` を作成する際の参考情報として役立てることができます。
+</Callout>
+
+### パラメータ [#parameters]
+
+**画像生成**
+
+- **prompt**: テキストの説明 (必須)
+- **size**: `auto` (デフォルト), `1024x1024` (正方形), `1536x1024` (横長), または `1024x1536` (縦長)
+- **quality**: `auto` (デフォルト), `high`, `medium`, または `low`
+- **background**: `auto` (デフォルト), `transparent`, または `opaque` (transparentにはPNGまたはWebP形式が必要です)
+
+**画像編集**
+
+- **image_ids**: 編集の参照として使用する画像IDの配列（必須）
+- **prompt**: 変更内容のテキスト説明（必須）
+- **size**: `auto` (デフォルト), `1024x1024`, `1536x1024`, `1024x1536`, `256x256`, または `512x512`
+- **quality**: `auto` (デフォルト), `high`, `medium`, または `low`
+
+### セットアップ [#setup]
+
+OpenAIキーを作成または再利用して`.env`に追加し、エージェントの**Tools**リストに「OpenAI Image Tools」を追加してください。
+
+```bash filename=".env"
+IMAGE_GEN_OAI_API_KEY=sk-...
+# optional extras
+IMAGE_GEN_OAI_MODEL=gpt-image-1
+IMAGE_GEN_OAI_BASEURL=https://...
+```
+
+Azure OpenAI デプロイメントについては、まず https://aka.ms/oai/gptimage1access でアクセスをリクエストし、その後 `.env` に認証情報を追加してください：
+
+```bash filename=".env"
+IMAGE_GEN_OAI_API_KEY=your-api-key
+# optional extras
+IMAGE_GEN_OAI_MODEL=gpt-image-1
+IMAGE_GEN_OAI_BASEURL=https://deploymentname.openai.azure.com/openai/deployments/gpt-image-1/
+IMAGE_GEN_OAI_AZURE_API_VERSION=2025-04-01-preview
+```
+
+### 高度な設定 [#advanced-configuration]
+
+以下の環境変数を使用して、ツール説明とプロンプトガイダンスをカスタマイズします：
+
+```bash filename=".env"
+# Image Model
+IMAGE_GEN_OAI_MODEL=gpt-image-1
+
+# Image Generation Tool Descriptions
+IMAGE_GEN_OAI_DESCRIPTION=...
+IMAGE_GEN_OAI_PROMPT_DESCRIPTION=...
+
+# Image Editing Tool Descriptions
+IMAGE_EDIT_OAI_DESCRIPTION=...
+IMAGE_EDIT_OAI_PROMPT_DESCRIPTION=...
+```
+
+### 料金 [#pricing]
+
+画像生成のコストについては、[GPT-Image-1 pricing page](https://platform.openai.com/docs/models/gpt-image-1) および [Image Generation documentation](https://platform.openai.com/docs/guides/image-generation?image-generation-model=gpt-image-1#cost-and-latency) を参照してください。
+
+## Gemini Image Tools [#gemini-image-tools]
+
+Gemini Image Toolsは、Googleの最新の画像生成モデルを統合しており、テキストから画像への生成と、画像の内容を認識した編集の両方をサポートしています。
+
+- **Text-to-image generation**: 詳細なテキスト記述から高品質な画像を生成します。
+- **画像コンテキストのサポート**: 既存の画像を新しい生成のコンテキストやインスピレーションとして使用します。
+- **画像編集**: 既存の画像への変更に基づいて新しい画像を生成します（元の画像のIDを含めてください）。
+- **複数のモデル**: `gemini-2.5-flash-image` (デフォルト) または `gemini-3-pro-image-preview` を選択します。
+- **デュアルAPIサポート**: シンプルなGemini APIキーとGoogle Cloud Vertex AIの両方で動作します。
+
+### パラメータ [#parameters-1]
+
+- **prompt**: 生成したい画像の詳細なテキスト説明（必須、最大32,000文字）
+- **image_ids**: 生成の視覚的コンテキストとして使用する画像IDのオプションの配列
+
+### セットアップ [#setup-1]
+
+Gemini APIについては、[Google AI Studio](https://aistudio.google.com/app/apikey)からキーを取得してください：
+
+```bash filename=".env"
+GEMINI_API_KEY=your_api_key_here
+```
+
+Vertex AI の場合 (Vertex AI にアクセス可能な Google Cloud ユーザー向け):
+
+```bash filename=".env"
+GOOGLE_SERVICE_KEY_FILE=/path/to/service-account.json
+GOOGLE_CLOUD_LOCATION=us-central1  # optional, default: global
+```
+
+### モデルの選択 [#model-selection]
+
+```bash filename=".env"
+# Default model (fast and efficient)
+GEMINI_IMAGE_MODEL=gemini-2.5-flash-image
+
+# Higher quality model
+GEMINI_IMAGE_MODEL=gemini-3-pro-image-preview
+```
+
+### 高度な設定 [#advanced-configuration-1]
+
+環境変数を使用してツール（tool）の説明をカスタマイズする：
+
+```bash filename=".env"
+GEMINI_IMAGE_GEN_DESCRIPTION=...
+GEMINI_IMAGE_GEN_PROMPT_DESCRIPTION=...
+GEMINI_IMAGE_IDS_DESCRIPTION=...
+```
+
+詳細は、専用の [Gemini Image Gen ガイド](/docs/configuration/tools/gemini_image_gen) を参照してください。
+
+## DALL·E (レガシー) [#dalle-legacy]
+
+DALL·Eは、OpenAIの`dall-e-3`画像モデルを使用したレガシーな画像生成機能を提供します。
+
+### パラメータ [#parameters-2]
+
+- **prompt**: 画像に対する希望のテキスト説明（必須、最大4000文字）
+- **style**: `vivid` (ハイパーリアル、ドラマチック、デフォルト) または `natural` (ハイパーリアルさを抑えたもの)
+- **quality**: `standard` (デフォルト) または `hd`
+- **size**: `1024x1024` (デフォルト、正方形)、`1792x1024` (ワイド)、または `1024x1792` (トール)
+
+### セットアップ [#setup-2]
+
+```bash filename=".env"
+# Required
+DALLE_API_KEY=sk-...  # or DALLE3_API_KEY=sk-...
+
+# Optional
+DALLE_REVERSE_PROXY=https://...  # Alternative endpoint
+DALLE3_BASEURL=https://...  # For Azure or custom endpoints
+DALLE3_AZURE_API_VERSION=2023-12-01-preview  # For Azure deployments
+DALLE3_SYSTEM_PROMPT=...  # Custom system prompt for DALL·E
+```
+
+エージェントに対して **DALL·E** ツールを有効にし、プロンプトの入力を開始します。
+
+### 高度な設定 [#advanced-configuration-2]
+
+Azure OpenAI デプロイメントの場合は、ベースURLとAPIバージョンを設定してください：
+
+```bash filename=".env"
+DALLE3_BASEURL=https://your-resource-name.openai.azure.com/openai/deployments/your-deployment-name
+DALLE3_AZURE_API_VERSION=2023-12-01-preview
+DALLE3_API_KEY=your-azure-api-key
+```
+
+### 料金 [#pricing-1]
+
+画像生成のコストについては、[DALL-E pricing page](https://platform.openai.com/docs/models/dall-e-3) および [Image Generation documentation](https://platform.openai.com/docs/guides/image-generation?image-generation-model=dall-e-3) を参照してください。
+
+## Stable Diffusion (ローカル) [#stable-diffusion-local]
+
+画像を完全に自分のマシンまたはサーバー上で実行します。LibreChatを任意のAutomatic1111（または互換性のある）endpointに向けるだけで準備完了です。
+
+### パラメータ [#parameters-3]
+
+- **prompt**: 画像に含めたい要素を記述する詳細なキーワード（必須）
+- **negative_prompt**: 画像から除外する要素を記述するキーワード（必須）
+
+Stable Diffusionの実装では、ほとんどのユースケースで良好な結果が得られる以下の固定されたデフォルトパラメータを使用します：
+
+- cfg_scale: 4.5
+- steps: 22
+- width: 1024
+- height: 1024
+
+### セットアップ [#setup-3]
+
+APIキーは不要です。Automatic1111 WebUIのアクセス可能なURLのみが必要です：
+
+```bash filename=".env"
+SD_WEBUI_URL=http://127.0.0.1:7860  # URL to your Automatic1111 WebUI
+```
+
+Automatic1111の設定に関する詳細は、専用の[Stable Diffusionガイド](/docs/configuration/tools/stable_diffusion)をご覧ください。
+
+## Flux [#flux]
+
+速度とオプションのファインチューニング済みモデルを重視したクラウドジェネレーター。
+
+- 高速なクラウドベースの画像生成
+- ファインチューニングされたモデルのサポート
+- 複数の品質レベルとアスペクト比
+- より加工が少なく、より自然な見た目の画像のためのRawモード
+
+### パラメータ [#parameters-4]
+
+Fluxツールは、主に3つのアクションをサポートしています：
+
+1. **generate**: テキストプロンプトから新しい画像を生成します
+2. **generate_finetuned**: ファインチューニングされたモデルを使用して画像を生成する
+3. **list_finetunes**: ユーザーが利用可能なカスタムモデルを一覧表示します
+
+詳細は、専用の [Flux guide](/docs/configuration/tools/flux#parameters) を参照してください。
+
+### セットアップ [#setup-4]
+
+エージェント内で **Flux** ツールを選択します。プロンプトはプレーンテキストであり、1回の呼び出しで1枚の画像が生成されます。
+
+```bash filename=".env"
+FLUX_API_KEY=flux_live_...
+FLUX_API_BASE_URL=https://api.us1.bfl.ai   # default is fine for most users
+```
+
+### 料金 [#pricing-2]
+
+画像生成のコストについては、[Flux pricing page](https://docs.bfl.ml/pricing/) を参照してください。
+
+## Model Context Protocol (MCP) [#model-context-protocol-mcp]
+
+MCPサーバーからの画像出力がサポートされています。例えば、[Puppeteer MCP Server](https://github.com/modelcontextprotocol/servers-archived/tree/main/src/puppeteer) はウェブページのスクリーンショットを生成でき、期待される形式で画像を出力するため、LibreChatの組み込み画像ツールと同様に扱われます。
+
+<Callout type="warning" title="MCPの画像サポートはまだ発展途上です">
+- 以下の例は、LibreChatがDockerを使用せず、Node.jsで直接実行されていることを前提としています。Model Context Protocolは比較的新しいフレームワークであり、多くの開発者がスケーラブルな配布のためにuv/nodeを使用してシステムを提供する方法を現在学んでいる段階です。
+- 画像生成サーバーはまだ少なく、その多くは画像に対して適切なレスポンス形式を採用していません。
+- 多くのMCPサーバーはDocker内で正常に動作しますが、以下の例は動作しないか、より高度な設定なしでは動作しません。これは、現在のMCPサーバー間における一貫性の欠如を示しています。
+</Callout>
+
+```yaml filename="librechat.yaml"
+mcpServers:
+  puppeteer:
+    command: npx
+    args:
+      - -y
+      - '@modelcontextprotocol/server-puppeteer'
+```
+
+The following is an example of an [Image Generation server](https://github.com/GongRzhe/Image-Generation-MCP-Server) that outputs images using the [Replicate API](https://replicate.com/account/api-tokens), but returns URLs of the images, which doesn't conform to MCP's image response standard.
+
+<Callout type="info" title="グローバルインストールが必要です">
+この特定のサーバーについては、`npm install -g @gongrzhe/image-gen-server` を実行して `@gongrzhe/image-gen-server` パッケージをグローバルにインストールし、以下に示すようにパッケージのコンパイル済みファイルを指定してください。
+</Callout>
+
+```yaml filename="librechat.yaml"
+mcpServers:
+  image-gen:
+    command: 'node'
+    # First, install the package globally using npm:
+    # `npm install -g @gongrzhe/image-gen-server`
+    # Then, point to the location of the installed package,
+    # which you can find by running `npm root -g`
+    args:
+      - '{REPLACE_WITH_NODE_MODULES_LOCATION}/@gongrzhe/image-gen-server/build/index.js'
+      # Example with output from `npm root -g`:
+      # - "/home/danny/.nvm/versions/node/v24.16.0/lib/node_modules/@gongrzhe/image-gen-server/build/index.js"
+    env:
+      # Do not hardcode the API token here, use the environment variable instead
+      # The following will pick up the token from your .env file or environment
+      REPLICATE_API_TOKEN: '${REPLICATE_API_TOKEN}'
+      MODEL: 'google/imagen-3'
+```
+
+## 画像の保存と取り扱い [#image-storage-and-handling]
+
+生成されたすべての画像は以下の通りです：
+
+1. 設定された [`fileStrategy`](/docs/configuration/librechat_yaml/object_structure/config#filestrategy) に従って保存されます。
+2. チャットインターフェースに直接表示されます
+3. 生成に続いて、即時のチャットコンテキストの一部としてLLMに送信されます
+
+最後の点については、いくつか注意点があります：
+
+- これは、画像入力をサポートしていないLLMで問題を引き起こす可能性があります。エージェントごとにこの動作を無効にするオプションを計画中です。
+- 出力は、すべてのメッセージごとではなく、生成時にのみLLMへ送信されます。
+- 後のターンで画像を含めるには、サイドパネルからメッセージに画像を添付してください。
+- 要約すると、LLMはユーザーメッセージに添付された画像、および生成や編集の直後に行われたものからのみ、ビジョンコンテキストを取得します。
+
+## プロキシサポート [#proxy-support]
+
+すべての画像生成ツールは、`PROXY` 環境変数を通じたプロキシ設定をサポートしています：
+
+```bash filename=".env"
+PROXY=http://proxy-url:port
+```
+
+`PROXY` が設定されていない場合、サポートされているサーバーサイドのクライアントは `HTTP_PROXY`、`HTTPS_PROXY`、および `NO_PROXY`/`no_proxy` を尊重します。
+
+## エラーハンドリング [#error-handling]
+
+ツールでエラーが発生した場合、何が問題であったかを説明するメッセージが返されます。一般的な問題には以下が含まれます：
+
+- 無効なAPIキー
+- APIの利用不可
+- コンテンツポリシー違反
+- プロキシ/ネットワークの問題
+- 無効なパラメータ
+- サポートされていない画像ペイロード（上記の [Image Storage and Handling](#image-storage-and-handling) を参照）
+
+## プロンプトエンジニアリング [#prompting]
+
+[OpenAI Image Tools](#advanced-configuration) および [DALL·E](#advanced-configuration-2) のプロンプトはカスタマイズ可能ですが、以下のヒントはツールが提供するデフォルトのプロンプトに関する情報であり、独自のプロンプトを作成する際に役立ちます。
+
+1. **被写体**と**スタイル**（写真、油絵など）から始めてください。
+2. **構図**（composition）や**カメラ/媒体**（camera/medium）（「…の広角ショット」、「水彩画…」など）を追加します。
+3. **照明と雰囲気**（「ゴールデンアワー」、「ドラマチックな影」など）について言及してください。
+4. **詳細なキーワード**（テクスチャ、色、表情）で締めくくってください。
+5. ネガティブな表現をポジティブに保つ：避けるべきことではなく、含めるべきことを記述してください。
+
+例:
+
+> 暖かい午後の日差しに包まれたアンティークな図書館の映画のような写真。背の高い木製の棚には革表紙の本があふれ、光の中で塵が輝いている。手前の磨き上げられたマホガニーの机の上では、緑色のシェードがついたバンカーズランプが、開かれた地図帳を照らしている。85mmレンズ、浅い被写界深度、豊かな琥珀色のトーン、超高精細。
+
+## 関連ページ [#related-pages]
+
+<Cards num={3}>
+  <Cards.Card title="エージェント" href="/docs/features/agents" arrow>
+    カスタムツールを使用してAIエージェントを作成および設定する
+  </Cards.Card>
+  <Cards.Card title="MCPサーバー" href="/docs/features/mcp" arrow>
+    Model Context Protocol を使用して独自のツールを持ち込む
+  </Cards.Card>
+  <Cards.Card title="Gemini画像ツール" href="/docs/configuration/tools/gemini_image_gen" arrow>
+    Google Gemini 画像生成の詳細なセットアップガイド
+  </Cards.Card>
+</Cards>
