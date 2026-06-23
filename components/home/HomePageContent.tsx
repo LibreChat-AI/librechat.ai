@@ -73,9 +73,23 @@ const DOCKER_HUB_REPOS = [
   'librechat/librechat-dev-api',
   'librechat/lc-dev',
   'librechat/lc-dev-api',
+  'librechat/lc-dev-staging',
+  'librechat/lc-dev-staging-api',
 ]
 
-const GHCR_PACKAGES = ['librechat', 'librechat-api', 'librechat-dev', 'librechat-dev-api']
+const GHCR_PACKAGES = [
+  'librechat-dev',
+  'librechat',
+  'librechat-dev-api',
+  'librechat-chart/librechat',
+  'librechat-api',
+  'lc-dev',
+  'librechat-chart/librechat-rag-api',
+  'lc-dev-staging-api',
+  'lc-dev-staging',
+  'lc-dev-api',
+  'librechat-gitnexus',
+]
 
 async function getDockerHubPulls(repo: string): Promise<number> {
   try {
@@ -92,24 +106,34 @@ async function getDockerHubPulls(repo: string): Promise<number> {
 
 async function getGhcrDownloads(pkg: string): Promise<number> {
   try {
-    const res = await fetch(`https://github.com/danny-avila/LibreChat/pkgs/container/${pkg}`, {
-      next: { revalidate: 3600 },
-    })
+    const encodedPackage = encodeURIComponent(pkg)
+    const res = await fetch(
+      `https://github.com/users/danny-avila/packages/container/package/${encodedPackage}`,
+      { next: { revalidate: 3600 } },
+    )
     if (!res.ok) return 0
     const html = await res.text()
-    const match = html.match(/Total downloads[\s\S]*?title="(\d+)"/)
+    const match = html.match(/Total downloads[\s\S]{0,500}?<h3 title="(\d+)">/)
     return match ? parseInt(match[1], 10) : 0
   } catch {
     return 0
   }
 }
 
+async function getGhcrDownloadsTotal(): Promise<number> {
+  let total = 0
+  for (const pkg of GHCR_PACKAGES) {
+    total += await getGhcrDownloads(pkg)
+  }
+  return total
+}
+
 async function getContainerPulls(): Promise<number> {
-  const [dockerHubCounts, ghcrCounts] = await Promise.all([
+  const [dockerHubCounts, ghcrTotal] = await Promise.all([
     Promise.all(DOCKER_HUB_REPOS.map(getDockerHubPulls)),
-    Promise.all(GHCR_PACKAGES.map(getGhcrDownloads)),
+    getGhcrDownloadsTotal(),
   ])
-  return [...dockerHubCounts, ...ghcrCounts].reduce((sum, n) => sum + n, 0)
+  return dockerHubCounts.reduce((sum, n) => sum + n, ghcrTotal)
 }
 
 /* ---------------------------------------------------------------------------
