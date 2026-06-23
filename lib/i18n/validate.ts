@@ -3,6 +3,7 @@ import {
   countCodeFences,
   collectInlineCode,
   collectUrls,
+  collectRawUrls,
   collectPlaceholders,
   collectBlockStructure,
 } from './segment'
@@ -64,8 +65,88 @@ function preservedTokens(text: string): Record<string, string[]> {
   }
 }
 
+function preservedInlineTokens(text: string): Record<string, string[]> {
+  return {
+    'inline code': collectInlineCode(text).sort(),
+    'link target': collectRawUrls(text),
+    'template placeholder': collectPlaceholders(text),
+    'table structure': [],
+    'blockquote marker': [],
+    'heading level': [],
+  }
+}
+
 function sameMultiset(a: string[], b: string[]): boolean {
   return a.length === b.length && a.every((value, i) => value === b[i])
+}
+
+function validatePreservedParts(
+  sourceFenceText: string,
+  outputFenceText: string,
+  sourceTokenText = sourceFenceText,
+  outputTokenText = outputFenceText,
+): { ok: boolean; error?: string } {
+  let srcFences: number
+  let outFences: number
+  let srcTokens: Record<string, string[]>
+  let outTokens: Record<string, string[]>
+  try {
+    srcFences = countCodeFences(sourceFenceText)
+    outFences = countCodeFences(outputFenceText)
+    srcTokens = preservedTokens(sourceTokenText)
+    outTokens = preservedTokens(outputTokenText)
+  } catch (e) {
+    return { ok: false, error: `output is not parseable MDX: ${(e as Error).message}` }
+  }
+
+  if (srcFences !== outFences) {
+    return { ok: false, error: `code block count changed: ${srcFences} -> ${outFences}` }
+  }
+
+  for (const label of Object.keys(srcTokens)) {
+    if (!sameMultiset(srcTokens[label], outTokens[label])) {
+      return {
+        ok: false,
+        error: `${label} changed: [${srcTokens[label].join(', ')}] -> [${outTokens[label].join(', ')}]`,
+      }
+    }
+  }
+
+  return { ok: true }
+}
+
+function validatePreservedInlineParts(
+  source: string,
+  output: string,
+): { ok: boolean; error?: string } {
+  const srcTokens = preservedInlineTokens(source)
+  const outTokens = preservedInlineTokens(output)
+
+  for (const label of Object.keys(srcTokens)) {
+    if (!sameMultiset(srcTokens[label], outTokens[label])) {
+      return {
+        ok: false,
+        error: `${label} changed: [${srcTokens[label].join(', ')}] -> [${outTokens[label].join(', ')}]`,
+      }
+    }
+  }
+
+  return { ok: true }
+}
+
+/**
+ * Validate a single translated markdown/MDX fragment before it is cached. Long
+ * docs pages are assembled from many independently translated blocks; catching a
+ * bad block here lets the runner retry or fall back to the source block instead
+ * of rejecting the entire file after all other blocks have succeeded.
+ */
+export function validatePreservedText(
+  source: string,
+  output: string,
+  kind: 'block' | 'inline' = 'block',
+): { ok: boolean; error?: string } {
+  if (kind === 'inline') return validatePreservedInlineParts(source, output)
+  return validatePreservedParts(source, output)
 }
 
 export function validateTranslation(
@@ -91,31 +172,5 @@ export function validateTranslation(
     return { ok: false, error: `frontmatter keys changed: [${srcKeys}] -> [${outKeys}]` }
   }
 
-  let srcFences: number
-  let outFences: number
-  let srcTokens: Record<string, string[]>
-  let outTokens: Record<string, string[]>
-  try {
-    srcFences = countCodeFences(src.content)
-    outFences = countCodeFences(out.content)
-    srcTokens = preservedTokens(corpus(src))
-    outTokens = preservedTokens(corpus(out))
-  } catch (e) {
-    return { ok: false, error: `output is not parseable MDX: ${(e as Error).message}` }
-  }
-
-  if (srcFences !== outFences) {
-    return { ok: false, error: `code block count changed: ${srcFences} -> ${outFences}` }
-  }
-
-  for (const label of Object.keys(srcTokens)) {
-    if (!sameMultiset(srcTokens[label], outTokens[label])) {
-      return {
-        ok: false,
-        error: `${label} changed: [${srcTokens[label].join(', ')}] -> [${outTokens[label].join(', ')}]`,
-      }
-    }
-  }
-
-  return { ok: true }
+  return validatePreservedParts(src.content, out.content, corpus(src), corpus(out))
 }

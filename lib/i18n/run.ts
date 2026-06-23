@@ -16,7 +16,7 @@ import {
   escapeJsString,
   type Segment,
 } from './segment'
-import { validateTranslation } from './validate'
+import { validatePreservedText, validateTranslation } from './validate'
 import { translate, type TranslateModel } from './engine'
 import { TM } from './tm'
 import { TARGET_LOCALES } from './config'
@@ -46,6 +46,11 @@ const FILE_CONCURRENCY = Number(process.env.TRANSLATE_CONCURRENCY) || 6
 // so a burst of provider/rate-limit errors converges instead of requiring the
 // whole workflow to be re-run by hand.
 const MAX_FILE_ROUNDS = Number(process.env.TRANSLATE_FILE_ROUNDS) || 3
+// A single corrupted block should not doom a long page after hundreds of other
+// blocks translated correctly. Retry preservation failures locally; if the model
+// still changes protected tokens, keep that one block in English and let the page
+// publish with the remaining translated content.
+const BLOCK_VALIDATION_ATTEMPTS = Number(process.env.TRANSLATE_BLOCK_VALIDATION_ATTEMPTS) || 3
 const LOCALE_ALT = TARGET_LOCALES.join('|')
 const LOCALE_RE = new RegExp(`\\.(${LOCALE_ALT})\\.mdx$`)
 const META_LOCALE_RE = new RegExp(`^meta\\.(${LOCALE_ALT})\\.json$`)
@@ -110,8 +115,12 @@ export async function runTranslation(opts: RunOptions): Promise<RunStats> {
       used.add(hash)
       const cached = opts.force ? undefined : tm.get(hash)
       if (cached !== undefined) {
-        stats.cachedBlocks++
-        return cached
+        const check = validatePreservedText(text, cached, kind)
+        if (check.ok) {
+          stats.cachedBlocks++
+          return cached
+        }
+        tm.delete(hash)
       }
       const pending = staged.get(hash)
       if (pending !== undefined) {
@@ -122,15 +131,26 @@ export async function runTranslation(opts: RunOptions): Promise<RunStats> {
         stats.translatedBlocks++
         return text
       }
-      const result = await translate({ text, locale, kind, context, model: opts.model })
-      // A model that returns nothing (refusal / reasoning-only finish) must not be
-      // cached or written as an empty block — treat it as a failure for this file.
-      if (result.trim() === '' && text.trim() !== '') {
-        throw new Error(`empty model output for a ${kind} block`)
+      let lastValidationError: string | undefined
+      for (let attempt = 0; attempt < BLOCK_VALIDATION_ATTEMPTS; attempt++) {
+        const result = await translate({ text, locale, kind, context, model: opts.model })
+        // A model that returns nothing (refusal / reasoning-only finish) must not be
+        // cached or written as an empty block — treat it as a failure for this file.
+        if (result.trim() === '' && text.trim() !== '') {
+          throw new Error(`empty model output for a ${kind} block`)
+        }
+        const check = validatePreservedText(text, result, kind)
+        if (check.ok) {
+          staged.set(hash, result)
+          stats.translatedBlocks++
+          return result
+        }
+        lastValidationError = check.error
       }
-      staged.set(hash, result)
-      stats.translatedBlocks++
-      return result
+      progress.note(
+        `${locale}: keeping source for a ${kind} block after ${BLOCK_VALIDATION_ATTEMPTS} preservation failure(s): ${lastValidationError ?? 'unknown validation error'}`,
+      )
+      return text
     }
 
     // Records the last transient error per file so it can be reported only if the
@@ -289,6 +309,7 @@ export async function runTranslation(opts: RunOptions): Promise<RunStats> {
     // Count each file's terminal completion exactly once for the progress UI: a
     // file may resolve 'transient' in one round and 'ok'/'skip' in a later one.
     const counted = new Set<string>()
+    let canPruneCache = true
     let pending = filtered
     for (let round = 0; ; round++) {
       const results = await Promise.all(
@@ -301,6 +322,7 @@ export async function runTranslation(opts: RunOptions): Promise<RunStats> {
         }
       const transient = results.filter(([, r]) => r === 'transient').map(([rel]) => rel)
       if (transient.length === 0 || round >= MAX_FILE_ROUNDS) {
+        if (transient.length > 0) canPruneCache = false
         for (const rel of transient) {
           if (!counted.has(rel)) {
             counted.add(rel)
@@ -332,7 +354,11 @@ export async function runTranslation(opts: RunOptions): Promise<RunStats> {
           : `${dir}${name.replace(`.${locale}.mdx`, '.mdx')}`
         if (!sourceSet.has(baseRel)) await unlink(join(opts.contentDir, f))
       }
-      tm.prune()
+      if (canPruneCache) {
+        tm.prune()
+      } else {
+        progress.note(`${locale}: skipped cache pruning because the locale run was incomplete`)
+      }
     }
 
     if (!opts.dryRun) await tm.save()
