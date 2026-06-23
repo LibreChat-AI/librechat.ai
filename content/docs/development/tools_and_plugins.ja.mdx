@@ -1,0 +1,358 @@
+---
+title: ツールとプラグイン
+icon: Wrench
+description: >-
+  このドキュメントでは、LangChainの `Tool`
+  クラスを拡張してLibreChat用のカスタムプラグインを作成する方法を解説します。プラグインでさまざまなAPIや関数を使用する方法、およびそれらをLangChainフレームワークに統合する方法を学びます。
+---
+
+**このページは廃止されました。ツールを使用するための最新情報については、[Agents Guide](/docs/features/agents) を参照してください。**
+
+カスタムツールを統合するには、[Model Context Protocol](/docs/features/agents#model-context-protocol-mcp) または [OpenAPI Actions](/docs/features/agents#actions) を使用することを強く推奨します。
+
+# 独自のツール/プラグインを作成する [#making-your-own-toolsplugins]
+
+<Callout type="warning" title="警告">
+  `api/app/clients/tools/structured/` で使用されている最新のツールを参照してください。プラグインは近い将来、ツールに置き換わる形で非推奨となる予定です。
+</Callout>
+
+このプロジェクトでカスタムプラグインを作成するには、`langchain/tools` モジュールの `Tool` クラスを拡張する必要があります。
+
+**注:** LangChainの仕様に合わせて「ツール (tool)」という用語を主に使用しているため、本ドキュメントでは「プラグイン (plugin)」と「ツール (tool)」を同義語として扱います。
+
+実質的にLangChainの用語で言うところのDynamicToolsを作成していることになります。詳細については、**[LangChainJS docs](https://js.langchain.com/docs/how_to/custom_tools/)** を参照してください。
+
+このガイドでは、`StableDiffusionAPI` および `WolframAlphaAPI` ツールを例として、独自のカスタムプラグインを作成するプロセスを順を追って説明します。
+
+Functions Agent（プラグインのデフォルトモード）を使用する場合、ツールは **[OpenAI functions](https://openai.com/blog/function-calling-and-other-api-updates)** に変換されます。いずれの場合も、プラグインやツールは、LLMが解析可能な特定のフォーマットを生成することに基づいて条件付きで呼び出されます。
+
+プラグインの最も一般的な実装は、AIからの自然言語入力に基づいてAPI呼び出しを行うことですが、プログラムによるユースケースに事実上制限はありません。
+
+---
+
+## 主要なポイント [#key-takeaways]
+
+独自のプラグインを作成するための重要なポイントは以下の通りです：
+
+**1.** [**必要なモジュールのインポート:**](#step-1-import-required-modules) プラグインに必要なモジュールをインポートします。これには `langchain/tools` からの `Tool` クラスや、プラグインが必要とするその他のモジュールが含まれます。
+
+**2.** [**プラグインクラスを定義する:**](#step-2-define-your-tool-class) `Tool` クラスを継承するプラグイン用のクラスを定義します。コンストラクタ内で `name` プロパティと `description` プロパティを設定してください。プラグインに認証情報やその他の変数が必要な場合は、fields パラメータから設定するか、プロセス環境からそれらを取得するメソッドから設定します。なお、プラグインに長文で詳細な指示が必要な場合は、`description_for_model` プロパティを追加し、`description` をより一般的な内容にすることをお勧めします。
+
+**3.** [**ヘルパーメソッドの定義:**](#step-3-define-helper-methods) 必要に応じて、特定のタスクを処理するためのヘルパーメソッドをクラス内に定義します。
+
+**4.** [**`_call` メソッドの実装:**](#step-4-implement-the-_call-method) プラグインの主要な機能が定義される `_call` メソッドを実装します。このメソッドは、言語モデルがプラグインの使用を決定した際に呼び出されます。`input` パラメータを受け取り、結果を返す必要があります。エラーが発生した場合は、エラーをスローするのではなく、エラーを表す文字列を返すようにしてください。プラグインがLLMから複数の入力を必要とする場合は、[StructuredTools](#StructuredTools) セクションを参照してください。
+
+**5.** [**プラグインをエクスポートし、handleTools.js にインポートする:**](#step-5-export-your-plugin-and-import-into-handletoolsjs) プラグインをエクスポートし、`handleTools.js` にインポートします。`loadTools` 関数内の `toolConstructors` オブジェクトにプラグインを追加してください。プラグインにより高度な初期化が必要な場合は、`customConstructors` オブジェクトに追加します。
+
+**6.** [**プラグインを index.js にエクスポートする:**](#step-6-export-your-plugin-into-indexjs) `tools` 配下の `index.js` にプラグインをエクスポートします。プラグインを `index.js` の `module.exports` に追加してください。そのためには、このファイル内で `const` として宣言する必要があります。
+
+**7.** [**プラグインを manifest.json に追加する:**](#step-7-add-your-plugin-to-manifestjson) プラグインを `manifest.json` に追加します。"plugin" オブジェクトの各フィールドについて、厳密な形式に従ってください。プラグインに認証が必要な場合は、その詳細を `authConfig` 配下に追加します。`pluginKey` は作成した Tool クラスの `name` と一致させる必要があり、`authField` プロパティは process.env の変数名と一致させる必要があります。
+
+カスタムプラグインを作成する際の鍵は、`Tool` クラスを継承し、`_call` メソッドを実装することです。`_call` メソッドは、プラグインの動作を定義する場所です。また、プラグインの機能をサポートするために、クラス内にヘルパーメソッドやプロパティを定義することもできます。
+
+**注: このガイドで言及されているすべてのファイルは、`.\api\app\langchain\tools` フォルダ内にあります。**
+
+---
+
+## StructuredTools [#structuredtools]
+
+**マルチ入力プラグイン**
+
+LLMからの単一の入力文字列ではなく、複数の入力からメリットを得られるプラグインを作成したい場合は、これから解説する内容の代わりに、LangChainの **[StructuredTool](https://blog.langchain.dev/structured-tools/)** を作成する必要があります。これに関する詳細なガイドは現在作成中ですが、現時点では `api\app\clients\tools\structured\` ディレクトリにある私のStructuredToolの実装例を参照してください。このガイドはStructuredToolを理解するための基礎となるものであり、まずはLangChainのツールについて理解を深めるために、このまま読み進めることをお勧めします。上記のブログ記事も、このガイドを読み終えた後に役立つはずです。
+
+---
+
+## ステップ 1: 必要なモジュールのインポート [#step-1-import-required-modules]
+
+まずは必要なモジュールをインポートすることから始めます。これには `langchain/tools` からの `Tool` クラスや、ツールが必要とするその他のモジュールが含まれます。例：
+
+```javascript
+const { Tool } = require('langchain/tools')
+// ... whatever else you need
+```
+
+## Step 2: Toolクラスを定義する [#step-2-define-your-tool-class]
+
+次に、`Tool` クラスを継承するプラグイン用のクラスを定義します。このクラスには、`super()` メソッドを呼び出し、`name` プロパティと `description` プロパティを設定するコンストラクタが必要です。これらのプロパティは、言語モデルがいつツールを呼び出すべきか、またどのようなパラメータを使用すべきかを判断するために使用されます。
+
+**重要:** credentials/必要な変数は、fields パラメータから設定するか、あるいは process environment から取得するメソッドを使用して設定する必要があります。
+
+```javascript
+class StableDiffusionAPI extends Tool {
+  constructor(fields) {
+    super();
+    this.name = 'stable-diffusion';
+    this.url = fields.SD_WEBUI_URL || this.getServerURL(); // <--- important!
+    this.description = `You can generate images with 'stable-diffusion'. This tool is exclusively for visual content...`;
+  }
+  ...
+}
+```
+
+**任意:** v0.5.8以降、Functionsを使用する際、`description_for_model`プロパティを使用して、より長く詳細な指示を追加できるようになりました。その際、トークンを最適化するために`description`プロパティをより汎用的なものにすることをお勧めします。このプロパティの各行には、ChatGPT (chat.openai.com) 用にプロンプトが生成される方法を模倣するため、`// `というプレフィックスが付けられます。この形式は、公式のChatGPTプラグインのプロンプトエンジニアリングにより近いものとなっています。
+
+```js
+// ...
+this.description_for_model = `// Generate images and visuals using text with 'stable-diffusion'.
+// Guidelines:
+// - ALWAYS use {{"prompt": "7+ detailed keywords", "negative_prompt": "7+ detailed keywords"}} structure for queries.
+// - Visually describe the moods, details, structures, styles, and/or proportions of the image. Remember, the focus is on visual attributes.
+// - Craft your input by "showing" and not "telling" the imagery. Think in terms of what you'd want to see in a photograph or a painting.
+// - Here's an example for generating a realistic portrait photo of a man:
+// "prompt":"photo of a man in black clothes, half body, high detailed skin, coastline, overcast weather, wind, waves, 8k uhd, dslr, soft lighting, high quality, film grain, Fujifilm XT3"
+// "negative_prompt":"semi-realistic, cgi, 3d, render, sketch, cartoon, drawing, anime, out of frame, low quality, ugly, mutation, deformed"
+// - Generate images only once per human query unless explicitly requested by the user`
+this.description =
+  "You can generate images using text with 'stable-diffusion'. This tool is exclusively for visual content."
+// ...
+```
+
+コンストラクタ内では、fieldsオブジェクトまたは環境変数にアクセスするために定義した **getServerURL** メソッドのいずれかから、機密性の高い変数を取得していることに注意してください。
+
+```js
+this.url = fields.SD_WEBUI_URL || this.getServerURL()
+```
+
+必要な認証情報は、ユーザーがフロントエンドから提供する際に `fields` を通じて渡されます。それ以外の場合、管理者は環境変数を通じてすべてのユーザーに対してプラグインを「承認」することができます。フロントエンドから渡されるすべての認証情報は暗号化されます。
+
+```js
+// It's recommended you follow this convention when accessing environment variables.
+  getServerURL() {
+    const url = process.env.SD_WEBUI_URL || '';
+    if (!url) {
+      throw new Error('Missing SD_WEBUI_URL environment variable.');
+    }
+    return url;
+  }
+```
+
+## Step 3: Helper メソッドの定義 [#step-3-define-helper-methods]
+
+必要に応じて、クラス内に特定のタスクを処理するためのヘルパーメソッドを定義できます。例えば、`StableDiffusionAPI` クラスには、さまざまなタスクを処理するために `replaceNewLinesWithSpaces`、`getMarkdownImageUrl`、`getServerURL` といったメソッドが含まれています。
+
+```javascript
+class StableDiffusionAPI extends Tool {
+  ...
+  replaceNewLinesWithSpaces(inputString) {
+    return inputString.replace(/\r\n|\r|\n/g, ' ');
+  }
+  ...
+}
+```
+
+## Step 4: `_call` メソッドの実装 [#step-4-implement-the-_call-method]
+
+`_call` メソッドは、プラグインの主要な機能が実装される場所です。このメソッドは、言語モデルがプラグインの使用を決定した際に呼び出されます。`input` パラメータを受け取り、結果を返す必要があります。
+
+> 基本的なToolでは、LLMは入力として1つの文字列値を生成します。プラグインがLLMから複数の入力を必要とする場合は、**[StructuredTools](#StructuredTools)** セクションをお読みください。
+
+```javascript
+class StableDiffusionAPI extends Tool {
+  ...
+  async _call(input) {
+    // Your tool's functionality goes here
+    ...
+    return this.result;
+  }
+}
+```
+
+**重要:** \_call 関数は、エージェントが実際に呼び出す関数です。エラーが発生した際は、可能な限りエラーをスローするのではなく、エラーを表す文字列を返すようにしてください。これにより、エラーが LLM に渡され、LLM がその処理方法を判断できるようになります。エラーがスローされた場合、エージェントの実行は停止します。
+
+## Step 5: プラグインをエクスポートして handleTools.js にインポートする [#step-5-export-your-plugin-and-import-into-handletoolsjs]
+
+**このプロセスは、`api\app\langchain\tools` にプラグイン/ツールがある限り、将来的にはある程度自動化される予定です。**
+
+```javascript
+// Export
+module.exports = StableDiffusionAPI
+```
+
+```js
+/* api\app\langchain\tools\handleTools.js */
+const StableDiffusionAPI = require('./StableDiffusion');
+...
+```
+
+handleTools.js 内で、`loadTools` 関数の冒頭を見つけ、toolConstructors オブジェクトにプラグイン/ツールを追加してください。
+
+```js
+const loadTools = async ({ user, model, tools = [], options = {} }) => {
+  const toolConstructors = {
+    calculator: Calculator,
+    google: GoogleSearchAPI,
+    wolfram: WolframAlphaAPI,
+    'dall-e': OpenAICreateImage,
+    'stable-diffusion': StableDiffusionAPI // <----- Newly Added. Note: the key is the 'name' provided in the class.
+    // We will now refer to this name as the `pluginKey`
+  };
+```
+
+Toolクラスでより高度な初期化が必要な場合は、それをcustomConstructorsオブジェクトに追加します。
+
+デフォルトの初期化は `loadToolWithAuth` 関数で確認でき、ほとんどのカスタムプラグインはこの方法で初期化する必要があります。
+
+以下は、さまざまな初期化を行ういくつかの customConstructors です。
+
+```javascript
+const customConstructors = {
+  browser: async () => {
+    let openAIApiKey = process.env.OPENAI_API_KEY
+    if (!openAIApiKey) {
+      openAIApiKey = await getUserPluginAuthValue(user, 'OPENAI_API_KEY')
+    }
+    return new WebBrowser({ model, embeddings: new OpenAIEmbeddings({ openAIApiKey }) })
+  },
+  // ...
+  plugins: async () => {
+    return [
+      new HttpRequestTool(),
+      await AIPluginTool.fromPluginUrl(
+        'https://www.klarna.com/.well-known/ai-plugin.json',
+        new ChatOpenAI({ openAIApiKey: options.openAIApiKey, temperature: 0 }),
+      ),
+    ]
+  },
+}
+```
+
+## Step 6: プラグインを index.js にエクスポートする [#step-6-export-your-plugin-into-indexjs]
+
+`api/app/clients/tools` 配下にある `index.js` を探します。プラグインをコンパイルできるようにするには、`module.exports` に追加し、さらにプラグインを `consts` として宣言する必要があります。
+
+```js
+const StructuredSD = require('./structured/StableDiffusion');
+const StableDiffusionAPI = require('./StableDiffusion');
+...
+module.exports = {
+  ...
+  StableDiffusionAPI,
+  StructuredSD,
+  ...
+}
+```
+
+## Step 7: manifest.json にプラグインを追加する [#step-7-add-your-plugin-to-manifestjson]
+
+**このプロセスは、プラグインやツールが `api\app\langchain\tools` に配置されており、デフォルトのメソッドで初期化できる限り、将来的にステップ5と合わせてある程度自動化される予定です。**
+
+```json
+  {
+    "name": "Calculator",
+    "pluginKey": "calculator",
+    "description": "Perform simple and complex mathematical calculations.",
+    "icon": "https://i.imgur.com/RHsSG5h.png",
+    "isAuthRequired": "false",
+    "authConfig": []
+  },
+  {
+    "name": "Stable Diffusion",
+    "pluginKey": "stable-diffusion",
+    "description": "Generate photo-realistic images given any text input.",
+    "icon": "https://i.imgur.com/Yr466dp.png",
+    "authConfig": [
+      {
+        "authField": "SD_WEBUI_URL",
+        "label": "Your Stable Diffusion WebUI API URL",
+        "description": "You need to provide the URL of your Stable Diffusion WebUI API. For instructions on how to obtain this, see <a href='url'>Our Docs</a>."
+      }
+    ]
+  },
+```
+
+"plugin" オブジェクトの各フィールドは重要です。この形式に厳密に従ってください。プラグインに認証が必要な場合は、複数の認証変数が存在する可能性があるため、`authConfig` の下にそれらの詳細を配列として追加します。認証を必要としない例については、Calculator プラグインを参照してください。この場合、authConfig は空の配列となります（配列は常に必須です）。
+
+**Note:** 前述の通り、`pluginKey` は作成した Tool クラスの `name` と一致させる必要があります。
+**Note:** `authField` プロパティは process.env の変数名と一致させる必要があります。
+**Note:** `authConfig` エントリには `sensitive` を含めることができます。API キーやシークレットの場合は省略するか `true` に設定してください。URL、ユーザー名、デプロイメント名、プロジェクト ID などの機密情報ではない設定値の場合は `sensitive: false` に設定することで、UI 上でシークレット入力ではなくプレーンテキストフィールドとしてレンダリングされます。
+
+以下は、複数の認証変数を持つプラグインの例です。
+
+```json
+  [
+  {
+    "name": "Google",
+    "pluginKey": "google",
+    "description": "Use Google Search to find information about the weather, news, sports, and more.",
+    "icon": "https://i.imgur.com/SMmVkNB.png",
+    "authConfig": [
+      {
+        "authField": "GOOGLE_CSE_ID",
+        "label": "Google CSE ID",
+        "description": "This is your Google Custom Search Engine ID. For instructions on how to obtain this, see <a href='https://github.com/danny-avila/LibreChat/blob/main/docs/features/plugins/google_search.md'>Our Docs</a>.",
+        "sensitive": false
+      },
+      {
+        "authField": "GOOGLE_SEARCH_API_KEY",
+        "label": "Google API Key",
+        "description": "This is your Google Custom Search API Key. For instructions on how to obtain this, see <a href='https://github.com/danny-avila/LibreChat/blob/main/docs/features/plugins/google_search.md'>Our Docs</a>.",
+        "sensitive": true
+      }
+    ]
+  },
+```
+
+## 例: WolframAlphaAPI Tool [#example-wolframalphaapi-tool]
+
+カスタムツールのもう一つの例として、`WolframAlphaAPI` ツールを紹介します。このツールは `axios` モジュールを使用して、Wolfram Alpha API に対して HTTP リクエストを行います。
+
+```javascript
+const axios = require('axios')
+const { Tool } = require('langchain/tools')
+
+class WolframAlphaAPI extends Tool {
+  constructor(fields) {
+    super()
+    this.name = 'wolfram'
+    this.apiKey = fields.WOLFRAM_APP_ID || this.getAppId()
+    this.description = `Access computation, math, curated knowledge & real-time data through wolframAlpha...`
+  }
+
+  async fetchRawText(url) {
+    try {
+      const response = await axios.get(url, { responseType: 'text' })
+      return response.data
+    } catch (error) {
+      console.error(`Error fetching raw text: ${error}`)
+      throw error
+    }
+  }
+
+  getAppId() {
+    const appId = process.env.WOLFRAM_APP_ID || ''
+    if (!appId) {
+      throw new Error('Missing WOLFRAM_APP_ID environment variable.')
+    }
+    return appId
+  }
+
+  createWolframAlphaURL(query) {
+    const formattedQuery = query.replaceAll(/`/g, '').replaceAll(/\n/g, ' ')
+    const baseURL = 'https://www.wolframalpha.com/api/v1/llm-api'
+    const encodedQuery = encodeURIComponent(formattedQuery)
+    const appId = this.apiKey || this.getAppId()
+    const url = `${baseURL}?input=${encodedQuery}&appid=${appId}`
+    return url
+  }
+
+  async _call(input) {
+    try {
+      const url = this.createWolframAlphaURL(input)
+      const response = await this.fetchRawText(url)
+      return response
+    } catch (error) {
+      if (error.response && error.response.data) {
+        console.log('Error data:', error.response.data)
+        return error.response.data
+      } else {
+        console.log(`Error querying Wolfram Alpha`, error.message)
+        return 'There was an error querying Wolfram Alpha.'
+      }
+    }
+  }
+}
+
+module.exports = WolframAlphaAPI
+```
+
+この例では、`WolframAlphaAPI` クラスは特定のタスクを処理するために `fetchRawText`、`getAppId`、`createWolframAlphaURL` といったヘルパーメソッドを持っています。`_call` メソッドは Wolfram Alpha API に対して HTTP リクエストを行い、レスポンスを返します。
