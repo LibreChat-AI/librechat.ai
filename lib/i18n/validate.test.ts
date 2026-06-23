@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { validateTranslation } from './validate'
+import { validatePreservedText, validateTranslation } from './validate'
 
 const SOURCE = `---
 title: Hello
@@ -56,6 +56,22 @@ describe('validateTranslation', () => {
     const result = validateTranslation(src, bad)
     expect(result.ok).toBe(false)
     expect(result.error).toMatch(/inline code/i)
+  })
+
+  it('validates inline fragments without parsing angle-bracket prose as JSX', () => {
+    const source =
+      '<Optional>: The attribute in the SAML assertion containing the user email. (default: email)'
+    const output =
+      '<Optional>: Das Attribut in der SAML-Assertion, das die Benutzer-E-Mail enthält. (default: email)'
+    expect(validatePreservedText(source, output, 'inline').ok).toBe(true)
+  })
+
+  it('still protects inline tokens when validating raw inline fragments', () => {
+    const source = '<Optional>: Set `SAML_EMAIL_CLAIM` from https://example.com/docs.'
+    const bad = '<Optional>: Set `SAML_EMAIL` from https://example.com/anleitung.'
+    const result = validatePreservedText(source, bad, 'inline')
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatch(/inline code|link target/i)
   })
 
   it('rejects a rewritten link target, accepts translated link text', () => {

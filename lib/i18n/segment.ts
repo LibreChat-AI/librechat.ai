@@ -406,6 +406,16 @@ const MD_LINK_URL_RE = /\]\(\s*([^)\s]+)/g
 // the collector) so reworded prose around an unchanged URL is not read as a change.
 const BARE_URL_RE = /\bhttps?:\/\/[^\s<>()[\]"'`]+/gi
 
+/** Collect URL-like tokens from raw text without parsing it as Markdown/MDX. */
+export function collectRawUrls(body: string): string[] {
+  const out: string[] = []
+  const withoutFences = stripFencedBlocks(body)
+  for (const m of withoutFences.matchAll(ATTR_URL_RE)) out.push(m[2])
+  for (const m of withoutFences.matchAll(MD_LINK_URL_RE)) out.push(m[1])
+  for (const m of withoutFences.matchAll(BARE_URL_RE)) out.push(m[0].replace(/[.,;:!?]+$/, ''))
+  return out
+}
+
 /**
  * Collect every destination URL anywhere in the body, in document order: Markdown
  * link/image/definition targets (AST) plus src/href attributes and raw Markdown
@@ -428,10 +438,7 @@ export function collectUrls(body: string): string[] {
     if (node.children) for (const child of node.children) visit(child as MdNode & { url?: string })
   }
   visit(tree)
-  const withoutFences = stripFencedBlocks(body)
-  for (const m of withoutFences.matchAll(ATTR_URL_RE)) out.push(m[2])
-  for (const m of withoutFences.matchAll(MD_LINK_URL_RE)) out.push(m[1])
-  for (const m of withoutFences.matchAll(BARE_URL_RE)) out.push(m[0].replace(/[.,;:!?]+$/, ''))
+  out.push(...collectRawUrls(body))
   return out
 }
 

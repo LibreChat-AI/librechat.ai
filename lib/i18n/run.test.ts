@@ -185,6 +185,92 @@ describe('runTranslation', () => {
     expect(out).not.toContain('{input}nAI')
   })
 
+  it('translates OptionTable descriptions that start with angle-bracket prose', async () => {
+    const source =
+      '<Optional>: The attribute in the SAML assertion containing the user email. (default: email)'
+    const translated =
+      '<Optional>: Das Attribut in der SAML-Assertion, das die Benutzer-E-Mail enthält. (default: email)'
+    const optional: TranslateModel = {
+      generate: async ({ prompt }) => {
+        const text = prompt.split(/Translate the following[^\n]*:\n/).pop() ?? ''
+        return text === source ? translated : text
+      },
+    }
+    await writeFile(
+      join(content, 'index.mdx'),
+      `---\ntitle: Hello\n---\n\n<OptionTable options={[['SAML_EMAIL_CLAIM', 'string', '${source}', 'SAML_EMAIL_CLAIM=']]} />\n`,
+    )
+    const stats = await runTranslation({
+      contentDir: content,
+      cacheDir: cache,
+      locales: ['de'],
+      model: optional,
+    })
+    expect(stats.skipped).toEqual([])
+    const out = await readFile(join(content, 'index.de.mdx'), 'utf8')
+    expect(out).toContain(translated)
+
+    const tm = await TM.load('de', cache)
+    expect(tm.get(hashText(source))).toBe(translated)
+  })
+
+  it('retries a block that changes protected tokens before accepting it', async () => {
+    let attempts = 0
+    const fixesOnRetry: TranslateModel = {
+      generate: async ({ prompt }) => {
+        const text = prompt.split(/Translate the following[^\n]*:\n/).pop() ?? ''
+        if (text === 'Use `PORT` now.') {
+          attempts++
+          return attempts === 1 ? 'Nutze `ANSCHLUSS` jetzt.' : 'Nutze `PORT` jetzt.'
+        }
+        return text
+      },
+    }
+    await writeFile(
+      join(content, 'index.mdx'),
+      `---\ntitle: Hello\n---\n\n<OptionTable options={[['k', 'string', 'Use \`PORT\` now.', 'x']]} />\n`,
+    )
+    const stats = await runTranslation({
+      contentDir: content,
+      cacheDir: cache,
+      locales: ['de'],
+      model: fixesOnRetry,
+    })
+    expect(stats.skipped).toEqual([])
+    expect(attempts).toBe(2)
+    const out = await readFile(join(content, 'index.de.mdx'), 'utf8')
+    expect(out).toContain('Nutze `PORT` jetzt.')
+  })
+
+  it('falls back to the source block instead of skipping a whole file', async () => {
+    const corruptsOneBlock: TranslateModel = {
+      generate: async ({ prompt }) => {
+        const text = prompt.split(/Translate the following[^\n]*:\n/).pop() ?? ''
+        if (text === 'Good text.') return 'Guter Text.'
+        if (text === 'Use `PORT` now.') return 'Nutze `ANSCHLUSS` jetzt.'
+        return text
+      },
+    }
+    await writeFile(
+      join(content, 'index.mdx'),
+      `---\ntitle: Hello\n---\n\nGood text.\n\n<OptionTable options={[['k', 'string', 'Use \`PORT\` now.', 'x']]} />\n`,
+    )
+    const stats = await runTranslation({
+      contentDir: content,
+      cacheDir: cache,
+      locales: ['de'],
+      model: corruptsOneBlock,
+    })
+    expect(stats.skipped).toEqual([])
+    const out = await readFile(join(content, 'index.de.mdx'), 'utf8')
+    expect(out).toContain('Guter Text.')
+    expect(out).toContain('Use `PORT` now.')
+
+    const tm = await TM.load('de', cache)
+    expect(tm.get(hashText('Good text.'))).toBe('Guter Text.')
+    expect(tm.get(hashText('Use `PORT` now.'))).toBeUndefined()
+  })
+
   it('skips a file on empty model output without aborting the run or caching it', async () => {
     const emptyStub: TranslateModel = {
       generate: async ({ prompt }) => {
@@ -302,14 +388,38 @@ describe('runTranslation', () => {
     expect(tm.get(hashText('A paragraph.'))).toBeUndefined() // failed → not cached
   })
 
-  it('evicts cached blocks when the file later fails validation, so it is not permanently skipped', async () => {
+  it('does not prune existing cache entries when a file is still transiently incomplete', async () => {
+    await runTranslation({ contentDir: content, cacheDir: cache, locales: ['de'], model: stub })
+    let tm = await TM.load('de', cache)
+    expect(tm.get(hashText('A paragraph.'))).toBe('A paragraph.')
+
+    const failsBeforeParagraph: TranslateModel = {
+      generate: async ({ prompt }) => {
+        const text = prompt.split(/Translate the following[^\n]*:\n/).pop() ?? ''
+        if (text.startsWith('# Hello')) {
+          throw Object.assign(new Error('429 Too Many Requests'), { statusCode: 429 })
+        }
+        return text
+      },
+    }
+    const stats = await runTranslation({
+      contentDir: content,
+      cacheDir: cache,
+      locales: ['de'],
+      model: failsBeforeParagraph,
+      force: true,
+    })
+    expect(stats.skipped.some((s) => s.includes('index.mdx'))).toBe(true)
+
+    tm = await TM.load('de', cache)
+    expect(tm.get(hashText('A paragraph.'))).toBe('A paragraph.')
+  })
+
+  it('keeps an invalid block out of the cache across transient retries', async () => {
     // The partial-cache hazard under load: a structurally bad block (a heading
-    // that gains a stray code fence) is staged, then a LATER block in the same
-    // file is rate-limited — so the transient path caches the bad block before the
-    // file ever validates. On the next round the bad block is read back from cache,
-    // the file fails validation and is skipped. The bad block must be evicted, or
-    // every future run reads it back, fails validation again, and the page stays
-    // skipped forever until a forced retranslation or a manual cache delete.
+    // that gains a stray code fence) is followed by a rate-limited block. The bad
+    // heading must not be cached by the transient path; otherwise the next round
+    // would read it back and the page could never converge.
     let paragraphThrown = false
     const model: TranslateModel = {
       generate: async ({ prompt }) => {
@@ -331,16 +441,21 @@ describe('runTranslation', () => {
       locales: ['de'],
       model,
     })
-    expect(stats.skipped.some((s) => s.includes('index.mdx'))).toBe(true)
+    expect(stats.skipped).toEqual([])
+    const out = await readFile(join(content, 'index.de.mdx'), 'utf8')
+    expect(out).toContain('# Head [#head]')
+    expect(out).not.toContain('```')
     const tm = await TM.load('de', cache)
-    expect(tm.get(hashText('# Head'))).toBeUndefined() // bad block evicted, not frozen
+    expect(tm.get(hashText('# Head'))).toBeUndefined()
   })
 
-  it('removes a stale locale file when a re-translation fails validation', async () => {
+  it('updates a stale locale file when a re-translated block falls back to source', async () => {
     await runTranslation({ contentDir: content, cacheDir: cache, locales: ['de'], model: stub })
     expect(await readdir(content)).toContain('index.de.mdx')
 
-    // Source changes and the new translation fails validation (breaking stub).
+    // Source changes and the model keeps corrupting the heading with a code fence.
+    // The runner should keep the valid source heading for that block and still
+    // update the locale file rather than deleting it.
     const breaking: TranslateModel = {
       generate: async ({ prompt }) => {
         const text = prompt.split(/Translate the following[^\n]*:\n/).pop() ?? ''
@@ -354,29 +469,12 @@ describe('runTranslation', () => {
       locales: ['de'],
       model: breaking,
     })
-    expect(stats.skipped.length).toBeGreaterThan(0)
-    expect(await readdir(content)).not.toContain('index.de.mdx')
-  })
-
-  it("does not persist a file's translations when it fails validation", async () => {
-    // Stub that injects a stray code fence into heading translations, breaking the
-    // output fence count so validateTranslation rejects the file.
-    const breaking: TranslateModel = {
-      generate: async ({ prompt }) => {
-        const text = prompt.split(/Translate the following[^\n]*:\n/).pop() ?? ''
-        return text.startsWith('#') ? `${text}\n\n\`\`\`\nx\n\`\`\`` : text
-      },
-    }
-    await writeFile(join(content, 'index.mdx'), `---\ntitle: Hello\n---\n\n# Head\n`)
-    const stats = await runTranslation({
-      contentDir: content,
-      cacheDir: cache,
-      locales: ['de'],
-      model: breaking,
-    })
-    expect(stats.skipped.length).toBeGreaterThan(0)
-    expect(await readdir(content)).not.toContain('index.de.mdx')
+    expect(stats.skipped).toEqual([])
+    expect(await readdir(content)).toContain('index.de.mdx')
+    const out = await readFile(join(content, 'index.de.mdx'), 'utf8')
+    expect(out).toContain('# Changed Heading [#changed-heading]')
+    expect(out).not.toContain('```')
     const tm = await TM.load('de', cache)
-    expect(tm.get(hashText('# Head'))).toBeUndefined()
+    expect(tm.get(hashText('# Changed Heading'))).toBeUndefined()
   })
 })
