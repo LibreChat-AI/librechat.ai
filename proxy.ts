@@ -3,6 +3,19 @@ import { createI18nMiddleware } from 'fumadocs-core/i18n/middleware'
 import { i18n, LOCALE_COOKIE } from '@/lib/i18n'
 
 const i18nMiddleware = createI18nMiddleware(i18n)
+const localeByLowercase = new Map(i18n.languages.map((locale) => [locale.toLowerCase(), locale]))
+
+function matchLocale(tag: string): string | null {
+  const normalized = tag.toLowerCase()
+  const exact = localeByLowercase.get(normalized)
+  if (exact) return exact
+
+  const base = normalized.split('-')[0]
+  const baseLocale = localeByLowercase.get(base)
+  if (baseLocale) return baseLocale
+
+  return i18n.languages.find((locale) => locale.toLowerCase().split('-')[0] === base) ?? null
+}
 
 function isMarkdownPreferred(request: NextRequest): boolean {
   const accept = request.headers.get('accept') ?? ''
@@ -25,12 +38,13 @@ function preferredLocale(request: NextRequest): string {
     .split(',')
     .map((part) => {
       const [tag, q] = part.trim().split(';q=')
-      return { base: tag.split('-')[0].toLowerCase(), q: q ? Number(q) : 1 }
+      return { tag, q: q ? Number(q) : 1 }
     })
     .sort((a, b) => b.q - a.q)
 
-  for (const { base } of ranked) {
-    if (i18n.languages.includes(base)) return base
+  for (const { tag } of ranked) {
+    const locale = matchLocale(tag)
+    if (locale) return locale
   }
   return i18n.defaultLanguage
 }
@@ -82,5 +96,5 @@ export default function proxy(request: NextRequest, event: NextFetchEvent) {
 }
 
 export const config = {
-  matcher: ['/', '/docs/:path*', '/(zh|es|fr|de|ja)/docs/:path*'],
+  matcher: ['/', '/docs/:path*', '/(zh|es|fr|de|ja|pt-BR|it|nl|pl|vi|ko|id|tr)/docs/:path*'],
 }

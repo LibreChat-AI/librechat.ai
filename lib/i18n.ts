@@ -13,7 +13,22 @@ import type { I18nConfig } from 'fumadocs-core/i18n'
  */
 export const i18n: I18nConfig = {
   defaultLanguage: 'en',
-  languages: ['en', 'zh', 'es', 'fr', 'de', 'ja'],
+  languages: [
+    'en',
+    'zh',
+    'es',
+    'fr',
+    'de',
+    'ja',
+    'pt-BR',
+    'it',
+    'nl',
+    'pl',
+    'vi',
+    'ko',
+    'id',
+    'tr',
+  ],
   hideLocale: 'default-locale',
 }
 
@@ -67,6 +82,14 @@ export const LOCALE_NAMES: Record<string, string> = {
   fr: 'Français',
   de: 'Deutsch',
   ja: '日本語',
+  'pt-BR': 'Português (Brasil)',
+  it: 'Italiano',
+  nl: 'Nederlands',
+  pl: 'Polski',
+  vi: 'Tiếng Việt',
+  ko: '한국어',
+  id: 'Bahasa Indonesia',
+  tr: 'Türkçe',
 }
 
 /** Localized strings for the machine-translation notice banner. */
@@ -95,5 +118,45 @@ export const MT_BANNER: Record<string, { notice: string; original: string; impro
     notice: 'このページは機械翻訳されており、誤りが含まれている可能性があります。',
     original: '英語の原文を表示',
     improve: 'この翻訳を改善する',
+  },
+  'pt-BR': {
+    notice: 'Esta página foi traduzida por máquina e pode conter erros.',
+    original: 'Ver o original em inglês',
+    improve: 'Melhorar esta tradução',
+  },
+  it: {
+    notice: 'Questa pagina è stata tradotta automaticamente e potrebbe contenere errori.',
+    original: "Vedi l'originale in inglese",
+    improve: 'Migliora questa traduzione',
+  },
+  nl: {
+    notice: 'Deze pagina is machinaal vertaald en kan fouten bevatten.',
+    original: 'Engels origineel bekijken',
+    improve: 'Deze vertaling verbeteren',
+  },
+  pl: {
+    notice: 'Ta strona została przetłumaczona maszynowo i może zawierać błędy.',
+    original: 'Zobacz oryginał po angielsku',
+    improve: 'Popraw to tłumaczenie',
+  },
+  vi: {
+    notice: 'Trang này được dịch bằng máy và có thể có lỗi.',
+    original: 'Xem bản gốc tiếng Anh',
+    improve: 'Cải thiện bản dịch này',
+  },
+  ko: {
+    notice: '이 페이지는 기계 번역되었으며 오류가 포함될 수 있습니다.',
+    original: '영어 원문 보기',
+    improve: '이 번역 개선하기',
+  },
+  id: {
+    notice: 'Halaman ini diterjemahkan mesin dan mungkin berisi kesalahan.',
+    original: 'Lihat versi asli bahasa Inggris',
+    improve: 'Perbaiki terjemahan ini',
+  },
+  tr: {
+    notice: 'Bu sayfa makine çevirisiyle çevrilmiştir ve hatalar içerebilir.',
+    original: 'İngilizce aslına bak',
+    improve: 'Bu çeviriyi iyileştir',
   },
 }
