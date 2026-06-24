@@ -60,6 +60,11 @@ export function outputPath(variant: Variant): string {
   return resolve(IMG_DIR, variant.outputFile)
 }
 
+export function screenshotBaseURL(value: string | undefined): string {
+  const trimmed = value?.trim()
+  return trimmed ? trimmed.replace(/\/+$/, '') : BASE_URL
+}
+
 /**
  * Returns a JS snippet (string) to run as a Playwright init script, forcing the
  * LibreChat theme before app code reads it. THEME_STORAGE_KEY is the best-known

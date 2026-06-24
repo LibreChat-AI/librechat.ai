@@ -1,12 +1,19 @@
 import { chromium, type Browser, type BrowserContext } from 'playwright'
 import { mkdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
-import { BASE_URL, ZOOM, VARIANTS, type Variant, outputPath, themeBootstrap } from './config'
+import {
+  ZOOM,
+  VARIANTS,
+  type Variant,
+  outputPath,
+  screenshotBaseURL,
+  themeBootstrap,
+} from './config'
 
 const EMAIL = process.env.DEMO_EMAIL
 const PASSWORD = process.env.DEMO_PASSWORD
 const CONVERSATION_ID = process.env.DEMO_CONVERSATION_ID
-const baseURL = process.env.DEMO_BASE_URL ?? BASE_URL
+const baseURL = screenshotBaseURL(process.env.DEMO_BASE_URL)
 
 if (!EMAIL || !PASSWORD || !CONVERSATION_ID) {
   console.error('Missing required env: DEMO_EMAIL, DEMO_PASSWORD, DEMO_CONVERSATION_ID')

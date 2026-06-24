@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest'
-import { VARIANTS, outputPath, themeBootstrap, THEME_STORAGE_KEY, IMG_DIR } from './config'
+import {
+  VARIANTS,
+  outputPath,
+  themeBootstrap,
+  THEME_STORAGE_KEY,
+  IMG_DIR,
+  BASE_URL,
+  screenshotBaseURL,
+} from './config'
 
 describe('screenshot config', () => {
   it('defines exactly the four hero image variants', () => {
@@ -42,5 +50,12 @@ describe('screenshot config', () => {
     for (const v of VARIANTS) {
       expect(outputPath(v).startsWith(IMG_DIR)).toBe(true)
     }
+  })
+
+  it('defaults blank screenshot base URLs and normalizes explicit overrides', () => {
+    expect(screenshotBaseURL(undefined)).toBe(BASE_URL)
+    expect(screenshotBaseURL('')).toBe(BASE_URL)
+    expect(screenshotBaseURL('   ')).toBe(BASE_URL)
+    expect(screenshotBaseURL(' https://example.test/ ')).toBe('https://example.test')
   })
 })
