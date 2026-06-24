@@ -1,0 +1,275 @@
+---
+title: Pamięć użytkownika
+icon: Bookmark
+description: >-
+  Magazyn klucz-wartość dla pamięci użytkownika, który działa przy każdym
+  żądaniu czatu w LibreChat
+---
+
+## Przegląd [#overview]
+
+User Memory w LibreChat to **magazyn klucz/wartość**, który przechowuje informacje specyficzne dla użytkownika pomiędzy różnymi konwersacjami. Dedykowany agent pamięci uruchamia się na początku **każdego żądania czatu**, odczytując i zapisując dane w tym magazynie, aby zapewnić głównemu modelowi AI spersonalizowany kontekst.
+
+<Callout type="info" title="Magazyn klucz-wartość, nie pamięć konwersacji">
+To **nie** jest pamięć semantyczna obejmująca całą historię Twoich konwersacji. Nie indeksuje, nie osadza ani nie przeszukuje poprzednich rozmów. Zamiast tego utrzymuje ustrukturyzowany zestaw par klucz/wartość (np. `user_preferences`, `learned_facts`), które są wstrzykiwane do każdego zapytania jako kontekst. Pomyśl o tym jak o trwałym notatniku, który AI czyta przed każdą odpowiedzią.
+
+W kontekście poprzednich wiadomości w ramach jednej konwersacji, LibreChat korzysta już ze standardowego okna historii wiadomości — jest to funkcja niezależna od tej opcji.
+
+</Callout>
+
+<Callout type="important" title="⚠️ Wymagana konfiguracja">
+  Funkcjonalność Memory musi zostać jawnie skonfigurowana w pliku `librechat.yaml`, aby działała. Nie jest ona domyślnie włączona.
+</Callout>
+
+## Kluczowe funkcje [#key-features]
+
+- **Uruchamiany przy każdym żądaniu**: Agent pamięci wykonuje się na początku każdego żądania czatu, zapewniając, że zapisany kontekst jest zawsze dostępny.
+- **Magazyn klucz/wartość**: Informacje są przechowywane jako ustrukturyzowane pary klucz/wartość, a nie jako surowe dzienniki konwersacji
+- **Wpisy ręczne**: Użytkownicy mogą ręcznie dodawać, edytować lub usuwać wpisy w pamięci bezpośrednio, co zapewnia pełną kontrolę nad tym, co zapamiętuje AI.
+- **Kontrola użytkownika**: Po włączeniu użytkownicy mogą włączać i wyłączać pamięć dla swoich poszczególnych czatów
+- **Konfigurowalne klucze**: Ogranicz kategorie informacji, które mogą być przechowywane, używając `validKeys`
+- **Zarządzanie tokenami**: Ustaw limity zużycia pamięci, aby kontrolować koszty
+- **Integracja agentów**: Używaj agentów AI do inteligentnego zarządzania tym, co ma zostać zapamiętane
+
+## Konfiguracja [#configuration]
+
+Aby włączyć funkcje pamięci, musisz dodać konfigurację `memory` do swojego pliku `librechat.yaml`:
+
+```yaml filename="librechat.yaml"
+version: 1.3.5
+cache: true
+
+memory:
+  disabled: false # Set to true to completely disable memory
+  personalize: true # Gives users the ability to toggle memory on/off, true by default
+  tokenLimit: 2000 # Maximum tokens for memory storage
+  maxInputTokens: 12000 # Maximum recent-chat tokens sent to the memory agent
+  messageWindowSize: 5 # Number of recent messages to consider
+  agent:
+    provider: 'openAI'
+    model: 'gpt-4'
+```
+
+Pole provider powinno być zgodne z zaakceptowanymi wartościami zdefiniowanymi w [Przewodniku po Model Spec](/docs/configuration/librechat_yaml/object_structure/model_specs#endpoint).
+
+**Uwaga:** Jeśli używasz niestandardowego endpoint, wartość endpoint musi dokładnie odpowiadać zdefiniowanej nazwie niestandardowego endpoint.
+
+Zobacz [Przewodnik konfiguracji pamięci](/docs/configuration/librechat_yaml/object_structure/memory), aby uzyskać szczegółowe opcje konfiguracji.
+
+## Jak to działa [#how-it-works]
+
+<Callout type="note" title="Wykonywanie agenta pamięci">
+Agent pamięci działa przy **każdym żądaniu czatu**, gdy pamięć jest włączona. Wykonuje się on równolegle z główną odpowiedzią czatu — rozpoczyna się przed rozpoczęciem głównej odpowiedzi i jest ograniczony do czasu trwania głównego żądania oraz maksymalnie 3 sekund po jego zakończeniu.
+
+Oznacza to, że każda wysłana przez Ciebie wiadomość uruchamia agenta pamięci, aby:
+
+<ol>
+  <li>
+    <strong>Odczytaj</strong> bieżący magazyn klucz/wartość i wstrzyknij odpowiednie wpisy jako kontekst
+  </li>
+  <li>
+    <strong>Przeanalizuj</strong> okno ostatniej wiadomości pod kątem informacji wartych zapisania lub zaktualizowania
+  </li>
+  <li>
+    <strong>Zapisuj</strong> wszelkie nowe lub zmodyfikowane wpisy z powrotem do magazynu
+  </li>
+</ol>
+</Callout>
+
+### 1. Przechowywanie klucz/wartość [#1-keyvalue-storage]
+
+Wpisy w pamięci są przechowywane jako pary klucz/wartość. Gdy pamięć jest włączona, system może przechowywać wpisy takie jak:
+
+- Preferencje użytkownika (styl komunikacji, zainteresowania)
+- Ważne fakty wyraźnie udostępnione przez użytkowników
+- Trwające projekty lub wspomniane zadania
+- Każda kategoria zdefiniowana przez `validKeys`
+
+Użytkownicy mogą również **ręcznie tworzyć, edytować i usuwać** wpisy w pamięci za pośrednictwem interfejsu, co zapewnia bezpośrednią kontrolę nad tym, co sztuczna inteligencja o nich wie.
+
+### 2. Okno kontekstowe [#2-context-window]
+
+Parametr `messageWindowSize` określa, ile ostatnich wiadomości jest analizowanych pod kątem aktualizacji pamięci. Pomaga to agentowi pamięci zdecydować, które informacje warto przechowywać lub aktualizować w magazynie klucz-wartość.
+
+Parametr `maxInputTokens` ogranicza tekst z niedawnych czatów wysyłany do automatycznego agenta pamięci przed ekstrakcją. Jeśli wybrane okno wiadomości jest nadal zbyt duże, LibreChat zachowuje najnowszy kontekst i pomija wcześniejszą zawartość czatu przed wywołaniem agenta pamięci.
+
+### 3. Kontrola użytkownika [#3-user-control]
+
+Gdy `personalize` jest ustawione na `true`:
+
+- Użytkownicy widzą przełącznik pamięci w swoim interfejsie czatu
+- Mogą oni włączać/wyłączać pamięć dla poszczególnych konwersacji
+- Ustawienia pamięci są zachowywane między sesjami
+
+### 4. Prawidłowe klucze [#4-valid-keys]
+
+Możesz ograniczyć kategorie przechowywanych informacji, określając `validKeys`:
+
+```yaml filename="memory / validKeys"
+memory:
+  validKeys:
+    - 'user_preferences'
+    - 'conversation_context'
+    - 'learned_facts'
+    - 'personal_information'
+```
+
+## Najlepsze praktyki [#best-practices]
+
+### 1. Limity tokenów [#1-token-limits]
+
+Ustaw odpowiednie limity tokenów, aby zrównoważyć funkcjonalność z kosztami:
+
+- Wyższe limity pozwalają na bardziej rozbudowaną pamięć
+- Niższe limity obniżają koszty przetwarzania
+- Rozważ swoje wzorce użytkowania oraz budżet
+
+### 2. Custom Instructions [#2-custom-instructions]
+
+Podczas korzystania z `validKeys`, podaj instrukcje niestandardowe dla agenta pamięci:
+
+```yaml filename="memory / agent with instructions"
+memory:
+  agent:
+    provider: 'openAI'
+    model: 'gpt-4'
+    instructions: |
+      Store information only in the specified validKeys categories.
+      Focus on explicitly stated preferences and important facts.
+      Delete outdated or corrected information promptly.
+```
+
+### 3. Kwestie dotyczące prywatności [#3-privacy-considerations]
+
+- Pamięć przechowuje informacje o użytkowniku pomiędzy konwersacjami
+- Upewnij się, że użytkownicy rozumieją, jakie informacje są przechowywane
+- Rozważ wdrożenie polityk przechowywania danych
+- Dostarcz jasną dokumentację na temat wykorzystania pamięci
+
+## Przykłady [#examples]
+
+### Podstawowa konfiguracja [#basic-configuration]
+
+Włącz pamięć z ustawieniami domyślnymi:
+
+```yaml filename="Basic memory config"
+memory:
+  tokenLimit: 2000
+  maxInputTokens: 12000
+  agent:
+    provider: 'openAI'
+    model: 'gpt-4.1-mini'
+```
+
+### Zaawansowana konfiguracja [#advanced-configuration]
+
+Pełna konfiguracja ze wszystkimi opcjami:
+
+```yaml filename="Advanced memory config"
+memory:
+  disabled: false
+  validKeys: ['preferences', 'context', 'facts']
+  tokenLimit: 3000
+  maxInputTokens: 12000
+  personalize: true
+  messageWindowSize: 10
+  agent:
+    provider: 'anthropic'
+    model: 'claude-3-opus-20240229'
+    instructions: 'Remember only explicitly stated preferences and key facts.'
+    model_parameters:
+      temperature: 0.3
+```
+
+Aby uzyskać informacje o prawidłowych parametrach modelu dla poszczególnych dostawców, zobacz [Model Spec Preset Fields](/docs/configuration/librechat_yaml/object_structure/model_specs#preset-fields).
+
+### Używanie zdefiniowanych agentów [#using-predefined-agents]
+
+Odniesienie do istniejącego agenta za pomocą ID:
+
+```yaml filename="Memory with agent ID"
+memory:
+  agent:
+    id: 'memory-specialist-001'
+```
+
+### Niestandardowe endpointy z pamięcią [#custom-endpoints-with-memory]
+
+Memory w pełni obsługuje niestandardowe endpoint, w tym te z niestandardowymi nagłówkami i zmiennymi środowiskowymi. W przypadku korzystania z niestandardowego endpoint, symbole zastępcze nagłówków oraz zmienne środowiskowe są poprawnie rozwiązywane podczas przetwarzania pamięci.
+
+```yaml filename="librechat.yaml with custom endpoint for memory"
+
+endpoints:
+    custom:
+        - name: 'Custom Memory Endpoint'
+           apiKey: 'dummy'
+           baseURL: 'https://api.gateway.ai/v1'
+           headers:
+             x-gateway-api-key: '${GATEWAY_API_KEY}'
+             x-gateway-virtual-key: '${GATEWAY_OPENAI_VIRTUAL_KEY}'
+             X-User-Identifier: '{{LIBRECHAT_USER_EMAIL}}'
+             X-Application-Identifier: 'LibreChat - Test'
+             api-key: '${TEST_CUSTOM_API_KEY}'
+           models:
+             default:
+               - 'gpt-4o-mini'
+               - 'gpt-4o'
+             fetch: false
+
+memory:
+  disabled: false
+  tokenLimit: 3000
+  maxInputTokens: 12000
+  personalize: true
+  messageWindowSize: 10
+  agent:
+    provider: 'Custom Memory Endpoint'
+    model: 'gpt-4o-mini'
+```
+
+- Wszystkie [niestandardowe nagłówki endpointów](/docs/configuration/librechat_yaml/object_structure/custom_endpoint#headers) są obsługiwane
+
+## Rozwiązywanie problemów [#troubleshooting]
+
+### Pamięć nie działa [#memory-not-working]
+
+1. Zweryfikuj, czy pamięć jest skonfigurowana w `librechat.yaml`
+2. Sprawdź, czy `disabled` jest ustawione na `false`
+3. Upewnij się, że skonfigurowany agent/model jest dostępny
+4. Zweryfikuj, czy użytkownicy włączyli pamięć w swoim interfejsie czatu
+5. Dla niestandardowych endpointów: upewnij się, że nazwa `provider` dokładnie odpowiada `name` niestandardowego endpointu
+
+### Wysokie zużycie tokenów [#high-token-usage]
+
+1. Zmniejsz `tokenLimit`, aby kontrolować koszty
+2. Zmniejsz `maxInputTokens`, aby ograniczyć ilość niedawnej historii czatu wysyłanej do agenta pamięci.
+3. Zmniejsz `messageWindowSize`, aby analizować mniej wiadomości
+4. Użyj `validKeys`, aby ograniczyć to, co jest przechowywane
+5. Przejrzyj i zoptymalizuj instrukcje agenta
+
+### Niespójna pamięć [#inconsistent-memory]
+
+1. Sprawdź, czy użytkownicy włączają/wyłączają pamięć
+2. Sprawdź, czy limity tokenów nie są przekraczane
+3. Zapewnij spójną konfigurację agenta
+4. Przejrzyj zapisaną pamięć pod kątem konfliktów
+
+### Problemy z uwierzytelnianiem niestandardowego endpoint [#custom-endpoint-authentication-issues]
+
+1. Zweryfikuj, czy zmienne środowiskowe są poprawnie ustawione w pliku `.env`
+2. Upewnij się, że niestandardowe nagłówki używają poprawnej składni (`${ENV_VAR}` dla zmiennych środowiskowych, `{{LIBRECHAT_USER_*}}` dla symboli zastępczych użytkownika)
+3. Sprawdź, czy niestandardowy endpoint działa dla zwykłych uzupełnień czatu (chat completions), zanim przejdziesz do testowania z pamięcią (memory).
+4. Sprawdź logi serwera pod kątem błędów uwierzytelniania z niestandardowego API endpoint.
+
+## Przyszłe ulepszenia [#future-improvements]
+
+Obecna implementacja uruchamia agenta pamięci przy każdym żądaniu czatu bezwarunkowo. Planowane ulepszenia obejmują:
+
+- **Semantyczny wyzwalacz zapisu**: Wykrywa, kiedy użytkownik wyraźnie poprosił model o zapamiętanie czegoś (np. „Zapamiętaj, że preferuję Pythona”) i uruchamia agenta zapisu do pamięci tylko w takich przypadkach, co ogranicza niepotrzebne przetwarzanie rutynowych wiadomości.
+- **Przywoływanie podobieństwa wektorowego (Vector Similarity Recall)**: Zamiast wstrzykiwać wszystkie zapisane wpisy z pamięci do każdego żądania, użyj osadzeń wektorowych (vector embeddings), aby pobrać tylko te wpisy, które są najbardziej istotne dla bieżącego kontekstu konwersacji, co poprawia zarówno wydajność, jak i trafność.
+
+## Powiązane funkcje [#related-features]
+
+- [Agenci](/docs/features/agents) - Twórz własnych asystentów AI
+- [Presets](/docs/user_guides/presets) - Zapisuj ustawienia konwersacji
+- [Fork Messages](/docs/features/fork) - Rozgałęziaj konwersacje przy zachowaniu kontekstu

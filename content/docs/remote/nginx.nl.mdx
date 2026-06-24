@@ -1,0 +1,180 @@
+---
+title: NGINX
+icon: Nginx
+description: >-
+  Stapsgewijze handleiding voor het beveiligen van uw LibreChat-implementatie
+  met Nginx als reverse proxy en HTTPS
+---
+
+Deze handleiding behandelt de essentiële stappen voor het beveiligen van uw LibreChat-implementatie met een SSL/TLS-certificaat voor HTTPS, het instellen van Nginx als reverse proxy en het configureren van uw domein.
+
+## Vereisten [#prerequisites]
+
+1. Een cloudserver (bijv. AWS, Google Cloud, Azure, Digital Ocean).
+2. Een geregistreerde domeinnaam.
+3. Terminaltoegang tot uw cloudserver.
+4. Node.js `v24.16.0` en npm `v11.16.0` als je LibreChat rechtstreeks op de host draait.
+
+## Initiële configuratie [#initial-setup]
+
+### Je domein naar je server verwijzen [#pointing-your-domain-to-your-server]
+
+Voordat u doorgaat met het verkrijgen van een certificaat, moet u uw domein naar het IP-adres van uw cloudserver laten wijzen. Deze stap is fundamenteel en moet voorafgaan aan de installatie van het SSL-certificaat vanwege de tijd die DNS-records nodig kunnen hebben om wereldwijd te propageren.
+
+1. Log in op het configuratiescherm van uw domeinregistrar.
+2. Navigeer naar DNS-instellingen.
+3. Maak een `A record` aan dat verwijst naar het IP-adres van je cloudserver.
+4. Wacht tot de DNS-wijzigingen wereldwijd zijn doorgevoerd (je kunt dit controleren door je domein te pingen: `ping your_domain.com`).
+
+## Een SSL/TLS-certificaat verkrijgen [#obtain-an-ssltls-certificate]
+
+Om je LibreChat-applicatie te beveiligen met HTTPS, heb je een SSL/TLS-certificaat nodig. Let's Encrypt biedt gratis certificaten aan:
+
+1. Certbot installeren:
+    - Voor Ubuntu: `sudo apt-get install certbot python3-certbot-nginx`
+    - Voor CentOS: `sudo yum install certbot python2-certbot-nginx`
+
+2. Verkrijg het certificaat:
+    - Voer `sudo certbot --nginx` uit om het certificaat automatisch te verkrijgen en te installeren voor Nginx.
+    - Volg de instructies op het scherm. Certbot zal om informatie vragen en het validatieproces voltooien.
+    - Zodra dit is gelukt, zal Certbot je certificaatbestanden opslaan.
+
+## Nginx instellen als reverse proxy [#set-up-nginx-as-a-reverse-proxy]
+
+Nginx fungeert als een reverse proxy die clientverzoeken doorstuurt naar uw LibreChat-applicatie. Er zijn twee implementatieopties:
+
+### Optie A: Gebruikmaken van de `deploy-compose.yml` Docker Compose (Aanbevolen) [#option-a-using-the-deploy-composeyml-docker-compose-recommended]
+
+Het `deploy-compose.yml` bestand bevat een Nginx-container en gebruikt het `client/nginx.conf` bestand voor de Nginx-configuratie. Omdat `sudo certbot --nginx` het certificaat echter naar de hostconfiguratie extraheert, moet u het certificaat dupliceren naar de Docker-containers.
+
+1. Update `client/nginx.conf` met je domein- en certificaatpaden.
+2. Update `deploy-compose.yml` in de `client` sectie om de certificaatbestanden van de host te mounten:
+
+```yaml
+client:
+  # ...
+  volumes:
+    - ./client/nginx.conf:/etc/nginx/conf.d/default.conf
+    - /etc/letsencrypt/live/<your-domain>:/etc/letsencrypt/live/<your-domain>
+    - /etc/letsencrypt/archive/<your-domain>:/etc/letsencrypt/archive/<your-domain>
+    - /etc/letsencrypt/options-ssl-nginx.conf:/etc/letsencrypt/options-ssl-nginx.conf
+    - /etc/letsencrypt/ssl-dhparams.pem:/etc/letsencrypt/ssl-dhparams.pem
+```
+
+3. Stop elke draaiende instantie: `npm run stop:deployed`
+4. Commit de wijzigingen naar een nieuwe Git-branch.
+5. Rebase de geïmplementeerde instantie: `npm run rebase:deployed`
+
+### Optie B: Host-gebaseerde implementatie zonder Docker [#option-b-host-based-deployment-without-docker]
+
+Als je geen Docker gebruikt, kun je Nginx direct op de host installeren en configureren:
+
+1. Installeer Nginx:
+    - Ubuntu: `sudo apt-get install nginx`
+    - CentOS: `sudo yum install nginx`
+
+2. Start Nginx: `sudo systemctl start nginx`
+
+3. Open het Nginx-configuratiebestand: `sudo nano /etc/nginx/sites-available/default`
+
+4. Vervang de bestandsinhoud door het volgende, waarbij je `your_domain.com` vervangt door je domein en `app_port` door de poort van je applicatie:
+
+```nginx filename="/etc/nginx/sites-available/default"
+server {
+    listen 80;
+    server_name your_domain.com;
+
+    location / {
+        proxy_pass http://localhost:app_port;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+    }
+}
+```
+
+5. Controleer de Nginx-configuratie: `sudo nginx -t`
+6. Herlaad Nginx: `sudo systemctl reload nginx`
+
+## De applicatie uitvoeren [#run-the-application]
+
+1. Navigeer naar de map van je applicatie:
+
+```bash filename="Replace 'LibreChat' with your actual application directory.
+cd LibreChat
+```
+
+2. Start je applicatie met Docker Compose:
+
+```bash filename="Start your application"
+sudo docker compose -f ./deploy-compose.yml up -d
+```
+
+## Certificaten vernieuwen bij gebruik van nginx [#renewing-certificates-when-using-nginx]
+
+Als je nginx hebt ingesteld met de aanbevolen Optie A hierboven, gebruik dan deze stappen om de certificaten te vernieuwen:
+
+1. Navigeer naar de map van je applicatie
+```bash filename="Replace 'LibreChat' with your actual application directory.
+cd LibreChat
+```
+
+2. Stop uw actieve Docker containers
+
+```bash filename="Stop your application"
+sudo docker compose -f ./deploy-compose.yml down -d
+```
+
+3. certificaten vernieuwen
+
+```bash
+sudo certbot renew
+```
+
+4. Start je applicatie opnieuw op
+
+```bash filename="Start your application"
+sudo docker compose -f ./deploy-compose.yml up -d
+```
+
+Let op: certbot kan de nginx van de host herstarten. Je kunt dit beëindigen met `sudo pkill nginx`
+
+## Web Application Firewall [#web-application-firewall]
+
+Nginx kan worden geconfigureerd om te fungeren als een web application firewall (WAF) door gebruik te maken van de OWASP Core Rule Set (CRS), die een robuuste set regels biedt om te beschermen tegen veelvoorkomende kwetsbaarheden en aanvallen op webapplicaties. Het gebruik van OWASP CRS met Nginx kan de beveiliging van uw LibreChat-implementatie verbeteren door een extra beschermingslaag toe te voegen.
+
+1. Installeer OWASP CRS:
+
+    - Ubuntu: `sudo apt-get install nginx-modsecurity-crs`
+
+2. Schakel ModSecurity in Nginx in:
+    - Open uw Nginx-configuratiebestand (bijv. `/etc/nginx/nginx.conf`).
+    - Voeg de volgende regels toe binnen het `http` blok:
+
+      ```yaml filename="nginx.conf"
+      modsecurity on;
+      modsecurity_rules_file /usr/share/nginx/modsecurity-crs/nginx-modsecurity.conf;
+      ```
+
+3. Configureer OWASP CRS:
+    - Het OWASP CRS-pakket bevat doorgaans een configuratiebestand (bijv. `/etc/nginx/modsecurity.d/nginx-modsecurity.conf`) waar u verschillende instellingen en regelsets kunt aanpassen op basis van uw vereisten.
+
+4. Nginx herladen:
+    - `sudo systemctl reload nginx`
+
+Door OWASP CRS in je Nginx-configuratie in te schakelen, kun je gebruikmaken van de uitgebreide set regels die door het project worden aangeboden om diverse kwetsbaarheden en aanvallen op webapplicaties te detecteren en te beperken, zoals SQL-injectie, cross-site scripting (XSS), remote file inclusion en meer.
+
+## Statische bestands-caching en compressie [#static-file-caching-and-compression]
+
+LibreChat ondersteunt nu standaard statische file caching en compressie. Als je NGINX gebruikt om compressie af te handelen, moet je compressie in LibreChat uitschakelen om redundante verwerking te voorkomen. Je kunt dit doen door de omgevingsvariabele `DISABLE_COMPRESSION` in te stellen op `true` in je LibreChat configuratie.
+
+```.env
+# .env file
+DISABLE_COMPRESSION=true
+```
+
+Dit voorkomt dat LibreChat statische bestanden comprimeert, waardoor NGINX compressie efficiënter kan afhandelen.
+
+Voor meer informatie over het afhandelen van statische bestanden in LibreChat, inclusief cache-opties, raadpleeg de [Static File Handling](/docs/configuration/dotenv#static-file-handling) documentatie.

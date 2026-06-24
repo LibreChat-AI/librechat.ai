@@ -1,0 +1,210 @@
+---
+title: Painel de Administração
+icon: LayoutDashboard
+description: >-
+  Uma interface web independente para gerenciar usuários, grupos, funções,
+  substituições de configuração e permissões de sistema do LibreChat - sem
+  editar o librechat.yaml manualmente.
+---
+
+# Painel de Administração do LibreChat [#librechat-admin-panel]
+
+O **LibreChat Admin Panel** é uma interface de gerenciamento independente baseada em navegador para o LibreChat. Ele se conecta ao mesmo banco de dados que o próprio LibreChat e fornece uma GUI para as tarefas administrativas que impulsionam o [granular access control](/docs/features/access_control): administração de usuários e grupos, gerenciamento de funções, substituições de configuração com escopo para funções ou grupos e concessões de recursos em nível de sistema.
+
+<Callout type="info" title="Status: Prévia">
+  O painel de administração está disponível para testes agora e é a interface de gerenciamento que está por vir, a qual se baseia nas APIs de administração introduzidas no [LibreChat v0.8.5](/changelog/v0.8.5). O código-fonte, problemas e lançamentos estão disponíveis em [github.com/ClickHouse/librechat-admin-panel](https://github.com/ClickHouse/librechat-admin-panel).
+</Callout>
+
+## O que ele faz [#what-it-does]
+
+O painel de administração é um cliente leve: todos os dados residem no banco de dados do LibreChat, e cada ação passa pelos endpoints versionados `/api/admin/*` no servidor da API do LibreChat. Ele oferece aos administradores um local único para:
+
+- **Gerenciar configuração**: visualize e edite todas as configurações do LibreChat por meio de um formulário dinâmico baseado em esquema. Novos campos adicionados ao esquema de configuração aparecem automaticamente, sem a necessidade de lançamento de painel administrativo.
+- **Aplicar substituições por principal**: limite as substituições de configuração a funções ou grupos específicos, com uma cascata baseada em prioridade que determina o valor final resolvido que cada usuário vê ao fazer login.
+- **Administrar usuários**: listar, pesquisar e visualizar todas as contas na instância.
+- **Gerenciar grupos**: crie e exclua grupos, adicione/remova membros e use grupos como principais de primeira classe em ACLs e substituições (overrides).
+- **Gerenciar funções**: crie funções personalizadas além das nativas `USER` / `ADMIN`, edite sua matriz de permissões de recursos e atribua usuários a funções.
+- **Concessões do sistema de permissões**: delegue capacidades administrativas (por exemplo, `manage:users`, `read:usage`, `manage:mcpservers`) a usuários, grupos ou funções específicos sem torná-los administradores completos.
+- **Autenticar**: faça login com uma conta de administrador local do LibreChat, ou via SSO OpenID / SAML / provedores OAuth suportados quando estes estiverem habilitados na instância do LibreChat.
+
+Para o modelo de permissão subjacente (principais, ACLs de recursos, capacidades e como as camadas se compõem), consulte a página [Access Control](/docs/features/access_control).
+
+## Arquitetura [#architecture]
+
+```
+┌──────────────────┐         ┌──────────────────┐         ┌──────────────┐
+│  Admin Panel     │ ───────▶│  LibreChat API   │ ───────▶│   MongoDB    │
+│  (Bun + Vite)    │  HTTPS  │  /api/admin/*    │         │  (shared DB) │
+└──────────────────┘         └──────────────────┘         └──────────────┘
+       │                             │
+       │ OAuth/OIDC/SAML redirect    │ Verifies admin access
+       └─────────────────────────────┘
+```
+
+O painel de administração é executado como um serviço separado; ele não compartilha um processo com o LibreChat. As capacidades de administração são verificadas no lado do LibreChat por meio da permissão do sistema `access:admin` ou da função `SystemRoles.ADMIN`, portanto, o painel não pode conceder a si mesmo privilégios que não deveria ter.
+
+A superfície da API de administrador exposta pelo LibreChat é:
+
+| Mount | Propósito |
+| ----------------------------------------- | --------------------------------------------------------- |
+| `POST /api/admin/login` &nbsp; `/oauth/*` | Endpoints de autenticação específicos para administradores (local + SSO) |
+| `GET /api/admin/verify`                   | Valida a sessão do administrador |
+| `/api/admin/users`                        | Listagem e busca de usuários |
+| `/api/admin/groups`                       | CRUD de grupos + gerenciamento de membros |
+| `/api/admin/roles`                        | CRUD de funções personalizadas + edição de permissões + gerenciamento de membros |
+| `/api/admin/grants`                       | Concessões de capacidade do sistema (atribuir/revogar/listar) |
+| `/api/admin/config`                       | Substituições de configuração base + por principal |
+
+## Primeiros Passos [#getting-started]
+
+### Pré-requisitos [#prerequisites]
+
+- Uma instância do LibreChat em execução na **v0.8.5 ou posterior** (as APIs de administrador não estão disponíveis em versões anteriores)
+- Acesso de rede do container/host do admin-panel para a API do LibreChat
+- Uma conta de administrador no LibreChat: ou o primeiro usuário registrado (auto-admin), um usuário com `role: 'ADMIN'` definido no Mongo, ou um principal ao qual foi concedida a capacidade `access:admin`
+
+### Empacotado com o LibreChat (recomendado) [#bundled-with-librechat-recommended]
+
+Se você executar o LibreChat com o [`docker-compose.yml`](https://github.com/danny-avila/LibreChat/blob/main/docker-compose.yml) ou [`deploy-compose.yml`](https://github.com/danny-avila/LibreChat/blob/main/deploy-compose.yml) oficial, o painel administrativo é fornecido como um serviço e inicia automaticamente junto com o LibreChat -- nenhuma implantação separada é necessária.
+
+| Arquivo Compose | URL do painel administrativo | Como é servido |
+| ------------------------------ | ------------------------ | ----------------------------------------------------------------- |
+| `docker-compose.yml` (padrão) | `http://localhost:3000`  | Publicado em uma porta do host (`ADMIN_PANEL_PORT`, padrão `3000`) |
+| `deploy-compose.yml`           | `http://admin.localhost` | Roteado através do proxy reverso nginx integrado em um subdomínio |
+
+Defina o segredo de sessão do painel no `.env` do LibreChat; os arquivos compose o transmitem como o `SESSION_SECRET` do painel:
+
+```bash filename=".env"
+# Min 32 characters. Generate with: openssl rand -hex 32
+ADMIN_PANEL_SESSION_SECRET=replace-with-a-32-char-random-string
+
+# Optional: host port for the default docker-compose
+# ADMIN_PANEL_PORT=3000
+
+# Optional: set true when the panel is served over HTTPS
+# ADMIN_PANEL_SESSION_COOKIE_SECURE=false
+```
+
+Os arquivos compose conectam o restante automaticamente: `API_SERVER_URL` aponta para o serviço `api`, `VITE_API_BASE_URL` segue `DOMAIN_CLIENT` para redirecionamentos de OAuth voltados ao navegador, e `ADMIN_PANEL_URL` é definido para que o LibreChat retorne os administradores ao painel após o SSO. Para optar por não utilizar, remova o serviço `admin-panel` ou proteja-o atrás de uma entrada de [`profiles`](https://docs.docker.com/compose/how-tos/profiles/) do Compose.
+
+<Callout type="info" title="admin.localhost em um domínio real">
+  Navegadores modernos resolvem `*.localhost` (incluindo `admin.localhost`) para `127.0.0.1`, portanto a URL do deploy-compose funciona sem alterações no arquivo hosts. Para um domínio real, aponte um registro DNS para o host, atualize o `server_name` `admin.localhost` em `client/nginx.conf` e defina `ADMIN_PANEL_URL` para corresponder.
+</Callout>
+
+### Standalone (implantação separada) [#standalone-separate-deployment]
+
+Para hospedar o painel de administração separadamente -- apontando para uma instância do LibreChat rodando em outro lugar -- use a imagem publicada no GHCR:
+
+```bash
+# 1. Create an env file
+cp .env.example .env
+
+# 2. Edit .env and set at minimum:
+#    SESSION_SECRET=<random string, min 32 characters>
+#    VITE_API_BASE_URL=http://host.docker.internal:3080
+
+# 3. Start it
+docker compose up -d   # http://localhost:3000
+docker compose down    # stop
+```
+
+`docker run` autônomo:
+
+```bash
+docker run -p 3000:3000 \
+  --add-host=host.docker.internal:host-gateway \
+  -e SESSION_SECRET=replace-with-32-char-random-string \
+  -e VITE_API_BASE_URL=http://host.docker.internal:3080 \
+  ghcr.io/clickhouse/librechat-admin-panel:latest
+```
+
+<Callout type="warning" title="Rede no Docker">
+  Dentro de um container, `localhost` refere-se ao próprio container, não ao seu host. Quando o LibreChat é executado no mesmo host, aponte `VITE_API_BASE_URL` para `http://host.docker.internal:3080` (Linux: adicione `--add-host=host.docker.internal:host-gateway`). Em produção, use o nome DNS público/interno da sua API do LibreChat.
+</Callout>
+
+### Executar Localmente para Desenvolvimento [#run-locally-for-development]
+
+```bash
+git clone https://github.com/ClickHouse/librechat-admin-panel.git
+cd librechat-admin-panel
+cp .env.example .env    # then edit
+bun install
+bun dev                 # http://localhost:3000
+```
+
+## Variáveis de Ambiente [#environment-variables]
+
+| Variável | Obrigatório | Padrão | Descrição |
+| ------------------------------- | --------------------- | --------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SESSION_SECRET`                | **Sim** em produção | Fallback de desenvolvimento hardcoded ao executar `bun dev`; **sem padrão** na imagem Docker | Chave de criptografia de sessão. Deve ter pelo menos 32 caracteres. |
+| `VITE_API_BASE_URL`             | **Sim** no Docker     | `http://localhost:3080` (apenas dev local)                                          | URL do servidor da API do LibreChat voltada para o navegador, usada para redirecionamentos OAuth. |
+| `API_SERVER_URL`                | Não                   | Recorre a `VITE_API_BASE_URL`                                                 | URL do lado do servidor para chamadas da API do LibreChat. Útil quando o servidor do painel administrativo acessa o LibreChat por uma URL diferente da do navegador (ex: serviço interno do Kubernetes vs. hostname público). |
+| `PORT`                          | Não                   | `3000`                                                                            | Porta em que o painel administrativo escuta. |
+| `ADMIN_SSO_ONLY`                | Não                   | `false`                                                                           | Oculta o formulário de e-mail/senha, forçando o login apenas por SSO. |
+| `ADMIN_SESSION_IDLE_TIMEOUT_MS` | Não                   | `1800000` (30 min)                                                                | Tempo limite de inatividade da sessão em milissegundos. |
+| `SESSION_COOKIE_SECURE`         | Não                   | `true` em produção                                                              | Se o cookie de sessão requer HTTPS. |
+| `ADMIN_PANEL_METRICS_SECRET`    | Não                   | _não definido_                                                                           | Token Bearer necessário para coletar dados do endpoint `/metrics` do Prometheus. O endpoint retorna `401` quando não definido ou incompatível. |
+
+### URL de redirecionamento do LibreChat [#librechat-redirect-url]
+
+Quando o painel administrativo estiver hospedado em uma URL separada do LibreChat, defina `ADMIN_PANEL_URL` no ambiente da API do LibreChat. Use a URL base externa do painel administrativo, incluindo qualquer prefixo de caminho, e omita a barra final:
+
+```bash filename=".env"
+ADMIN_PANEL_URL=https://admin.example.com/admin
+```
+
+Para implantações via Helm, defina `librechat.adminPanelUrl` no seu arquivo values. O chart o renderiza como `ADMIN_PANEL_URL` para o fluxo de OAuth do painel administrativo do LibreChat:
+
+```yaml filename="values.yaml"
+librechat:
+  adminPanelUrl: https://admin.example.com/admin
+```
+
+Para OpenID SSO, registre `${DOMAIN_SERVER}/api/admin/oauth/openid/callback` com seu provedor de identidade.
+
+### Controles de Cache [#cache-controls]
+
+Estes espelham as variáveis de ambiente de cache do LibreChat. As variantes `ADMIN_PANEL_*` têm precedência, recorrendo aos equivalentes compartilhados do LibreChat quando não definidas.
+
+| Variável | Propósito |
+| --------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `STATIC_CACHE_MAX_AGE` / `ADMIN_PANEL_STATIC_CACHE_MAX_AGE`     | `max-age` do navegador em segundos para ativos com hash em `/assets/` (padrão 172800 = 2 dias). |
+| `STATIC_CACHE_S_MAX_AGE` / `ADMIN_PANEL_STATIC_CACHE_S_MAX_AGE` | `s-maxage` da CDN em segundos (padrão 86400 = 1 dia). |
+| `INDEX_CACHE_CONTROL` / `ADMIN_PANEL_INDEX_CACHE_CONTROL`       | Cabeçalho `Cache-Control` para a resposta do índice HTML. |
+| `INDEX_PRAGMA` / `ADMIN_PANEL_INDEX_PRAGMA`                     | Cabeçalho `Pragma` para a resposta do índice HTML. |
+| `INDEX_EXPIRES` / `ADMIN_PANEL_INDEX_EXPIRES`                   | Cabeçalho `Expires` para a resposta do índice HTML. |
+
+## Autenticação [#authentication]
+
+O painel de administração reutiliza a pilha de autenticação do LibreChat e não possui seu próprio banco de dados de usuários. Dois caminhos de login são suportados:
+
+- **Contas locais**: nome de usuário/senha para qualquer usuário do LibreChat cuja conta passe na verificação de acesso de administrador.
+- **Single sign-on**: OpenID Connect, SAML e os provedores OAuth sociais já configurados na sua instância do LibreChat. Defina `ADMIN_SSO_ONLY=true` para ocultar o formulário de senha completamente.
+
+O acesso de administrador é verificado no lado do servidor pelo LibreChat para cada solicitação. A conta deve:
+
+1. Tenha `role: 'ADMIN'` no MongoDB, **ou**
+2. Possuir a permissão de sistema `access:admin` (atribuída a outro principal através do próprio painel de administração; veja [System Grants](/docs/features/access_control#layer-3-system-grants-admin-capabilities)).
+
+As sessões são baseadas em cookies, criptografadas com `SESSION_SECRET` e expiram por inatividade conforme `ADMIN_SESSION_IDLE_TIMEOUT_MS`.
+
+## Gerenciamento de Configuração [#configuration-management]
+
+O painel renderiza a configuração do LibreChat como um formulário dinâmico orientado pelo esquema de configuração. Isso possui duas propriedades úteis:
+
+- **Compatível com versões futuras**: quando o LibreChat lança um novo campo de configuração, o painel o detecta automaticamente a partir do esquema. Nenhuma atualização ou reimplantação do painel de administração é necessária.
+- **Substituições em camadas**: a configuração base (do `librechat.yaml`) pode ser ocultada por substituições por principal, com escopo definido para uma função ou grupo. Quando um usuário faz login, as substituições são resolvidas em ordem de prioridade e mescladas sobre a base para produzir a configuração efetiva que o usuário vê.
+
+Esta é a superfície por trás do [sistema de substituição de configuração por principal baseado em banco de dados](https://github.com/danny-avila/LibreChat/pull/12354) do LibreChat. Casos de uso típicos:
+
+- Dê a um grupo "Research" um `recursionLimit` maior e endpoints adicionais
+- Permita que uma função "FinanceAdmins" gerencie servidores MCP, enquanto usuários comuns apenas possam utilizá-los
+- Limitar permissões de `interface` mais rigorosas a grupos de contratados externos
+
+## Relacionado [#related]
+
+- [Access Control](/docs/features/access_control): o modelo de permissão no qual o painel de administração é baseado
+- [Configuração da Interface](/docs/configuration/librechat_yaml/object_structure/interface): as sinalizações de recursos que o painel edita
+- [Autenticação](/docs/features/authentication): autenticação de usuário no LibreChat
+- [changelog v0.8.5](/changelog/v0.8.5): fundamentos da API de administrador
+- [GitHub: ClickHouse/librechat-admin-panel](https://github.com/ClickHouse/librechat-admin-panel): código-fonte, issues, releases

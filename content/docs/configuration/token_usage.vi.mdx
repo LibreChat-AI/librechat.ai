@@ -1,0 +1,304 @@
+---
+title: Sử dụng Token
+icon: Coins
+description: >-
+  Phần này hướng dẫn cách theo dõi và kiểm soát việc sử dụng token trong
+  LibreChat. Bạn sẽ học cách xem ngữ cảnh và chi phí, cấu hình giao dịch, bật số
+  dư người dùng và thêm tín dụng vào tài khoản.
+---
+
+## Giới thiệu [#intro]
+
+Kể từ phiên bản `v0.6.0`, LibreChat theo dõi chính xác mức sử dụng token cho các endpoint được hỗ trợ. Tất cả các giao dịch token đều được lưu trữ trong bộ sưu tập "Transactions" trong cơ sở dữ liệu của bạn. Các bản phát hành hiện tại cũng hiển thị mức sử dụng ngữ cảnh và chi phí theo thời gian thực trong giao diện người dùng cuộc trò chuyện khi được bật.
+
+Hiện tại, bạn có thể giới hạn mức sử dụng token của người dùng bằng cách bật tính năng số dư người dùng (user balances). Thay vì cấu hình giới hạn tín dụng token thông qua các biến môi trường, giờ đây bạn có thể thiết lập các tùy chọn này trong tệp `librechat.yaml` của mình tại phần **balance**. Các giá trị chi phí bị ẩn theo mặc định và phải được bật bằng `interface.contextCost`.
+
+## Xem Mức Sử dụng Ngữ cảnh và Chi phí [#viewing-context-usage-and-cost]
+
+LibreChat hiển thị một thanh đo ngữ cảnh trong khi cuộc trò chuyện đang diễn ra. Thanh đo này cập nhật từ các sự kiện sử dụng trong quá trình truyền phát (streaming) và có thể hiển thị:
+
+- Mức sử dụng prompt/ngữ cảnh hiện tại so với cửa sổ ngữ cảnh của model
+- Một bản tóm tắt khi di chuột qua để xem nhanh chi tiết về token và chi phí
+- Một bảng phân tích chi tiết khi nhấp chuột cho prompt, completion, mức sử dụng token được lưu trong bộ nhớ đệm, tổng số nhánh và tổng số cuộc hội thoại
+
+Các bảng phân tích mức sử dụng được lưu trữ cùng với tin nhắn và cuộc trò chuyện. Các cuộc trò chuyện được mở lại sẽ giữ nguyên chi tiết về nhánh và tổng mức sử dụng/chi phí thay vì chỉ dựa vào phiên phát trực tuyến đang hoạt động.
+
+Khi tính năng tóm tắt rút gọn một cuộc trò chuyện dài, LibreChat sẽ ghi lại cơ sở tóm tắt đã rút gọn và chỉ tính các lượt hội thoại sau khi tóm tắt trên cơ sở đó cho thước đo ngữ cảnh. Tổng mức sử dụng và chi phí vẫn bao gồm toàn bộ chi phí của nhánh đó.
+
+Quản trị viên có thể kiểm soát các hiển thị này trong `librechat.yaml`:
+
+```yaml filename="librechat.yaml"
+interface:
+  contextUsage: true
+  contextCost: true
+  currency:
+    code: EUR
+    rate: 0.92
+```
+
+- `contextUsage` kiểm soát việc người dùng có nhìn thấy cửa sổ ngữ cảnh và thước đo mức sử dụng token hay không.
+- `contextCost` kiểm soát việc người dùng có nhìn thấy giá trị chi phí trong chi tiết sử dụng hay không. Giá trị mặc định là `false`; hãy đặt thành `true` để hiển thị chi phí.
+- `currency` chuyển đổi chi phí USD hiển thị bằng cách sử dụng hệ số nhân tĩnh khi tính năng hiển thị chi phí được bật. Các giao dịch vẫn được ghi lại bằng hệ thống kế toán tín dụng token của LibreChat.
+
+## Cấu hình Token cho Custom Endpoint [#custom-endpoint-token-config]
+
+Đối với các endpoint tùy chỉnh, hãy xác định cửa sổ ngữ cảnh cụ thể cho từng model và mức phí trên mỗi triệu token bằng `endpoints.custom[].tokenConfig`:
+
+```yaml filename="librechat.yaml"
+endpoints:
+  custom:
+    - name: 'Mistral'
+      apiKey: '${MISTRAL_API_KEY}'
+      baseURL: 'https://api.mistral.ai/v1'
+      models:
+        default: ['mistral-large-latest']
+      tokenConfig:
+        mistral-large-latest:
+          prompt: 2
+          completion: 6
+          context: 128000
+```
+
+`prompt`, `completion`, và `context` là bắt buộc cho mỗi mục model. `cacheRead` và `cacheWrite` có thể được thêm vào cho các nhà cung cấp báo cáo mức sử dụng đầu vào được lưu trong bộ nhớ đệm (cached input). Đối với các Agent sử dụng nhiều endpoint, LibreChat sử dụng cấu hình token của endpoint/model tương ứng khi ghi lại mức sử dụng và chi phí.
+
+Cấu hình token được lấy về sẽ được lưu vào bộ nhớ đệm theo phạm vi người dùng khi các endpoint models, keys, URLs hoặc headers có thể thay đổi theo ngữ cảnh yêu cầu, nhờ đó việc định giá và cửa sổ ngữ cảnh của endpoint tùy chỉnh được cách ly sẽ luôn tách biệt.
+
+## Cấu hình giao dịch [#transaction-configuration]
+
+Hệ thống giao dịch kiểm soát việc liệu các bản ghi sử dụng token có được lưu vào cơ sở dữ liệu hay không. Điều này có thể được cấu hình riêng biệt với hệ thống số dư.
+
+### Cài đặt giao dịch [#transaction-settings]
+
+```yaml filename="librechat.yaml"
+version: 1.2.9
+
+# Transaction settings
+# Controls whether to save transaction records to the database
+# Default is true (enabled)
+transactions:
+  enabled: false
+```
+
+**Quan trọng:** Khi `balance.enabled` được đặt thành `true`, việc ghi lại giao dịch sẽ tự động được bật bất kể cài đặt `transactions.enabled`. Điều này đảm bảo rằng tính năng theo dõi số dư hoạt động chính xác bằng cách duy trì hồ sơ đầy đủ về tất cả mức sử dụng token.
+
+    Xem trang [Transactions Configuration](/docs/configuration/librechat_yaml/object_structure/transactions) để biết thêm chi tiết.
+
+## Cấu hình cân bằng [#balance-configuration]
+
+Hệ thống số dư trong LibreChat cho phép quản trị viên cấu hình cách quản lý số dư tín dụng token cho người dùng. Tất cả các cài đặt số dư hiện được quản lý trong cấu hình YAML của bạn dưới đối tượng `balance`.
+
+**Lưu ý:** Điều này thay thế các biến môi trường trước đây (`CHECK_BALANCE` và `START_BALANCE`) và cung cấp một cách có cấu trúc hơn để quản lý số dư người dùng.
+
+### Cài đặt số dư hoàn chỉnh [#complete-balance-settings]
+
+```yaml filename="librechat.yaml"
+version: 1.3.5
+
+# Balance settings
+balance:
+  enabled: true # Enable token credit balances for users
+  startBalance: 20000 # Initial tokens credited upon registration
+  autoRefillEnabled: false # Enable automatic token refills
+  refillIntervalValue: 30 # Numerical value for refill interval
+  refillIntervalUnit: 'days' # Time unit for refill interval (days, hours, etc.)
+  refillAmount: 10000 # Tokens added during each refill
+```
+
+### Giải thích các thiết lập số dư (Balance Settings) [#balance-settings-explained]
+
+- **enabled**: Kích hoạt tính năng theo dõi tín dụng token và quản lý số dư cho người dùng. Khi được đặt thành `true`, hệ thống sẽ theo dõi mức sử dụng token và thực thi các giới hạn số dư.
+
+- **startBalance**: Chỉ định số lượng token ban đầu được cấp cho người dùng khi đăng ký. Đây là số dư bắt đầu cho tất cả người dùng mới.
+
+- **autoRefillEnabled**: Xác định xem tính năng tự động nạp lại token credit có được bật hay không. Khi được đặt thành `true`, hệ thống sẽ tự động thêm credit vào số dư của người dùng dựa trên khoảng thời gian nạp lại.
+
+- **refillIntervalValue**: Chỉ định giá trị số cho khoảng thời gian mà tại đó các tín dụng token được tự động nạp lại. Hoạt động cùng với `refillIntervalUnit`.
+
+- **refillIntervalUnit**: Chỉ định đơn vị thời gian cho khoảng thời gian nạp lại. Các giá trị được hỗ trợ bao gồm "seconds", "minutes", "hours", "days", "weeks" và "months".
+
+- **refillAmount**: Chỉ định số lượng token sẽ được thêm vào số dư của người dùng trong mỗi lần nạp tự động.
+
+Xem trang [Balance Configuration](/docs/configuration/librechat_yaml/object_structure/balance) để biết thêm chi tiết.
+
+## Cách thức hoạt động của Auto-Refill [#how-auto-refill-works]
+
+Khi số dư của người dùng được theo dõi và tính năng **autoRefill** được bật, hệ thống sẽ tự động cộng thêm tín dụng vào số dư chỉ khi khoảng thời gian xác định đã trôi qua kể từ lần nạp gần nhất. Điều này đạt được bằng cách so sánh ngày hiện tại với ngày `lastRefill` cộng với khoảng thời gian đã chỉ định.
+
+### Quy trình Tự động Nạp lại (Auto-Refill) [#auto-refill-process]
+
+1. Khi người dùng cố gắng sử dụng token, hệ thống sẽ kiểm tra xem số dư hiện tại có đủ hay không.
+2. Nếu số dư giảm xuống bằng hoặc dưới 0 sau giao dịch, hệ thống sẽ kiểm tra xem tính năng tự động nạp tiền (auto-refill) có được bật hay không
+3. Nếu auto-refill được bật, hệ thống sẽ kiểm tra xem khoảng thời gian kể từ lần nạp lại cuối cùng đã trôi qua hay chưa:
+   - Hệ thống so sánh ngày hiện tại với `lastRefill + refillInterval`
+   - Nếu khoảng thời gian đã trôi qua, các token sẽ được thêm vào số dư của người dùng
+   - Ngày `lastRefill` được cập nhật thành ngày hiện tại
+4. Giao dịch sẽ được tiến hành nếu số dư đủ (dù là số dư ban đầu hay sau khi nạp thêm)
+
+### Các đơn vị thời gian được hỗ trợ [#supported-time-units]
+
+`refillIntervalUnit` có thể được đặt thành bất kỳ giá trị nào sau đây:
+
+- giây
+- phút
+- giờ
+- ngày
+- tuần
+- tháng
+
+Ví dụ: nếu `refillIntervalValue` được đặt là 30 và `refillIntervalUnit` là `days`, hệ thống sẽ chỉ cộng thêm `refillAmount` token vào số dư của người dùng nếu đã đủ 30 ngày kể từ lần nạp gần nhất.
+
+### Đồng bộ hóa số dư [#balance-synchronization]
+
+Khi người dùng đăng nhập, hệ thống sẽ tự động đồng bộ hóa cài đặt số dư của họ với cấu hình số dư toàn cục hiện tại. Điều này đảm bảo rằng mọi thay đổi đối với cấu hình số dư đều được áp dụng cho tất cả người dùng.
+
+Quy trình đồng bộ hóa:
+
+1. Kiểm tra xem người dùng có bản ghi số dư hay không
+2. Nếu không có bản ghi nào tồn tại, sẽ tạo một bản ghi mới với `startBalance` hiện tại
+3. Cập nhật cài đặt tự động nạp tiền của người dùng để khớp với cấu hình toàn cục
+4. Đảm bảo khoảng thời gian nạp lại và số lượng của người dùng khớp với các cài đặt chung
+
+## Quản lý số dư Token [#managing-token-balances]
+
+Bạn có thể thêm hoặc thiết lập số dư người dùng theo cách thủ công. Điều này đặc biệt hữu ích trong quá trình phát triển hoặc nếu bạn dự định xây dựng một hệ thống tích lũy số dư đầy đủ trong tương lai (ví dụ: thông qua bảng điều khiển quản trị).
+
+### Thêm số dư [#adding-balances]
+
+```bash filename="To manually add balances, run the following command:"
+# Local Development
+npm run add-balance
+
+# Docker (default setup)
+docker compose exec api npm run add-balance
+
+# Docker (deployment setup)
+docker exec -it LibreChat-API /bin/sh -c "cd .. && npm run add-balance"
+```
+
+```bash filename="You can also specify the email and token credit amount to add, e.g.:"
+# Local Development
+npm run add-balance danny@librechat.ai 1000
+
+# Docker (default setup)
+docker compose exec api npm run add-balance danny@librechat.ai 1000
+
+# Docker (deployment setup)
+docker exec -it LibreChat-API /bin/sh -c "cd .. && npm run add-balance danny@librechat.ai 1000"
+```
+
+### Thiết lập số dư [#setting-balances]
+
+Ngoài ra, bạn có thể thiết lập số dư cho người dùng. Số dư hiện tại sẽ bị ghi đè bởi số dư mới.
+
+```bash filename="To manually set balances, run the following command:"
+# Local Development
+npm run set-balance
+
+# Docker (default setup)
+docker compose exec api npm run set-balance
+
+# Docker (deployment setup)
+docker exec -it LibreChat-API /bin/sh -c "cd .. && npm run set-balance"
+```
+
+```bash filename="You can also specify the email and token credit amount to set, e.g.:"
+# Local Development
+npm run set-balance danny@librechat.ai 1000
+
+# Docker (default setup)
+docker compose exec api npm run set-balance danny@librechat.ai 1000
+
+# Docker (deployment setup)
+docker exec -it LibreChat-API /bin/sh -c "cd .. && npm run set-balance danny@librechat.ai 1000"
+```
+
+### Danh sách số dư [#listing-of-balances]
+
+```bash filename="To see the balances of your users, you can run:"
+# Local Development
+npm run list-balances
+
+# Docker (default setup)
+docker compose exec api npm run list-balances
+
+# Docker (deployment setup)
+docker exec -it LibreChat-API /bin/sh -c "cd .. && npm run list-balances"
+```
+
+Cách này hoạt động hiệu quả để theo dõi mức sử dụng của riêng bạn cho mục đích cá nhân; 1000 credits = $0.001 (1 phần nghìn USD)
+
+## Ghi chú về Sử dụng Token và Số dư [#notes-on-token-usage-and-balance]
+
+- Khi tính năng tóm tắt được bật, bạn sẽ bị chặn thực hiện yêu cầu API nếu chi phí của nội dung bạn cần tóm tắt + payload tin nhắn của bạn vượt quá số dư hiện tại.
+- Việc sử dụng mô hình của Subagent child-run được ghi lại dựa trên giao dịch gốc, do đó các lượt chạy của agent gốc sẽ bao gồm cả mức sử dụng được ủy quyền trong tổng số của chúng.
+- Việc đếm token của Prompt thực sự chính xác đối với các lệnh gọi OpenAI, nhưng không chính xác 100% đối với các plugin (do việc gọi hàm). Con số này rất sát và mang tính thận trọng, nghĩa là số lượng đếm được có thể cao hơn từ 2-5 token.
+- Hệ thống cho phép thâm hụt phát sinh từ các completion tokens. Hệ thống chỉ kiểm tra xem bạn có đủ số dư cho các prompt Tokens hay không, và khá linh hoạt đối với phần completion. Biểu đồ dưới đây trình bày chi tiết logic này.
+- Như đã nói ở trên, các plugin được kiểm tra tại mỗi bước tạo phản hồi, vì quy trình này hoạt động với nhiều lệnh gọi API. Bất kỳ nội dung nào mà LLM đã tạo kể từ lời nhắc ban đầu của người dùng đều được chia sẻ với người dùng trong thông báo lỗi như dưới đây.
+- Có một bộ đệm 150 token cho việc đặt tiêu đề vì đây là quy trình gồm 2 bước, trung bình khoảng 200 token tổng cộng. Trong trường hợp không đủ kinh phí, việc đặt tiêu đề sẽ bị hủy trước khi bất kỳ khoản chi tiêu nào xảy ra và không có lỗi nào được đưa ra.
+
+![image](https://github.com/danny-avila/LibreChat/assets/110412045/78175053-9c38-44c8-9b56-4b81df61049e)
+
+## Thông tin chi tiết [#more-details]
+
+nguồn: [LibreChat/discussions/1640](https://github.com/danny-avila/LibreChat/discussions/1640#discussioncomment-8251970)
+
+> "rawAmount": -000, // cái này là gì?
+
+Số lượng token thô được tính theo thuật toán tokenizer.
+
+> "tokenValue": -00000, // đây là gì?
+
+Giá trị tín dụng token. 1000 tín dụng = $0.001 (1 mill USD)
+
+> "rate": 00, // cái này là gì?
+
+Tốc độ tính phí token dưới dạng credit.
+
+Ví dụ, gpt-3.5-turbo-1106 có tỷ lệ là 1 cho lời nhắc của người dùng (input) và 2 cho phản hồi hoàn thiện (output)
+
+| Model              | Input               | Output              |
+| ------------------ | ------------------- | ------------------- |
+| gpt-3.5-turbo-1106 | $0.0010 / 1K tokens | $0.0020 / 1K tokens |
+
+Dựa trên ví dụ được cung cấp:
+
+```sh
+    "rawAmount": -137
+    "tokenValue": -205.5
+    "rate": 1.5
+```
+
+```math
+\text{Token Value} = (\text{Raw Amount of Tokens}) \times (\text{Rate})
+```
+
+```math
+137 \times 1.5 = 205.5
+```
+
+Và để có được số tiền USD thực tế đã chi tiêu dựa trên **Token Value**:
+
+```math
+\frac{\text{Token Value}}{1,000,000} = \left(\frac{\text{Raw Amount of Tokens} \times \text{Rate}}{1,000,000}\right)
+```
+
+```math
+\frac{205.5}{1,000,000} = \$0.0002055 \text{ USD}
+```
+
+Đối với các endpoint tùy chỉnh, hãy ưu tiên sử dụng `endpoints.custom[].tokenConfig` trong `librechat.yaml` để thiết lập tỷ lệ và cửa sổ ngữ cảnh cho từng model.
+
+## Xem trước [#preview]
+
+![image](https://github.com/danny-avila/LibreChat/assets/110412045/39a1aa5d-f8fc-43bf-81f2-299e57d944bb)
+
+![image](https://github.com/danny-avila/LibreChat/assets/110412045/e1b1cc3f-8981-4c7c-a5f8-e7badbc6f675)
+
+## Các lưu ý bổ sung [#additional-notes]
+
+- Khi tính năng tóm tắt được bật, các yêu cầu API sẽ bị chặn nếu chi phí của nội dung cộng với payload của tin nhắn vượt quá số dư hiện tại.
+- Hệ thống khá linh hoạt với các token hoàn thành (completion tokens), tập trung chủ yếu vào các token gợi ý (prompt tokens) để kiểm tra số dư.
+- Một bộ đệm được thêm vào để đặt tiêu đề (khoảng 150 token) nhằm tính đến quy trình hai bước.
+- Token credits được quy đổi thành giá trị tiền tệ (ví dụ: 1000 credits = $0.001 USD).
+
+Để biết thêm chi tiết và các tùy chỉnh, vui lòng tham khảo [Tài liệu LibreChat](https://www.librechat.ai/docs/configuration/librechat_yaml).

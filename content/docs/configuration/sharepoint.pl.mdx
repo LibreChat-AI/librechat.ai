@@ -1,0 +1,327 @@
+---
+title: Integracja z SharePoint
+icon: SharePoint
+description: Skonfiguruj integrację SharePoint Online i OneDrive for Business z LibreChat
+---
+
+LibreChat zapewnia integrację klasy korporacyjnej z SharePoint Online oraz OneDrive for Business, umożliwiając użytkownikom płynne przeglądanie, wybieranie i załączanie plików ze środowiska Microsoft 365 bezpośrednio wewnątrz konwersacji.
+
+## Przegląd [#overview]
+
+Integracja z SharePoint umożliwia użytkownikom:
+- Przeglądaj biblioteki dokumentów SharePoint i pliki OneDrive
+- Wybierz wiele plików jednocześnie (domyślnie do 10)
+- Zobacz postęp pobierania w czasie rzeczywistym
+- Dołączaj pliki z SharePoint do konwersacji
+- Utrzymuj bezpieczeństwo klasy korporacyjnej dzięki odpowiednim kontrolom dostępu
+
+<Callout type="info" title="Funkcja Enterprise">
+Ta funkcja wymaga Microsoft 365/SharePoint Online i jest przeznaczona dla wdrożeń korporacyjnych korzystających z uwierzytelniania Azure Entra ID (dawniej Azure AD).
+</Callout>
+
+## Wymagania wstępne [#prerequisites]
+
+Przed skonfigurowaniem integracji z SharePoint upewnij się, że posiadasz:
+
+1. **Azure Entra ID Authentication** skonfigurowane i działające
+2. **Token Reuse** włączone (`OPENID_REUSE_TOKENS=true`)
+3. **Udostępniony zakres API** dla LibreChat, taki jak `api://<client-id>/access_as_user`
+4. **Dostęp administratora** do Twojego tenanta Azure w celu nadania uprawnień aplikacji
+5. **HTTPS** włączone (wymagane w środowiskach produkcyjnych)
+
+<Callout type="error" title="Kluczowy wymóg">
+Integracja z SharePoint nie będzie działać bez `OPENID_REUSE_TOKENS=true`, ponieważ opiera się ona na przepływie tokenów on-behalf-of w celu uzyskania dostępu do interfejsów API Microsoft Graph.
+</Callout>
+
+## Konfiguracja rejestracji aplikacji Azure [#azure-app-registration-setup]
+
+### Krok 1: Skonfiguruj uprawnienia API [#step-1-configure-api-permissions]
+
+1. Przejdź do rejestracji swojej aplikacji w [Azure Portal](https://portal.azure.com)
+2. Przejdź do **API permissions** w menu po lewej stronie
+3. Kliknij **Add a permission**
+
+### Krok 2: Uwidocznij i przyznaj zakres API LibreChat [#step-2-expose-and-grant-a-librechat-api-scope]
+
+Przepływ on-behalf-of wymaga początkowego tokenu dostępu OpenID, aby kierować zapytania do API Twojej aplikacji LibreChat, a nie do Microsoft Graph. Uwidocznij zakres (scope) API, aby Azure mógł wydać token z LibreChat jako odbiorcą (audience).
+
+1. Przejdź do **Expose an API** w menu po lewej stronie
+2. Ustaw **Application ID URI** na `api://<client-id>`, jeśli nie jest jeszcze skonfigurowany
+3. Kliknij **Add a scope**
+4. Nazwij zakres `access_as_user`
+5. Zapisz zakres (scope), a następnie skopiuj pełną wartość zakresu:
+
+```text
+api://<client-id>/access_as_user
+```
+
+Następnie przyznaj ten zakres rejestracji aplikacji:
+
+1. Wróć do **API permissions**
+2. Kliknij **Add a permission**
+3. Wybierz **APIs my organization uses**
+4. Wyszukaj i wybierz swoją rejestrację aplikacji LibreChat
+5. Wybierz **Delegated permissions**
+6. Wybierz `access_as_user`
+7. Kliknij **Add permissions**
+
+Użyj pełnej wartości zakresu `api://<client-id>/access_as_user` w `OPENID_SCOPE` w dalszej części tego przewodnika.
+
+### Krok 3: Dodaj uprawnienia SharePoint [#step-3-add-sharepoint-permissions]
+
+Dla interfejsu wyboru plików:
+
+1. Wybierz **SharePoint** z listy API
+2. Wybierz **Delegated permissions**
+3. Wyszukaj i wybierz:
+   - `AllSites.Read` - Odczyt elementów we wszystkich kolekcjach witryn
+4. Kliknij **Add permissions**
+
+### Krok 4: Dodaj uprawnienia Microsoft Graph [#step-4-add-microsoft-graph-permissions]
+
+Dla pobierania plików:
+
+1. Kliknij ponownie **Add a permission**
+2. Wybierz **Microsoft Graph**
+3. Wybierz **Delegated permissions**
+4. Wyszukaj i wybierz:
+   - `Files.Read.All` - Odczyt wszystkich plików, do których użytkownik ma dostęp
+5. Kliknij **Add permissions**
+
+### Krok 5: Udziel zgody administratora [#step-5-grant-admin-consent]
+
+1. Po dodaniu uprawnień zobaczysz je na liście
+2. Kliknij **Udziel zgody administratora dla [Twoja Organizacja]**
+3. Potwierdź zgodę w wyskakującym okienku
+
+Twoje uprawnienia powinny wyglądać następująco:
+
+| Nazwa API / Uprawnienia | Typ | Opis | Status |
+|------------------------|------|-------------|---------|
+| Microsoft Graph - Files.Read.All | Delegowane | Odczyt wszystkich plików, do których użytkownik ma dostęp | ✅ Przyznano |
+| SharePoint - AllSites.Read | Delegowane | Odczyt elementów we wszystkich kolekcjach witryn | ✅ Przyznano |
+| LibreChat - access_as_user | Delegowane | Pozwól LibreChat na otrzymanie tokena zgodnego z OBO | ✅ Przyznano |
+
+## Konfiguracja środowiska [#environment-configuration]
+
+Dodaj następujące zmienne środowiskowe do swojego pliku `.env`:
+
+```bash filename=".env"
+# OpenID token reuse and OBO-compatible audience
+OPENID_REUSE_TOKENS=true
+OPENID_SCOPE=openid profile email offline_access api://<client-id>/access_as_user
+OPENID_ON_BEHALF_FLOW_FOR_USERINFO_REQUIRED=true
+
+# Enable SharePoint file picker
+ENABLE_SHAREPOINT_FILEPICKER=true
+
+# Your SharePoint tenant base URL
+# Format: https://[your-tenant-name].sharepoint.com
+SHAREPOINT_BASE_URL=https://contoso.sharepoint.com
+
+# SharePoint scope for the file picker
+# Replace 'contoso' with your actual tenant name
+SHAREPOINT_PICKER_SHAREPOINT_SCOPE=https://contoso.sharepoint.com/AllSites.Read
+
+# Microsoft Graph scope for file downloads
+SHAREPOINT_PICKER_GRAPH_SCOPE=Files.Read.All
+```
+
+<Callout type="warning" title="Nazwa dzierżawcy">
+Upewnij się, że zastąpisz `contoso` w powyższych przykładach swoją rzeczywistą nazwą dzierżawy SharePoint. Musi ona dokładnie odpowiadać Twojemu adresowi URL SharePoint.
+</Callout>
+
+<Callout type="warning" title="Odbiorca zakresu OpenID">
+Zastąp `<client-id>` identyfikatorem aplikacji (klienta) swojej rejestracji aplikacji Azure. Zakres `api://<client-id>/access_as_user` nadaje Azure specyficzną dla aplikacji grupę odbiorców dla asercji OBO. Jeśli `OPENID_SCOPE` zawiera tylko standardowe zakresy OpenID, Azure może wydać token dostępu dla grupy odbiorców Graph, którego nie można ponownie wymienić na dostęp do SharePoint lub Graph.
+</Callout>
+
+<Callout type="info" title="Wymiana tokenów Userinfo">
+`OPENID_ON_BEHALF_FLOW_FOR_USERINFO_REQUIRED=true` pozwala LibreChat na wymianę tokena dostępu z grupą odbiorców aplikacji na token zgodny z userinfo przed wywołaniem punktu końcowego userinfo OpenID. Jest to wymagane w przypadku konfiguracji Azure Entra ID, gdzie `OPENID_SCOPE` zawiera powyższy zakres API LibreChat.
+</Callout>
+
+## Jak to działa [#how-it-works]
+
+### Przepływ uwierzytelniania [#authentication-flow]
+
+1. Użytkownik uwierzytelnia się za pomocą Azure Entra ID
+2. Podczas uzyskiwania dostępu do selektora SharePoint, LibreChat wymienia token użytkownika na dostęp do SharePoint.
+3. Tokeny są buforowane w celu uzyskania optymalnej wydajności (zazwyczaj przez 50 minut)
+4. Oddzielne zakresy zapewniają zasadę najmniejszych uprawnień
+
+### Proces wyboru plików [#file-selection-process]
+
+1. Użytkownik klika „From SharePoint” w menu załączników
+2. Selektor plików SharePoint Online otwiera się w osadzonym elemencie iframe
+3. Użytkownik przegląda i wybiera pliki przy użyciu znanego interfejsu SharePoint
+4. Wybrane pliki zostały dodane do kolejki pobierania
+
+### Proces pobierania [#download-process]
+
+1. Pliki są pobierane w partiach (do 3 jednoczesnych pobrań)
+2. Wskaźnik postępu pokazuje bieżący plik i procent ukończenia
+3. Pobrane pliki są dołączone do konwersacji
+4. Nieudane pobieranie jest ponawiane automatycznie
+
+## Doświadczenie użytkownika [#user-experience]
+
+### Dostęp do plików SharePoint [#accessing-sharepoint-files]
+
+Po prawidłowej konfiguracji użytkownicy zobaczą nową opcję w menu załączników plików:
+
+1. Kliknij ikonę załącznika w polu wprowadzania wiadomości
+2. Wybierz "From SharePoint" z menu
+3. Otworzy się selektor plików SharePoint
+4. Przeglądaj i wybieraj pliki w razie potrzeby
+5. Kliknij "Select", aby rozpocząć pobieranie
+
+### Dostępne funkcje [#features-available]
+
+- **Wybór wielu plików**: Wybierz do 10 plików jednocześnie
+- **Znajomy interfejs**: Wykorzystuje natywny selektor plików SharePoint
+- **Śledzenie postępu**: Zobacz postęp pobierania w czasie rzeczywistym
+- **Obsługa błędów**: Jasne komunikaty dotyczące wszelkich problemów
+- **Localization**: Obsługuje wiele języków
+
+## Kwestie bezpieczeństwa [#security-considerations]
+
+### Kontrola dostępu [#access-control]
+
+- Dostępne są tylko pliki, do których użytkownik ma uprawnienia w SharePoint
+- Respektuje wszystkie uprawnienia i zasady SharePoint
+- Brak podwyższonego dostępu lub omijania zabezpieczeń
+
+### Bezpieczeństwo tokenów [#token-security]
+
+- Wykorzystuje bezpieczny przepływ on-behalf-of do wymiany tokenów
+- Tokeny są krótkotrwałe i automatycznie odświeżane
+- Brak długoterminowego przechowywania poświadczeń SharePoint
+
+### Izolacja zakresu [#scope-isolation]
+
+- Zakres SharePoint ograniczony wyłącznie do operacji odczytu
+- Zakres Graph API ograniczony do dostępu do odczytu plików
+- Nie można modyfikować ani usuwać plików za pośrednictwem LibreChat
+
+## Rozwiązywanie problemów [#troubleshooting]
+
+### Typowe problemy [#common-issues]
+
+#### Opcja "From SharePoint" nie pojawia się [#from-sharepoint-option-not-appearing]
+
+**Przyczyna**: Funkcja nie została poprawnie włączona lub wystąpiły problemy z uwierzytelnianiem
+
+**Rozwiązania**:
+1. Zweryfikuj `ENABLE_SHAREPOINT_FILEPICKER=true` w pliku `.env`
+2. Upewnij się, że ustawiono `OPENID_REUSE_TOKENS=true`
+3. Sprawdź, czy użytkownik jest uwierzytelniony przez Azure Entra ID
+4. Zrestartuj LibreChat po wprowadzeniu zmian w konfiguracji
+
+#### Wybór plików nie działa [#file-picker-fails-to-open]
+
+**Przyczyna**: Brakujące lub nieprawidłowe uprawnienia
+
+**Rozwiązania**:
+1. Zweryfikuj, czy uprawnienia SharePoint zostały przyznane w Azure
+2. Upewnij się, że uzyskano zgodę administratora
+3. Sprawdź, czy `SHAREPOINT_BASE_URL` dokładnie odpowiada Twojemu tenantowi
+4. Upewnij się, że `SHAREPOINT_PICKER_SHAREPOINT_SCOPE` używa pełnego adresu URL dzierżawy, na przykład `https://contoso.sharepoint.com/AllSites.Read`
+5. Potwierdź, że HTTPS jest włączone w środowisku produkcyjnym
+
+#### Selektor plików otwiera się na pustej białej stronie [#file-picker-opens-to-a-blank-white-page]
+
+**Przyczyna**: Azure może odrzucać wymianę on-behalf-of, ponieważ token dostępu OpenID ma nieprawidłową grupę odbiorców (audience) lub ponieważ wymiana tokena userinfo nie jest włączona.
+
+**Rozwiązania**:
+1. Upewnij się, że Twoja rejestracja aplikacji Azure posiada udostępniony zakres API, taki jak `api://<client-id>/access_as_user`
+2. Dodaj ten pełny zakres do `OPENID_SCOPE`
+3. Ustaw `OPENID_ON_BEHALF_FLOW_FOR_USERINFO_REQUIRED=true`
+4. Zrestartuj LibreChat i zaloguj się ponownie, aby Azure wygenerował nowe tokeny OpenID
+
+#### Pobieranie kończy się niepowodzeniem lub przekracza limit czasu [#downloads-fail-or-timeout]
+
+**Przyczyna**: Uprawnienia Graph API lub problemy z siecią
+
+**Rozwiązania**:
+1. Zweryfikuj, czy przyznano uprawnienie `Files.Read.All`
+2. Sprawdź łączność sieciową z SharePoint
+3. Upewnij się, że tokeny nie wygasły (w razie potrzeby przeprowadź ponowną autoryzację)
+4. Sprawdź konsolę przeglądarki pod kątem konkretnych komunikatów o błędach
+
+### Tryb debugowania [#debug-mode]
+
+W celu rozwiązywania problemów włącz logowanie debugowania:
+
+```bash filename=".env"
+DEBUG_LOGGING=true
+DEBUG_CONSOLE=true
+```
+
+To zapewni szczegółowe logi dotyczące:
+- Procesy wymiany tokenów
+- Wywołania API do SharePoint i Graph
+- Postęp pobierania i błędy
+- Przepływy uwierzytelniania
+
+## Optymalizacja wydajności [#performance-optimization]
+
+### Buforowanie tokenów [#token-caching]
+
+- Tokeny są buforowane w celu zmniejszenia narzutu uwierzytelniania
+- Czas trwania pamięci podręcznej odpowiada okresowi ważności tokena (zazwyczaj 50 minut)
+- Automatyczne odświeżanie przed wygaśnięciem
+
+### Równoległe pobieranie [#concurrent-downloads]
+
+- Do 3 plików pobieranych jednocześnie
+- Zapobiega przeciążeniu przeglądarki lub serwera
+- Optymalizuje zarówno pod kątem szybkości, jak i stabilności
+
+### Uwagi dotyczące rozmiaru plików [#file-size-considerations]
+
+- Pobieranie dużych plików może chwilę potrwać
+- Wskaźnik postępu pomaga zarządzać oczekiwaniami użytkownika
+- Rozważ limity przesyłania plików w konfiguracji LibreChat
+
+## Najlepsze praktyki [#best-practices]
+
+### Dla administratorów [#for-administrators]
+
+1. **Regularne audyty uprawnień**: Okresowo sprawdzaj uprawnienia aplikacji
+2. **Monitorowanie użycia**: Śledź użycie integracji z SharePoint w logach
+3. **Aktualizacja dokumentacji**: Utrzymuj wewnętrzną dokumentację w stanie aktualnym, uwzględniając specyfikę Twojego tenanta
+4. **Test Thoroughly**: Zweryfikuj funkcjonalność po każdej zmianie w Azure AD
+
+### Dla użytkowników końcowych [#for-end-users]
+
+1. **Organizacja plików**: Dobrze zorganizowane biblioteki SharePoint poprawiają komfort użytkowania
+2. **Rozmiary plików**: Pamiętaj, że duże pliki mogą spowalniać konwersacje
+3. **Uprawnienia**: Upewnij się, że masz dostęp do plików przed ich udostępnieniem
+4. **Pobieranie przez pacjenta**: Zapewnij czas na pobranie wielu lub dużych plików
+
+## Zaawansowana konfiguracja [#advanced-configuration]
+
+### Niestandardowe zakresy (Custom Scopes) [#custom-scopes]
+
+W przypadku organizacji o określonych wymaganiach, możesz dostosować zakresy (scopes):
+
+```bash filename=".env"
+# Example: Limiting to specific site collections
+SHAREPOINT_PICKER_SHAREPOINT_SCOPE=https://contoso.sharepoint.com/sites/Engineering/AllSites.Read
+
+# Example: Using more restrictive Graph permissions
+SHAREPOINT_PICKER_GRAPH_SCOPE=Files.Read
+```
+
+### Integracja z Information Barriers [#integration-with-information-barriers]
+
+Jeśli Twoja organizacja korzysta z Information Barriers:
+- Integracja z SharePoint respektuje wszystkie zasady barier (barrier policies)
+- Użytkownicy widzą tylko te treści, do których mają uprawnienia dostępu
+- Nie jest wymagana żadna dodatkowa konfiguracja
+
+## Powiązana dokumentacja [#related-documentation]
+
+- [Uwierzytelnianie Azure Entra](/docs/configuration/authentication/OAuth2-OIDC/azure)
+- [Ponowne użycie tokena OpenID](/docs/configuration/authentication/OAuth2-OIDC/token-reuse)
+- [Integracja z Microsoft Graph API](/docs/configuration/authentication/OAuth2-OIDC/azure#advanced-microsoft-graph-api-integration)
+- [Konfiguracja przesyłania plików](/docs/configuration/librechat_yaml/object_structure/file_config)

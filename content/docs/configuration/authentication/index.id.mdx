@@ -1,0 +1,142 @@
+---
+title: Sistem Autentikasi
+icon: BookOpen
+description: >-
+  Panduan ini menjelaskan cara menggunakan sistem autentikasi pengguna
+  LibreChat, yang menawarkan login email dan sosial yang aman serta mudah. Anda
+  akan mempelajari cara mengatur pendaftaran, login, pengaturan ulang kata
+  sandi, dan banyak lagi.
+---
+
+## Umum [#general]
+
+Untuk gambaran umum yang cepat, silakan merujuk ke panduan pengguna yang disediakan di sini: [Authentication](/docs/features/authentication)
+
+Berikut adalah gambaran umum mengenai konfigurasi umum.
+
+<OptionTable
+  options={[
+    ['ALLOW_EMAIL_LOGIN', 'boolean', 'Aktifkan atau nonaktifkan HANYA login email.','ALLOW_EMAIL_LOGIN=true'],
+    ['ALLOW_REGISTRATION', 'boolean', 'Aktifkan atau nonaktifkan pendaftaran Email untuk pengguna baru.','ALLOW_REGISTRATION=true'],
+    ['ALLOW_SOCIAL_LOGIN', 'boolean', 'Izinkan pengguna untuk terhubung ke LibreChat dengan berbagai jejaring sosial.','ALLOW_SOCIAL_LOGIN=false'],
+    ['ALLOW_SOCIAL_REGISTRATION', 'boolean', 'Aktifkan atau nonaktifkan pendaftaran pengguna baru menggunakan berbagai jejaring sosial.','ALLOW_SOCIAL_REGISTRATION=false'],
+  ]}
+/>
+
+> **Catatan:** OpenID dan SAML tidak mendukung kemampuan untuk menonaktifkan pendaftaran saja.
+
+Tips Cepat:
+
+- Bahkan dengan pendaftaran dinonaktifkan, Anda dapat menambahkan pengguna secara langsung ke basis data menggunakan [skrip create-user](#create-user-script) yang dirinci di bawah ini.
+- Untuk menghapus pengguna, Anda dapat menggunakan [skrip delete-user](#delete-user-script) yang juga dijelaskan secara rinci di bawah ini.
+
+
+<ThemeImage
+  light="https://github.com/danny-avila/LibreChat/assets/32828263/4c51dc25-31d3-4c51-8c2a-0cdfb5a25033"
+  dark="https://github.com/danny-avila/LibreChat/assets/32828263/3bc5371d-e51d-4e91-ac68-56db6e85bb2c"
+  alt="Layar pendaftaran pengguna"
+/>
+
+
+## Kedaluwarsa Sesi dan Refresh Token [#session-expiry-and-refresh-token]
+
+- Nilai default: kedaluwarsa sesi: 15 menit, kedaluwarsa token refresh: 7 hari
+  - Untuk informasi lebih lanjut: **[GitHub PR #927 - Refresh Token](https://github.com/danny-avila/LibreChat/pull/927)**
+
+<OptionTable
+  options={[
+    ['SESSION_EXPIRY', 'integer (milliseconds)', 'Waktu kedaluwarsa sesi.','SESSION_EXPIRY=1000 * 60 * 15'],
+    ['REFRESH_TOKEN_EXPIRY', 'integer (milliseconds)', 'Waktu kedaluwarsa refresh token.','REFRESH_TOKEN_EXPIRY=(1000 * 60 * 60 * 24) * 7'],
+  ]}
+/>
+
+``` mermaid
+sequenceDiagram
+    Client->>Server: Login request with credentials
+    Server->>Passport: Use authentication strategy (e.g., 'local', 'google', etc.)
+    Passport-->>Server: User object or false/error
+    Note over Server: If valid user...
+    Server->>Server: Generate access and refresh tokens
+    Server->>Database: Store hashed refresh token
+    Server-->>Client: Access token and refresh token
+    Client->>Client: Store access token in HTTP Header and refresh token in HttpOnly cookie
+    Client->>Server: Request with access token from HTTP Header
+    Server-->>Client: Requested data
+    Note over Client,Server: Access token expires
+    Client->>Server: Request with expired access token
+    Server-->>Client: Unauthorized
+    Client->>Server: Request with refresh token from HttpOnly cookie
+    Server->>Database: Retrieve hashed refresh token
+    Server->>Server: Compare hash of provided refresh token with stored hash
+    Note over Server: If hashes match...
+    Server-->>Client: New access token and refresh token
+    Client->>Server: Retry request with new access token
+    Server-->>Client: Requested data
+```
+
+## JWT Secret dan Refresh Secret [#jwt-secret-and-refresh-secret]
+
+- Anda harus menggunakan nilai aman yang baru. Contoh yang diberikan adalah kunci 32-byte (64 karakter dalam hex).
+  - Gunakan alat ini untuk membuat beberapa dengan cepat: **[JWT Keys](/toolkit/creds_generator)**
+
+<OptionTable
+  options={[
+    ['JWT_SECRET', 'string (hex)', 'Kunci rahasia JWT.','JWT_SECRET=16f8c0ef4a5d391b26034086c628469d3f9f497f08163ab9b40137092f2909ef'],
+    ['JWT_REFRESH_SECRET', 'string (hex)', 'Kunci rahasia refresh JWT.','JWT_REFRESH_SECRET=eaa5191f2914e30b9387fd84e254e4ba6fc51b4654968a9b0803b456a54b8418'],
+  ]}
+/>
+
+---
+
+## Sistem Moderasi Otomatis (opsional) [#automated-moderation-system-optional]
+
+Sistem Moderasi Otomatis diaktifkan secara default. Sistem ini menggunakan mekanisme penilaian untuk melacak pelanggaran pengguna. Saat pengguna melakukan tindakan seperti login, pendaftaran, atau pengiriman pesan yang berlebihan, mereka akan mengumpulkan skor pelanggaran. Setelah mencapai ambang batas yang ditetapkan, pengguna dan IP mereka akan diblokir sementara. Sistem ini memastikan keamanan platform dengan memantau dan memberikan penalti terhadap aktivitas yang cepat atau mencurigakan.
+
+Untuk menyiapkan sistem mod, tinjau [panduan penyiapan](/docs/configuration/mod_system).
+
+> *Harap Dicatat: Jika Anda ingin ini berfungsi dalam mode pengembangan, Anda perlu membuat file bernama `.env.development` di direktori root dan mengatur `DOMAIN_CLIENT` ke `http://localhost:3090` atau port apa pun yang disediakan oleh vite saat menjalankan `npm run frontend-dev`*
+
+## Skrip Manajemen Pengguna [#user-management-scripts]
+
+### Membuat User Script [#create-user-script]
+
+Skrip create-user memungkinkan Anda untuk menambahkan pengguna langsung ke basis data, bahkan saat pendaftaran dinonaktifkan. Berikut cara menggunakannya:
+
+1. Untuk `docker-compose.yml` default (jika Anda menggunakan `docker compose up` untuk menjalankan aplikasi):
+   ```bash
+   docker compose exec api npm run create-user
+   ```
+
+2. Untuk `deploy-compose.yml` (jika Anda mengikuti [Panduan Docker Ubuntu](/docs/remote/docker_linux)):
+   ```bash
+   docker exec -it LibreChat-API /bin/sh -c "cd .. && npm run create-user"
+   ```
+
+3. Untuk pengembangan lokal (dari root proyek):
+   ```bash
+   npm run create-user
+   ```
+
+Ikuti perintah untuk memasukkan email dan kata sandi pengguna baru.
+
+### Skrip Hapus Pengguna [#delete-user-script]
+
+Untuk menghapus pengguna, Anda dapat menggunakan skrip delete-user:
+
+1. Untuk `docker-compose.yml` default (jika Anda menggunakan `docker compose up` untuk menjalankan aplikasi):
+   ```bash
+   docker compose exec api npm run delete-user email@domain.com
+   ```
+
+2. Untuk `deploy-compose.yml` (jika Anda mengikuti [Panduan Docker Ubuntu](/docs/remote/docker_linux)):
+   ```bash
+   docker exec -it LibreChat-API /bin/sh -c "cd .. && npm run delete-user email@domain.com"
+   ```
+
+3. Untuk pengembangan lokal (dari root proyek):
+   ```bash
+   npm run delete-user email@domain.com
+   ```
+
+Ganti `email@domain.com` dengan email pengguna yang ingin Anda hapus.
+

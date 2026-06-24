@@ -1,0 +1,160 @@
+---
+title: Struktur Objek Pengaturan MCP
+icon: Blocks
+---
+
+## Ikhtisar [#overview]
+
+Konfigurasi `mcpSettings` menyediakan pengaturan global untuk keamanan dan perilaku server MCP (Model Context Protocol). Konfigurasi ini terpisah dari `mcpServers` dan mengontrol bagaimana server MCP dapat terhubung ke domain dan alamat IP tertentu.
+
+## Contoh [#example]
+
+```yaml filename="MCP Settings Object Structure"
+# Example MCP Settings Configuration
+mcpSettings:
+  # Strict whitelist mode:
+  # allowedDomains:
+  #   - "example.com"                    # Specific domain
+  #   - "*.example.com"                  # All subdomains using wildcard
+  #   - "https://api.example.com:8443"   # With protocol and port
+  #   - "http://mcp-server:3000"         # Internal service, explicitly whitelisted
+
+  # Default SSRF mode with private service exemptions:
+  allowedAddresses:
+    - "host.docker.internal:8080"        # Permit one private host on one port
+    - "10.0.0.5:8000"                    # Permit one private IP on one port
+```
+
+## Konfigurasi [#configuration]
+
+### Subkeys [#subkeys]
+
+<OptionTable
+  options={[
+    ['allowedDomains', 'Array of Strings', 'Daftar yang menentukan domain yang diizinkan untuk koneksi server MCP.', 'When configured, only listed domains are allowed. When not configured, SSRF targets are blocked but all other domains are allowed.'],
+    ['allowedAddresses', 'Array of Strings', 'Daftar pengecualian SSRF, yang dicakup ke ruang IP privat. Pasangan nama host/IP + port yang tercantum di sini akan melewati blokir SSRF default-deny saat `allowedDomains` tidak dikonfigurasi.', 'Use when you want default SSRF protection AND specific internal MCP servers, without flipping `allowedDomains` into strict-whitelist mode.'],
+  ]}
+/>
+
+### Konteks Keamanan (Perlindungan SSRF) [#security-context-ssrf-protection]
+
+LibreChat menyertakan perlindungan SSRF (Server-Side Request Forgery) dengan perilaku berikut:
+
+**Ketika `allowedDomains` TIDAK dikonfigurasi:**
+- Target yang rentan terhadap SSRF **diblokir secara default**
+- Semua domain eksternal lainnya **diizinkan**
+
+**Saat `allowedDomains` DIKONFIGURASIKAN:**
+- **Hanya** domain yang ada di dalam daftar yang diizinkan
+- Target Internal/SSRF dapat diizinkan dengan menambahkannya secara eksplisit ke dalam daftar
+
+**Target SSRF yang diblokir meliputi:**
+- Alamat **Localhost** (`localhost`, `127.0.0.1`, `::1`)
+- **Rentang IP privat** (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`)
+- **Alamat link-local** (`169.254.0.0/16`, mencakup IP metadata cloud)
+- **TLD Internal** (`.internal`, `.local`, `.localhost`)
+- **Nama layanan internal umum** (`redis`, `mongodb`, `postgres`, `api`, `rag_api`, dll.)
+
+Jika server MCP Anda perlu terhubung ke layanan internal atau kontainer Docker, tambahkan server tersebut ke daftar putih `allowedDomains` yang ketat, atau biarkan `allowedDomains` tidak diatur dan tambahkan layanan privat yang tepat ke `allowedAddresses`.
+
+### Format Pola [#pattern-formats]
+
+Array `allowedDomains` mendukung beberapa format pola:
+
+1. **Pencocokan Domain Persis**
+   ```yaml
+   allowedDomains:
+     - "example.com"
+   ```
+   Hanya mengizinkan koneksi tepat ke `example.com` (protokol/port apa pun)
+
+2. **Pencocokan Subdomain Wildcard**
+   ```yaml
+   allowedDomains:
+     - "*.example.com"
+   ```
+   Mengizinkan koneksi ke semua subdomain dari `example.com` (contoh: `api.example.com`, `mcp.example.com`)
+
+3. **Alamat IP Spesifik**
+   ```yaml
+   allowedDomains:
+     - "192.168.1.100"
+     - "172.24.1.165"
+   ```
+   Mengizinkan koneksi ke alamat IP tertentu
+
+4. **Domain Docker Lokal**
+   ```yaml
+   allowedDomains:
+     - "mcp-server"
+     - "host.docker.internal"
+   ```
+   Mengizinkan koneksi ke nama kontainer Docker atau domain Docker khusus
+
+5. **Dengan Protokol dan Port**
+   ```yaml
+   allowedDomains:
+     - "https://api.example.com:8443"
+     - "http://internal-mcp:3000"
+   ```
+   Membatasi koneksi ke kombinasi protokol dan port tertentu
+
+### Pesan Kesalahan [#error-messages]
+
+Jika Anda melihat kesalahan seperti:
+```bash
+  error: [MCPServersRegistry] Failed to inspect server "my-mcp": Domain "http://172.24.1.165:8000" is not allowed
+  error: [MCP][my-mcp] Failed to initialize: Domain "http://172.24.1.165:8000" is not allowed
+```
+
+Ini kemungkinan menunjukkan bahwa host dan port pribadi MCP server perlu ditambahkan ke `allowedAddresses`, kecuali jika Anda sengaja menggunakan `allowedDomains` sebagai daftar putih (whitelist) yang ketat:
+
+```yaml
+mcpSettings:
+  allowedAddresses:
+    - "172.24.1.165:8000"    # Add the private host/IP and MCP port
+```
+
+## allowedAddresses
+
+`allowedAddresses` adalah **daftar pengecualian** untuk blokir IP privat SSRF — bukan daftar putih domain. Ini adalah alat yang tepat jika Anda ingin mengizinkan satu atau dua layanan privat/internal tertentu tanpa membatasi apa yang dapat dijangkau oleh server MCP Anda di internet publik.
+
+### Kapan menggunakannya sebagai pengganti `allowedDomains` [#when-to-use-it-instead-of-alloweddomains]
+
+`allowedDomains` adalah daftar putih yang ketat: ketika diatur, **hanya** entri yang terdaftar yang dapat dijangkau. Menambahkan IP privat ke dalamnya untuk mengizinkan, misalnya, server MCP yang di-host sendiri juga akan memblokir setiap tujuan publik (`api.example.com`, `*.googleapis.com`, dll.) yang tidak Anda cantumkan.
+
+`allowedAddresses` hanya digunakan ketika `allowedDomains` tidak dikonfigurasi. Ini mengizinkan target `host:port` privat tertentu sambil tetap membiarkan sisa internet publik dapat diakses melalui kebijakan SSRF default. Konfigurasi umum:
+
+```yaml filename="default SSRF + permitted private host"
+mcpSettings:
+  allowedAddresses:
+    - "host.docker.internal:8080"
+    - "10.0.0.5:8000"
+  # allowedDomains is intentionally not set — public destinations
+  # remain reachable, only listed private host:port services are exempted.
+```
+
+Jika `allowedDomains` dikonfigurasi, maka konfigurasi tersebut bersifat otoritatif: layanan privat harus dicantumkan di sana alih-alih mengandalkan `allowedAddresses`.
+
+### Entri yang dapat diterima [#acceptable-entries]
+
+- **Nama host dengan port**: `host.docker.internal:8080`, `mcp-server:3000`, `localhost:3001`
+- **Literal IPv4 privat dengan port**: `10.0.0.5:8000`, `127.0.0.1:3001`, `192.168.1.10:443`, `169.254.169.254:80`
+- **Literal IPv6 privat dalam kurung dengan port**: `[::1]:3001`, `[fc00::1]:8080`, `[fe80::1]:8080`
+
+### Entri yang ditolak (divalidasi saat pemuatan konfigurasi) [#rejected-entries-validated-at-config-load]
+
+- **URL / path / rentang CIDR**: `http://10.0.0.5`, `10.0.0.0/24`, `/path`
+- **Nama host atau IP mentah**: `localhost`, `10.0.0.5`, `::1`, `[::1]` — setiap entri harus menyertakan port
+- **Port tidak valid**: `localhost:0`, `localhost:65536`, `localhost:http`
+- **Literal IP publik**: `8.8.8.8:53`, `1.1.1.1:53`, `[2001:4860::8888]:443` — kolom ini dicakup untuk ruang IP privat; IP publik bukanlah target SSRF dan pengecualian IP publik tidak memiliki tujuan pertahanan
+
+### Kepercayaan hostname [#hostname-trust]
+
+Entri hostname memercayai IP apa pun yang di-resolve oleh hostname tersebut saat runtime pada port yang tercantum. Jika DNS untuk hostname yang tercantum dirotasi atau dibajak untuk mengarah ke IP privat yang berbeda, pengecualian tersebut akan mengikuti. Hanya cantumkan hostname yang DNS-nya Anda kendalikan. **Utamakan penggunaan IP literal jika memungkinkan.**
+
+## Referensi [#references]
+
+- [Konfigurasi Server MCP](/docs/configuration/librechat_yaml/object_structure/mcp_servers)
+- [Fitur MCP](/docs/features/mcp)
+- [Actions allowedAddresses](/docs/configuration/librechat_yaml/object_structure/actions#allowedaddresses) (konsep serupa untuk Actions)

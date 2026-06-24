@@ -1,0 +1,142 @@
+---
+title: Sistema di autenticazione
+icon: BookOpen
+description: >-
+  Questa guida spiega come utilizzare il sistema di autenticazione utente di
+  LibreChat, che offre accessi sicuri e semplici tramite email e social.
+  Imparerai come configurare la registrazione, l'accesso, il ripristino della
+  password e altro ancora.
+---
+
+## Generale [#general]
+
+Per una rapida panoramica, consulta la guida per l'utente fornita qui: [Authentication](/docs/features/authentication)
+
+Ecco una panoramica della configurazione generale.
+
+<OptionTable
+  options={[
+    ['ALLOW_EMAIL_LOGIN', 'boolean', 'Abilita o disabilita SOLO l\'accesso tramite email.','ALLOW_EMAIL_LOGIN=true'],
+    ['ALLOW_REGISTRATION', 'boolean', 'Abilita o disabilita la registrazione via email per i nuovi utenti.','ALLOW_REGISTRATION=true'],
+    ['ALLOW_SOCIAL_LOGIN', 'boolean', 'Consenti agli utenti di connettersi a LibreChat tramite vari social network.','ALLOW_SOCIAL_LOGIN=false'],
+    ['ALLOW_SOCIAL_REGISTRATION', 'boolean', 'Abilita o disabilita la registrazione di nuovi utenti tramite vari social network.','ALLOW_SOCIAL_REGISTRATION=false'],
+  ]}
+/>
+
+> **Nota:** OpenID e SAML non supportano la possibilità di disabilitare solo la registrazione.
+
+Suggerimenti rapidi:
+
+- Anche con la registrazione disabilitata, puoi aggiungere utenti direttamente al database utilizzando [lo script create-user](#create-user-script) descritto di seguito.
+- Per eliminare un utente, puoi utilizzare [lo script delete-user](#delete-user-script) descritto anche di seguito.
+
+
+<ThemeImage
+  light="https://github.com/danny-avila/LibreChat/assets/32828263/4c51dc25-31d3-4c51-8c2a-0cdfb5a25033"
+  dark="https://github.com/danny-avila/LibreChat/assets/32828263/3bc5371d-e51d-4e91-ac68-56db6e85bb2c"
+  alt="Schermata di registrazione utente"
+/>
+
+
+## Scadenza della sessione e token di aggiornamento [#session-expiry-and-refresh-token]
+
+- Valori predefiniti: scadenza sessione: 15 minuti, scadenza token di aggiornamento: 7 giorni
+  - Per maggiori informazioni: **[GitHub PR #927 - Refresh Token](https://github.com/danny-avila/LibreChat/pull/927)**
+
+<OptionTable
+  options={[
+    ['SESSION_EXPIRY', 'integer (milliseconds)', 'Tempo di scadenza della sessione.','SESSION_EXPIRY=1000 * 60 * 15'],
+    ['REFRESH_TOKEN_EXPIRY', 'integer (milliseconds)', 'Tempo di scadenza del token di aggiornamento.','REFRESH_TOKEN_EXPIRY=(1000 * 60 * 60 * 24) * 7'],
+  ]}
+/>
+
+``` mermaid
+sequenceDiagram
+    Client->>Server: Login request with credentials
+    Server->>Passport: Use authentication strategy (e.g., 'local', 'google', etc.)
+    Passport-->>Server: User object or false/error
+    Note over Server: If valid user...
+    Server->>Server: Generate access and refresh tokens
+    Server->>Database: Store hashed refresh token
+    Server-->>Client: Access token and refresh token
+    Client->>Client: Store access token in HTTP Header and refresh token in HttpOnly cookie
+    Client->>Server: Request with access token from HTTP Header
+    Server-->>Client: Requested data
+    Note over Client,Server: Access token expires
+    Client->>Server: Request with expired access token
+    Server-->>Client: Unauthorized
+    Client->>Server: Request with refresh token from HttpOnly cookie
+    Server->>Database: Retrieve hashed refresh token
+    Server->>Server: Compare hash of provided refresh token with stored hash
+    Note over Server: If hashes match...
+    Server-->>Client: New access token and refresh token
+    Client->>Server: Retry request with new access token
+    Server-->>Client: Requested data
+```
+
+## JWT Secret e Refresh Secret [#jwt-secret-and-refresh-secret]
+
+- Dovresti utilizzare nuovi valori sicuri. Gli esempi forniti sono chiavi a 32 byte (64 caratteri in esadecimale).
+  - Usa questo strumento per generarne alcune rapidamente: **[JWT Keys](/toolkit/creds_generator)**
+
+<OptionTable
+  options={[
+    ['JWT_SECRET', 'string (hex)', 'Chiave segreta JWT.','JWT_SECRET=16f8c0ef4a5d391b26034086c628469d3f9f497f08163ab9b40137092f2909ef'],
+    ['JWT_REFRESH_SECRET', 'string (hex)', 'Chiave segreta per il refresh dei JWT.','JWT_REFRESH_SECRET=eaa5191f2914e30b9387fd84e254e4ba6fc51b4654968a9b0803b456a54b8418'],
+  ]}
+/>
+
+---
+
+## Sistema di moderazione automatizzato (opzionale) [#automated-moderation-system-optional]
+
+Il sistema di moderazione automatizzato è abilitato per impostazione predefinita. Utilizza un meccanismo di punteggio per tracciare le violazioni degli utenti. Man mano che gli utenti compiono azioni come accessi eccessivi, registrazioni o invio di messaggi, accumulano punteggi di violazione. Al raggiungimento di una soglia prestabilita, l'utente e il suo indirizzo IP vengono temporaneamente bannati. Questo sistema garantisce la sicurezza della piattaforma monitorando e penalizzando le attività rapide o sospette.
+
+Per configurare il sistema di moderazione, consulta [la guida alla configurazione](/docs/configuration/mod_system).
+
+> *Nota: Se desideri che questo funzioni in modalità di sviluppo, dovrai creare un file chiamato `.env.development` nella directory principale e impostare `DOMAIN_CLIENT` su `http://localhost:3090` o su qualsiasi porta fornita da vite durante l'esecuzione di `npm run frontend-dev`*
+
+## Script di gestione utenti [#user-management-scripts]
+
+### Crea User Script [#create-user-script]
+
+Lo script create-user ti consente di aggiungere utenti direttamente al database, anche quando la registrazione è disabilitata. Ecco come utilizzarlo:
+
+1. Per il `docker-compose.yml` predefinito (se utilizzi `docker compose up` per avviare l'app):
+   ```bash
+   docker compose exec api npm run create-user
+   ```
+
+2. Per il `deploy-compose.yml` (se hai seguito la [Guida Docker per Ubuntu](/docs/remote/docker_linux)):
+   ```bash
+   docker exec -it LibreChat-API /bin/sh -c "cd .. && npm run create-user"
+   ```
+
+3. Per lo sviluppo locale (dalla root del progetto):
+   ```bash
+   npm run create-user
+   ```
+
+Segui le istruzioni per inserire l'email e la password del nuovo utente.
+
+### Script di eliminazione utente [#delete-user-script]
+
+Per eliminare un utente, è possibile utilizzare lo script delete-user:
+
+1. Per il `docker-compose.yml` predefinito (se utilizzi `docker compose up` per avviare l'app):
+   ```bash
+   docker compose exec api npm run delete-user email@domain.com
+   ```
+
+2. Per il `deploy-compose.yml` (se hai seguito la [Guida Docker per Ubuntu](/docs/remote/docker_linux)):
+   ```bash
+   docker exec -it LibreChat-API /bin/sh -c "cd .. && npm run delete-user email@domain.com"
+   ```
+
+3. Per lo sviluppo locale (dalla root del progetto):
+   ```bash
+   npm run delete-user email@domain.com
+   ```
+
+Sostituisci `email@domain.com` con l'email dell'utente che desideri eliminare.
+

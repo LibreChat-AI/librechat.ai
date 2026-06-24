@@ -1,0 +1,232 @@
+---
+title: Kiểm soát truy cập
+icon: ShieldCheck
+description: >-
+  Hệ thống cấp quyền chi tiết của LibreChat - kiểm soát ai có thể sử dụng, chia
+  sẻ, chỉnh sửa và quản lý các agent, prompt, MCP server và các tài nguyên khác
+  ở cấp độ người dùng, nhóm, vai trò và instance.
+---
+
+# Kiểm soát truy cập chi tiết [#granular-access-control]
+
+LibreChat đi kèm với một hệ thống ủy quyền đầy đủ bên trên hệ thống xác thực. Quyền truy cập không phải là "tất cả hoặc không có gì": mọi thực thể có thể chia sẻ trong ứng dụng (tác nhân, lời nhắc, máy chủ MCP, tác nhân từ xa, tệp, cuộc trò chuyện) đều có Danh sách kiểm soát truy cập (ACL) riêng và mọi tính năng đều có thể được bật hoặc hạn chế độc lập cho từng **người dùng**, **nhóm**, **vai trò** hoặc **công khai**.
+
+Trang này giải thích cách các thành phần kết hợp với nhau để bạn có thể lập mô hình quyền truy cập phù hợp với tổ chức của mình, từ một nhóm nhỏ nơi mọi người chia sẻ tự do, cho đến triển khai cấp doanh nghiệp với các nhóm Entra ID được đồng bộ hóa, vai trò tùy chỉnh và quản trị viên được ủy quyền.
+
+<Callout type="info" title="Bảng điều khiển quản trị">
+  [**Bảng điều khiển quản trị LibreChat**](/docs/features/admin_panel) chuyên dụng là giao diện người dùng sắp ra mắt để quản lý người dùng, nhóm, vai trò, hồ sơ quyền tùy chỉnh và các cấp quyền trên toàn hệ thống được giới thiệu trong [v0.8.5](/changelog/v0.8.5). Trang này ghi lại mô hình cơ bản, hiện đã có sẵn trong chính LibreChat.
+</Callout>
+
+## Tổng quan về Mô hình Truy cập [#the-access-model-at-a-glance]
+
+Cơ chế ủy quyền của LibreChat có ba lớp độc lập kết hợp với nhau:
+
+| Lớp | Phạm vi | Những gì được kiểm soát |
+| ----------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Quyền tính năng** | Theo vai trò (USER, ADMIN, tùy chỉnh) | Liệu một chủ thể có thể _sử dụng_, _tạo_, _chia sẻ_ hoặc _chia sẻ công khai_ một loại tính năng (tác nhân, lời nhắc, máy chủ MCP, bộ nhớ, tìm kiếm web, v.v.) hay không. Được cấu hình trong `librechat.yaml` hoặc bảng quản trị. |
+| **ACL tài nguyên** | Theo từng tài nguyên riêng lẻ | Ai có thể xem, chỉnh sửa, xóa hoặc chia sẻ lại một tác nhân, lời nhắc, máy chủ MCP, v.v. cụ thể. Được quản lý bởi chủ sở hữu tài nguyên thông qua hộp thoại chia sẻ trong ứng dụng. |
+| **Cấp quyền hệ thống** | Toàn bộ nền tảng | Các khả năng của quản trị viên (ví dụ: `manage:users`, `manage:roles`, `read:usage`). Được sử dụng bởi bảng quản trị. |
+
+Cả ba đều được đánh giá cho cùng bốn loại chính sau:
+
+- **User**: một tài khoản LibreChat cá nhân
+- **Group**: một tập hợp người dùng (cục bộ hoặc được đồng bộ từ Entra ID)
+- **Role**: một hồ sơ quyền hạn được đặt tên (ví dụ: `USER`, `ADMIN`, hoặc bất kỳ vai trò tùy chỉnh nào)
+- **Public**: mọi người dùng đã xác thực trên instance
+
+## Lớp 1: Quyền tính năng (Dựa trên vai trò) [#layer-1-feature-permissions-role-based]
+
+Các quyền ở cấp độ tính năng kiểm soát toàn bộ các khả năng của ứng dụng cho một vai trò nhất định. Chúng giải đáp các câu hỏi như _"Người dùng trong vai trò này có thể tạo tác nhân (agent) hay không?"_, _"Họ có được phép chia sẻ prompt công khai không?"_, _"Họ có thể gọi trình thông dịch mã (code interpreter) không?"_.
+
+### Các vai trò hệ thống tích hợp [#built-in-system-roles]
+
+LibreChat đi kèm với hai vai trò hệ thống luôn hiện diện và không thể xóa:
+
+- **`ADMIN`**: được gán cho tài khoản đầu tiên đăng ký trên instance. Quản trị viên có thể xem mọi tài nguyên, sửa đổi bất kỳ cài đặt nào, truy cập bảng quản trị và cấu hình hành vi trên toàn nền tảng.
+- **`USER`**: vai trò mặc định được gán cho mọi tài khoản mới.
+
+Quản trị viên có thể được thăng cấp thủ công bằng cách cập nhật tài liệu người dùng trong MongoDB, xem [Administrator Controls](/docs/features/agents#administrator-controls).
+
+### Các loại quyền [#permission-types]
+
+Mỗi vai trò nắm giữ một ma trận gồm **các loại quyền × các hành động**:
+
+| Loại quyền | Các hành động khả dụng |
+| ---------------- | --------------------------------------------------------- |
+| `AGENTS`         | `USE`, `CREATE`, `SHARE`, `SHARE_PUBLIC`                  |
+| `PROMPTS`        | `USE`, `CREATE`, `SHARE`, `SHARE_PUBLIC`                  |
+| `MCP_SERVERS`    | `USE`, `CREATE`, `SHARE`, `SHARE_PUBLIC`, `CONFIGURE_OBO` |
+| `REMOTE_AGENTS`  | `USE`, `CREATE`, `SHARE`, `SHARE_PUBLIC`                  |
+| `SKILLS`         | `USE`, `CREATE`, `SHARE`, `SHARE_PUBLIC`                  |
+| `SHARED_LINKS`   | `CREATE`, `SHARE`, `SHARE_PUBLIC`                         |
+| `MEMORIES`       | `USE`, `CREATE`, `UPDATE`, `READ`, `OPT_OUT`              |
+| `BOOKMARKS`      | `USE`                                                     |
+| `MULTI_CONVO`    | `USE`                                                     |
+| `TEMPORARY_CHAT` | `USE`                                                     |
+| `RUN_CODE`       | `USE`                                                     |
+| `WEB_SEARCH`     | `USE`                                                     |
+| `FILE_SEARCH`    | `USE`                                                     |
+| `FILE_CITATIONS` | `USE`                                                     |
+| `MARKETPLACE`    | `USE`                                                     |
+| `PEOPLE_PICKER`  | `VIEW_USERS`, `VIEW_GROUPS`, `VIEW_ROLES`                 |
+
+Sự khác biệt giữa `SHARE` và `SHARE_PUBLIC` là rất quan trọng: bạn có thể cho phép một vai trò chia sẻ các agent với những người dùng hoặc nhóm _cụ thể_ (`SHARE`) mà không cần để họ công khai các agent đó cho _tất cả mọi người_ trên instance (`SHARE_PUBLIC`).
+
+### Cấu hình quyền tính năng [#configuring-feature-permissions]
+
+Cách được khuyến nghị để quản lý quyền tính năng là sử dụng [**LibreChat Admin Panel**](/docs/features/admin_panel), công cụ này chỉnh sửa trực tiếp ma trận quyền trên từng vai trò (bao gồm cả các vai trò tùy chỉnh mà bạn tạo). Các thay đổi sẽ có hiệu lực mà không cần triển khai lại LibreChat và được áp dụng chính xác cho vai trò mà bạn muốn sửa đổi, thay vì áp dụng mặc định cho toàn bộ `USER`.
+
+<Callout type="warning" title="Kế thừa: khối giao diện `librechat.yaml`">
+  [`interface` block](/docs/configuration/librechat_yaml/object_structure/interface) trong `librechat.yaml` vẫn có thể khởi tạo quyền cho vai trò `USER` mặc định khi khởi động, và vẫn hữu ích cho việc thiết lập một instance mới hoặc cho các triển khai hoàn toàn dựa trên tệp tin. Tuy nhiên, nó chỉ nhắm mục tiêu đến vai trò `USER` và không thể thể hiện sự khác biệt giữa các vai trò tùy chỉnh. Để quản lý quyền liên tục, hãy ưu tiên sử dụng bảng điều khiển quản trị (admin panel).
+</Callout>
+
+### Các vai trò tùy chỉnh [#custom-roles]
+
+Ngoài `USER` và `ADMIN`, quản trị viên có thể tạo **các vai trò tùy chỉnh** với ma trận quyền tính năng riêng (được giới thiệu từ phiên bản v0.8.5; xem [#12528](https://github.com/danny-avila/LibreChat/pull/12528)). Một người dùng có thể nắm giữ nhiều vai trò và các quyền hiệu dụng của họ là sự hợp nhất từ tất cả các vai trò đang nắm giữ. Các vai trò tùy chỉnh được quản lý từ bảng điều khiển quản trị.
+
+### Ghi đè cấu hình theo vai trò và nhóm (Role- and Group-Scoped Configuration Overrides) [#role--and-group-scoped-configuration-overrides]
+
+Ngoài các cờ tính năng, phiên bản v0.8.5 đã giới thiệu hệ thống **ghi đè cấu hình dựa trên DB** ([#12354](https://github.com/danny-avila/LibreChat/pull/12354)). Hệ thống này cho phép bạn chỉ định một _cấu hình kiểu `librechat.yaml` khác_ cho các nhóm hoặc vai trò cụ thể. Ví dụ: một nhóm "Nghiên cứu" có thể có quyền truy cập vào các endpoint bổ sung, giới hạn đệ quy cao hơn và các khả năng tác nhân khác so với cấu hình mặc định. Các ghi đè được giải quyết khi đăng nhập và được kết hợp trên cấu hình cơ sở.
+
+## Lớp 2: ACL tài nguyên (Chia sẻ theo thực thể) [#layer-2-resource-acls-per-entity-sharing]
+
+Mọi tài nguyên có thể chia sẻ trong LibreChat đều có Danh sách kiểm soát truy cập (Access Control List) riêng, độc lập với các quyền dựa trên vai trò. Đây là cách một người dùng cá nhân có quyền `SHARE` chọn _ai_ sẽ có quyền truy cập vào tác nhân (agent), prompt hoặc máy chủ MCP _của họ_.
+
+### Các loại tài nguyên [#resource-types]
+
+Các ACL tài nguyên hiện áp dụng cho:
+
+- **Agents** (`agent`)
+- **Lời nhắc / Nhóm lời nhắc** (`promptGroup`)
+- **Các máy chủ MCP** (`mcpServer`)
+- **Remote Agents** (`remoteAgent`), dành cho [Agents API](/docs/features/agents_api)
+- **Files** (`file`), thường được kế thừa từ tài nguyên sử dụng chúng
+- **Projects** (`project`), hỗ trợ kế thừa để các tài nguyên được chia sẻ với một project sẽ tự động kế thừa các ACL
+
+### Vai trò truy cập (Cấu hình quyền hạn) [#access-roles-permission-presets]
+
+Thay vì hiển thị các bit quyền thô cho người dùng cuối, việc chia sẻ sử dụng ba vai trò được đặt tên cho mỗi loại tài nguyên:
+
+| Vai trò | Các bit quyền | Những gì người được cấp quyền có thể làm |
+| ---------- | ----------------------------------------------- | ------------------------------------------------------------------- |
+| **Viewer** | `VIEW` (`0b0001`) | Sử dụng / tương tác với tài nguyên |
+| **Editor** | `VIEW` + `EDIT` (`0b0011`) | Xem và sửa đổi cài đặt, hướng dẫn, công cụ, tệp của tài nguyên |
+| **Owner**  | `VIEW` + `EDIT` + `DELETE` + `SHARE` (`0b1111`) | Toàn quyền kiểm soát: chỉnh sửa, xóa và chia sẻ lại cho người khác |
+
+Bên dưới hệ thống, các quyền được lưu trữ dưới dạng bitmask (`permBits`) cho mỗi cặp (tài nguyên, chủ thể); các tập siêu (superset) được xử lý tự động, vì vậy việc cấp quyền Editor đồng nghĩa với việc cấp quyền Viewer.
+
+### Cấp quyền truy cập từ giao diện người dùng [#granting-access-from-the-ui]
+
+1. Mở tài nguyên (trình tạo tác nhân, biểu mẫu prompt, cài đặt máy chủ MCP, v.v.)
+2. Nhấp vào nút **Share** (hiển thị khi bạn là chủ sở hữu, quản trị viên hoặc đã được cấp quyền `SHARE`)
+3. Trong hộp thoại chia sẻ:
+   - Sử dụng bộ chọn người dùng để tìm kiếm **users**, **groups**, hoặc **roles** cần thêm
+   - Chọn một vai trò truy cập (Viewer / Editor / Owner) cho mỗi principal
+   - Tùy chọn bật/tắt **Public access** để làm cho tài nguyên hiển thị với tất cả mọi người trên instance (yêu cầu quyền tính năng `SHARE_PUBLIC`)
+4. Lưu. Người được cấp quyền sẽ thấy tài nguyên vào lần tiếp theo họ làm mới trang.
+
+<Callout type="warning" title="Ngăn chặn rò rỉ dữ liệu">
+  Người được cấp quyền Editor và Owner có thể xem mọi thứ được cấu hình trên tài nguyên, bao gồm các system instructions, tệp đính kèm và công cụ. Bất kỳ agent nào cũng có thể làm rò rỉ dữ liệu đính kèm thông qua đầu ra của cuộc trò chuyện, vì vậy hãy đảm bảo các hướng dẫn của bạn có khả năng chống lại prompt injection trước khi cấp quyền chỉnh sửa hoặc công khai một agent.
+</Callout>
+
+### Những gì người được cấp quyền nhìn thấy [#what-grantees-see]
+
+- **Viewers** thấy tài nguyên như một mục sẵn sàng sử dụng trong bộ chọn có liên quan (ví dụ: menu thả xuống của agent). Họ không thể mở trình tạo, xem các hướng dẫn thô hoặc sửa đổi cài đặt.
+- **Editors** (Người chỉnh sửa) có thể mở cấu hình của tài nguyên và sửa đổi nó, nhưng không thể xóa hoặc chia sẻ lại tài nguyên đó.
+- **Owners** có giao diện giống như tác giả gốc và có thể xóa cũng như chia sẻ lại một cách tự do.
+- **Tác giả gốc** luôn giữ toàn quyền kiểm soát bất kể trạng thái ACL, và quản trị viên có thể quản lý bất kỳ tài nguyên nào trên instance.
+
+### Kế thừa dự án [#project-inheritance]
+
+Các quyền có thể được kế thừa từ một **project** cha. Khi một mục ACL được kế thừa, liên kết `inheritedFrom` sẽ trỏ ngược lại nguồn. Đây là cơ chế vận hành của project "Global" trong LibreChat, nơi một tài nguyên được thêm vào project toàn cục sẽ trở nên khả dụng với tất cả người dùng mà không cần phải tạo mục nhập cho từng chủ thể (principal).
+
+## Lớp 3: Cấp quyền hệ thống (Khả năng quản trị) [#layer-3-system-grants-admin-capabilities]
+
+Các quyền hệ thống (system grants) là một bảng quyền riêng biệt được sử dụng cho các **tính năng cấp quản trị**, trả lời cho các câu hỏi như _"Người dùng này có thể truy cập bảng điều khiển quản trị không?"_ hoặc _"Nhóm này có thể quản lý các máy chủ MCP trên toàn hệ thống không?"_. Các quyền này luôn được giới hạn phạm vi cho một chủ thể (người dùng, nhóm hoặc vai trò) và một chuỗi tính năng.
+
+Các khả năng chính bao gồm:
+
+| Khả năng | Mục đích |
+| ------------------------------------ | --------------------------------------------- |
+| `access:admin`                       | Truy cập bảng điều khiển quản trị |
+| `read:users` / `manage:users`        | Xem / sửa đổi tài khoản người dùng |
+| `read:groups` / `manage:groups`      | Xem / sửa đổi nhóm |
+| `read:roles` / `manage:roles`        | Xem / sửa đổi vai trò tùy chỉnh |
+| `read:configs` / `manage:configs`    | Xem / sửa đổi cấu hình hệ thống |
+| `assign:configs:{user\|group\|role}` | Gán hồ sơ ghi đè cấu hình cho các đối tượng |
+| `read:usage`                         | Xem mức sử dụng nền tảng và dữ liệu đo lường từ xa |
+| `read:agents` / `manage:agents`      | Xem / kiểm duyệt mọi agent trên instance |
+| `read:prompts` / `manage:prompts`    | Xem / kiểm duyệt mọi prompt |
+| `manage:mcpservers`                  | Quản lý các MCP server trên toàn hệ thống |
+
+Các khả năng quản lý (manage capabilities) bao gồm cả khả năng đọc (read capability) tương ứng của chúng (ví dụ: sở hữu `manage:users` sẽ tự động cấp quyền `read:users`). Người dùng có `SystemRoles.ADMIN` mặc định sở hữu tất cả các khả năng; các quyền được cấp cho phép bạn **ủy quyền** một tập hợp con các quyền quản trị cho các chủ thể không phải quản trị viên mà không cần biến họ thành quản trị viên toàn quyền.
+
+Các quyền hệ thống được cấp và thu hồi thông qua bảng điều khiển quản trị.
+
+## Tìm hiểu sâu về các Nguyên tắc [#principals-in-depth]
+
+### Người dùng [#users]
+
+Các tài khoản LibreChat tiêu chuẩn. Người dùng có thể là **cục bộ** (email/mật khẩu) hoặc **liên kết** (OAuth2, OIDC, SAML, LDAP). Người dùng liên kết có thể được khớp với một danh tính bên ngoài (`idOnTheSource`); đối với Entra ID, đây là OID, yếu tố cho phép đồng bộ hóa nhóm.
+
+### Các nhóm [#groups]
+
+Một nhóm là một tập hợp người dùng được đặt tên. LibreChat hỗ trợ hai nguồn:
+
+- **Local groups**: được tạo và quản lý từ bảng điều khiển quản trị hoặc trực tiếp trong cơ sở dữ liệu. Các thành viên là các LibreChat user ID.
+- **Các nhóm Entra ID (Azure AD)**: được đồng bộ hóa từ Microsoft Graph khi người dùng đăng nhập qua Azure OIDC với [token reuse](/docs/configuration/authentication/OAuth2-OIDC/token-reuse) được bật. Mỗi nhóm được đồng bộ hóa sẽ lưu trữ Entra Object ID của nó dưới dạng `idOnTheSource`, giúp LibreChat luôn đồng bộ với tư cách thành viên của tenant.
+
+Các nhóm có thể xuất hiện trong bất kỳ ACL nào, trong tìm kiếm `peoplePicker` và là mục tiêu chính cho các ghi đè cấu hình hoặc cấp quyền hệ thống. Một tài nguyên duy nhất được chia sẻ với một nhóm 500 người chỉ là một mục nhập ACL (không phải 500) và các thay đổi về tư cách thành viên trong Entra sẽ tự động được cập nhật vào lần đăng nhập tiếp theo.
+
+### Vai trò [#roles]
+
+Bất kỳ vai trò hệ thống hoặc vai trò tùy chỉnh nào cũng có thể được sử dụng làm chủ thể. Việc chia sẻ một agent với một vai trò (ví dụ: `SupportEngineers`) sẽ cấp quyền truy cập cho mọi người dùng hiện đang giữ vai trò đó mà không cần phải liệt kê từng cá nhân. Các vai trò có thể được ẩn khỏi trình chọn người dùng thông qua [`interface.peoplePicker.roles`](/docs/configuration/librechat_yaml/object_structure/interface#peoplepicker) đối với các môi trường mà việc chia sẻ dựa trên vai trò chỉ dành cho quản trị viên.
+
+### Công khai [#public]
+
+Một principal đặc biệt khớp với mọi người dùng đã xác thực. Các quyền truy cập công khai (public grants) chỉ được cho phép khi người dùng cấp quyền sở hữu quyền tính năng `SHARE_PUBLIC` cho loại tài nguyên đó.
+
+## Hiển thị Bộ chọn Người dùng (People Picker) [#people-picker-visibility]
+
+Trình chọn người (hộp tìm kiếm trong các hộp thoại chia sẻ) có thể được giới hạn ở cấp độ instance để ẩn các loại đối tượng chính không liên quan đến quá trình triển khai của bạn:
+
+```yaml filename="librechat.yaml"
+interface:
+  peoplePicker:
+    users: true
+    groups: true
+    roles: false
+```
+
+Điều này chỉ ảnh hưởng đến _giao diện tìm kiếm_; các mục ACL hiện có cho các loại principal bị ẩn vẫn tiếp tục hoạt động và được thực thi như bình thường.
+
+## Di chuyển từ các phiên bản trước ACL [#migrations-from-pre-acl-versions]
+
+Các phiên bản trước v0.8.0-rc3 đã sử dụng mô hình quyền sở hữu đơn giản hơn. Việc nâng cấp yêu cầu chạy quá trình di chuyển ACL để các agent và prompt hiện có vẫn có thể truy cập được:
+
+**Chạy thử (xem trước các thay đổi):**
+
+```bash
+npm run migrate:agent-permissions:dry-run
+npm run migrate:prompt-permissions:dry-run
+```
+
+**Thực thi:**
+
+```bash
+npm run migrate:agent-permissions
+npm run migrate:prompt-permissions
+```
+
+Xem [hướng dẫn di chuyển agents](/docs/features/agents#migration-required-v080-rc3) để biết các biến thể Docker và các tùy chọn batch-size.
+
+## Tài liệu liên quan [#related-documentation]
+
+- [Agents: Chia sẻ và Quyền truy cập](/docs/features/agents#sharing-and-permissions)
+- [Cấu hình giao diện (quyền tính năng)](/docs/configuration/librechat_yaml/object_structure/interface)
+- [Xác thực](/docs/features/authentication)
+- [Tái sử dụng Token OpenID Connect (bắt buộc để đồng bộ hóa nhóm Entra ID)](/docs/configuration/authentication/OAuth2-OIDC/token-reuse)
+- [Azure / Entra ID OAuth2](/docs/configuration/authentication/OAuth2-OIDC/azure)
+- [Tích hợp SharePoint](/docs/configuration/sharepoint)
+- [Agents API (Remote Agents)](/docs/features/agents_api)
+- [Bảng điều khiển quản trị LibreChat](/docs/features/admin_panel)

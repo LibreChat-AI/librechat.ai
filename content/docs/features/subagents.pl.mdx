@@ -1,0 +1,131 @@
+---
+title: Podagenci
+icon: Network
+description: >-
+  Deleguj skoncentrowaną pracę z jednego agenta do odizolowanych uruchomień
+  agentów podrzędnych.
+---
+
+Subagenci pozwalają agentowi LibreChat na uruchomienie izolowanego procesu podrzędnego w celu wykonania skoncentrowanego zadania. Agent podrzędny otrzymuje własne okno kontekstowe oraz przepływ wykonywania narzędzi. Agent nadrzędny otrzymuje wynik pracy podrzędnego bez konieczności wchłaniania każdego pośredniego wywołania narzędzia, śladu czy szczegółowej operacji na plikach do własnego kontekstu.
+
+Użyj subagentów do:
+
+- Podzadania badawcze, które mogą generować długie dane wyjściowe pośrednie
+- Przegląd przechodzi przez wyspecjalizowanego agenta
+- Praca wymagająca dużej liczby narzędzi, która powinna pozostać poza kontekstem nadrzędnym
+- Dekompozycja w stylu równoległym, w której element nadrzędny koordynuje i podsumowuje
+
+## Czym subagenci różnią się od łańcucha agentów (Agent Chain) [#how-subagents-differ-from-agent-chain]
+
+Agent Chain buduje graf wieloagentowy, w którym agenci przekazują wyniki poprzez skonfigurowane kroki łańcucha. Podagenci są tworzeni przez agenta jako wywołanie narzędzia (tool call) podczas działania.
+
+- **Agent Chain**: przepływ pracy typu multi-agent na poziomie grafu
+- **Subagenci**: delegowanie czasu wykonywania z agenta nadrzędnego do odizolowanych uruchomień podrzędnych
+
+Oba rozwiązania mogą korzystać z istniejących agentów, ale subagenty zostały zaprojektowane z myślą o delegowaniu zadań w określonym zakresie z poziomu pętli rozumowania pojedynczego agenta.
+
+## Włączanie funkcji [#enable-the-capability]
+
+Funkcja `subagents` jest domyślnie włączona. Administratorzy mogą usunąć ją z listy możliwości endpointu agents, aby wyłączyć tę funkcję.
+
+```yaml filename="librechat.yaml"
+endpoints:
+  agents:
+    capabilities:
+      - 'deferred_tools'
+      - 'execute_code'
+      - 'file_search'
+      - 'web_search'
+      - 'artifacts'
+      - 'subagents'
+      - 'actions'
+      - 'context'
+      - 'skills'
+      - 'tools'
+      - 'chain'
+      - 'ocr'
+```
+
+## Konfiguracja Agenta [#configure-an-agent]
+
+W kreatorze agentów (Agent Builder) otwórz **Advanced Settings** i włącz **Subagents**.
+
+Dostępne ustawienia:
+
+- **Włącz subagenty**: dodaje narzędzie do tworzenia subagentów do agenta.
+- **Allow self-spawn**: pozwala agentowi na utworzenie nowej kopii samego siebie w izolowanym kontekście. Jest to domyślnie włączone, gdy włączone są subagenty.
+- **Dodatkowe subagenty**: wybiera konkretne agenty, które mogą być wywoływane przez agenta nadrzędnego.
+
+Równoważny kształt agenta:
+
+```yaml filename="agent subagents"
+subagents:
+  enabled: true
+  allowSelf: true
+  agent_ids:
+    - 'agent_researcher'
+    - 'agent_reviewer'
+```
+
+## Konfiguracja Model Specs [#configure-a-model-spec]
+
+Administratorzy mogą również włączyć Subagents dla efemerycznych agentów tworzonych na podstawie Model Specs. Jest to przydatne, gdy Model Specs ma zachowywać się jak ukierunkowany profil agenta bez konieczności tworzenia lub wybierania przez użytkowników utrwalonego agenta nadrzędnego.
+
+```yaml filename="modelSpecs / subagents"
+modelSpecs:
+  list:
+    - name: 'research-assistant'
+      label: 'Research Assistant'
+      subagents:
+        enabled: true
+        allowSelf: true
+        agent_ids: []
+      preset:
+        endpoint: 'agents'
+        model: 'gpt-4o'
+```
+
+Tylko `enabled` oraz `allowSelf` są wysyłane do klientów w konfiguracji startowej. Lista dozwolonych `agent_ids` pozostaje po stronie serwera i jest weryfikowana względem współdzielonego limitu `MAX_SUBAGENTS`. Ładunki żądań klienta nie mogą dostarczać ani nadpisywać konfiguracji Subagent w Model Specs.
+
+## Zachowanie w czasie wykonywania (Runtime Behavior) [#runtime-behavior]
+
+Gdy podagenci są włączeni, agent nadrzędny otrzymuje narzędzie `subagent`. Narzędzie to może tworzyć:
+
+- `self`, gdy `allowSelf` nie jest ustawione na false
+- Każdy skonfigurowany agent podrzędny w `agent_ids`
+
+Agenty podrzędne działają w izolowanym kontekście. Stan wyszukiwania narzędzi nadrzędnych oraz zgromadzony kontekst nie są kopiowane do uruchomienia podrzędnego. Zużycie modelu w uruchomieniu podrzędnym jest doliczane do transakcji nadrzędnej i uwzględniane w całkowitym zużyciu rodzica. Interfejs użytkownika wyświetla uruchomienie podrzędne jako rozwijany element aktywności agenta ze statusem, aktualizacjami w czasie rzeczywistym oraz wynikiem końcowym.
+
+## Limity [#limits]
+
+LibreChat egzekwuje te limity, aby utrzymać grafy subagentów w określonych granicach:
+
+<OptionTable
+  options={[
+    ['MAX_SUBAGENTS', 'Number', 'Maksymalna liczba jawnych subagentów na agenta nadrzędnego.', '10'],
+    ['MAX_SUBAGENT_DEPTH', 'Number', 'Maksymalna liczba jawnych przeskoków subagenta od agenta głównego.', '5'],
+    [
+      'MAX_SUBAGENT_GRAPH_NODES',
+      'Number',
+      'Maksymalna liczba unikalnych jawnych celów subagentów wczytywanych w czasie wykonywania.',
+      '50',
+    ],
+    [
+      'MAX_SUBAGENT_RUN_CONFIGS',
+      'Number',
+      'Maksymalna liczba rozwiniętych konfiguracji subagenta osadzonych w jednym żądaniu uruchomienia.',
+      '100',
+    ],
+  ]}
+/>
+
+## Kontrola dostępu [#access-control]
+
+Skonfigurowane agenty podrzędne muszą być widoczne dla użytkownika. Jeśli użytkownik nie posiada uprawnień do wyświetlania powiązanego agenta, LibreChat pomija tego podagenta. W przypadku żądań utworzenia i aktualizacji, nieprawidłowe lub nieautoryzowane wpisy `subagents.agent_ids` są odrzucane.
+
+## Wskazówki dotyczące projektowania [#design-tips]
+
+- Włącz funkcję self-spawn, gdy agent nadrzędny ma już odpowiedni zakres i potrzebuje jedynie świeżego kontekstu dla podzadania.
+- Dodaj określonych agentów podrzędnych, gdy zadanie wymaga innego modelu, zestawu instrukcji, zestawu narzędzi lub listy dozwolonych umiejętności.
+- Dbaj o przejrzystość opisów elementów podrzędnych. Element nadrzędny używa nazwy i opisu każdego elementu podrzędnego, aby wybrać odpowiedni cel delegowania.
+- Używaj subagentów do prac pośrednich, które powinny zwracać zwięzły wynik, a nie do stałego przekazywania zadań do innej ścieżki konwersacji.

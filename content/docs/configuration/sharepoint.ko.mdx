@@ -1,0 +1,327 @@
+---
+title: SharePoint 통합
+icon: SharePoint
+description: LibreChat과 SharePoint Online 및 OneDrive for Business 통합 구성
+---
+
+LibreChat은 SharePoint Online 및 OneDrive for Business와의 엔터프라이즈급 통합을 제공하여, 사용자가 Microsoft 365 환경의 파일을 대화 내에서 직접 원활하게 탐색, 선택 및 첨부할 수 있도록 지원합니다.
+
+## 개요 [#overview]
+
+SharePoint 통합을 통해 사용자는 다음을 수행할 수 있습니다:
+- SharePoint 문서 라이브러리 및 OneDrive 파일 탐색
+- 한 번에 여러 파일을 선택하세요 (기본값 최대 10개)
+- 실시간 다운로드 진행 상황 보기
+- SharePoint에서 대화로 파일 첨부
+- 적절한 액세스 제어를 통해 엔터프라이즈 보안을 유지하세요
+
+<Callout type="info" title="엔터프라이즈 기능">
+이 기능은 Microsoft 365/SharePoint Online이 필요하며, Azure Entra ID(이전 명칭 Azure AD) 인증을 사용하는 엔터프라이즈 배포를 위해 설계되었습니다.
+</Callout>
+
+## 필수 조건 [#prerequisites]
+
+SharePoint 통합을 구성하기 전에 다음 사항을 확인하세요:
+
+1. **Azure Entra ID Authentication**이(가) 구성되어 정상 작동 중
+2. **Token Reuse** 활성화 (`OPENID_REUSE_TOKENS=true`)
+3. LibreChat을 위한 **노출된 API 범위**(예: `api://<client-id>/access_as_user`)
+4. 앱 권한을 위한 Azure 테넌트에 대한 **관리자 액세스 권한**
+5. **HTTPS** 활성화됨 (프로덕션 환경에 필수)
+
+<Callout type="error" title="필수 요구 사항">
+SharePoint 통합은 Microsoft Graph API에 액세스하기 위해 on-behalf-of 토큰 흐름을 사용하므로 `OPENID_REUSE_TOKENS=true` 설정 없이는 작동하지 않습니다.
+</Callout>
+
+## Azure App Registration 설정 [#azure-app-registration-setup]
+
+### 1단계: API 권한 구성 [#step-1-configure-api-permissions]
+
+1. [Azure Portal](https://portal.azure.com)에서 앱 등록(app registration)으로 이동하세요.
+2. 왼쪽 메뉴에서 **API permissions**로 이동하세요
+3. **Add a permission**을 클릭하세요
+
+### 2단계: LibreChat API 범위 노출 및 권한 부여 [#step-2-expose-and-grant-a-librechat-api-scope]
+
+On-behalf-of 흐름은 Microsoft Graph가 아닌 LibreChat 앱 API를 대상으로 하는 초기 OpenID 액세스 토큰이 필요합니다. Azure가 LibreChat을 대상(audience)으로 하는 토큰을 발급할 수 있도록 API 범위를 노출하세요.
+
+1. 왼쪽 메뉴에서 **Expose an API**로 이동하세요
+2. **Application ID URI**가 아직 구성되지 않았다면 `api://<client-id>`로 설정하세요.
+3. **Add a scope**를 클릭하세요
+4. `access_as_user` 범위를 지정하세요
+5. 범위를 저장한 다음, 전체 범위 값을 복사하세요:
+
+```text
+api://<client-id>/access_as_user
+```
+
+그런 다음 해당 범위를 앱 등록에 부여하세요:
+
+1. **API permissions**로 돌아가기
+2. **Add a permission**을 클릭하세요
+3. **우리 조직이 사용하는 API**를 선택하세요
+4. LibreChat 앱 등록을 검색하고 선택하세요
+5. **Delegated permissions**을 선택하세요
+6. `access_as_user`를 선택하세요
+7. **권한 추가(Add permissions)**를 클릭하세요
+
+이 가이드의 뒷부분에서 `OPENID_SCOPE`에 전체 `api://<client-id>/access_as_user` 스코프 값을 사용하세요.
+
+### 3단계: SharePoint 권한 추가 [#step-3-add-sharepoint-permissions]
+
+파일 선택기 인터페이스의 경우:
+
+1. API 목록에서 **SharePoint**를 선택하세요
+2. **Delegated permissions**을 선택하세요
+3. 검색 및 선택:
+   - `AllSites.Read` - 모든 사이트 모음의 항목 읽기
+4. **권한 추가(Add permissions)**를 클릭하세요
+
+### 단계 4: Microsoft Graph 권한 추가 [#step-4-add-microsoft-graph-permissions]
+
+파일 다운로드의 경우:
+
+1. **Add a permission**을 다시 클릭하세요
+2. **Microsoft Graph**를 선택하세요
+3. **Delegated permissions**을 선택하세요
+4. 검색 및 선택:
+   - `Files.Read.All` - 사용자가 액세스할 수 있는 모든 파일 읽기
+5. **권한 추가(Add permissions)**를 클릭하세요
+
+### 5단계: 관리자 동의 부여 [#step-5-grant-admin-consent]
+
+1. 권한을 추가하면 목록에 표시됩니다
+2. **[Your Organization]에 대한 관리자 동의 부여(Grant admin consent for [Your Organization])**를 클릭하세요.
+3. 팝업에서 동의를 확인하세요
+
+권한 설정은 다음과 같아야 합니다:
+
+| API / 권한 이름 | 유형 | 설명 | 상태 |
+|------------------------|------|-------------|---------|
+| Microsoft Graph - Files.Read.All | Delegated | 사용자가 액세스할 수 있는 모든 파일 읽기 | ✅ Granted |
+| SharePoint - AllSites.Read | Delegated | 모든 사이트 모음의 항목 읽기 | ✅ Granted |
+| LibreChat - access_as_user | Delegated | LibreChat이 OBO 호환 토큰을 수신하도록 허용 | ✅ Granted |
+
+## 환경 설정 [#environment-configuration]
+
+`.env` 파일에 다음 환경 변수를 추가하세요:
+
+```bash filename=".env"
+# OpenID token reuse and OBO-compatible audience
+OPENID_REUSE_TOKENS=true
+OPENID_SCOPE=openid profile email offline_access api://<client-id>/access_as_user
+OPENID_ON_BEHALF_FLOW_FOR_USERINFO_REQUIRED=true
+
+# Enable SharePoint file picker
+ENABLE_SHAREPOINT_FILEPICKER=true
+
+# Your SharePoint tenant base URL
+# Format: https://[your-tenant-name].sharepoint.com
+SHAREPOINT_BASE_URL=https://contoso.sharepoint.com
+
+# SharePoint scope for the file picker
+# Replace 'contoso' with your actual tenant name
+SHAREPOINT_PICKER_SHAREPOINT_SCOPE=https://contoso.sharepoint.com/AllSites.Read
+
+# Microsoft Graph scope for file downloads
+SHAREPOINT_PICKER_GRAPH_SCOPE=Files.Read.All
+```
+
+<Callout type="warning" title="테넌트 이름">
+위의 예시에서 `contoso`를 실제 SharePoint 테넌트 이름으로 바꾸어야 합니다. 이는 SharePoint URL과 정확히 일치해야 합니다.
+</Callout>
+
+<Callout type="warning" title="OpenID 스코프 대상">
+`<client-id>`를 Azure 앱 등록의 애플리케이션(클라이언트) ID로 바꿉니다. `api://<client-id>/access_as_user` 스코프는 Azure에 OBO 어설션을 위한 앱별 대상을 제공합니다. `OPENID_SCOPE`에 표준 OpenID 스코프만 포함된 경우, Azure는 SharePoint 또는 Graph 액세스로 다시 교환할 수 없는 Graph 대상 액세스 토큰을 발급할 수 있습니다.
+</Callout>
+
+<Callout type="info" title="Userinfo 토큰 교환">
+`OPENID_ON_BEHALF_FLOW_FOR_USERINFO_REQUIRED=true` 설정을 사용하면 LibreChat이 OpenID userinfo 엔드포인트를 호출하기 전에 앱 대상(app-audience) 액세스 토큰을 userinfo 호환 토큰으로 교환할 수 있습니다. 이는 `OPENID_SCOPE`에 위에서 언급한 LibreChat API 스코프가 포함된 Azure Entra ID 설정에서 필요합니다.
+</Callout>
+
+## 작동 방식 [#how-it-works]
+
+### 인증 흐름 [#authentication-flow]
+
+1. 사용자가 Azure Entra ID를 통해 인증합니다
+2. SharePoint 선택기에 액세스할 때, LibreChat은 사용자의 토큰을 SharePoint 액세스 권한으로 교환합니다.
+3. 토큰은 최적의 성능을 위해 캐시됩니다(일반적으로 50분).
+4. 분리된 스코프는 최소 권한 원칙을 보장합니다.
+
+### 파일 선택 프로세스 [#file-selection-process]
+
+1. 사용자가 첨부 파일 메뉴에서 "From SharePoint"를 클릭합니다
+2. SharePoint Online 파일 선택기가 포함된 iframe에서 열립니다
+3. 사용자가 익숙한 SharePoint 인터페이스를 사용하여 파일을 탐색하고 선택합니다.
+4. 선택한 파일이 다운로드 대기열에 추가되었습니다.
+
+### 다운로드 프로세스 [#download-process]
+
+1. 파일은 일괄적으로 다운로드됩니다(최대 3개까지 동시 다운로드 가능).
+2. 진행률 표시기는 현재 파일과 완료율을 보여줍니다
+3. 다운로드한 파일이 대화에 첨부됩니다.
+4. 실패한 다운로드는 자동으로 재시도됩니다.
+
+## 사용자 경험 [#user-experience]
+
+### SharePoint 파일 액세스 [#accessing-sharepoint-files]
+
+올바르게 구성되면 사용자는 파일 첨부 메뉴에서 새로운 옵션을 보게 됩니다:
+
+1. 메시지 입력창에서 첨부 아이콘을 클릭하세요
+2. 메뉴에서 "From SharePoint"를 선택하세요
+3. SharePoint 파일 선택기가 열립니다
+4. 필요에 따라 파일을 탐색하고 선택하세요
+5. "Select"을 클릭하여 다운로드를 시작하세요
+
+### 사용 가능한 기능 [#features-available]
+
+- **다중 파일 선택**: 한 번에 최대 10개의 파일을 선택하세요
+- **익숙한 인터페이스**: 네이티브 SharePoint 파일 선택기를 사용합니다.
+- **진행 상황 추적**: 실시간 다운로드 진행 상황 확인
+- **오류 처리**: 모든 문제에 대한 명확한 메시지 제공
+- **Localization**: 다국어 지원
+
+## 보안 고려 사항 [#security-considerations]
+
+### 접근 제어 [#access-control]
+
+- 사용자가 SharePoint에서 액세스 권한을 가진 파일만 사용할 수 있습니다.
+- 모든 SharePoint 권한 및 정책을 준수합니다
+- 권한 상승이나 보안 제어 우회 없음
+
+### 토큰 보안 [#token-security]
+
+- 토큰 교환을 위해 안전한 on-behalf-of 흐름을 사용합니다
+- 토큰은 수명이 짧으며 자동으로 갱신됩니다
+- SharePoint 자격 증명의 장기 저장 없음
+
+### Scope Isolation [#scope-isolation]
+
+- SharePoint 범위는 읽기 전용 작업으로 제한됨
+- 파일 읽기 액세스로 제한된 Graph API 범위
+- LibreChat을 통해 파일을 수정하거나 삭제할 수 없음
+
+## 문제 해결 [#troubleshooting]
+
+### 일반적인 문제 [#common-issues]
+
+#### "From SharePoint" 옵션이 나타나지 않음 [#from-sharepoint-option-not-appearing]
+
+**원인**: 기능이 제대로 활성화되지 않았거나 인증 문제 발생
+
+**해결 방법**:
+1. `.env` 파일에서 `ENABLE_SHAREPOINT_FILEPICKER=true`를 확인하세요.
+2. `OPENID_REUSE_TOKENS=true`가 설정되어 있는지 확인하세요
+3. Azure Entra ID를 통해 사용자가 인증되었는지 확인합니다
+4. 구성 변경 후 LibreChat 재시작
+
+#### 파일 선택기가 열리지 않음 [#file-picker-fails-to-open]
+
+**원인**: 권한이 누락되었거나 잘못되었습니다
+
+**해결 방법**:
+1. Azure에서 SharePoint 권한이 부여되었는지 확인하세요
+2. 관리자 동의가 제공되었는지 확인하십시오
+3. `SHAREPOINT_BASE_URL`이 테넌트와 정확히 일치하는지 확인하세요
+4. `SHAREPOINT_PICKER_SHAREPOINT_SCOPE`가 `https://contoso.sharepoint.com/AllSites.Read`와 같이 전체 테넌트 URL을 사용하는지 확인하세요.
+5. 프로덕션 환경에서 HTTPS가 활성화되었는지 확인하세요
+
+#### 파일 선택기가 빈 흰색 페이지로 열림 [#file-picker-opens-to-a-blank-white-page]
+
+**원인**: Azure가 OpenID 액세스 토큰의 대상(audience)이 잘못되었거나, userinfo 토큰 교환이 활성화되지 않았다는 이유로 on-behalf-of 교환을 거부하고 있을 수 있습니다.
+
+**해결 방법**:
+1. Azure 앱 등록에 `api://<client-id>/access_as_user`와 같은 노출된 API 범위가 있는지 확인하세요.
+2. `OPENID_SCOPE`에 해당 전체 범위를 추가하세요.
+3. `OPENID_ON_BEHALF_FLOW_FOR_USERINFO_REQUIRED=true`로 설정하세요.
+4. LibreChat을 재시작하고 다시 로그인하여 Azure가 새로운 OpenID 토큰을 발급하도록 하세요.
+
+#### 다운로드 실패 또는 시간 초과 [#downloads-fail-or-timeout]
+
+**원인**: Graph API 권한 또는 네트워크 문제
+
+**해결 방법**:
+1. `Files.Read.All` 권한이 부여되었는지 확인하세요
+2. SharePoint에 대한 네트워크 연결을 확인하세요
+3. 토큰이 만료되지 않았는지 확인하세요(필요한 경우 다시 인증하세요)
+4. 브라우저 콘솔에서 구체적인 오류 메시지를 확인하세요
+
+### 디버그 모드 [#debug-mode]
+
+문제 해결을 위해 디버그 로깅을 활성화하세요:
+
+```bash filename=".env"
+DEBUG_LOGGING=true
+DEBUG_CONSOLE=true
+```
+
+다음은 다음에 대한 자세한 로그를 제공합니다:
+- 토큰 교환 프로세스
+- SharePoint 및 Graph에 대한 API 호출
+- 다운로드 진행률 및 오류
+- 인증 흐름
+
+## 성능 최적화 [#performance-optimization]
+
+### Token Caching [#token-caching]
+
+- 인증 오버헤드를 줄이기 위해 토큰이 캐시됩니다.
+- 캐시 지속 시간은 토큰 수명(일반적으로 50분)과 일치합니다.
+- 만료 전 자동 새로고침
+
+### 동시 다운로드 [#concurrent-downloads]
+
+- 최대 3개의 파일을 동시에 다운로드합니다
+- 브라우저나 서버에 과부하가 걸리는 것을 방지합니다
+- 속도와 안정성 모두를 최적화합니다
+
+### 파일 크기 고려 사항 [#file-size-considerations]
+
+- 대용량 파일은 다운로드하는 데 시간이 걸릴 수 있습니다.
+- 진행률 표시기는 사용자의 기대치를 관리하는 데 도움이 됩니다.
+- LibreChat 구성에서 파일 업로드 제한을 고려하세요
+
+## 모범 사례 [#best-practices]
+
+### 관리자용 [#for-administrators]
+
+1. **정기적인 권한 감사**: 주기적으로 앱 권한을 검토하세요
+2. **사용량 모니터링**: 로그에서 SharePoint 통합 사용량을 추적하세요
+3. **문서 업데이트**: 내부 문서를 테넌트 세부 정보에 맞춰 최신 상태로 유지하세요
+4. **철저하게 테스트**: Azure AD 변경 후 기능을 확인하세요
+
+### 최종 사용자용 [#for-end-users]
+
+1. **파일 구성**: 잘 정리된 SharePoint 라이브러리는 사용자 경험을 향상시킵니다.
+2. **파일 크기**: 대화 속도를 저하시킬 수 있는 대용량 파일에 유의하세요.
+3. **권한**: 파일을 공유하기 전에 해당 파일에 대한 접근 권한이 있는지 확인하세요.
+4. **Patient Downloads**: 대용량 파일이나 여러 파일을 다운로드할 때 시간을 충분히 확보하세요
+
+## 고급 구성 [#advanced-configuration]
+
+### 사용자 지정 범위 (Custom Scopes) [#custom-scopes]
+
+특정한 요구 사항이 있는 조직의 경우, 범위를 사용자 지정할 수 있습니다:
+
+```bash filename=".env"
+# Example: Limiting to specific site collections
+SHAREPOINT_PICKER_SHAREPOINT_SCOPE=https://contoso.sharepoint.com/sites/Engineering/AllSites.Read
+
+# Example: Using more restrictive Graph permissions
+SHAREPOINT_PICKER_GRAPH_SCOPE=Files.Read
+```
+
+### 정보 장벽(Information Barriers)과의 통합 [#integration-with-information-barriers]
+
+조직에서 Information Barriers를 사용하는 경우:
+- SharePoint 통합은 모든 장벽 정책(barrier policies)을 준수합니다.
+- 사용자는 자신이 액세스할 권한이 있는 콘텐츠만 볼 수 있습니다.
+- 추가 구성이 필요하지 않습니다
+
+## 관련 문서 [#related-documentation]
+
+- [Azure Entra 인증](/docs/configuration/authentication/OAuth2-OIDC/azure)
+- [OpenID 토큰 재사용](/docs/configuration/authentication/OAuth2-OIDC/token-reuse)
+- [Microsoft Graph API 통합](/docs/configuration/authentication/OAuth2-OIDC/azure#advanced-microsoft-graph-api-integration)
+- [파일 업로드 설정](/docs/configuration/librechat_yaml/object_structure/file_config)

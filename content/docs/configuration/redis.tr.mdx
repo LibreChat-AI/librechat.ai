@@ -1,0 +1,345 @@
+---
+title: Redis
+icon: Redis
+description: >-
+  LibreChat'te önbellekleme, oturum depolama ve yatay ölçeklendirme için Redis
+  kurulumu
+---
+
+Bu kılavuz, LibreChat içinde önbelleğe alma ve oturum depolama için Redis'in nasıl yapılandırılacağını kapsar. Redis, önemli performans iyileştirmeleri sağlar ve **yatay ölçeklendirme için gereklidir**; eğer bir yük dengeleyicinin arkasında birden fazla LibreChat örneği çalıştırıyorsanız, Redis tüm örnekler arasında tutarlı bir durum sağlar.
+
+## İçindekiler [#table-of-contents]
+
+- [Temel Kurulum](#basic-setup)
+- [Bağlantı Türleri](#connection-types)
+- [Güvenlik Yapılandırması](#security-configuration)
+- [Gelişmiş Seçenekler](#advanced-options)
+- [Performans Ayarı](#performance-tuning)
+- [Yapılandırma Örnekleri](#configuration-examples)
+- [Devam Ettirilebilir Akışlar](#resumable-streams)
+
+## Temel Kurulum [#basic-setup]
+
+### Redis'i Etkinleştir [#enable-redis]
+
+LibreChat'te Redis'i etkinleştirmek için `.env` dosyanızda aşağıdaki ortam değişkenini ayarlayın:
+
+```bash
+USE_REDIS=true
+```
+
+**Önemli**: `USE_REDIS=true` olduğunda, bir `REDIS_URI` da sağlamanız gerekir. Uygulama, bir bağlantı URI'si olmadan Redis etkinleştirilirse hata verecektir.
+
+## Bağlantı Türleri [#connection-types]
+
+### Tek Redis Örneği [#single-redis-instance]
+
+Standart bir tekli Redis sunucusu kurulumu için:
+
+```bash
+# Local Redis instance
+REDIS_URI=redis://127.0.0.1:6379
+
+# Remote Redis instance
+REDIS_URI=redis://your-redis-host:6379
+```
+
+### Redis Cluster [#redis-cluster]
+
+Birden fazla düğüme sahip Redis kümesi dağıtımları için:
+
+```bash
+# Multiple Redis cluster nodes
+REDIS_URI=redis://127.0.0.1:7001,redis://127.0.0.1:7002,redis://127.0.0.1:7003
+```
+
+Uygulama, birden fazla URI sağlandığında küme modunu otomatik olarak algılar.
+
+Redis kümenizin yalnızca tek bir URI'si varsa, küme modunu etkinleştirmek için `USE_REDIS_CLUSTER` ortam değişkenini kullanabilirsiniz:
+
+```bash
+# Redis cluster with single URI
+REDIS_URI=redis://127.0.0.1:7001
+USE_REDIS_CLUSTER=true
+```
+
+### Tek Uç Noktalı Yönetilen Redis Hizmetleri [#single-endpoint-managed-redis-services]
+
+AWS ElastiCache Serverless ve AWS üzerindeki Redis Enterprise Cloud dahil olmak üzere bazı yönetilen Redis hizmetleri, anahtarları dahili olarak parçalarken (sharding) tek bir bağlantı endpoint'i sunar. Bu kurulumda, LibreChat'i tek düğümlü (single-node) bağlantı modunda tutun, ancak önbellek temizleme işlemleri `CROSSSLOT Keys in request don't hash to the same slot` hatasıyla başarısız olursa küme güvenli (cluster-safe) silme işlemlerini etkinleştirin.
+
+```bash
+USE_REDIS=true
+REDIS_URI=rediss://your-managed-redis-endpoint:6379
+USE_REDIS_CLUSTER=false
+REDIS_CLUSTER_SAFE_DELETE=true
+```
+
+`REDIS_CLUSTER_SAFE_DELETE=true`, LibreChat'in çoklu anahtar `DEL` komutları göndermek yerine eşleşen önbellek anahtarlarını tek tek silmesini sağlar. Bu, LibreChat'in Redis'e bağlanma şeklini değiştirmeden `CROSSSLOT` hatalarını önler.
+
+Yalnızca LibreChat'in bir Redis Cluster istemcisi oluşturması gerektiğinde `USE_REDIS_CLUSTER=true` kullanın. Tek uç noktalı yönetilen hizmetler için `REDIS_CLUSTER_SAFE_DELETE=true` daha güvenli bir seçenektir.
+
+### TLS/SSL ile Redis [#redis-with-tlsssl]
+
+Güvenli Redis bağlantıları için:
+
+```bash
+# Redis with TLS encryption
+REDIS_URI=rediss://127.0.0.1:6380
+
+# Path to CA certificate for TLS verification
+REDIS_CA=/path/to/ca-cert.pem
+```
+
+## Güvenlik Yapılandırması [#security-configuration]
+
+### Kimlik Doğrulama [#authentication]
+
+Redis kimlik doğrulama bilgilerini yapılandırın:
+
+```bash
+# Method 1: Include credentials in URI
+# With both username and password
+REDIS_URI=redis://myuser:mypassword@127.0.0.1:6379
+
+
+# Method 2: Separate environment variables
+REDIS_URI=redis://127.0.0.1:6379
+REDIS_USERNAME=your_redis_username
+REDIS_PASSWORD=your_redis_password
+```
+
+**Not**: Her ikisi de sağlandığında, ayrı kullanıcı adı/parola değişkenleri URI içindeki kimlik bilgilerini geçersiz kılar.
+
+### TLS Yapılandırması [#tls-configuration]
+
+Şifreli bağlantılar için:
+
+```bash
+# Enable TLS with rediss:// protocol
+REDIS_URI=rediss://your-redis-host:6380
+
+# Provide CA certificate for verification
+REDIS_CA=/path/to/your/ca-certificate.pem
+```
+
+### Elasticache ile TLS [#tls-with-elasticache]
+
+Elasticache, TLS bağlantıları için alternatif bir dnsLookup kullanma ihtiyacı duyabilir. Bu web sayfasındaki "Special Note: Aws Elasticache Clusters with TLS" bölümüne bakın: https://www.npmjs.com/package/ioredis
+
+```bash
+# Enable redis alternate dnsLookup
+REDIS_USE_ALTERNATIVE_DNS_LOOKUP=true
+```
+
+## Gelişmiş Seçenekler [#advanced-options]
+
+### Anahtar Önekleme (Key Prefixing) [#key-prefixing]
+
+Redis anahtar önekleme (key prefixing), aynı Redis sunucusunu paylaşan farklı ortamlar, sürümler veya örnekler arasındaki önbellek verilerini izole ederek dağıtımlar arası kirlenmeyi önler. Bu, aşağıdakiler için gereklidir:
+
+- **Çok kiracılı dağıtımlar**: Ayrı hazırlık (staging), üretim (production) ve geliştirme (development) ortamları
+- **Blue-green deployments**: Farklı uygulama sürümleri arasında önbelleği yalıtın
+
+```bash
+# Option 1: Dynamic prefix from environment variable (recommended for cloud)
+
+# Google Cloud Platform - Cloud Run
+REDIS_KEY_PREFIX_VAR=K_REVISION
+
+# AWS - ECS/Fargate
+REDIS_KEY_PREFIX_VAR=AWS_EXECUTION_ENV
+
+# Azure Container Instances
+REDIS_KEY_PREFIX_VAR=CONTAINER_NAME
+
+# Kubernetes - Pod name or deployment
+REDIS_KEY_PREFIX_VAR=HOSTNAME
+REDIS_KEY_PREFIX_VAR=POD_NAME
+
+# Kubernetes - Custom deployment identifier
+REDIS_KEY_PREFIX_VAR=DEPLOYMENT_ID
+
+# Heroku
+REDIS_KEY_PREFIX_VAR=DYNO
+
+# Option 2: Static prefix (for manual control)
+REDIS_KEY_PREFIX=librechat-prod-v2
+REDIS_KEY_PREFIX=staging-branch-feature-x
+REDIS_KEY_PREFIX=dev-john-local
+```
+
+**Önemli**: Hem `REDIS_KEY_PREFIX_VAR` hem de `REDIS_KEY_PREFIX` değişkenlerini aynı anda ayarlayamazsınız.
+
+**Ön ek kullanılmadan kirlenme örnekleri**:
+
+- Üretim önbelleği, hazırlık (staging) dağıtımı tarafından üzerine yazıldı
+- Özellik dalı testleri ana dal önbelleğini bozuyor
+- Eski önbelleğe alınmış verileri sunan eski dağıtım sürümleri
+
+**Anahtar öneki formatı**:
+
+- IoRedis istemcisi: `{prefix}::{key}`
+- Keyv istemcisi: Depolama katmanı tarafından yönetilir
+
+### Bağlantı Sınırları [#connection-limits]
+
+Redis bağlantı sınırlarını yapılandırın:
+
+```bash
+# Maximum number of event listeners (default: 40)
+REDIS_MAX_LISTENERS=40
+```
+
+### Connection Keep-Alive [#connection-keep-alive]
+
+Bağlantıları sürdürmek için Redis ping aralıklarını yapılandırın:
+
+```bash
+# Redis ping interval in seconds (default: 0 = disabled)
+# When set to a positive integer (in seconds), Redis clients will ping the server at this interval
+# When unset or 0, no pinging is performed (recommended for most use cases)
+# Example: 300 = ping every 5 minutes
+REDIS_PING_INTERVAL=300
+```
+
+**Önemli**:
+
+- `REDIS_PING_INTERVAL=0` değerini ayarlamak veya bu değişkeni atlamak, ping işlemini tamamen devre dışı bırakır.
+- Yalnızca bağlantı zaman aşımı sorunları yaşıyorsanız pozitif bir değer (saniye cinsinden) ayarlayın
+- Aralık saniye cinsinden belirtilir ve hem IoRedis hem de Keyv Redis istemcileri için geçerlidir
+- Örnek değerler: `300` (5 dakika), `600` (10 dakika), `60` (1 dakika)
+
+### Seçici Bellek İçi Önbelleğe Alma [#selective-in-memory-caching]
+
+Redis etkinleştirildiğinde bile belirli önbellek ad alanlarını bellek içi (in-memory) depolamayı kullanmaya zorlayın:
+
+```bash
+# Comma-separated list of cache keys
+FORCED_IN_MEMORY_CACHE_NAMESPACES=ROLES,MESSAGES
+```
+
+Geçerli önbellek anahtarları (`librechat-data-provider` içindeki `CacheKeys` enum'ından):
+
+| Anahtar                    | Açıklama                  |
+| ------------------------- | ------------------------- |
+| `CONFIG_STORE`            | Yapılandırma deposu       |
+| `ROLES`                   | Kullanıcı rolleri         |
+| `PLUGINS`                 | Eklenti verileri          |
+| `GEN_TITLE`               | Oluşturulan başlıklar     |
+| `TOOLS`                   | Araç verileri             |
+| `MODELS_CONFIG`           | Model yapılandırması      |
+| `MODEL_QUERIES`           | Model sorguları           |
+| `STARTUP_CONFIG`          | Başlangıç yapılandırması  |
+| `ENDPOINT_CONFIG`         | Endpoint yapılandırması   |
+| `TOKEN_CONFIG`            | Token yapılandırması      |
+| `APP_CONFIG`              | Uygulama yapılandırması   |
+| `ABORT_KEYS`              | İptal anahtarları         |
+| `BANS`                    | Yasaklama verileri        |
+| `ENCODED_DOMAINS`         | Kodlanmış alan adları     |
+| `AUDIO_RUNS`              | Ses işleme çalışmaları    |
+| `MESSAGES`                | Mesajlar                  |
+| `FLOWS`                   | Akış verileri             |
+| `PENDING_REQ`             | Bekleyen istekler         |
+| `S3_EXPIRY_INTERVAL`      | S3 sona erme aralıkları   |
+| `OPENID_EXCHANGED_TOKENS` | OpenID takas edilen tokenlar |
+| `OPENID_SESSION`          | OpenID oturumları         |
+| `SAML_SESSION`            | SAML oturumları           |
+
+<Callout type="warn" title="Geçersiz anahtarlar">
+  Geçersiz bir anahtar (örneğin, kullanımdan kaldırılmış `STATIC_CONFIG`) kullanmak başlatma hatasına neden olacaktır. Yalnızca yukarıdaki tablodaki anahtarları kullanın.
+</Callout>
+
+## Performans Ayarı [#performance-tuning]
+
+### Connection Keep-Alive [#connection-keep-alive-1]
+
+Uygulama, yapılandırılabilir bağlantı canlı tutma (keep-alive) özelliğini uygular:
+
+- Ping aralıkları `REDIS_PING_INTERVAL` ortam değişkeni ile kontrol edilir.
+- Varsayılan davranış: Ping atma yok (çoğu dağıtım için önerilir)
+- Etkinleştirildiğinde, hem IoRedis hem de Keyv Redis istemcilerine belirtilen aralıklarla ping gönderir
+- Bağlantı kesilmesi/kapatılması olaylarında ping aralıklarını otomatik olarak temizler
+
+### Önbellek Stratejisi [#cache-strategy]
+
+Uygulama, ikili bir istemci yaklaşımı kullanır:
+
+- **IoRedis istemcisi**: Otomatik önekleme ile birincil Redis işlemleri
+- **Keyv Redis istemcisi**: `cacheFactory.js` içinde önek işleme ile depolama katmanı işlemleri
+
+### Bellek Optimizasyonu [#memory-optimization]
+
+Performansı optimize etmek için sık erişilen küçük veri kümelerini bellekte tutarken, daha büyük önbellekler için Redis kullanarak `FORCED_IN_MEMORY_CACHE_NAMESPACES` ayarını kullanın.
+
+## Yapılandırma Örnekleri [#configuration-examples]
+
+### Geliştirme Kurulumu [#development-setup]
+
+```bash
+USE_REDIS=true
+REDIS_URI=redis://127.0.0.1:6379
+REDIS_KEY_PREFIX=librechat-dev
+```
+
+### Üretim Kurulumu [#production-setup]
+
+```bash
+USE_REDIS=true
+REDIS_URI=rediss://prod-redis.company.com:6380
+REDIS_USERNAME=librechat_user
+REDIS_PASSWORD=secure_password_here
+REDIS_CA=/etc/ssl/redis-ca.pem
+REDIS_KEY_PREFIX_VAR=DEPLOYMENT_ID
+REDIS_MAX_LISTENERS=100
+REDIS_PING_INTERVAL=300
+FORCED_IN_MEMORY_CACHE_NAMESPACES=ROLES,MESSAGES
+```
+
+### Küme Kurulumu [#cluster-setup]
+
+```bash
+USE_REDIS=true
+REDIS_URI=redis://cluster-node1:7001,redis://cluster-node2:7002,redis://cluster-node3:7003
+REDIS_USERNAME=cluster_user
+REDIS_PASSWORD=cluster_password
+REDIS_KEY_PREFIX=librechat-cluster
+```
+
+## Devam Ettirilebilir Akışlar [#resumable-streams]
+
+Redis, yatay ölçekli dağıtımlar için [Resumable Streams](/docs/features/resumable_streams) özelliğini etkinleştirir. Etkinleştirildiğinde, yapay zeka yanıtları sunucu örnekleri arasında sorunsuz bir şekilde yeniden bağlanabilir ve kaldığı yerden devam edebilir.
+
+**Önemli:** `USE_REDIS=true` olduğunda, devam ettirilebilir akışlar (resumable streams) örnekler arası koordinasyon için otomatik olarak Redis kullanır. Bu, kullanıcıların farklı sunucu örneklerine bağlanabileceği yatay ölçeklendirilmiş dağıtımlar için önerilen kurulumdur.
+
+**Not:** Eğer tek bir LibreChat örneği çalıştırıyorsanız, devam ettirilebilir akışlar için Redis genellikle gereksizdir; yerleşik bellek içi mod gayet iyi çalışır. Redis, bir yük dengeleyicinin arkasında birden fazla LibreChat örneğiniz olduğunda ve bir kullanıcının yeniden bağlantısı, akışının başladığı sunucudan farklı bir sunucuya denk gelebileceği durumlarda gerekli hale gelir.
+
+### Yapılandırma [#configuration]
+
+```bash
+# Redis enabled = resumable streams automatically use Redis
+USE_REDIS=true
+REDIS_URI=redis://127.0.0.1:6379
+
+# Optional: explicitly control resumable streams behavior
+# USE_REDIS_STREAMS=true  # Enabled by default when USE_REDIS=true
+```
+
+### Temel Avantajlar (Yatay Ölçeklendirme için) [#key-benefits-for-horizontal-scaling]
+
+- **Örnekler arası süreklilik**: Kullanıcılar bir sunucuda oluşturma işlemini başlatıp diğerinde devam ettirebilirler
+- **Kademeli dağıtımlar**: Aktif akışlar sunucu yeniden başlatmalarından etkilenmez
+- **Çoklu sekme senkronizasyonu**: Aynı konuşma, yük dengelemeli bir ortamda birden fazla tarayıcı sekmesi arasında senkronize edilir
+- **Bağlantı dayanıklılığı**: İsteği hangi sunucunun işlediğine bakılmaksızın otomatik yeniden bağlanma
+
+### Küme Yapılandırması [#cluster-configuration]
+
+Redis Cluster dağıtımları için LibreChat, akış işlemlerinin aynı küme yuvası (cluster slot) içinde kalmasını sağlamak amacıyla otomatik olarak hash-tag'li anahtarlar kullanır:
+
+```bash
+USE_REDIS=true
+USE_REDIS_STREAMS=true
+USE_REDIS_CLUSTER=true
+REDIS_URI=redis://node1:7001,redis://node2:7002,redis://node3:7003
+```
+
+Bu özellik hakkında daha fazla bilgi için [Resumable Streams](/docs/features/resumable_streams) bölümüne bakın.

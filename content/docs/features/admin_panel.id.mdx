@@ -1,0 +1,210 @@
+---
+title: Panel Admin
+icon: LayoutDashboard
+description: >-
+  UI web mandiri untuk mengelola pengguna, grup, peran, penggantian konfigurasi,
+  dan hibah sistem LibreChat - tanpa perlu mengedit librechat.yaml secara
+  manual.
+---
+
+# Panel Admin LibreChat [#librechat-admin-panel]
+
+**LibreChat Admin Panel** adalah antarmuka manajemen berbasis peramban yang berdiri sendiri untuk LibreChat. Panel ini terhubung ke basis data yang sama dengan LibreChat itu sendiri dan menyediakan GUI untuk tugas-tugas administratif yang mendukung [granular access control](/docs/features/access_control): administrasi pengguna dan grup, manajemen peran, penggantian konfigurasi yang dicakup untuk peran atau grup, serta pemberian kapabilitas tingkat sistem.
+
+<Callout type="info" title="Status: Pratinjau">
+  Panel admin kini tersedia untuk pengujian dan merupakan antarmuka manajemen mendatang yang dibangun di atas API admin yang diperkenalkan pada [LibreChat v0.8.5](/changelog/v0.8.5). Sumber kode, isu, dan rilis tersedia di [github.com/ClickHouse/librechat-admin-panel](https://github.com/ClickHouse/librechat-admin-panel).
+</Callout>
+
+## Apa Fungsinya [#what-it-does]
+
+Panel admin adalah klien tipis: semua data tersimpan di basis data LibreChat, dan setiap tindakan melalui endpoint `/api/admin/*` yang memiliki versi di server API LibreChat. Panel ini memberikan administrator satu tempat untuk:
+
+- **Kelola konfigurasi**: lihat dan edit setiap pengaturan LibreChat melalui formulir dinamis berbasis skema. Bidang baru yang ditambahkan ke skema konfigurasi akan muncul secara otomatis, tanpa memerlukan rilis panel admin.
+- **Terapkan penggantian per-principal**: cakup penggantian konfigurasi ke peran atau grup tertentu, dengan kaskade berbasis prioritas yang menentukan nilai akhir yang diselesaikan yang dilihat setiap pengguna saat login.
+- **Mengelola pengguna**: mencantumkan, mencari, dan melihat setiap akun pada instance.
+- **Kelola grup**: membuat dan menghapus grup, menambah/menghapus anggota, serta menggunakan grup sebagai prinsipal kelas satu dalam ACL dan penggantian (overrides).
+- **Kelola peran**: buat peran kustom di luar `USER` / `ADMIN` bawaan, edit matriks fitur-izin mereka, dan tetapkan pengguna ke peran tersebut.
+- **Issue system grants**: mendelegasikan kemampuan admin (contoh: `manage:users`, `read:usage`, `manage:mcpservers`) kepada pengguna, grup, atau peran tertentu tanpa menjadikan mereka admin penuh.
+- **Authenticate**: masuk dengan akun admin LibreChat lokal, atau melalui OpenID SSO / SAML / penyedia OAuth yang didukung saat fitur tersebut diaktifkan pada instance LibreChat.
+
+Untuk model izin yang mendasarinya (prinsipal, ACL sumber daya, kapabilitas, dan bagaimana lapisan-lapisan tersebut disusun), lihat halaman [Access Control](/docs/features/access_control).
+
+## Arsitektur [#architecture]
+
+```
+┌──────────────────┐         ┌──────────────────┐         ┌──────────────┐
+│  Admin Panel     │ ───────▶│  LibreChat API   │ ───────▶│   MongoDB    │
+│  (Bun + Vite)    │  HTTPS  │  /api/admin/*    │         │  (shared DB) │
+└──────────────────┘         └──────────────────┘         └──────────────┘
+       │                             │
+       │ OAuth/OIDC/SAML redirect    │ Verifies admin access
+       └─────────────────────────────┘
+```
+
+Panel admin berjalan sebagai layanan terpisah; layanan ini tidak berbagi proses dengan LibreChat. Kemampuan admin diverifikasi di sisi LibreChat melalui pemberian akses `access:admin` atau peran `SystemRoles.ADMIN`, sehingga panel tidak dapat memberikan hak istimewa kepada dirinya sendiri yang seharusnya tidak dimilikinya.
+
+Permukaan API admin yang diekspos oleh LibreChat adalah:
+
+| Mount                                     | Tujuan                                                    |
+| ----------------------------------------- | --------------------------------------------------------- |
+| `POST /api/admin/login` &nbsp; `/oauth/*` | Endpoint autentikasi khusus admin (lokal + SSO)           |
+| `GET /api/admin/verify`                   | Memvalidasi sesi admin                                    |
+| `/api/admin/users`                        | Pencatatan dan pencarian pengguna                         |
+| `/api/admin/groups`                       | CRUD grup + manajemen anggota                             |
+| `/api/admin/roles`                        | CRUD peran kustom + pengeditan izin + manajemen anggota   |
+| `/api/admin/grants`                       | Pemberian kapabilitas sistem (menetapkan/mencabut/daftar) |
+| `/api/admin/config`                       | Dasar + penggantian konfigurasi per-prinsipal             |
+
+## Memulai [#getting-started]
+
+### Prasyarat [#prerequisites]
+
+- Instans LibreChat yang sedang berjalan pada **v0.8.5 atau lebih baru** (API admin tidak tersedia pada versi sebelumnya)
+- Akses jaringan dari container/host admin-panel ke API LibreChat
+- Akun admin di LibreChat: bisa berupa pengguna yang pertama kali mendaftar (auto-admin), pengguna dengan `role: 'ADMIN'` yang diatur di Mongo, atau prinsipal yang telah diberikan kapabilitas `access:admin`
+
+### Dibundel dengan LibreChat (direkomendasikan) [#bundled-with-librechat-recommended]
+
+Jika Anda menjalankan LibreChat dengan [`docker-compose.yml`](https://github.com/danny-avila/LibreChat/blob/main/docker-compose.yml) atau [`deploy-compose.yml`](https://github.com/danny-avila/LibreChat/blob/main/deploy-compose.yml) resminya, panel admin akan disertakan sebagai layanan dan dimulai secara otomatis bersama LibreChat -- tidak diperlukan penerapan terpisah.
+
+| File Compose                   | URL panel admin          | Cara disajikan                                                    |
+| ------------------------------ | ------------------------ | ----------------------------------------------------------------- |
+| `docker-compose.yml` (default) | `http://localhost:3000`  | Diterbitkan pada port host (`ADMIN_PANEL_PORT`, default `3000`)   |
+| `deploy-compose.yml`           | `http://admin.localhost` | Dirutekan melalui reverse proxy nginx bawaan pada subdomain       |
+
+Atur session secret panel di dalam `.env` LibreChat; file compose meneruskannya sebagai `SESSION_SECRET` panel:
+
+```bash filename=".env"
+# Min 32 characters. Generate with: openssl rand -hex 32
+ADMIN_PANEL_SESSION_SECRET=replace-with-a-32-char-random-string
+
+# Optional: host port for the default docker-compose
+# ADMIN_PANEL_PORT=3000
+
+# Optional: set true when the panel is served over HTTPS
+# ADMIN_PANEL_SESSION_COOKIE_SECURE=false
+```
+
+File compose menghubungkan sisanya secara otomatis: `API_SERVER_URL` mengarah ke layanan `api`, `VITE_API_BASE_URL` mengikuti `DOMAIN_CLIENT` untuk pengalihan OAuth yang menghadap ke browser, dan `ADMIN_PANEL_URL` diatur agar LibreChat mengembalikan admin ke panel setelah SSO. Untuk tidak ikut serta, hapus layanan `admin-panel` atau batasi di balik entri [`profiles`](https://docs.docker.com/compose/how-tos/profiles/) Compose.
+
+<Callout type="info" title="admin.localhost pada domain asli">
+  Peramban modern meresolusi `*.localhost` (termasuk `admin.localhost`) ke `127.0.0.1`, sehingga URL deploy-compose berfungsi tanpa perubahan file hosts. Untuk domain asli, arahkan record DNS ke host tersebut, perbarui `server_name` `admin.localhost` di `client/nginx.conf`, dan atur `ADMIN_PANEL_URL` agar sesuai.
+</Callout>
+
+### Standalone (penyebaran terpisah) [#standalone-separate-deployment]
+
+Untuk menghosting panel admin secara mandiri -- yang diarahkan ke instans LibreChat yang berjalan di tempat lain -- gunakan image yang dipublikasikan dari GHCR:
+
+```bash
+# 1. Create an env file
+cp .env.example .env
+
+# 2. Edit .env and set at minimum:
+#    SESSION_SECRET=<random string, min 32 characters>
+#    VITE_API_BASE_URL=http://host.docker.internal:3080
+
+# 3. Start it
+docker compose up -d   # http://localhost:3000
+docker compose down    # stop
+```
+
+`docker run` mandiri:
+
+```bash
+docker run -p 3000:3000 \
+  --add-host=host.docker.internal:host-gateway \
+  -e SESSION_SECRET=replace-with-32-char-random-string \
+  -e VITE_API_BASE_URL=http://host.docker.internal:3080 \
+  ghcr.io/clickhouse/librechat-admin-panel:latest
+```
+
+<Callout type="warning" title="Jaringan Docker">
+  Di dalam container, `localhost` merujuk pada container itu sendiri, bukan host Anda. Saat LibreChat berjalan pada host yang sama, arahkan `VITE_API_BASE_URL` ke `http://host.docker.internal:3080` (Linux: tambahkan `--add-host=host.docker.internal:host-gateway`). Dalam produksi, gunakan nama DNS publik/internal dari API LibreChat Anda.
+</Callout>
+
+### Jalankan Secara Lokal untuk Pengembangan [#run-locally-for-development]
+
+```bash
+git clone https://github.com/ClickHouse/librechat-admin-panel.git
+cd librechat-admin-panel
+cp .env.example .env    # then edit
+bun install
+bun dev                 # http://localhost:3000
+```
+
+## Environment Variables [#environment-variables]
+
+| Variabel | Diperlukan | Default | Deskripsi |
+| ------------------------------- | --------------------- | --------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SESSION_SECRET`                | **Ya** di produksi | Fallback dev hardcoded saat menjalankan `bun dev`; **tidak ada default** di image Docker | Kunci enkripsi sesi. Harus minimal 32 karakter. |
+| `VITE_API_BASE_URL`             | **Ya** di Docker     | `http://localhost:3080` (hanya dev lokal)                                          | URL API server LibreChat yang menghadap ke browser, digunakan untuk pengalihan OAuth. |
+| `API_SERVER_URL`                | Tidak | Kembali ke `VITE_API_BASE_URL` | URL sisi server untuk panggilan API LibreChat. Berguna ketika server admin-panel menjangkau LibreChat pada URL yang berbeda dari browser (misalnya layanan internal Kubernetes vs. hostname publik). |
+| `PORT`                          | Tidak | `3000` | Port tempat panel admin mendengarkan. |
+| `ADMIN_SSO_ONLY`                | Tidak | `false` | Sembunyikan formulir email/kata sandi, memaksa login hanya melalui SSO. |
+| `ADMIN_SESSION_IDLE_TIMEOUT_MS` | Tidak | `1800000` (30 menit) | Batas waktu idle sesi dalam milidetik. |
+| `SESSION_COOKIE_SECURE`         | Tidak | `true` di produksi | Apakah cookie sesi memerlukan HTTPS. |
+| `ADMIN_PANEL_METRICS_SECRET`    | Tidak | _tidak diatur_ | Token bearer yang diperlukan untuk mengambil data dari endpoint Prometheus `/metrics`. Endpoint akan mengembalikan `401` jika tidak diatur atau tidak cocok. |
+
+### URL Pengalihan LibreChat [#librechat-redirect-url]
+
+Ketika panel admin di-host pada URL yang terpisah dari LibreChat, atur `ADMIN_PANEL_URL` di lingkungan API LibreChat. Gunakan URL dasar panel admin eksternal, termasuk awalan jalur (path prefix) apa pun, dan hilangkan garis miring (trailing slash) di akhir:
+
+```bash filename=".env"
+ADMIN_PANEL_URL=https://admin.example.com/admin
+```
+
+Untuk penyebaran Helm, atur `librechat.adminPanelUrl` di dalam file values Anda. Chart tersebut akan merendernya sebagai `ADMIN_PANEL_URL` untuk alur OAuth admin LibreChat:
+
+```yaml filename="values.yaml"
+librechat:
+  adminPanelUrl: https://admin.example.com/admin
+```
+
+Untuk OpenID SSO, daftarkan `${DOMAIN_SERVER}/api/admin/oauth/openid/callback` dengan penyedia identitas Anda.
+
+### Kontrol Cache [#cache-controls]
+
+Ini mencerminkan env var cache LibreChat. Varian `ADMIN_PANEL_*` lebih diutamakan, dan akan kembali ke padanan LibreChat bersama jika tidak diatur.
+
+| Variabel | Tujuan |
+| --------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `STATIC_CACHE_MAX_AGE` / `ADMIN_PANEL_STATIC_CACHE_MAX_AGE`     | `max-age` peramban dalam detik untuk aset yang di-hash di `/assets/` (default 172800 = 2 hari). |
+| `STATIC_CACHE_S_MAX_AGE` / `ADMIN_PANEL_STATIC_CACHE_S_MAX_AGE` | `s-maxage` CDN dalam detik (default 86400 = 1 hari).                                      |
+| `INDEX_CACHE_CONTROL` / `ADMIN_PANEL_INDEX_CACHE_CONTROL`       | Header `Cache-Control` untuk respons indeks HTML.                                     |
+| `INDEX_PRAGMA` / `ADMIN_PANEL_INDEX_PRAGMA`                     | Header `Pragma` untuk respons indeks HTML.                                            |
+| `INDEX_EXPIRES` / `ADMIN_PANEL_INDEX_EXPIRES`                   | Header `Expires` untuk respons indeks HTML.                                           |
+
+## Autentikasi [#authentication]
+
+Panel admin menggunakan kembali tumpukan autentikasi LibreChat dan tidak memiliki basis data pengguna sendiri. Dua jalur masuk didukung:
+
+- **Akun lokal**: nama pengguna/kata sandi terhadap pengguna LibreChat mana pun yang akunnya lolos pemeriksaan akses admin.
+- **Single sign-on**: OpenID Connect, SAML, dan penyedia OAuth sosial yang sudah dikonfigurasi pada instans LibreChat Anda. Atur `ADMIN_SSO_ONLY=true` untuk menyembunyikan formulir kata sandi sepenuhnya.
+
+Akses admin diverifikasi di sisi server oleh LibreChat untuk setiap permintaan. Akun tersebut harus:
+
+1. Memiliki `role: 'ADMIN'` di MongoDB, **atau**
+2. Memiliki hak akses sistem `access:admin` (diberikan kepada principal lain melalui panel admin itu sendiri; lihat [System Grants](/docs/features/access_control#layer-3-system-grants-admin-capabilities)).
+
+Sesi berbasis cookie, dienkripsi dengan `SESSION_SECRET`, dan akan kedaluwarsa saat tidak aktif sesuai dengan `ADMIN_SESSION_IDLE_TIMEOUT_MS`.
+
+## Manajemen Konfigurasi [#configuration-management]
+
+Panel ini merender konfigurasi LibreChat sebagai formulir dinamis yang didorong oleh skema konfigurasi. Hal ini memiliki dua properti yang berguna:
+
+- **Forward-compatible**: ketika LibreChat merilis field konfigurasi baru, panel akan mengambilnya secara otomatis dari skema. Tidak diperlukan peningkatan atau redeploy panel admin.
+- **Layered overrides**: konfigurasi dasar (dari `librechat.yaml`) dapat dibayangi oleh override per-principal yang dicakup ke peran atau grup. Saat pengguna masuk, override diselesaikan berdasarkan urutan prioritas dan digabungkan di atas konfigurasi dasar untuk menghasilkan konfigurasi efektif yang dilihat oleh pengguna tersebut.
+
+Ini adalah antarmuka di balik [sistem penggantian konfigurasi per-prinsipal berbasis DB](https://github.com/danny-avila/LibreChat/pull/12354) milik LibreChat. Kasus penggunaan umum:
+
+- Berikan grup "Research" `recursionLimit` yang lebih tinggi dan endpoint tambahan
+- Izinkan peran "FinanceAdmins" untuk mengelola server MCP sementara pengguna biasa hanya dapat menggunakannya
+- Batasi izin `interface` yang lebih ketat untuk grup kontraktor eksternal
+
+## Terkait [#related]
+
+- [Access Control](/docs/features/access_control): model perizinan yang menjadi dasar pembangunan panel admin
+- [Konfigurasi Antarmuka](/docs/configuration/librechat_yaml/object_structure/interface): fitur flag yang disunting oleh panel
+- [Authentication](/docs/features/authentication): autentikasi pengguna pada LibreChat
+- [changelog v0.8.5](/changelog/v0.8.5): fondasi API admin
+- [GitHub: ClickHouse/librechat-admin-panel](https://github.com/ClickHouse/librechat-admin-panel): sumber, masalah, rilis

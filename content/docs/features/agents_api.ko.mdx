@@ -1,0 +1,173 @@
+---
+title: Agents API (베타)
+icon: Plug
+description: OpenAI 호환 및 Open Responses API 엔드포인트를 통해 프로그래밍 방식으로 LibreChat 에이전트에 액세스
+---
+
+<Callout type="warning" title="베타 기능">
+Agents API는 현재 베타 버전입니다. 안정적인 릴리스를 위해 반복적으로 개선하는 과정에서 endpoint, 요청/응답 형식 및 동작이 변경될 수 있습니다.
+</Callout>
+
+LibreChat은 두 가지 API 호환 인터페이스를 통해 에이전트를 노출하므로, 외부 애플리케이션, 스크립트 및 서비스가 프로그래밍 방식으로 에이전트와 상호 작용할 수 있습니다.
+
+## 개요 [#overview]
+
+Agents API는 두 가지 인터페이스를 제공합니다:
+
+- **OpenAI 호환 Chat Completions** — `POST /api/agents/v1/chat/completions`
+- **Open Responses API** — `POST /api/agents/v1/responses`
+
+둘 다 API 키를 통해 인증되며 스트리밍 응답을 지원하므로, OpenAI SDK나 유사한 도구를 이미 사용 중인 기존 워크플로우에 LibreChat 에이전트를 쉽게 통합할 수 있습니다.
+
+LibreChat은 에이전트를 서비스하기 위한 기본 API 프레임워크로 [Open Responses](https://www.openresponses.org/)를 채택하고 있습니다. Chat Completions endpoint는 기존 OpenAI 호환 도구와의 하위 호환성을 제공하지만, Open Responses endpoint는 향후의 발전 방향을 나타냅니다.
+
+## Agents API 활성화하기 [#enabling-the-agents-api]
+
+Agents API는 `remoteAgents` 인터페이스 구성 뒤에 게이트되어 있습니다. 모든 권한은 기본적으로 `false`로 설정됩니다.
+
+```yaml filename="librechat.yaml"
+interface:
+  remoteAgents:
+    use: true
+    create: true
+```
+
+사용 가능한 모든 옵션은 [Interface Configuration — remoteAgents](/docs/configuration/librechat_yaml/object_structure/interface#remoteagents)를 참조하세요.
+
+**참고:** 관리자 사용자는 기본적으로 모든 원격 에이전트 권한이 활성화되어 있습니다.
+
+## API Key Management [#api-key-management]
+
+`remoteAgents.use` 및 `remoteAgents.create`가 활성화되면, 사용자는 LibreChat UI에서 API 키를 생성할 수 있습니다. 이 키들은 Agents API에 대한 요청을 인증하는 데 사용됩니다.
+
+## 인증 [#authentication]
+
+Agents API는 독립적으로 또는 함께 사용할 수 있는 두 가지 인증 방법을 지원합니다.
+
+### API Key [#api-key]
+
+API 키 인증은 기본적으로 활성화되어 있습니다. `remoteAgents.use` 및 `remoteAgents.create`가 활성화되면 LibreChat UI에서 API 키를 생성하십시오.
+
+```bash
+Authorization: Bearer <YOUR_API_KEY>
+```
+
+### OIDC Bearer Token [#oidc-bearer-token]
+
+인프라에 이미 OIDC 공급자가 있는 기계 간(machine-to-machine) 시나리오의 경우, LibreChat API 키 없이 OIDC Bearer 토큰으로 직접 인증할 수 있습니다.
+
+`librechat.yaml`에서 OIDC 인증을 구성하세요:
+
+```yaml filename="librechat.yaml"
+endpoints:
+  agents:
+    remoteApi:
+      auth:
+        apiKey:
+          enabled: false
+        oidc:
+          enabled: true
+          issuer: https://auth.example.com/realms/myrealm
+          # jwksUri is optional and auto-discovered from issuer if omitted
+          audience: my-client-id
+```
+
+그런 다음 OIDC 액세스 토큰을 사용하여 API를 호출하세요:
+
+```bash
+curl -X POST https://your-librechat-instance/api/agents/v1/responses \
+  -H "Authorization: Bearer YOUR_OIDC_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "agent_abc123", "input": "Hello!"}'
+```
+
+<Callout type="info">
+  OIDC 토큰은 LibreChat에 이미 존재하는 사용자의 것이어야 합니다. 일치 여부는 `sub` 클레임을 우선적으로 사용하며, 그 다음으로 `email`, `preferred_username` 또는 `upn`을 순차적으로 확인합니다.
+</Callout>
+
+모든 구성 옵션은 [Agents Endpoint - remoteApi](/docs/configuration/librechat_yaml/object_structure/agents#remoteapi)를 참조하세요.
+
+## Endpoints [#endpoints]
+
+### Chat Completions (OpenAI-compatible) [#chat-completions-openai-compatible]
+
+```
+POST /api/agents/v1/chat/completions
+```
+
+LibreChat 인스턴스를 가리키도록 설정하여 OpenAI 호환 SDK를 사용하세요. `model` 매개변수는 에이전트 ID에 해당합니다.
+
+**curl을 사용한 예시:**
+```bash
+curl -X POST https://your-librechat-instance/api/agents/v1/chat/completions \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "agent_abc123",
+    "messages": [
+      {"role": "user", "content": "Hello, what can you help me with?"}
+    ],
+    "stream": true
+  }'
+```
+
+**OpenAI SDK (Python) 사용 예시:**
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="https://your-librechat-instance/api/agents/v1",
+    api_key="YOUR_API_KEY"
+)
+
+response = client.chat.completions.create(
+    model="agent_abc123",
+    messages=[{"role": "user", "content": "Hello!"}],
+    stream=True
+)
+
+for chunk in response:
+    print(chunk.choices[0].delta.content, end="")
+```
+
+### 모델 목록 (List Models) [#list-models]
+
+```
+GET /api/agents/v1/models
+```
+
+사용 가능한 에이전트를 모델로 반환합니다. API 키로 어떤 에이전트에 액세스할 수 있는지 확인하는 데 유용합니다.
+
+### Open Responses API [#open-responses-api]
+
+```
+POST /api/agents/v1/responses
+```
+
+Open Responses endpoint는 OpenAI가 시작하고 오픈 소스 AI 커뮤니티가 구축한 개방형 추론 표준인 [Open Responses specification](https://www.openresponses.org/)을 따릅니다. 이는 추론, 도구 사용, 구조화된 출력 및 스트리밍 의미론적 이벤트에 대한 기본 지원을 통해 에이전트 워크플로우를 위해 설계되었습니다.
+
+```bash
+curl -X POST https://your-librechat-instance/api/agents/v1/responses \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "agent_abc123",
+    "input": "What is the weather today?"
+  }'
+```
+
+## 토큰 사용량 추적 [#token-usage-tracking]
+
+모든 Agents API 요청은 (토큰 사용량 제한이 설정된 경우) 사용자의 잔액을 기준으로 토큰 사용량을 추적합니다. 입력 및 출력 토큰이 모두 계산되며, 이를 지원하는 제공자(OpenAI, Anthropic)의 경우 캐시 토큰도 포함됩니다.
+
+## 로드맵 [#roadmap]
+
+- **Open Responses를 기본 인터페이스로 사용** — 저희는 에이전트 루프, 도구 오케스트레이션 및 스트리밍 의미론적 이벤트에 대한 완전한 지원을 포함하도록 Open Responses endpoint를 확장할 계획입니다.
+- **Anthropic Messages API** — 향후 추가 인터페이스로 Anthropic Messages API 형식에 대한 지원을 추가할 수 있습니다.
+
+## 관련 문서 [#related-documentation]
+
+- [Agents](/docs/features/agents) — 에이전트 생성 및 구성
+- [인터페이스 구성 — remoteAgents](/docs/configuration/librechat_yaml/object_structure/interface#remoteagents) — 액세스 제어 설정
+- [Token Usage](/docs/configuration/token_usage) — 토큰 사용량 및 잔액 설정
+- [Open Responses Specification](https://www.openresponses.org/) — 개방형 추론 표준

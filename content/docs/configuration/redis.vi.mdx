@@ -1,0 +1,345 @@
+---
+title: Redis
+icon: Redis
+description: >-
+  Thiết lập Redis để lưu trữ bộ nhớ đệm, lưu trữ phiên và mở rộng quy mô theo
+  chiều ngang trong LibreChat
+---
+
+Hướng dẫn này bao gồm cách cấu hình Redis để lưu trữ bộ nhớ đệm (caching) và phiên làm việc (session) trong LibreChat. Redis mang lại những cải thiện đáng kể về hiệu suất và là **yêu cầu bắt buộc để mở rộng theo chiều ngang**—nếu bạn đang chạy nhiều instance LibreChat phía sau một bộ cân bằng tải (load balancer), Redis sẽ đảm bảo trạng thái nhất quán trên tất cả các instance.
+
+## Mục lục [#table-of-contents]
+
+- [Thiết lập cơ bản](#basic-setup)
+- [Các loại kết nối](#connection-types)
+- [Cấu hình bảo mật](#security-configuration)
+- [Tùy chọn nâng cao](#advanced-options)
+- [Tối ưu hóa hiệu năng](#performance-tuning)
+- [Các ví dụ về cấu hình](#configuration-examples)
+- [Luồng có thể tiếp tục](#resumable-streams)
+
+## Thiết lập cơ bản [#basic-setup]
+
+### Bật Redis [#enable-redis]
+
+Để kích hoạt Redis trong LibreChat, hãy thiết lập biến môi trường sau trong tệp `.env` của bạn:
+
+```bash
+USE_REDIS=true
+```
+
+**Quan trọng**: Khi `USE_REDIS=true`, bạn cũng phải cung cấp `REDIS_URI`. Ứng dụng sẽ báo lỗi nếu Redis được bật mà không có URI kết nối.
+
+## Các loại kết nối [#connection-types]
+
+### Một instance Redis duy nhất [#single-redis-instance]
+
+Đối với thiết lập máy chủ Redis đơn lẻ tiêu chuẩn:
+
+```bash
+# Local Redis instance
+REDIS_URI=redis://127.0.0.1:6379
+
+# Remote Redis instance
+REDIS_URI=redis://your-redis-host:6379
+```
+
+### Redis Cluster [#redis-cluster]
+
+Đối với các triển khai cụm Redis với nhiều node:
+
+```bash
+# Multiple Redis cluster nodes
+REDIS_URI=redis://127.0.0.1:7001,redis://127.0.0.1:7002,redis://127.0.0.1:7003
+```
+
+Ứng dụng sẽ tự động phát hiện chế độ cụm (cluster mode) khi có nhiều URI được cung cấp.
+
+Nếu cụm redis của bạn chỉ có một URI duy nhất, bạn có thể sử dụng biến môi trường `USE_REDIS_CLUSTER` để kích hoạt chế độ cụm:
+
+```bash
+# Redis cluster with single URI
+REDIS_URI=redis://127.0.0.1:7001
+USE_REDIS_CLUSTER=true
+```
+
+### Các dịch vụ Redis được quản lý với một endpoint duy nhất [#single-endpoint-managed-redis-services]
+
+Một số dịch vụ Redis được quản lý, bao gồm AWS ElastiCache Serverless và Redis Enterprise Cloud trên AWS, cung cấp một endpoint kết nối duy nhất trong khi vẫn thực hiện phân đoạn (sharding) các khóa ở bên trong. Trong thiết lập đó, hãy giữ LibreChat ở chế độ kết nối đơn nút (single-node), nhưng hãy bật tính năng xóa an toàn cho cụm (cluster-safe deletes) nếu việc xóa bộ nhớ đệm thất bại với thông báo lỗi `CROSSSLOT Keys in request don't hash to the same slot`.
+
+```bash
+USE_REDIS=true
+REDIS_URI=rediss://your-managed-redis-endpoint:6379
+USE_REDIS_CLUSTER=false
+REDIS_CLUSTER_SAFE_DELETE=true
+```
+
+`REDIS_CLUSTER_SAFE_DELETE=true` khiến LibreChat xóa các khóa bộ nhớ đệm (cache keys) khớp từng cái một thay vì gửi các lệnh `DEL` đa khóa. Điều này giúp tránh các lỗi `CROSSSLOT` mà không làm thay đổi cách LibreChat kết nối với Redis.
+
+Chỉ sử dụng `USE_REDIS_CLUSTER=true` khi LibreChat cần tạo một client Redis Cluster. Đối với các dịch vụ được quản lý có một endpoint duy nhất, `REDIS_CLUSTER_SAFE_DELETE=true` là tùy chọn an toàn hơn.
+
+### Redis với TLS/SSL [#redis-with-tlsssl]
+
+Đối với các kết nối Redis bảo mật:
+
+```bash
+# Redis with TLS encryption
+REDIS_URI=rediss://127.0.0.1:6380
+
+# Path to CA certificate for TLS verification
+REDIS_CA=/path/to/ca-cert.pem
+```
+
+## Cấu hình bảo mật [#security-configuration]
+
+### Xác thực [#authentication]
+
+Cấu hình thông tin xác thực Redis:
+
+```bash
+# Method 1: Include credentials in URI
+# With both username and password
+REDIS_URI=redis://myuser:mypassword@127.0.0.1:6379
+
+
+# Method 2: Separate environment variables
+REDIS_URI=redis://127.0.0.1:6379
+REDIS_USERNAME=your_redis_username
+REDIS_PASSWORD=your_redis_password
+```
+
+**Lưu ý**: Các biến tên người dùng/mật khẩu riêng biệt sẽ ghi đè lên thông tin xác thực trong URI nếu cả hai đều được cung cấp.
+
+### Cấu hình TLS [#tls-configuration]
+
+Đối với các kết nối được mã hóa:
+
+```bash
+# Enable TLS with rediss:// protocol
+REDIS_URI=rediss://your-redis-host:6380
+
+# Provide CA certificate for verification
+REDIS_CA=/path/to/your/ca-certificate.pem
+```
+
+### TLS với Elasticache [#tls-with-elasticache]
+
+Elasticache có thể cần sử dụng một dnsLookup thay thế cho các kết nối TLS. Xem "Special Note: Aws Elasticache Clusters with TLS" trên trang web này: https://www.npmjs.com/package/ioredis
+
+```bash
+# Enable redis alternate dnsLookup
+REDIS_USE_ALTERNATIVE_DNS_LOOKUP=true
+```
+
+## Các tùy chọn nâng cao [#advanced-options]
+
+### Tiền tố khóa (Key Prefixing) [#key-prefixing]
+
+Tiền tố khóa Redis giúp ngăn chặn sự nhiễm chéo giữa các lần triển khai bằng cách cô lập dữ liệu bộ nhớ đệm giữa các môi trường, phiên bản hoặc thực thể khác nhau khi dùng chung một máy chủ Redis. Điều này rất cần thiết cho:
+
+- **Triển khai đa người thuê (Multi-tenant deployments)**: Tách biệt các môi trường staging, production và development
+- **Blue-green deployments**: Cô lập bộ nhớ đệm giữa các phiên bản ứng dụng khác nhau
+
+```bash
+# Option 1: Dynamic prefix from environment variable (recommended for cloud)
+
+# Google Cloud Platform - Cloud Run
+REDIS_KEY_PREFIX_VAR=K_REVISION
+
+# AWS - ECS/Fargate
+REDIS_KEY_PREFIX_VAR=AWS_EXECUTION_ENV
+
+# Azure Container Instances
+REDIS_KEY_PREFIX_VAR=CONTAINER_NAME
+
+# Kubernetes - Pod name or deployment
+REDIS_KEY_PREFIX_VAR=HOSTNAME
+REDIS_KEY_PREFIX_VAR=POD_NAME
+
+# Kubernetes - Custom deployment identifier
+REDIS_KEY_PREFIX_VAR=DEPLOYMENT_ID
+
+# Heroku
+REDIS_KEY_PREFIX_VAR=DYNO
+
+# Option 2: Static prefix (for manual control)
+REDIS_KEY_PREFIX=librechat-prod-v2
+REDIS_KEY_PREFIX=staging-branch-feature-x
+REDIS_KEY_PREFIX=dev-john-local
+```
+
+**Quan trọng**: Bạn không thể thiết lập đồng thời cả `REDIS_KEY_PREFIX_VAR` và `REDIS_KEY_PREFIX`.
+
+**Các ví dụ về nhiễm bẩn không có tiền tố**:
+
+- Bộ nhớ đệm production bị ghi đè bởi quá trình triển khai staging
+- Các bài kiểm tra trên nhánh tính năng làm hỏng bộ nhớ đệm của nhánh chính
+- Các phiên bản triển khai cũ đang phục vụ dữ liệu lưu trữ đệm (cached) lỗi thời
+
+**Định dạng tiền tố khóa**:
+
+- Máy khách IoRedis: `{prefix}::{key}`
+- Keyv client: Được xử lý bởi lớp lưu trữ
+
+### Giới hạn kết nối [#connection-limits]
+
+Cấu hình giới hạn kết nối Redis:
+
+```bash
+# Maximum number of event listeners (default: 40)
+REDIS_MAX_LISTENERS=40
+```
+
+### Connection Keep-Alive [#connection-keep-alive]
+
+Cấu hình khoảng thời gian ping Redis để duy trì kết nối:
+
+```bash
+# Redis ping interval in seconds (default: 0 = disabled)
+# When set to a positive integer (in seconds), Redis clients will ping the server at this interval
+# When unset or 0, no pinging is performed (recommended for most use cases)
+# Example: 300 = ping every 5 minutes
+REDIS_PING_INTERVAL=300
+```
+
+**Quan trọng**:
+
+- Việc đặt `REDIS_PING_INTERVAL=0` hoặc bỏ qua nó sẽ vô hiệu hóa hoàn toàn tính năng ping.
+- Chỉ đặt giá trị dương (tính bằng giây) nếu bạn gặp sự cố hết thời gian chờ kết nối
+- Khoảng thời gian được chỉ định bằng giây và áp dụng cho cả hai client IoRedis và Keyv Redis.
+- Các giá trị ví dụ: `300` (5 phút), `600` (10 phút), `60` (1 phút)
+
+### Bộ nhớ đệm trong bộ nhớ có chọn lọc (Selective In-Memory Caching) [#selective-in-memory-caching]
+
+Buộc các namespace bộ nhớ đệm cụ thể sử dụng bộ nhớ trong (in-memory) ngay cả khi Redis đã được bật:
+
+```bash
+# Comma-separated list of cache keys
+FORCED_IN_MEMORY_CACHE_NAMESPACES=ROLES,MESSAGES
+```
+
+Các khóa cache hợp lệ (từ enum `CacheKeys` trong `librechat-data-provider`):
+
+| Key                       | Description               |
+| ------------------------- | ------------------------- |
+| `CONFIG_STORE`            | Lưu trữ cấu hình          |
+| `ROLES`                   | Vai trò người dùng        |
+| `PLUGINS`                 | Dữ liệu plugin            |
+| `GEN_TITLE`               | Tiêu đề được tạo          |
+| `TOOLS`                   | Dữ liệu công cụ           |
+| `MODELS_CONFIG`           | Cấu hình model            |
+| `MODEL_QUERIES`           | Truy vấn model            |
+| `STARTUP_CONFIG`          | Cấu hình khởi động        |
+| `ENDPOINT_CONFIG`         | Cấu hình endpoint         |
+| `TOKEN_CONFIG`            | Cấu hình token            |
+| `APP_CONFIG`              | Cấu hình ứng dụng         |
+| `ABORT_KEYS`              | Phím hủy                  |
+| `BANS`                    | Dữ liệu cấm               |
+| `ENCODED_DOMAINS`         | Tên miền đã mã hóa        |
+| `AUDIO_RUNS`              | Các lần xử lý âm thanh    |
+| `MESSAGES`                | Tin nhắn                  |
+| `FLOWS`                   | Dữ liệu luồng             |
+| `PENDING_REQ`             | Yêu cầu đang chờ xử lý    |
+| `S3_EXPIRY_INTERVAL`      | Khoảng thời gian hết hạn S3 |
+| `OPENID_EXCHANGED_TOKENS` | Token trao đổi OpenID     |
+| `OPENID_SESSION`          | Phiên OpenID              |
+| `SAML_SESSION`            | Phiên SAML                |
+
+<Callout type="warn" title="Các khóa không hợp lệ">
+  Việc sử dụng một khóa không hợp lệ (ví dụ: `STATIC_CONFIG` đã bị loại bỏ) sẽ gây ra lỗi khởi động. Chỉ sử dụng các khóa từ bảng trên.
+</Callout>
+
+## Tinh chỉnh hiệu năng [#performance-tuning]
+
+### Connection Keep-Alive [#connection-keep-alive-1]
+
+Ứng dụng triển khai tính năng duy trì kết nối (keep-alive) có thể cấu hình:
+
+- Các khoảng thời gian ping được kiểm soát bởi biến môi trường `REDIS_PING_INTERVAL`
+- Hành vi mặc định: Không ping (được khuyến nghị cho hầu hết các triển khai)
+- Khi được bật, sẽ thực hiện ping cả hai client IoRedis và Keyv Redis theo khoảng thời gian được chỉ định
+- Tự động xóa các khoảng thời gian ping khi xảy ra sự kiện ngắt kết nối/đóng.
+
+### Chiến lược bộ nhớ đệm (Cache Strategy) [#cache-strategy]
+
+Ứng dụng sử dụng phương pháp tiếp cận hai máy khách (dual-client):
+
+- **IoRedis client**: Các thao tác Redis chính với tiền tố tự động
+- **Keyv Redis client**: Các thao tác lớp lưu trữ với xử lý tiền tố trong `cacheFactory.js`
+
+### Tối ưu hóa bộ nhớ [#memory-optimization]
+
+Sử dụng `FORCED_IN_MEMORY_CACHE_NAMESPACES` để tối ưu hóa hiệu suất bằng cách lưu trữ các tập dữ liệu nhỏ, thường xuyên truy cập trong bộ nhớ trong khi vẫn sử dụng Redis cho các bộ nhớ đệm lớn hơn.
+
+## Các ví dụ về cấu hình [#configuration-examples]
+
+### Thiết lập môi trường phát triển [#development-setup]
+
+```bash
+USE_REDIS=true
+REDIS_URI=redis://127.0.0.1:6379
+REDIS_KEY_PREFIX=librechat-dev
+```
+
+### Thiết lập môi trường Production [#production-setup]
+
+```bash
+USE_REDIS=true
+REDIS_URI=rediss://prod-redis.company.com:6380
+REDIS_USERNAME=librechat_user
+REDIS_PASSWORD=secure_password_here
+REDIS_CA=/etc/ssl/redis-ca.pem
+REDIS_KEY_PREFIX_VAR=DEPLOYMENT_ID
+REDIS_MAX_LISTENERS=100
+REDIS_PING_INTERVAL=300
+FORCED_IN_MEMORY_CACHE_NAMESPACES=ROLES,MESSAGES
+```
+
+### Thiết lập Cluster [#cluster-setup]
+
+```bash
+USE_REDIS=true
+REDIS_URI=redis://cluster-node1:7001,redis://cluster-node2:7002,redis://cluster-node3:7003
+REDIS_USERNAME=cluster_user
+REDIS_PASSWORD=cluster_password
+REDIS_KEY_PREFIX=librechat-cluster
+```
+
+## Luồng có thể tiếp tục (Resumable Streams) [#resumable-streams]
+
+Redis cho phép [Resumable Streams](/docs/features/resumable_streams) đối với các triển khai mở rộng theo chiều ngang. Khi được bật, các phản hồi AI có thể kết nối lại và tiếp tục một cách liền mạch trên các instance máy chủ.
+
+**Quan trọng:** Khi `USE_REDIS=true`, các luồng có thể tiếp tục (resumable streams) sẽ tự động sử dụng Redis để điều phối giữa các instance. Đây là thiết lập được khuyến nghị cho các triển khai mở rộng theo chiều ngang (horizontally scaled), nơi người dùng có thể kết nối với các instance máy chủ khác nhau.
+
+**Lưu ý:** Nếu bạn đang chạy một instance LibreChat đơn lẻ, Redis cho các luồng có thể tiếp tục (resumable streams) thường là không cần thiết—chế độ in-memory tích hợp sẵn đã hoạt động tốt. Redis trở nên cần thiết khi bạn có nhiều instance LibreChat phía sau bộ cân bằng tải (load balancer), nơi việc kết nối lại của người dùng có thể rơi vào một máy chủ khác với máy chủ nơi luồng của họ bắt đầu.
+
+### Cấu hình [#configuration]
+
+```bash
+# Redis enabled = resumable streams automatically use Redis
+USE_REDIS=true
+REDIS_URI=redis://127.0.0.1:6379
+
+# Optional: explicitly control resumable streams behavior
+# USE_REDIS_STREAMS=true  # Enabled by default when USE_REDIS=true
+```
+
+### Các lợi ích chính (cho việc mở rộng theo chiều ngang) [#key-benefits-for-horizontal-scaling]
+
+- **Tính liên tục giữa các instance**: Người dùng có thể bắt đầu tạo phản hồi trên một máy chủ và tiếp tục trên một máy chủ khác
+- **Rolling deployments**: Các luồng đang hoạt động vẫn tồn tại sau khi khởi động lại máy chủ
+- **Đồng bộ hóa đa tab**: Cùng một cuộc trò chuyện được đồng bộ hóa trên nhiều tab trình duyệt trong môi trường cân bằng tải
+- **Khả năng phục hồi kết nối**: Tự động kết nối lại bất kể máy chủ nào xử lý yêu cầu
+
+### Cấu hình Cluster [#cluster-configuration]
+
+Đối với các triển khai Redis Cluster, LibreChat tự động sử dụng các khóa có gắn thẻ băm (hash-tagged keys) để đảm bảo các thao tác luồng (stream operations) luôn nằm trong cùng một slot của cluster:
+
+```bash
+USE_REDIS=true
+USE_REDIS_STREAMS=true
+USE_REDIS_CLUSTER=true
+REDIS_URI=redis://node1:7001,redis://node2:7002,redis://node3:7003
+```
+
+Xem [Resumable Streams](/docs/features/resumable_streams) để biết thêm chi tiết về tính năng này.

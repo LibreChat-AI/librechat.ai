@@ -1,0 +1,135 @@
+---
+title: Structuur van het Actions-object
+icon: Webhook
+---
+
+Actions kunnen worden gebruikt om dynamisch tools te maken op basis van OpenAPI-specificaties. De structuur van het `actions` object stelt je in staat om toegestane domeinen op te geven voor acties van agents/assistants.
+
+Meer info: [Agents - Actions](/docs/features/agents#actions)
+
+## Voorbeeld [#example]
+
+```yaml filename="Actions Object Structure"
+# Example Actions Object Structure
+actions:
+  # Strict whitelist mode:
+  # allowedDomains:
+  #   - "swapi.dev"
+  #   - "librechat.ai"
+  #   - "google.com"
+  #   - "https://api.example.com:8443"  # With protocol and port
+
+  # Default SSRF mode with private service exemptions:
+  allowedAddresses:
+    - "host.docker.internal:11434"    # Permit one private host on one port
+    - "10.0.0.5:8080"                 # Permit one private IP on one port
+```
+
+## allowedDomains
+
+**Sleutel:**
+<OptionTable
+  options={[
+    ['allowedDomains', 'Array of Strings', 'Een lijst met toegestane domeinen voor agent/assistant-acties.', 'When configured, only listed domains are allowed. When not configured, SSRF targets are blocked but all other domains are allowed.'],
+  ]}
+/>
+
+**Optioneel**
+
+### Beveiligingscontext (SSRF-bescherming) [#security-context-ssrf-protection]
+
+LibreChat bevat SSRF (Server-Side Request Forgery) bescherming met het volgende gedrag:
+
+**Wanneer `allowedDomains` NIET is geconfigureerd:**
+- Doelen die gevoelig zijn voor SSRF worden **standaard geblokkeerd**
+- Alle andere externe domeinen zijn **toegestaan**
+
+**Wanneer `allowedDomains` IS geconfigureerd:**
+- **Alleen** domeinen op de lijst zijn toegestaan
+- Interne/SSRF-doelen kunnen worden toegestaan door ze expliciet toe te voegen aan de lijst
+
+**Geblokkeerde SSRF-doelen zijn onder andere:**
+- **Localhost**-adressen (`localhost`, `127.0.0.1`, `::1`)
+- **Private IP-bereiken** (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`)
+- **Link-local-adressen** (`169.254.0.0/16`, inclusief cloud-metadata-IP's)
+- **Interne TLD's** (`.internal`, `.local`, `.localhost`)
+- **Veelvoorkomende interne servicenamen** (`redis`, `mongodb`, `postgres`, `api`, enz.)
+
+Als uw acties toegang moeten hebben tot interne services, voeg deze dan toe aan de strikte `allowedDomains` whitelist, of laat `allowedDomains` leeg en voeg de exacte private service toe aan `allowedAddresses`.
+
+### Patroonformaten [#pattern-formats]
+
+De `allowedDomains` array ondersteunt verschillende formaten:
+
+1. **Alleen domein** - Staat alle protocollen en poorten toe:
+   ```yaml
+   allowedDomains:
+     - "api.example.com"
+   ```
+
+2. **Met protocol** - Beperkt tot een specifiek protocol:
+   ```yaml
+   allowedDomains:
+     - "https://api.example.com"
+   ```
+
+3. **Met protocol en poort** - Beperkt tot een specifiek protocol en poort:
+   ```yaml
+   allowedDomains:
+     - "https://api.example.com:8443"
+   ```
+
+4. **Interne adressen** (moeten expliciet worden toegestaan):
+   ```yaml
+   allowedDomains:
+     - "192.168.1.100"
+     - "internal-api.local"
+   ```
+
+**Voorbeeld:**
+```yaml filename="actions / allowedDomains"
+allowedDomains:
+  - "swapi.dev"
+  - "librechat.ai"
+  - "google.com"
+  - "https://secure-api.example.com:443"
+  - "192.168.1.50"  # Internal service (explicitly allowed)
+```
+
+## allowedAddresses
+
+`allowedAddresses` is een **vrijstellingslijst** voor de SSRF private-IP blokkade — geen domein-whitelist. Het is het juiste hulpmiddel wanneer u één of twee specifieke private/interne services wilt toestaan zonder te beperken wat uw Actions kunnen bereiken op het openbare internet.
+
+### Wanneer te gebruiken in plaats van `allowedDomains` [#when-to-use-it-instead-of-alloweddomains]
+
+`allowedDomains` is een strikte whitelist: wanneer deze is ingesteld, zijn **alleen** de vermelde items bereikbaar. Het toevoegen van een privé-IP om bijvoorbeeld een zelf-gehoste interne API toe te staan, blokkeert ook elk openbaar actie-endpoint dat je niet ook hebt vermeld.
+
+`allowedAddresses` wordt alleen gebruikt wanneer `allowedDomains` niet is geconfigureerd. Het staat specifieke private `host:port` doelen toe, terwijl de rest van het publieke internet bereikbaar blijft via het standaard SSRF-beleid.
+
+```yaml filename="default SSRF + permitted private host"
+actions:
+  allowedAddresses:
+    - "host.docker.internal:11434"
+    - "10.0.0.5:8080"
+  # allowedDomains is intentionally not set — public destinations
+  # remain reachable, only listed private host:port services are exempted.
+```
+
+Indien `allowedDomains` is geconfigureerd, is dit leidend: private services moeten daar worden vermeld in plaats van te vertrouwen op `allowedAddresses`.
+
+### Acceptabele invoer [#acceptable-entries]
+
+- **Hostnames met poort**: `host.docker.internal:11434`, `ollama.internal:8080`, `localhost:11434`
+- **Private IPv4-literals met poort**: `10.0.0.5:8080`, `127.0.0.1:11434`, `192.168.1.10:443`, `169.254.169.254:80`
+- **Bracketed private IPv6 literals with port**: `[::1]:11434`, `[fc00::1]:8080`, `[fe80::1]:8080`
+
+### Geweigerde items (gevalideerd bij het laden van de configuratie) [#rejected-entries-validated-at-config-load]
+
+- **URL's / paden / CIDR-bereiken**: `http://10.0.0.5`, `10.0.0.0/24`, `/path`
+- **Bare hostnames of IP-adressen**: `localhost`, `10.0.0.5`, `::1`, `[::1]` — elk item moet een poort bevatten
+- **Ongeldige poorten**: `localhost:0`, `localhost:65536`, `localhost:http`
+- **Public IP literals**: `8.8.8.8:53`, `1.1.1.1:53`, `[2001:4860::8888]:443` — het veld is beperkt tot de private IP-ruimte; publieke IP's zijn geen SSRF-doelen en een vrijstelling voor publieke IP's heeft geen defensief doel
+
+### Hostname trust [#hostname-trust]
+
+Een hostname-vermelding vertrouwt op elk IP-adres waarnaar die hostname tijdens runtime op de vermelde poort verwijst. Als de DNS voor een vermelde hostname wordt geroteerd of gekaapt om naar een ander privé-IP-adres te wijzen, volgt de uitzondering. Vermeld alleen hostnames waarvan u de DNS beheert. **Geef de voorkeur aan letterlijke IP-adressen wanneer dat mogelijk is.**

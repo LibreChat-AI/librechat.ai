@@ -1,0 +1,117 @@
+---
+title: 자동화된 조정
+icon: Shield
+description: >-
+  자동화된 조정 시스템(Automated Moderation System)은 점수 매기기 메커니즘을 사용하여 사용자 위반 사항을 추적합니다.
+  사용자가 과도한 로그인, 등록 또는 메시지 전송과 같은 행동을 하면 위반 점수가 누적됩니다. 설정된 임계값에 도달하면 해당 사용자와 IP는
+  일시적으로 차단됩니다. 이 시스템은 급격하거나 의심스러운 활동을 모니터링하고 제재함으로써 플랫폼 보안을 보장합니다.
+---
+
+## 자동화된 조정 시스템 (선택 사항) [#automated-moderation-system-optional]
+자동화된 조정 시스템(Automated Moderation System)은 점수 매기기 메커니즘을 사용하여 사용자 위반 사항을 추적합니다. 사용자가 과도한 로그인, 등록 또는 메시지 전송과 같은 행동을 하면 위반 점수가 누적됩니다. 설정된 임계값에 도달하면 해당 사용자와 IP는 일시적으로 차단됩니다. 이 시스템은 급격하거나 의심스러운 활동을 모니터링하고 제재함으로써 플랫폼 보안을 보장합니다.
+
+프로덕션 환경에서는 서버를 과도한 요청으로부터 확실하게 보호하기 위해 Cloudflare나 기타 DDoS 방어 솔루션을 도입해야 하지만, 이러한 변경 사항들은 배포된 인스턴스를 프록시로 악용하려는 단일 또는 소수의 악의적인 공격자들로부터 귀하를 크게 보호해 줄 것입니다.
+
+### 참고 사항 [#notes]
+
+- 기본적인 보안 및 위반 로깅(차단, 동시 메시지, 속도 제한 초과)을 위해 Caching을 사용합니다.
+    - 가까운 시일 내에 프로덕션 인스턴스를 위한 **Redis** 지원을 추가할 예정이며, 이는 현재 캐싱 설정에 쉽게 주입할 수 있습니다.
+- 로그인/등록/메시징 등 속도 제한기(rate limiter) 중 하나라도 초과하는 것은 위반으로 간주되며, 기본 점수는 1입니다.
+- 브라우저가 아닌 출처는 위반입니다
+- 각 위반에 대한 기본 점수는 구성 가능합니다.
+- 제한기 및/또는 차단 기능을 활성화하면 캐싱/로깅이 활성화됩니다.
+- 위반 로그는 로깅이 시작될 때 생성되는 데이터 폴더인 `librechat/data`에서 찾을 수 있습니다.
+  - **위반 사항만 기록됩니다**
+  - `violations.json`은 사용자별 각 위반 사항의 총 횟수를 추적합니다.
+  - `logs.json`은 사용자별 각 위반 사례를 기록합니다.
+- 차단 로그는 MongoDB의 `logs` 컬렉션에 저장됩니다. 이 로그는 차단 기간 동안에만 존재하는 일시적인 데이터입니다.
+    - 수동으로 차단을 해제하려면 데이터베이스에서 해당 사용자를 수동으로 삭제한 후 서버를 재시작해야 합니다.
+    - **Redis** 지원 또한 이를 위해 계획되어 있습니다.
+
+### Rate Limiter 유형 [#rate-limiter-types]
+
+#### 로그인 및 회원가입 속도 제한 (Rate Limiting) [#login-and-registration-rate-limiting]
+단일 IP 주소에서 특정 시간 내에 시도할 수 있는 로그인 횟수나 신규 계정 등록 횟수를 제한하여 무차별 대입 공격(brute force attacks) 및 스팸 등록을 방지합니다.
+
+#### 메시지 속도 제한 (Message Rate Limiting) [#message-rate-limiting]
+스팸 및 남용을 방지하기 위해 사용자가 메시지를 보낼 수 있는 빈도를 제어합니다:
+- **Concurrent Message Limiting**: 사용자가 동시에 보낼 수 있는 메시지 수를 제한합니다(사용자가 여러 탭을 열어 제한을 우회하는 것을 방지).
+- **메시지 빈도 제한(Message Frequency Limiting)**: IP 주소 및 개별 사용자별로 구성 가능한, 메시지 전송 빈도 제어 기능
+
+#### 대화 가져오기 속도 제한 (Import Conversation Rate Limiting) [#import-conversation-rate-limiting]
+대화 가져오기 기능의 남용을 방지하기 위해 특정 시간 내에 가져올 수 있는 대화 수를 제한합니다. 이는 다음을 방지하는 데 도움이 됩니다:
+- 서버에 과부하를 줄 수 있는 대량 데이터 가져오기
+- 가져온 데이터로 시스템에 과부하를 주려는 자동화된 스크립트
+- 대량의 가져오기(import) 처리로 인한 리소스 고갈
+
+기본 제한:
+- IP 기반: 분당 100회 임포트
+- 사용자 기반: 분당 50회 임포트 (기본값으로 비활성화됨)
+
+#### 대화 포크(Forking) 속도 제한 [#conversation-forking-rate-limiting]
+사용자가 기존 대화의 포크(복사본)를 생성할 수 있는 빈도를 제어합니다. 이는 다음을 방지합니다:
+- 대량의 대화 복제로 인한 과도한 데이터베이스 증가
+- fork 작업으로 인한 리소스 고갈
+- 스팸 또는 데이터 수집을 위한 포크(forking) 기능의 남용
+
+기본 제한:
+- IP 기반: 분당 30 포크
+- 사용자 기반: 분당 7 포크 (기본값으로 비활성화됨)
+
+#### 파일 업로드 속도 제한 [#file-upload-rate-limiting]
+librechat.yaml 파일을 통해 구성되며, 스토리지 남용 및 대역폭 고갈을 방지하기 위해 사용자가 파일을 업로드할 수 있는 빈도를 제어합니다.
+
+#### Text-to-Speech (TTS) 속도 제한 [#text-to-speech-tts-rate-limiting]
+사용자가 텍스트 음성 변환(text-to-speech)을 요청할 수 있는 빈도를 제어합니다. 이는 다음을 방지합니다:
+- 과도한 API 사용 비용
+- 오디오 생성으로 인한 서버 리소스 고갈
+- 데이터 수집을 위한 TTS 기능의 오용
+
+librechat.yaml 파일을 통해 구성되며, IP 및 사용자별로 제한을 사용자 지정할 수 있습니다.
+
+#### 음성-텍스트 변환(STT) 속도 제한 [#speech-to-text-stt-rate-limiting]
+사용자가 오디오를 전사(transcription)하기 위해 제출할 수 있는 빈도를 제어합니다. 이는 다음을 방지합니다:
+- 과도한 API 사용 비용
+- 오디오 처리로 인한 서버 리소스 고갈
+- 승인되지 않은 전사 서비스를 위한 STT 기능의 오용
+
+librechat.yaml 파일을 통해 구성되며, IP 및 사용자별로 제한을 사용자 지정할 수 있습니다.
+
+#### 비밀번호 재설정 속도 제한 [#password-reset-rate-limiting]
+사용자가 비밀번호 재설정 이메일을 요청할 수 있는 빈도를 제어합니다. 이는 다음을 방지합니다:
+- 이메일 폭탄 공격
+- 비밀번호 재설정 시스템 남용
+- 과도한 이메일 서비스 사용
+
+#### 이메일 인증 속도 제한 (Rate Limiting) [#email-verification-rate-limiting]
+사용자가 이메일 인증 메시지를 요청할 수 있는 빈도를 제어합니다. 이는 다음을 방지합니다:
+- 인증 시스템을 통한 스팸 공격
+- 이메일 서비스 악용
+- 인증 요청으로 인한 리소스 고갈
+
+#### 도구 호출 속도 제한 (Tool Call Rate Limiting) [#tool-call-rate-limiting]
+사용자가 도구/플러그인 호출을 수행할 수 있는 빈도를 제어합니다. 이는 다음을 방지합니다:
+- 통합 도구로부터의 과도한 API 사용
+- 외부 서비스 통합 오용
+- 도구 처리로 인한 리소스 고갈
+
+#### 대화 접근 속도 제한 (Conversation Access Rate Limiting) [#conversation-access-rate-limiting]
+사용자가 대화에 액세스하거나 액세스를 시도할 수 있는 빈도를 제어합니다. 이는 다음을 방지합니다:
+- 무단 액세스 시도
+- 데이터 스크래핑 공격
+- 과도한 데이터베이스 쿼리
+
+### 속도 제한기 (Rate Limiters) [#rate-limiters]
+
+이 프로젝트의 현재 속도 제한기는 다음과 같습니다 (기본값은 아래 설정 섹션을 참조하세요):
+
+- 로그인 및 회원가입 속도 제한
+- `Optional:` 동시 메시지 제한 (사용자당 한 번에 X개의 메시지만 허용)
+- `Optional:` 메시지 제한 (사용자가 메시지를 보낼 수 있는 빈도, IP 및 사용자별로 구성 가능)
+- `Optional:` 대화 가져오기 제한 (사용자가 대화를 가져올 수 있는 빈도, IP 및 사용자별로 구성 가능)
+- `Optional:` 대화 포킹 제한 (사용자가 대화를 포킹할 수 있는 빈도, IP 및 사용자별로 구성 가능)
+- `Optional:` Text-to-Speech (TTS) limiting (configurable through [`librechat.yaml` config file](/docs/configuration/librechat_yaml/object_structure/config#ratelimits))
+- `Optional:` 음성-텍스트 변환(STT) 제한 ([`librechat.yaml` 설정 파일](/docs/configuration/librechat_yaml/object_structure/config#ratelimits)을 통해 구성 가능)
+- `Optional:` 파일 업로드 제한 ([`librechat.yaml` 설정 파일](/docs/configuration/librechat_yaml/object_structure/config#ratelimits)을 통해 구성 가능)
+
+자세한 내용은 다음의 구성 가이드를 참조하세요: [Automated Moderation](/docs/configuration/mod_system)

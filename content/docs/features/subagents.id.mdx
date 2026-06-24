@@ -1,0 +1,131 @@
+---
+title: Subagen
+icon: Network
+description: >-
+  Delegasikan pekerjaan terfokus dari satu agen ke eksekusi agen anak yang
+  terisolasi.
+---
+
+Subagents memungkinkan Agent LibreChat untuk memicu run anak yang terisolasi untuk pekerjaan yang terfokus. Agent anak mendapatkan jendela konteks dan alur eksekusi tool-nya sendiri. Parent menerima hasil dari anak tanpa harus menyerap setiap panggilan tool perantara, trace, atau operasi file yang panjang ke dalam konteksnya sendiri.
+
+Gunakan subagen untuk:
+
+- Riset sub-tugas yang mungkin menghasilkan output perantara yang panjang
+- Tinjauan lolos dengan agen khusus
+- Pekerjaan berat alat (tool-heavy) yang harus tetap berada di luar konteks induk
+- Dekomposisi gaya paralel di mana induk mengoordinasikan dan meringkas
+
+## Bagaimana Subagents Berbeda dari Agent Chain [#how-subagents-differ-from-agent-chain]
+
+Agent Chain membangun grafik multi-agen di mana agen meneruskan hasil melalui langkah-langkah rantai yang telah dikonfigurasi. Subagen dibuat oleh agen sebagai panggilan alat (tool call) selama proses berjalan.
+
+- **Agent Chain**: alur kerja multi-agen tingkat grafik
+- **Subagents**: delegasi runtime dari agen induk ke eksekusi anak yang terisolasi
+
+Keduanya dapat menggunakan agen yang sudah ada, namun subagent dirancang untuk delegasi terlingkup dari dalam loop penalaran satu agen.
+
+## Mengaktifkan Kapabilitas [#enable-the-capability]
+
+Kemampuan `subagents` diaktifkan secara default. Admin dapat menghapusnya dari daftar kemampuan endpoint agents untuk menonaktifkan fitur tersebut.
+
+```yaml filename="librechat.yaml"
+endpoints:
+  agents:
+    capabilities:
+      - 'deferred_tools'
+      - 'execute_code'
+      - 'file_search'
+      - 'web_search'
+      - 'artifacts'
+      - 'subagents'
+      - 'actions'
+      - 'context'
+      - 'skills'
+      - 'tools'
+      - 'chain'
+      - 'ocr'
+```
+
+## Mengonfigurasi Agen [#configure-an-agent]
+
+Di Agent Builder, buka **Advanced Settings** dan aktifkan **Subagents**.
+
+Pengaturan yang tersedia:
+
+- **Aktifkan subagent**: menambahkan alat pembuat subagent ke agen.
+- **Allow self-spawn**: memungkinkan agen untuk membuat salinan baru dari dirinya sendiri dalam konteks yang terisolasi. Fitur ini diaktifkan secara default saat subagents diaktifkan.
+- **Subagent tambahan**: memilih agen spesifik yang dapat dipicu oleh agen induk.
+
+Bentuk agen yang setara:
+
+```yaml filename="agent subagents"
+subagents:
+  enabled: true
+  allowSelf: true
+  agent_ids:
+    - 'agent_researcher'
+    - 'agent_reviewer'
+```
+
+## Mengonfigurasi Model Spec [#configure-a-model-spec]
+
+Admin juga dapat mengaktifkan Subagents untuk agen efemeral yang dibuat dari Model Specs. Hal ini berguna ketika sebuah Model Specs harus berperilaku seperti profil agen yang terfokus tanpa mengharuskan pengguna untuk membuat atau memilih agen induk yang persisten.
+
+```yaml filename="modelSpecs / subagents"
+modelSpecs:
+  list:
+    - name: 'research-assistant'
+      label: 'Research Assistant'
+      subagents:
+        enabled: true
+        allowSelf: true
+        agent_ids: []
+      preset:
+        endpoint: 'agents'
+        model: 'gpt-4o'
+```
+
+Hanya `enabled` dan `allowSelf` yang dikirim ke klien dalam konfigurasi startup. Daftar izinkan `agent_ids` tetap berada di sisi server dan divalidasi terhadap batas `MAX_SUBAGENTS` yang dibagikan. Payload permintaan klien tidak dapat menyediakan atau menimpa konfigurasi Subagent Model Specs.
+
+## Perilaku Runtime [#runtime-behavior]
+
+Saat subagent diaktifkan, agen induk akan menerima tool `subagent`. Tool tersebut dapat memunculkan:
+
+- `self`, jika `allowSelf` tidak bernilai false
+- Setiap child agent yang dikonfigurasi di dalam `agent_ids`
+
+Agen anak berjalan dengan konteks terisolasi. Status pencarian alat induk dan konteks yang terakumulasi tidak disalin ke dalam eksekusi anak. Penggunaan model pada eksekusi anak ditagihkan ke dalam transaksi induk dan disertakan dalam total penggunaan induk. UI menampilkan eksekusi anak sebagai bagian aktivitas agen yang dapat diperluas dengan status, pembaruan ticker, dan hasil akhir.
+
+## Batasan [#limits]
+
+LibreChat memberlakukan batasan ini untuk menjaga grafik subagent tetap terbatas:
+
+<OptionTable
+  options={[
+    ['MAX_SUBAGENTS', 'Number', 'Subagen eksplisit maksimum per agen induk.', '10'],
+    ['MAX_SUBAGENT_DEPTH', 'Number', 'Jumlah lompatan subagen eksplisit maksimum dari agen akar.', '5'],
+    [
+      'MAX_SUBAGENT_GRAPH_NODES',
+      'Number',
+      'Target subagen unik eksplisit maksimum yang dimuat saat runtime.',
+      '50',
+    ],
+    [
+      'MAX_SUBAGENT_RUN_CONFIGS',
+      'Number',
+      'Konfigurasi subagen yang diperluas secara maksimum disematkan ke dalam satu permintaan eksekusi.',
+      '100',
+    ],
+  ]}
+/>
+
+## Kontrol Akses [#access-control]
+
+Agen anak yang dikonfigurasi harus terlihat oleh pengguna. Jika pengguna tidak memiliki akses lihat ke agen yang direferensikan, LibreChat akan melewati subagen tersebut. Untuk permintaan pembuatan dan pembaruan, entri `subagents.agent_ids` yang tidak valid atau tidak sah akan ditolak.
+
+## Tips Desain [#design-tips]
+
+- Aktifkan self-spawn ketika agen induk sudah memiliki cakupan yang jelas dan hanya memerlukan konteks baru untuk sub-tugas.
+- Tambahkan child agents spesifik ketika tugas memerlukan model, set instruksi, set alat, atau daftar izin keterampilan yang berbeda.
+- Jaga agar deskripsi anak tetap jelas. Induk menggunakan nama dan deskripsi setiap anak untuk memilih target delegasi yang tepat.
+- Gunakan subagent untuk pekerjaan perantara yang harus mengembalikan hasil ringkas, bukan untuk pengalihan permanen ke jalur percakapan lain.

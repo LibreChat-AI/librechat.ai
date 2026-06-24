@@ -1,0 +1,127 @@
+---
+title: Fluxos Resumíveis
+icon: Zap
+description: >-
+  Recupere respostas de IA em andamento após uma queda de conexão, sincronize o
+  mesmo chat entre abas e dispositivos e mantenha fluxos ativos em instâncias
+  escalonadas.
+---
+
+Fluxos retomáveis permitem que uma resposta de IA em andamento sobreviva a uma queda de conexão. Se a rede cair, o navegador for atualizado ou você alternar entre abas ou dispositivos, o LibreChat reconstrói o conteúdo que já foi transmitido e continua de onde parou. O mesmo mecanismo mantém vários visualizadores de uma mesma conversa sincronizados.
+
+## O que você recebe [#what-you-get]
+
+- **Sem perda de respostas.** Quedas de rede, atualizações do navegador e reinicializações do servidor não descartam o conteúdo transmitido.
+- **As abas permanecem sincronizadas.** Abra uma conversa em duas abas do navegador e ambas receberão as mesmas atualizações em tempo real.
+- **Troque de dispositivo durante o fluxo.** Inicie uma geração no seu desktop e continue de onde parou no seu celular.
+- **Gerações em segundo plano.** Inicie uma resposta longa, mude para outra aba ou aplicativo, e a resposta completa estará lá quando você retornar.
+- **Conversas compartilhadas.** Todos que visualizam um chat compartilhado veem o conteúdo sendo transmitido ao mesmo tempo.
+
+## Como funciona [#how-it-works]
+
+Ao enviar uma mensagem, o LibreChat cria um trabalho de geração que registra cada delta transmitido. Se a conexão for interrompida:
+
+1. O cliente detecta a desconexão.
+2. Ao reconectar, o servidor reconstrói o conteúdo transmitido até o momento a partir dos deltas registrados do trabalho.
+3. O conteúdo ausente é entregue em um único evento de sincronização.
+4. O streaming continua a partir da posição atual.
+
+Isso é executado automaticamente e não requer nenhuma ação do usuário.
+
+## Modos de Implantação [#deployment-modes]
+
+O LibreChat vem com dois backends para streams retomáveis.
+
+### Modo de Instância Única (padrão) [#single-instance-mode-default]
+
+Armazena o estado do stream na memória e utiliza um `EventEmitter` do Node.js para pub/sub. Esta é a configuração padrão e não requer nenhuma configuração adicional. Ela atende ao desenvolvimento local, implantações em servidor único e configurações com Docker Compose.
+
+### Modo Redis (produção) [#redis-mode-production]
+
+Usa Redis Streams e Pub/Sub para que o estado do stream seja compartilhado entre instâncias. Use-o para implantações com escalonamento horizontal, balanceamento de carga ou alta disponibilidade, incluindo clusters Kubernetes. Com o Redis, uma geração iniciada em uma instância pode ser retomada em outra, o que mantém os streams ativos durante implantações contínuas (rolling deployments) e auto-scaling.
+
+<Callout type="info" title="Instância única? Provavelmente você não precisa de Redis aqui">
+O modo in-memory lida com tudo para uma única instância do LibreChat. O Redis torna-se relevante assim que você executa múltiplas instâncias atrás de um balanceador de carga. O Redis ainda é útil para cache e armazenamento de sessão em implantações de instância única, apenas não especificamente para fluxos (streams) retomáveis.
+</Callout>
+
+## Configuração [#configuration]
+
+### Habilitar Redis Streams [#enable-redis-streams]
+
+Definir `USE_REDIS=true` faz com que os streams retomáveis usem o Redis automaticamente. Use `USE_REDIS_STREAMS` para controlá-lo explicitamente.
+
+```bash filename=".env"
+USE_REDIS=true
+REDIS_URI=redis://localhost:6379
+# Resumable streams use Redis automatically when USE_REDIS=true.
+# Set USE_REDIS_STREAMS to control it explicitly:
+USE_REDIS_STREAMS=true
+```
+
+### Cluster Redis [#redis-cluster]
+
+Para um Redis Cluster, habilite o modo cluster e liste os nós em `REDIS_URI`.
+
+```bash filename=".env"
+USE_REDIS_STREAMS=true
+USE_REDIS_CLUSTER=true
+REDIS_URI=redis://node1:7001,redis://node2:7002,redis://node3:7003
+```
+
+O LibreChat usa chaves com hash-tags para que operações com múltiplas chaves caiam no mesmo slot de cluster.
+
+## O que é reconstruído [#what-gets-reconstructed]
+
+Ao reconectar, o LibreChat agrega os eventos delta registrados para reconstruir:
+
+- Conteúdo da mensagem (texto, chamadas de ferramenta, citações)
+- Etapas de execução do agente e raciocínio intermediário
+- Metadados e informações de estado
+
+O mecanismo de armazenamento depende do modo de implantação:
+
+| Componente | Mecanismo de Armazenamento |
+|-----------|-------------------|
+| Chunks | Redis Streams (`XADD`/`XRANGE`) |
+| Metadados de Job | Estruturas Redis Hash |
+| Eventos em tempo real | Canais Redis Pub/Sub |
+| Expiração | TTL automático após a conclusão do stream |
+
+O LibreChat aplica algumas otimizações para manter isso barato:
+
+- **Recuperação priorizando a memória.** Reconectar à mesma instância realiza a leitura a partir do cache local, evitando uma viagem de ida e volta ao Redis.
+- **Limpeza no acesso.** Entradas de tarefas obsoletas são removidas durante consultas, e fluxos concluídos expiram automaticamente.
+- **Armazenamento com coleta de lixo (garbage-collected).** O modo em memória armazena grafos de fluxo com `WeakRef`, para que sejam coletados assim que uma conversa termina.
+
+## Testando [#testing]
+
+Para confirmar que o recurso está funcionando, inicie uma conversa com streaming com qualquer modelo e, em seguida, tente uma das opções abaixo:
+
+- **Abas.** Abra o mesmo chat em uma segunda aba; ambos devem sincronizar.
+- **Desconecte.** Interrompa a rede brevemente e, em seguida, reconecte.
+- **Navegação.** Navegue para fora durante o fluxo e depois retorne.
+
+Cada caso deve produzir a resposta completa sem nenhum conteúdo faltando.
+
+## Solução de problemas [#troubleshooting]
+
+**Streams não retomando.** Confirme se o Redis está acessível e se `USE_REDIS_STREAMS` está definido.
+
+```bash
+docker exec -it librechat-redis redis-cli ping
+# Expected: PONG
+
+echo $USE_REDIS_STREAMS
+```
+
+**O conteúdo parece duplicado.** Isso geralmente significa uma incompatibilidade de versão do cliente. Atualize para a versão mais recente do LibreChat.
+
+**Alto uso de memória no modo de instância única.** Fluxos concluídos são coletados pelo garbage collector. Se o uso de memória permanecer alto, procure por fluxos de longa duração que nunca são concluídos ou fluxos que apresentaram erro sem serem limpos.
+
+## Documentação Relacionada [#related-documentation]
+
+- [Configuração do Redis](/docs/configuration/redis): configurando o Redis para cache e escalonamento horizontal
+- [Agents](/docs/features/agents): Agentes de IA com uso de ferramentas
+- [Implantação com Docker](/docs/local/docker): implantação baseada em contêineres
+
+Para detalhes de implementação, veja o [PR #10926](https://github.com/danny-avila/LibreChat/pull/10926).

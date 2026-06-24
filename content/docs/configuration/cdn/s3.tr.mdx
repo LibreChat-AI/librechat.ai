@@ -1,0 +1,163 @@
+---
+title: Amazon S3
+icon: S3
+description: >-
+  Bu belge, Amazon S3'ü LibreChat için bir dosya depolama arka ucu olarak
+  ayarlamaya yönelik talimatları sağlar.
+---
+
+Amazon S3, LibreChat için bir dosya depolama arka ucu olarak kullanılabilen ölçeklenebilir ve güvenli bir nesne depolama hizmetidir. S3 bucket'ınızı yapılandırmak için şu adımları izleyin.
+
+## 1. Bir AWS Hesabı Oluşturun ve Bir IAM Kullanıcısı Yapılandırın (veya IRSA Kullanın) [#1-create-an-aws-account-and-configure-an-iam-user-or-use-irsa]
+
+### Seçenek A: Açık Kimlik Bilgileri ile bir IAM Kullanıcısı Kullanma [#option-a-using-an-iam-user-with-explicit-credentials]
+
+1. **AWS'de oturum açın:**
+   - [AWS Management Console](https://aws.amazon.com/console/) sayfasını açın ve hesabınızla giriş yapın.
+
+2. **Bir IAM Kullanıcısı Oluşturun veya Mevcut Birini Kullanın:**
+   - **IAM (Identity and Access Management)** bölümüne gidin.
+   - **Programmatic Access** (Programatik Erişim) ile yeni bir IAM kullanıcısı oluşturun veya mevcut olanı seçin.
+   - Uygun bir politika ekleyin (örneğin, `AmazonS3FullAccess` veya sınırlı S3 izinlerine sahip özel bir politika).
+   - Kullanıcıyı oluşturduktan sonra bir **AWS_ACCESS_KEY_ID** ve **AWS_SECRET_ACCESS_KEY** alacaksınız. Bunları güvenli bir şekilde saklayın.
+
+### Seçenek B: Kubernetes'te IRSA (IAM Roles for Service Accounts) Kullanımı [#option-b-using-irsa-iam-roles-for-service-accounts-in-kubernetes]
+
+LibreChat'i Kubernetes üzerinde (örneğin EKS'de) dağıtıyorsanız, açık kimlik bilgileri sağlamanıza gerek kalmadan pod'larınıza AWS izinleri atamak için IRSA kullanabilirsiniz. IRSA kullanmak için:
+
+1. **Bir Güven İlkesi (Trust Policy) Oluşturun** EKS hizmet hesabınız için (aşağıdaki örnek):
+   ```json
+   {
+     "Version": "2012-10-17",
+     "Statement": [
+       {
+         "Effect": "Allow",
+         "Principal": {
+           "Federated": "arn:aws:iam::{AWS_ACCOUNT}:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/{EKS_OIDC}"
+         },
+         "Action": "sts:AssumeRoleWithWebIdentity",
+         "Condition": {
+           "StringEquals": {
+             "oidc.eks.us-east-1.amazonaws.com/id/{EKS_OIDC}:sub": "system:serviceaccount:librechat:librechat",
+             "oidc.eks.us-east-1.amazonaws.com/id/{EKS_OIDC}:aud": "sts.amazonaws.com"
+           }
+         }
+       }
+     ]
+   }
+   ```
+2. **Bir Politika Oluşturun** ve gerekli S3 izinlerini tanımlayın (aşağıdaki örnekte olduğu gibi):
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "VisualEditor0",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:GetObjectAcl",
+        "s3:GetObject",
+        "s3:ListBucket",
+        "s3:DeleteObject"
+      ],
+      "Resource": [
+        "arn:aws:s3:::my-example-librechat-bucket/*",
+        "arn:aws:s3:::my-example-librechat-bucket"
+      ]
+    }
+  ]
+}
+```
+
+3. **Kubernetes ServiceAccount'ınızı notlandırın:**  
+   LibreChat pod'larınızın IRSA için notlandırılmış bir hizmet hesabı kullandığından emin olun. Bu sayede, uygulamanızdaki AWS SDK (güncellenmiş S3 başlatma kodumuzu kullanarak), AWS kimlik bilgileri için ortam değişkenlerine ihtiyaç duymadan IRSA tarafından sağlanan geçici kimlik bilgilerini otomatik olarak kullanacaktır.
+
+## 2. Bir S3 Kovası (Bucket) Oluşturun [#2-create-an-s3-bucket]
+
+1. **S3 Konsolunu açın:**
+
+- [Amazon S3 konsoluna](https://s3.console.aws.amazon.com/s3/) gidin.
+
+2. **Yeni Bir Bucket Oluşturun:**
+
+- **"Create bucket"** öğesine tıklayın.
+- **Bucket Name:** Benzersiz bir ad girin (örneğin, `mylibrechatbucket`).
+- **Bölge:** Kullanıcılarınıza en yakın AWS bölgesini seçin (örneğin, `us-east-1` veya `eu-west-1`).
+- **Yapılandırma Seçenekleri:** Gerektiğinde diğer seçenekleri ayarlayın, ardından **"Create bucket"** düğmesine tıklayın.
+
+## 3. Ortam Değişkenlerinizi Güncelleyin [#3-update-your-environment-variables]
+
+Eğer IRSA kullanmıyorsanız, projenizin kök dizinindeki `.env` dosyanızı oluşturun veya aşağıdaki yapılandırma ile güncelleyin:
+
+```bash filename=".env"
+AWS_ACCESS_KEY_ID=your_access_key_id
+AWS_SECRET_ACCESS_KEY=your_secret_access_key
+AWS_REGION=your_selected_region
+AWS_BUCKET_NAME=your_bucket_name
+AWS_ENDPOINT_URL=https://your_endpoint_url
+# AWS_FORCE_PATH_STYLE=false
+```
+
+- **AWS_ACCESS_KEY_ID:** IAM kullanıcınızın erişim anahtarı.
+- **AWS_SECRET_ACCESS_KEY:** IAM kullanıcınızın gizli anahtarı.
+- **AWS_REGION:** S3 paketinizin bulunduğu AWS bölgesi.
+- **AWS_BUCKET_NAME:** Oluşturduğunuz S3 bucket'ının adı.
+- **AWS_ENDPOINT_URL:** (İsteğe bağlı) Özel AWS endpoint URL'si. MinIO, Cloudflare R2, Hetzner Object Storage, Backblaze B2 ve IDrive e2 gibi S3 uyumlu hizmetler için gereklidir. `https://a7g8.da.idrivee2-32.com` gibi URL şemasını dahil edin; `http://` veya `https://` içermeyen değerler, dosyalar akış halindeyken `Invalid URL` hatasına neden olabilir.
+- **AWS_FORCE_PATH_STYLE:** (İsteğe bağlı) Sanal barındırma stili (`bucket.endpoint/key`) yerine yol stili (`endpoint/bucket/key`) URL'leri gerektiren sağlayıcılar için `true` olarak ayarlayın. Hetzner Object Storage, MinIO ve SSL sertifikaları bucket alt alan adlarını kapsamayan benzer sağlayıcılar için gereklidir. AWS S3 veya Cloudflare R2 için gerekli değildir. Varsayılan: `false`.
+
+Kubernetes üzerinde **IRSA** kullanıyorsanız, ortamınızda `AWS_ACCESS_KEY_ID` ve `AWS_SECRET_ACCESS_KEY` değerlerini ayarlamanıza gerek **yoktur**. AWS SDK, geçici kimlik bilgilerini pod'unuza atanan hizmet hesabı (service account) aracılığıyla otomatik olarak alacaktır. `AWS_REGION` ve `AWS_BUCKET_NAME` değerlerinin hala sağlandığından emin olun.
+
+## 4. LibreChat'i Amazon S3 Kullanacak Şekilde Yapılandırın [#4-configure-librechat-to-use-amazon-s3]
+
+Uygulamanın dosya yönetimi için Amazon S3 kullanması gerektiğini belirtmek üzere LibreChat yapılandırma dosyanızı (`librechat.yaml`) güncelleyin:
+
+```yaml filename="librechat.yaml"
+version: 1.3.11
+cache: true
+fileStrategy: 's3'
+```
+
+<Callout type="warning" title="Görsel varlıklar için S3 önceden imzalanmış URL'lerin süresi dolar">
+  S3, dosyaları bir CDN üzerinden sunmaz. LibreChat, S3 dosyalarına, yapılandırılabilir bir sona erme süresine (`S3_URL_EXPIRY_SECONDS`) sahip geçici imzalı belirteçler olan **presigned URL**'ler aracılığıyla erişir. AWS, IAM kullanıcı kimlik bilgileri için presigned URL ömrünü 7 günle, geçici kimlik bilgileri (IRSA gibi STS/IAM rolleri) kullanıldığında ise sadece birkaç saatle sınırlar. Bir URL'nin süresi dolduğunda, referans verdiği görsel veya avatar, sayfa yenilenip yeni bir URL oluşturulana kadar arayüzde bozuk görünecektir.
+
+LibreChat'teki yenileme mantığı her görsel yüzey için tutarlı bir şekilde uygulanmamaktadır. Örneğin, liste tarzı endpoint'ler depolanmış URL'leri döndürebilirken, detay endpoint'leri bunları yeniler. Bu durum, model seçicide ve sohbet arayüzünde bozuk avatar görsellerinin görünmesine neden olabilir. Tam bağlam için [ilgili tartışmaya](https://github.com/danny-avila/LibreChat/discussions/10280#discussioncomment-14803903) göz atın.
+
+**S3, kısa ömürlü önceden imzalanmış indirme URL'lerinin uygun olduğu belge depolama** (PDF'ler, metin dosyaları, kod) için oldukça uygundur. Arayüz genelinde kalıcı olarak görüntülenmesi gereken görseller ve avatarlar için [CloudFront with S3](/docs/configuration/cdn/cloudfront) veya [Firebase](/docs/configuration/cdn/firebase) kullanın ya da yalnızca bu türleri CDN destekli bir stratejiye yönlendirmek için `fileStrategies` yapılandırmasını yapın:
+
+```yaml filename="librechat.yaml"
+fileStrategies:
+  avatar: 'cloudfront'
+  image: 'cloudfront'
+  document: 's3'
+```
+
+</Callout>
+
+## Özet [#summary]
+
+1. **Bir AWS Hesabı ve IAM Kullanıcısı Oluşturun (veya IRSA yapılandırın):**
+
+- Geleneksel dağıtımlar için programatik erişime sahip bir IAM kullanıcısı oluşturun ve erişim anahtarlarınızı edinin.
+- Kubernetes dağıtımları için (örneğin EKS üzerinde), pod'larınızın geçici kimlik bilgilerini otomatik olarak alabilmesi için IRSA'yı yapılandırın.
+
+2. **S3 Kovası Oluşturun:**
+
+- Bir kova (bucket) oluşturmak için Amazon S3 konsolunu kullanın ve benzersiz bir ad ile bölge seçin.
+
+3. **Ortam Değişkenlerini Güncelleyin:**
+
+- IRSA kullanmıyorsanız: `.env` dosyanızda `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION` ve `AWS_BUCKET_NAME` değerlerini ayarlayın.
+- IRSA için: yalnızca `AWS_REGION` ve `AWS_BUCKET_NAME` değerlerini ayarlayın; pod'unuzun hizmet hesabının doğru şekilde etiketlendiğinden (annotated) emin olun.
+
+4. **LibreChat'i yapılandırın:**
+
+- `librechat.yaml` yapılandırma dosyanızda `fileStrategy` değerini `"s3"` olarak ayarlayın veya belgeleri S3'te tutarken görselleri ve avatarları CloudFront üzerinden göndermek için `fileStrategies` kullanın.
+
+Bu adımlarla, LibreChat uygulamanız dosya yükleme, indirme ve silme işlemlerini yönetmek için Amazon S3'ü kullanacaktır. Ayrıca, IRSA desteği sayesinde uygulamanız, uzun süreli AWS kimlik bilgilerini gömmeye gerek kalmadan Kubernetes üzerinde güvenli bir şekilde çalışabilir.
+
+<Callout type="info" title="Not">
+  AWS kimlik bilgilerinizin her zaman güvende kaldığından emin olun. Bunları herkese açık bir depoya (repository) işlemeyin (commit).
+  IAM politikalarını gerektiği şekilde en az yetki ilkesine (principle of least privilege) uyacak şekilde ayarlayın.
+</Callout>

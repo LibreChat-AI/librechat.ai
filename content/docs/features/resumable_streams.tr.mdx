@@ -1,0 +1,127 @@
+---
+title: Devam Ettirilebilir Akışlar
+icon: Zap
+description: >-
+  Bağlantı kesildiğinde devam eden AI yanıtlarını kurtarın, aynı sohbeti
+  sekmeler ve cihazlar arasında senkronize edin ve ölçeklendirilmiş örnekler
+  genelinde akışları canlı tutun.
+---
+
+Devam ettirilebilir akışlar (resumable streams), devam eden bir yapay zeka yanıtının bağlantı koptuğunda hayatta kalmasını sağlar. Ağ bağlantısı kesilirse, tarayıcı yenilenirse veya sekmeler ya da cihazlar arasında geçiş yaparsanız, LibreChat halihazırda akışı sağlanmış içeriği yeniden oluşturur ve kaldığı yerden devam eder. Aynı mekanizma, tek bir sohbetin birden fazla görüntüleyicisini de senkronize tutar.
+
+## Ne Elde Edersiniz [#what-you-get]
+
+- **Yanıt kaybı yok.** Ağ kesintileri, tarayıcı yenilemeleri ve sunucu yeniden başlatmaları, akış halindeki içeriği kaybetmenize neden olmaz.
+- **Sekmeler senkronize kalır.** Bir konuşmayı iki tarayıcı sekmesinde açın; her ikisi de aynı güncellemeleri gerçek zamanlı olarak alır.
+- **Cihazlar arasında anında geçiş yapın.** Masaüstünüzde bir oluşturma işlemini başlatın ve sonucu telefonunuzdan takip etmeye devam edin.
+- **Arka planda oluşturma.** Uzun bir yanıt başlatın, başka bir sekmeye veya uygulamaya geçin; geri döndüğünüzde yanıtın tamamı orada olacaktır.
+- **Paylaşılan sohbetler.** Paylaşılan bir sohbeti görüntüleyen herkes, içeriğin aynı anda aktığını görür.
+
+## Nasıl Çalışır [#how-it-works]
+
+Bir mesaj gönderdiğinizde, LibreChat her bir akış deltasını kaydeden bir üretim işi oluşturur. Bağlantı koparsa:
+
+1. İstemci bağlantının kesildiğini algılar.
+2. Yeniden bağlanma durumunda sunucu, işin kaydedilmiş deltalarından şimdiye kadar aktarılan içeriği yeniden oluşturur.
+3. Eksik içerik tek bir senkronizasyon etkinliğinde iletilir.
+4. Akış mevcut konumdan devam ediyor.
+
+Bu otomatik olarak çalışır ve herhangi bir kullanıcı işlemi gerektirmez.
+
+## Dağıtım Modları [#deployment-modes]
+
+LibreChat, devam ettirilebilir akışlar için iki arka uç ile birlikte gelir.
+
+### Tek Örnekli Mod (varsayılan) [#single-instance-mode-default]
+
+Akış durumunu bellekte tutar ve pub/sub için bir Node.js `EventEmitter` kullanır. Bu varsayılan yöntemdir ve herhangi bir yapılandırma gerektirmez. Yerel geliştirme, tek sunuculu dağıtımlar ve Docker Compose kurulumlarını kapsar.
+
+### Redis Modu (production) [#redis-mode-production]
+
+Akış durumunun örnekler arasında paylaşılabilmesi için Redis Streams ve Pub/Sub kullanır. Kubernetes kümeleri dahil olmak üzere yatay ölçeklendirilmiş, yük dengeli veya yüksek erişilebilirlik gerektiren dağıtımlar için kullanın. Redis ile bir örnekte başlatılan üretim bir diğerinde devam ettirilebilir; bu da kademeli dağıtımlar ve otomatik ölçeklendirme sırasında aktif akışların canlı kalmasını sağlar.
+
+<Callout type="info" title="Tek örnek mi? Burada muhtemelen Redis'e ihtiyacınız yok">
+In-memory modu, tek bir LibreChat örneği için her şeyi yönetir. Redis, bir yük dengeleyicinin arkasında birden fazla örnek çalıştırdığınızda önem kazanır. Redis, tek örnekli dağıtımlarda önbelleğe alma ve oturum depolama için hala yararlıdır, ancak özellikle devam ettirilebilir akışlar (resumable streams) için değildir.
+</Callout>
+
+## Yapılandırma [#configuration]
+
+### Redis Streams'i Etkinleştir [#enable-redis-streams]
+
+`USE_REDIS=true` ayarını yapmak, devam ettirilebilir akışların otomatik olarak Redis kullanmasını sağlar. Bunu açıkça kontrol etmek için `USE_REDIS_STREAMS` kullanın.
+
+```bash filename=".env"
+USE_REDIS=true
+REDIS_URI=redis://localhost:6379
+# Resumable streams use Redis automatically when USE_REDIS=true.
+# Set USE_REDIS_STREAMS to control it explicitly:
+USE_REDIS_STREAMS=true
+```
+
+### Redis Cluster [#redis-cluster]
+
+Bir Redis Cluster için, cluster modunu etkinleştirin ve düğümleri `REDIS_URI` içinde listeleyin.
+
+```bash filename=".env"
+USE_REDIS_STREAMS=true
+USE_REDIS_CLUSTER=true
+REDIS_URI=redis://node1:7001,redis://node2:7002,redis://node3:7003
+```
+
+LibreChat, çoklu anahtar işlemlerinin aynı küme yuvasına (cluster slot) denk gelmesi için etiketli (hash-tagged) anahtarlar kullanır.
+
+## Neler Yeniden Oluşturulur [#what-gets-reconstructed]
+
+Yeniden bağlanma durumunda LibreChat, şunları yeniden oluşturmak için kaydedilen delta olaylarını toplar:
+
+- İleti içeriği (metin, araç çağrıları, alıntılar)
+- Ajan çalıştırma adımları ve ara muhakeme
+- Meta veriler ve durum bilgisi
+
+Depolama mekanizması dağıtım moduna bağlıdır:
+
+| Bileşen | Depolama Mekanizması |
+|-----------|-------------------|
+| Chunks | Redis Streams (`XADD`/`XRANGE`) |
+| İş meta verileri | Redis Hash yapıları |
+| Gerçek zamanlı olaylar | Redis Pub/Sub kanalları |
+| Süre sonu | Akış tamamlandıktan sonra otomatik TTL |
+
+LibreChat, bunu düşük maliyetli tutmak için birkaç optimizasyon uygular:
+
+- **Bellek öncelikli kurtarma.** Aynı örneğe yeniden bağlanmak yerel önbellekten okuma yaparak Redis gidiş-dönüşünü önler.
+- **Erişim sırasında temizleme.** Eski iş girdileri sorgular sırasında kaldırılır ve tamamlanan akışların süresi otomatik olarak dolar.
+- **Çöp toplayıcı (Garbage-collected) depolama.** Bellek içi (in-memory) modu, akış grafiklerini `WeakRef` ile depolar, böylece bir konuşma sona erdiğinde bunlar toplanır.
+
+## Test Etme [#testing]
+
+Özelliğin çalıştığını doğrulamak için herhangi bir modelle akışlı (streaming) bir konuşma başlatın, ardından şunlardan birini deneyin:
+
+- **Sekmeler.** Aynı sohbeti ikinci bir sekmede açın; her ikisi de senkronize olmalıdır.
+- **Bağlantıyı kesin.** Ağ bağlantısını kısa bir süreliğine kesin, ardından tekrar bağlanın.
+- **Gezinme.** Akış devam ederken başka bir yere gidin, ardından geri dönün.
+
+Her durum, eksik içerik olmaksızın tam yanıtı üretmelidir.
+
+## Sorun Giderme [#troubleshooting]
+
+**Akışlar devam etmiyor.** Redis'in erişilebilir olduğunu ve `USE_REDIS_STREAMS` ayarının yapıldığını doğrulayın.
+
+```bash
+docker exec -it librechat-redis redis-cli ping
+# Expected: PONG
+
+echo $USE_REDIS_STREAMS
+```
+
+**İçerik yinelenmiş görünüyor.** Bu genellikle bir istemci sürümü uyuşmazlığı anlamına gelir. LibreChat'in en son sürümüne güncelleyin.
+
+**Tek örnekli modda yüksek bellek kullanımı.** Tamamlanan akışlar çöp toplayıcı (garbage collector) tarafından temizlenir. Bellek kullanımı yüksek kalmaya devam ederse, asla tamamlanmayan çok uzun süreli akışları veya temizlenmeden hata veren akışları kontrol edin.
+
+## İlgili Dokümantasyon [#related-documentation]
+
+- [Redis Yapılandırması](/docs/configuration/redis): önbelleğe alma ve yatay ölçeklendirme için Redis kurulumu
+- [Agents](/docs/features/agents): Araç kullanımı olan AI ajanları
+- [Docker Deployment](/docs/local/docker): konteyner tabanlı dağıtım
+
+Uygulama detayları için [PR #10926](https://github.com/danny-avila/LibreChat/pull/10926) adresine bakın.

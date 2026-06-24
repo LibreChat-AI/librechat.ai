@@ -1,0 +1,142 @@
+---
+title: System uwierzytelniania
+icon: BookOpen
+description: >-
+  Ten przewodnik wyjaśnia, jak korzystać z systemu uwierzytelniania użytkowników
+  LibreChat, który oferuje bezpieczne i łatwe logowanie przez e-mail oraz media
+  społecznościowe. Dowiesz się, jak skonfigurować rejestrację, logowanie,
+  resetowanie hasła i inne funkcje.
+---
+
+## Ogólne [#general]
+
+Aby uzyskać szybki przegląd, zapoznaj się z przewodnikiem użytkownika dostępnym tutaj: [Authentication](/docs/features/authentication)
+
+Oto przegląd ogólnej konfiguracji.
+
+<OptionTable
+  options={[
+    ['ALLOW_EMAIL_LOGIN', 'boolean', 'Włącz lub wyłącz TYLKO logowanie przez e-mail.','ALLOW_EMAIL_LOGIN=true'],
+    ['ALLOW_REGISTRATION', 'boolean', 'Włącz lub wyłącz rejestrację nowych użytkowników przez Email.','ALLOW_REGISTRATION=true'],
+    ['ALLOW_SOCIAL_LOGIN', 'boolean', 'Zezwalaj użytkownikom na łączenie się z LibreChat za pomocą różnych sieci społecznościowych.','ALLOW_SOCIAL_LOGIN=false'],
+    ['ALLOW_SOCIAL_REGISTRATION', 'boolean', 'Włącz lub wyłącz rejestrację nowych użytkowników przy użyciu różnych sieci społecznościowych.','ALLOW_SOCIAL_REGISTRATION=false'],
+  ]}
+/>
+
+> **Uwaga:** OpenID i SAML nie obsługują możliwości wyłączenia samej rejestracji.
+
+Szybkie wskazówki:
+
+- Nawet przy wyłączonej rejestracji możesz dodawać użytkowników bezpośrednio do bazy danych, korzystając ze [skryptu create-user](#create-user-script) opisanego poniżej.
+- Aby usunąć użytkownika, możesz użyć [skryptu delete-user](#delete-user-script), który został również szczegółowo opisany poniżej.
+
+
+<ThemeImage
+  light="https://github.com/danny-avila/LibreChat/assets/32828263/4c51dc25-31d3-4c51-8c2a-0cdfb5a25033"
+  dark="https://github.com/danny-avila/LibreChat/assets/32828263/3bc5371d-e51d-4e91-ac68-56db6e85bb2c"
+  alt="Ekran rejestracji użytkownika"
+/>
+
+
+## Wygasanie sesji i token odświeżania [#session-expiry-and-refresh-token]
+
+- Wartości domyślne: wygaśnięcie sesji: 15 minut, wygaśnięcie tokena odświeżania: 7 dni
+  - Więcej informacji: **[GitHub PR #927 - Refresh Token](https://github.com/danny-avila/LibreChat/pull/927)**
+
+<OptionTable
+  options={[
+    ['SESSION_EXPIRY', 'integer (milliseconds)', 'Czas wygaśnięcia sesji.','SESSION_EXPIRY=1000 * 60 * 15'],
+    ['REFRESH_TOKEN_EXPIRY', 'integer (milliseconds)', 'Czas wygaśnięcia tokena odświeżania.','REFRESH_TOKEN_EXPIRY=(1000 * 60 * 60 * 24) * 7'],
+  ]}
+/>
+
+``` mermaid
+sequenceDiagram
+    Client->>Server: Login request with credentials
+    Server->>Passport: Use authentication strategy (e.g., 'local', 'google', etc.)
+    Passport-->>Server: User object or false/error
+    Note over Server: If valid user...
+    Server->>Server: Generate access and refresh tokens
+    Server->>Database: Store hashed refresh token
+    Server-->>Client: Access token and refresh token
+    Client->>Client: Store access token in HTTP Header and refresh token in HttpOnly cookie
+    Client->>Server: Request with access token from HTTP Header
+    Server-->>Client: Requested data
+    Note over Client,Server: Access token expires
+    Client->>Server: Request with expired access token
+    Server-->>Client: Unauthorized
+    Client->>Server: Request with refresh token from HttpOnly cookie
+    Server->>Database: Retrieve hashed refresh token
+    Server->>Server: Compare hash of provided refresh token with stored hash
+    Note over Server: If hashes match...
+    Server-->>Client: New access token and refresh token
+    Client->>Server: Retry request with new access token
+    Server-->>Client: Requested data
+```
+
+## JWT Secret i Refresh Secret [#jwt-secret-and-refresh-secret]
+
+- Powinieneś użyć nowych, bezpiecznych wartości. Podane przykłady to 32-bajtowe klucze (64 znaki w formacie szesnastkowym).
+  - Użyj tego narzędzia, aby szybko wygenerować kilka: **[Klucze JWT](/toolkit/creds_generator)**
+
+<OptionTable
+  options={[
+    ['JWT_SECRET', 'string (hex)', 'Klucz tajny JWT.','JWT_SECRET=16f8c0ef4a5d391b26034086c628469d3f9f497f08163ab9b40137092f2909ef'],
+    ['JWT_REFRESH_SECRET', 'string (hex)', 'Klucz tajny odświeżania JWT.','JWT_REFRESH_SECRET=eaa5191f2914e30b9387fd84e254e4ba6fc51b4654968a9b0803b456a54b8418'],
+  ]}
+/>
+
+---
+
+## Zautomatyzowany system moderacji (opcjonalnie) [#automated-moderation-system-optional]
+
+Zautomatyzowany system moderacji (Automated Moderation System) jest domyślnie włączony. Wykorzystuje on mechanizm punktacji do śledzenia naruszeń użytkowników. Gdy użytkownicy wykonują działania takie jak nadmierna liczba logowań, rejestracji lub wysyłanie wiadomości, gromadzą punkty naruszeń. Po osiągnięciu określonego progu użytkownik oraz jego adres IP są tymczasowo blokowani. System ten zapewnia bezpieczeństwo platformy poprzez monitorowanie i karanie gwałtownych lub podejrzanych aktywności.
+
+Aby skonfigurować system modów, zapoznaj się z [przewodnikiem konfiguracji](/docs/configuration/mod_system).
+
+> *Uwaga: Jeśli chcesz, aby to działało w trybie deweloperskim, musisz utworzyć plik o nazwie `.env.development` w katalogu głównym i ustawić `DOMAIN_CLIENT` na `http://localhost:3090` lub inny port udostępniony przez vite podczas uruchamiania `npm run frontend-dev`*
+
+## Skrypty zarządzania użytkownikami [#user-management-scripts]
+
+### Utwórz skrypt użytkownika [#create-user-script]
+
+Skrypt create-user umożliwia dodawanie użytkowników bezpośrednio do bazy danych, nawet gdy rejestracja jest wyłączona. Oto jak go użyć:
+
+1. Dla domyślnego `docker-compose.yml` (jeśli używasz `docker compose up`, aby uruchomić aplikację):
+   ```bash
+   docker compose exec api npm run create-user
+   ```
+
+2. Dla `deploy-compose.yml` (jeśli postępowałeś zgodnie z [Przewodnikiem Docker dla Ubuntu](/docs/remote/docker_linux)):
+   ```bash
+   docker exec -it LibreChat-API /bin/sh -c "cd .. && npm run create-user"
+   ```
+
+3. Do lokalnego programowania (z katalogu głównego projektu):
+   ```bash
+   npm run create-user
+   ```
+
+Postępuj zgodnie z instrukcjami, aby wprowadzić adres e-mail i hasło nowego użytkownika.
+
+### Skrypt usuwania użytkownika [#delete-user-script]
+
+Aby usunąć użytkownika, możesz użyć skryptu delete-user:
+
+1. Dla domyślnego `docker-compose.yml` (jeśli używasz `docker compose up`, aby uruchomić aplikację):
+   ```bash
+   docker compose exec api npm run delete-user email@domain.com
+   ```
+
+2. Dla `deploy-compose.yml` (jeśli postępowałeś zgodnie z [Przewodnikiem Docker dla Ubuntu](/docs/remote/docker_linux)):
+   ```bash
+   docker exec -it LibreChat-API /bin/sh -c "cd .. && npm run delete-user email@domain.com"
+   ```
+
+3. Do lokalnego programowania (z katalogu głównego projektu):
+   ```bash
+   npm run delete-user email@domain.com
+   ```
+
+Zastąp `email@domain.com` adresem e-mail użytkownika, którego chcesz usunąć.
+

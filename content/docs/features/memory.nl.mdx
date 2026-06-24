@@ -1,0 +1,275 @@
+---
+title: Gebruikersgeheugen
+icon: Bookmark
+description: >-
+  Key/value-opslag voor gebruikersgeheugen die bij elk chatverzoek in LibreChat
+  wordt uitgevoerd
+---
+
+## Overzicht [#overview]
+
+User Memory in LibreChat is een **key/value store** die gebruikersspecifieke informatie behoudt tussen gesprekken door. Een toegewezen memory agent wordt uitgevoerd aan het begin van **elk chatverzoek**, waarbij deze uit de store leest en ernaar schrijft om gepersonaliseerde context te bieden aan het hoofd-AI-antwoord.
+
+<Callout type="info" title="Key/Value-opslag, geen gespreksgeheugen">
+Dit is **geen** semantisch geheugen over je volledige gespreksgeschiedenis. Het indexeert, embedt of doorzoekt geen eerdere gesprekken. In plaats daarvan onderhoudt het een gestructureerde set van sleutel/waarde-paren (bijv. `user_preferences`, `learned_facts`) die als context in elk verzoek worden geïnjecteerd. Zie het als een persistent notitieblok dat de AI leest vóór elk antwoord.
+
+Voor context over eerdere berichten binnen een enkele conversatie gebruikt LibreChat al het standaard berichtgeschiedenisvenster — dat staat los van deze functie.
+
+</Callout>
+
+<Callout type="important" title="⚠️ Configuratie vereist">
+  Geheugenfunctionaliteit moet expliciet worden geconfigureerd in uw `librechat.yaml` bestand om te werken. Het is standaard niet ingeschakeld.
+</Callout>
+
+## Belangrijkste functies [#key-features]
+
+- **Wordt bij elk verzoek uitgevoerd**: De memory agent wordt uitgevoerd aan het begin van elk chatverzoek, waardoor wordt gegarandeerd dat de opgeslagen context altijd beschikbaar is.
+- **Key/Value Storage**: Informatie wordt opgeslagen als gestructureerde key/value-paren, niet als onbewerkte gesprekslogboeken
+- **Handmatige invoer**: Gebruikers kunnen geheugenitems handmatig toevoegen, bewerken of verwijderen, waardoor ze volledige controle hebben over wat de AI onthoudt.
+- **Gebruikersbeheer**: Wanneer ingeschakeld, kunnen gebruikers het geheugen in- of uitschakelen voor hun individuele chats
+- **Aanpasbare sleutels**: Beperk welke categorieën informatie kunnen worden opgeslagen met behulp van `validKeys`
+- **Tokenbeheer**: Stel limieten in op het geheugengebruik om de kosten te beheersen
+- **Agent-integratie**: Gebruik AI-agents om op intelligente wijze te beheren wat wordt onthouden
+
+## Configuratie [#configuration]
+
+Om geheugenfuncties in te schakelen, moet je de `memory` configuratie toevoegen aan je `librechat.yaml` bestand:
+
+```yaml filename="librechat.yaml"
+version: 1.3.5
+cache: true
+
+memory:
+  disabled: false # Set to true to completely disable memory
+  personalize: true # Gives users the ability to toggle memory on/off, true by default
+  tokenLimit: 2000 # Maximum tokens for memory storage
+  maxInputTokens: 12000 # Maximum recent-chat tokens sent to the memory agent
+  messageWindowSize: 5 # Number of recent messages to consider
+  agent:
+    provider: 'openAI'
+    model: 'gpt-4'
+```
+
+Het provider veld moet overeenkomen met de geaccepteerde waarden zoals gedefinieerd in de [Model Spec Guide](/docs/configuration/librechat_yaml/object_structure/model_specs#endpoint).
+
+**Let op:** Als je een aangepaste endpoint gebruikt, moet de endpoint-waarde exact overeenkomen met de gedefinieerde naam van de aangepaste endpoint.
+
+Zie de [Memory Configuration Guide](/docs/configuration/librechat_yaml/object_structure/memory) voor gedetailleerde configuratie-opties.
+
+## Hoe het werkt [#how-it-works]
+
+<Callout type="note" title="Uitvoering van de Memory Agent">
+De memory agent wordt uitgevoerd bij **elk chatverzoek** wanneer memory is ingeschakeld. Deze wordt gelijktijdig met het hoofd-chatantwoord uitgevoerd — het begint voordat het hoofdantwoord start en is beperkt tot de duur van het hoofdverzoek plus maximaal 3 seconden nadat dit is voltooid.
+
+Dit betekent dat elk bericht dat je verstuurt de memory agent activeert om:
+
+<ol>
+  <li>
+    <strong>Lees</strong> de huidige sleutel/waarde-opslag en voeg relevante items toe als context
+  </li>
+  <li>
+    <strong>Analyseer</strong> het recente berichtvenster op informatie die het opslaan of bijwerken waard is
+  </li>
+  <li>
+    <strong>Schrijf</strong> alle nieuwe of gewijzigde items terug naar de store
+  </li>
+</ol>
+</Callout>
+
+### 1. Key/Value-opslag [#1-keyvalue-storage]
+
+Geheugenitems worden opgeslagen als sleutel/waarde-paren. Wanneer geheugen is ingeschakeld, kan het systeem items opslaan zoals:
+
+- Gebruikersvoorkeuren (communicatiestijl, onderwerpen van interesse)
+- Belangrijke feiten die expliciet door gebruikers zijn gedeeld
+- Lopende projecten of taken die worden genoemd
+- Elke categorie die je definieert via `validKeys`
+
+Gebruikers kunnen ook **handmatig geheugenitems aanmaken, bewerken en verwijderen** via de interface, wat directe controle geeft over wat de AI over hen weet.
+
+### 2. Context Window [#2-context-window]
+
+De `messageWindowSize` parameter bepaalt hoeveel recente berichten worden geanalyseerd voor geheugenupdates. Dit helpt de memory agent te beslissen welke informatie het waard is om op te slaan of bij te werken in de key/value store.
+
+De `maxInputTokens` parameter begrenst de tekst van recente chats die naar de automatische memory agent wordt verzonden vóór extractie. Als het geselecteerde berichtvenster nog steeds te groot is, behoudt LibreChat de nieuwste context en laat het eerdere chatinhoud weg voordat de memory agent wordt aangeroepen.
+
+### 3. Gebruikersbeheer [#3-user-control]
+
+Wanneer `personalize` is ingesteld op `true`:
+
+- Gebruikers zien een geheugenschakelaar in hun chatinterface
+- Ze kunnen geheugen in- of uitschakelen voor individuele gesprekken
+- Geheugeninstellingen blijven behouden tussen sessies
+
+### 4. Geldige sleutels [#4-valid-keys]
+
+U kunt beperken welke categorieën informatie worden opgeslagen door `validKeys` op te geven:
+
+```yaml filename="memory / validKeys"
+memory:
+  validKeys:
+    - 'user_preferences'
+    - 'conversation_context'
+    - 'learned_facts'
+    - 'personal_information'
+```
+
+## Best Practices [#best-practices]
+
+### 1. Tokenlimieten [#1-token-limits]
+
+Stel geschikte tokenlimieten in om functionaliteit in balans te brengen met kosten:
+
+- Hogere limieten maken een uitgebreider geheugen mogelijk
+- Lagere limieten verlagen de verwerkingskosten
+- Overweeg je gebruikspatronen en budget
+
+### 2. Custom Instructions [#2-custom-instructions]
+
+Wanneer je `validKeys` gebruikt, geef dan aangepaste instructies aan de memory agent:
+
+```yaml filename="memory / agent with instructions"
+memory:
+  agent:
+    provider: 'openAI'
+    model: 'gpt-4'
+    instructions: |
+      Store information only in the specified validKeys categories.
+      Focus on explicitly stated preferences and important facts.
+      Delete outdated or corrected information promptly.
+```
+
+### 3. Privacyoverwegingen [#3-privacy-considerations]
+
+- Geheugen slaat gebruikersinformatie op over verschillende gesprekken heen
+- Zorg ervoor dat gebruikers begrijpen welke informatie wordt opgeslagen
+- Overweeg het implementeren van dataretentiebeleid
+- Zorg voor duidelijke documentatie over het geheugengebruik
+
+## Voorbeelden [#examples]
+
+### Basisconfiguratie [#basic-configuration]
+
+Schakel geheugen in met standaardinstellingen:
+
+```yaml filename="Basic memory config"
+memory:
+  tokenLimit: 2000
+  maxInputTokens: 12000
+  agent:
+    provider: 'openAI'
+    model: 'gpt-4.1-mini'
+```
+
+### Geavanceerde configuratie [#advanced-configuration]
+
+Volledige configuratie met alle opties:
+
+```yaml filename="Advanced memory config"
+memory:
+  disabled: false
+  validKeys: ['preferences', 'context', 'facts']
+  tokenLimit: 3000
+  maxInputTokens: 12000
+  personalize: true
+  messageWindowSize: 10
+  agent:
+    provider: 'anthropic'
+    model: 'claude-3-opus-20240229'
+    instructions: 'Remember only explicitly stated preferences and key facts.'
+    model_parameters:
+      temperature: 0.3
+```
+
+Voor geldige modelparameters per provider, zie de [Model Spec Preset Fields](/docs/configuration/librechat_yaml/object_structure/model_specs#preset-fields).
+
+### Vooraf gedefinieerde agents gebruiken [#using-predefined-agents]
+
+Verwijs naar een bestaande agent op ID:
+
+```yaml filename="Memory with agent ID"
+memory:
+  agent:
+    id: 'memory-specialist-001'
+```
+
+### Aangepaste endpoints met geheugen [#custom-endpoints-with-memory]
+
+Memory ondersteunt volledig custom endpoints, inclusief die met custom headers en omgevingsvariabelen. Bij het gebruik van een custom endpoint worden header-placeholders en omgevingsvariabelen correct opgelost tijdens de verwerking van het geheugen.
+
+```yaml filename="librechat.yaml with custom endpoint for memory"
+
+endpoints:
+    custom:
+        - name: 'Custom Memory Endpoint'
+           apiKey: 'dummy'
+           baseURL: 'https://api.gateway.ai/v1'
+           headers:
+             x-gateway-api-key: '${GATEWAY_API_KEY}'
+             x-gateway-virtual-key: '${GATEWAY_OPENAI_VIRTUAL_KEY}'
+             X-User-Identifier: '{{LIBRECHAT_USER_EMAIL}}'
+             X-Application-Identifier: 'LibreChat - Test'
+             api-key: '${TEST_CUSTOM_API_KEY}'
+           models:
+             default:
+               - 'gpt-4o-mini'
+               - 'gpt-4o'
+             fetch: false
+
+memory:
+  disabled: false
+  tokenLimit: 3000
+  maxInputTokens: 12000
+  personalize: true
+  messageWindowSize: 10
+  agent:
+    provider: 'Custom Memory Endpoint'
+    model: 'gpt-4o-mini'
+```
+
+- Alle [custom endpoint headers](/docs/configuration/librechat_yaml/object_structure/custom_endpoint#headers) worden ondersteund
+
+## Probleemoplossing [#troubleshooting]
+
+### Geheugen werkt niet [#memory-not-working]
+
+1. Controleer of het geheugen is geconfigureerd in `librechat.yaml`
+2. Controleer of `disabled` is ingesteld op `false`
+3. Zorg ervoor dat de geconfigureerde agent/model beschikbaar is
+4. Controleer of gebruikers geheugen hebben ingeschakeld in hun chatinterface
+5. Voor custom endpoints: zorg ervoor dat de `provider` naam exact overeenkomt met de custom endpoint `name`
+
+### Hoog tokengebruik [#high-token-usage]
+
+1. Verlaag `tokenLimit` om kosten te beheersen
+2. Verlaag `maxInputTokens` om te beperken hoeveel van de recente chat naar de memory agent wordt verzonden
+3. Verlaag `messageWindowSize` om minder berichten te analyseren
+4. Gebruik `validKeys` om te beperken wat er wordt opgeslagen
+5. Agent-instructies beoordelen en optimaliseren
+
+### Inconsistent geheugen [#inconsistent-memory]
+
+1. Controleer of gebruikers geheugen in- of uitschakelen
+2. Controleer of tokenlimieten niet worden overschreden
+3. Zorg voor een consistente agentconfiguratie
+4. Controleer opgeslagen geheugen op conflicten
+
+### Problemen met authenticatie voor aangepaste endpoint [#custom-endpoint-authentication-issues]
+
+1. Controleer of omgevingsvariabelen correct zijn ingesteld in uw `.env` bestand
+2. Zorg ervoor dat aangepaste headers de juiste syntaxis gebruiken (`${ENV_VAR}` voor omgevingsvariabelen, `{{LIBRECHAT_USER_*}}` voor gebruikers-placeholders)
+3. Controleer of het aangepaste endpoint werkt voor reguliere chat-aanvullingen voordat je het test met memory
+4. Controleer de serverlogs op authenticatiefouten van de custom endpoint API
+
+## Toekomstige verbeteringen [#future-improvements]
+
+De huidige implementatie voert de memory agent onvoorwaardelijk uit bij elk chatverzoek. Geplande verbeteringen zijn onder andere:
+
+- **Semantische trigger voor schrijfacties**: Detecteer wanneer een gebruiker het model expliciet heeft gevraagd om iets te onthouden (bijv. "Onthoud dat ik de voorkeur geef aan Python") en voer de memory write agent alleen in die gevallen uit, waardoor onnodige verwerking bij routinematige berichten wordt verminderd.
+- **Vector Similarity Recall**: In plaats van alle opgeslagen geheugenitems in elk verzoek te injecteren, worden vector-embeddings gebruikt om alleen de items op te halen die het meest relevant zijn voor de huidige gesprekscontext, wat zowel de efficiëntie als de relevantie verbetert.
+
+## Gerelateerde functies [#related-features]
+
+- [Agents](/docs/features/agents) - Bouw aangepaste AI-assistenten
+- [Presets](/docs/user_guides/presets) - Sla gespreksinstellingen op
+- [Fork Messages](/docs/features/fork) - Vertak gesprekken met behoud van context

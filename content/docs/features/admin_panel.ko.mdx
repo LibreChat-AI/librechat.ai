@@ -1,0 +1,212 @@
+---
+title: 관리자 패널
+icon: LayoutDashboard
+description: >-
+  LibreChat 사용자, 그룹, 역할, 구성 재정의 및 시스템 권한을 관리하기 위한 독립형 웹 UI - librechat.yaml을 직접
+  수정할 필요가 없습니다.
+---
+
+# LibreChat 관리자 패널 [#librechat-admin-panel]
+
+**LibreChat 관리자 패널**은 LibreChat을 위한 독립형 브라우저 기반 관리 인터페이스입니다. 이 패널은 LibreChat과 동일한 데이터베이스에 연결되며, [세분화된 액세스 제어](/docs/features/access_control)를 구동하는 관리 작업을 위한 GUI를 제공합니다. 여기에는 사용자 및 그룹 관리, 역할 관리, 역할 또는 그룹별로 범위가 지정된 구성 재정의, 시스템 수준의 기능 권한 부여가 포함됩니다.
+
+<Callout type="info" title="상태: 미리보기">
+  관리자 패널은 현재 테스트가 가능하며, [LibreChat v0.8.5](/changelog/v0.8.5)에서 도입된 관리자 API를 기반으로 구축되는 향후 관리 인터페이스입니다. 소스, 이슈 및 릴리스는 [github.com/ClickHouse/librechat-admin-panel](https://github.com/ClickHouse/librechat-admin-panel)에서 확인할 수 있습니다.
+</Callout>
+
+## 기능 설명 [#what-it-does]
+
+관리자 패널은 씬 클라이언트(thin client)입니다. 모든 데이터는 LibreChat의 데이터베이스에 저장되며, 모든 작업은 LibreChat API 서버의 버전이 지정된 `/api/admin/*` 엔드포인트를 통해 이루어집니다. 이를 통해 관리자는 다음 작업을 한곳에서 수행할 수 있습니다.
+
+- **구성 관리**: 동적 스키마 기반 폼을 통해 모든 LibreChat 설정을 확인하고 편집하세요. 구성 스키마에 추가된 새 필드는 관리자 패널 릴리스 없이도 자동으로 나타납니다.
+- **주체별 재정의 적용**: 구성 재정의 범위를 특정 역할이나 그룹으로 지정하며, 사용자가 로그인할 때 각 사용자에게 적용될 최종 값을 결정하는 우선순위 기반의 계단식 방식을 사용합니다.
+- **사용자 관리**: 인스턴스의 모든 계정을 나열, 검색 및 조회합니다.
+- **그룹 관리**: 그룹 생성 및 삭제, 멤버 추가/제거, 그리고 ACL 및 재정의(overrides)에서 그룹을 일급 주체(first-class principals)로 사용합니다.
+- **역할 관리**: 내장된 `USER` / `ADMIN` 외에 사용자 지정 역할을 생성하고, 기능 권한 매트릭스를 편집하며, 사용자에게 역할을 할당합니다.
+- **Issue system grants**: 특정 사용자, 그룹 또는 역할에 전체 관리자 권한을 부여하지 않고도 관리 기능(예: `manage:users`, `read:usage`, `manage:mcpservers`)을 위임합니다.
+- **Authenticate**: 로컬 LibreChat 관리자 계정으로 로그인하거나, LibreChat 인스턴스에서 활성화된 경우 OpenID SSO / SAML / 지원되는 OAuth 제공업체를 통해 로그인합니다.
+
+기본 권한 모델(주체, 리소스 ACL, 기능 및 계층 구성 방식)에 대해서는 [Access Control](/docs/features/access_control) 페이지를 참조하세요.
+
+## 아키텍처 [#architecture]
+
+```
+┌──────────────────┐         ┌──────────────────┐         ┌──────────────┐
+│  Admin Panel     │ ───────▶│  LibreChat API   │ ───────▶│   MongoDB    │
+│  (Bun + Vite)    │  HTTPS  │  /api/admin/*    │         │  (shared DB) │
+└──────────────────┘         └──────────────────┘         └──────────────┘
+       │                             │
+       │ OAuth/OIDC/SAML redirect    │ Verifies admin access
+       └─────────────────────────────┘
+```
+
+관리자 패널은 별도의 서비스로 실행되며, LibreChat과 프로세스를 공유하지 않습니다. 관리자 기능은 `access:admin` 시스템 권한 또는 `SystemRoles.ADMIN` 역할을 통해 LibreChat 측에서 검증되므로, 패널이 스스로 권한을 부여할 수 없습니다.
+
+LibreChat이 노출하는 관리자 API 표면은 다음과 같습니다:
+
+| Mount | Purpose |
+| ----------------------------------------- | --------------------------------------------------------- |
+| `POST /api/admin/login` &nbsp; `/oauth/*` | 관리자 전용 인증 엔드포인트 (로컬 + SSO) |
+| `GET /api/admin/verify` | 관리자 세션 유효성 검사 |
+| `/api/admin/users` | 사용자 목록 및 검색 |
+| `/api/admin/groups` | 그룹 CRUD + 멤버 관리 |
+| `/api/admin/roles` | 사용자 지정 역할 CRUD + 권한 편집 + 멤버 관리 |
+| `/api/admin/grants` | 시스템 기능 권한 부여 (할당/취소/목록) |
+| `/api/admin/config` | 기본 + 주체별 구성 재정의 |
+
+## 시작하기 [#getting-started]
+
+### 필수 조건 [#prerequisites]
+
+- **v0.8.5 이상**에서 실행 중인 LibreChat 인스턴스 (이전 버전에서는 관리자 API를 사용할 수 없음)
+- admin-panel 컨테이너/호스트에서 LibreChat API로의 네트워크 액세스
+- LibreChat의 관리자 계정: 최초 등록된 사용자(자동 관리자), Mongo에서 `role: 'ADMIN'`으로 설정된 사용자, 또는 `access:admin` 권한이 부여된 주체 중 하나입니다.
+
+### LibreChat과 함께 번들 제공 (권장) [#bundled-with-librechat-recommended]
+
+공식 [`docker-compose.yml`](https://github.com/danny-avila/LibreChat/blob/main/docker-compose.yml) 또는 [`deploy-compose.yml`](https://github.com/danny-avila/LibreChat/blob/main/deploy-compose.yml)을 사용하여 LibreChat을 실행하면, 관리자 패널이 서비스로 함께 제공되어 LibreChat과 동시에 자동으로 시작됩니다. 별도의 배포는 필요하지 않습니다.
+
+| Compose 파일 | 관리자 패널 URL | 서비스 방식 |
+| ------------------------------ | ------------------------ | ----------------------------------------------------------------- |
+| `docker-compose.yml` (기본값) | `http://localhost:3000`  | 호스트 포트(`ADMIN_PANEL_PORT`, 기본값 `3000`)에 게시됨 |
+| `deploy-compose.yml`           | `http://admin.localhost` | 번들로 제공되는 nginx 리버스 프록시를 통해 서브도메인으로 라우팅됨 |
+
+LibreChat의 `.env` 파일에 패널의 session secret을 설정하세요. compose 파일은 이를 패널의 `SESSION_SECRET`으로 전달합니다:
+
+```bash filename=".env"
+# Min 32 characters. Generate with: openssl rand -hex 32
+ADMIN_PANEL_SESSION_SECRET=replace-with-a-32-char-random-string
+
+# Optional: host port for the default docker-compose
+# ADMIN_PANEL_PORT=3000
+
+# Optional: set true when the panel is served over HTTPS
+# ADMIN_PANEL_SESSION_COOKIE_SECURE=false
+```
+
+compose 파일은 나머지를 자동으로 연결합니다: `API_SERVER_URL`은 `api` 서비스를 가리키고, `VITE_API_BASE_URL`은 브라우저 대상 OAuth 리디렉션을 위해 `DOMAIN_CLIENT`를 따르며, `ADMIN_PANEL_URL`은 LibreChat이 SSO 이후 관리자를 패널로 다시 안내하도록 설정됩니다. 이를 사용하지 않으려면 `admin-panel` 서비스를 제거하거나 Compose [`profiles`](https://docs.docker.com/compose/how-tos/profiles/) 항목 뒤에 배치하여 제한하십시오.
+
+<Callout type="info" title="실제 도메인에서의 admin.localhost">
+  Modern browsers resolve `*.localhost` (including `admin.localhost`) to `127.0.0.1`, so the
+  deploy-compose URL works with no hosts-file change. For a real domain, point a DNS record at the
+  host, update the `admin.localhost` `server_name` in `client/nginx.conf`, and set `ADMIN_PANEL_URL`
+  to match.
+</Callout>
+
+### Standalone (별도 배포) [#standalone-separate-deployment]
+
+관리자 패널을 별도로 호스팅하여 다른 곳에서 실행 중인 LibreChat 인스턴스를 가리키도록 하려면, GHCR에서 게시된 이미지를 사용하세요:
+
+```bash
+# 1. Create an env file
+cp .env.example .env
+
+# 2. Edit .env and set at minimum:
+#    SESSION_SECRET=<random string, min 32 characters>
+#    VITE_API_BASE_URL=http://host.docker.internal:3080
+
+# 3. Start it
+docker compose up -d   # http://localhost:3000
+docker compose down    # stop
+```
+
+독립형 `docker run`:
+
+```bash
+docker run -p 3000:3000 \
+  --add-host=host.docker.internal:host-gateway \
+  -e SESSION_SECRET=replace-with-32-char-random-string \
+  -e VITE_API_BASE_URL=http://host.docker.internal:3080 \
+  ghcr.io/clickhouse/librechat-admin-panel:latest
+```
+
+<Callout type="warning" title="Docker 네트워킹">
+  컨테이너 내부에서 `localhost`는 호스트가 아닌 컨테이너 자체를 의미합니다. LibreChat이 동일한 호스트에서 실행 중일 때, `VITE_API_BASE_URL`을 `http://host.docker.internal:3080`으로 지정하십시오(Linux의 경우 `--add-host=host.docker.internal:host-gateway` 추가). 프로덕션 환경에서는 LibreChat API의 공용/내부 DNS 이름을 사용하십시오.
+</Callout>
+
+### 개발을 위해 로컬에서 실행하기 [#run-locally-for-development]
+
+```bash
+git clone https://github.com/ClickHouse/librechat-admin-panel.git
+cd librechat-admin-panel
+cp .env.example .env    # then edit
+bun install
+bun dev                 # http://localhost:3000
+```
+
+## 환경 변수 [#environment-variables]
+
+| 변수 | 필수 여부 | 기본값 | 설명 |
+| ------------------------------- | --------------------- | --------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SESSION_SECRET`                | 프로덕션 환경에서 **필수** | `bun dev` 실행 시 하드코딩된 개발용 폴백; Docker 이미지에는 **기본값 없음** | 세션 암호화 키. 최소 32자 이상이어야 합니다. |
+| `VITE_API_BASE_URL`             | Docker 환경에서 **필수** | `http://localhost:3080` (로컬 개발 전용) | OAuth 리디렉션에 사용되는 브라우저용 LibreChat API 서버 URL. |
+| `API_SERVER_URL`                | 아니요 | `VITE_API_BASE_URL`로 폴백 | LibreChat API 호출을 위한 서버 측 URL. 관리자 패널 서버가 브라우저와 다른 URL(예: 내부 Kubernetes 서비스 vs. 공용 호스트명)로 LibreChat에 접근할 때 유용합니다. |
+| `PORT`                          | 아니요 | `3000` | 관리자 패널이 수신 대기할 포트. |
+| `ADMIN_SSO_ONLY`                | 아니요 | `false` | 이메일/비밀번호 폼을 숨기고 SSO 전용 로그인을 강제합니다. |
+| `ADMIN_SESSION_IDLE_TIMEOUT_MS` | 아니요 | `1800000` (30분) | 밀리초 단위의 세션 유휴 시간 제한. |
+| `SESSION_COOKIE_SECURE`         | 아니요 | 프로덕션 환경에서 `true` | 세션 쿠키에 HTTPS가 필요한지 여부. |
+| `ADMIN_PANEL_METRICS_SECRET`    | 아니요 | _설정되지 않음_ | `/metrics` Prometheus 엔드포인트를 스크랩하는 데 필요한 Bearer 토큰. 설정되지 않았거나 일치하지 않으면 엔드포인트가 `401`을 반환합니다. |
+
+### LibreChat 리디렉션 URL [#librechat-redirect-url]
+
+관리자 패널이 LibreChat과 별도의 URL에서 호스팅되는 경우, LibreChat API 환경에서 `ADMIN_PANEL_URL`을 설정하세요. 경로 접두사를 포함한 외부 관리자 패널의 기본 URL을 사용하고, 마지막 슬래시는 생략하세요:
+
+```bash filename=".env"
+ADMIN_PANEL_URL=https://admin.example.com/admin
+```
+
+Helm 배포의 경우, values 파일에서 `librechat.adminPanelUrl`을 설정하세요. 차트는 이를 LibreChat의 관리자 OAuth 흐름을 위한 `ADMIN_PANEL_URL`로 렌더링합니다:
+
+```yaml filename="values.yaml"
+librechat:
+  adminPanelUrl: https://admin.example.com/admin
+```
+
+OpenID SSO를 사용하려면 `${DOMAIN_SERVER}/api/admin/oauth/openid/callback`을 귀하의 ID 공급자(identity provider)에 등록하십시오.
+
+### 캐시 제어 (Cache Controls) [#cache-controls]
+
+이 설정들은 LibreChat의 캐시 환경 변수를 미러링합니다. `ADMIN_PANEL_*` 변수가 우선순위를 가지며, 설정되지 않은 경우 공유되는 LibreChat 대응 변수로 대체됩니다.
+
+| 변수 | 목적 |
+| --------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `STATIC_CACHE_MAX_AGE` / `ADMIN_PANEL_STATIC_CACHE_MAX_AGE`     | `/assets/` 내 해시된 에셋에 대한 브라우저 `max-age` (초 단위, 기본값 172800 = 2일). |
+| `STATIC_CACHE_S_MAX_AGE` / `ADMIN_PANEL_STATIC_CACHE_S_MAX_AGE` | CDN `s-maxage` (초 단위, 기본값 86400 = 1일). |
+| `INDEX_CACHE_CONTROL` / `ADMIN_PANEL_INDEX_CACHE_CONTROL`       | HTML 인덱스 응답을 위한 `Cache-Control` 헤더. |
+| `INDEX_PRAGMA` / `ADMIN_PANEL_INDEX_PRAGMA`                     | HTML 인덱스 응답을 위한 `Pragma` 헤더. |
+| `INDEX_EXPIRES` / `ADMIN_PANEL_INDEX_EXPIRES`                   | HTML 인덱스 응답을 위한 `Expires` 헤더. |
+
+## 인증 [#authentication]
+
+관리자 패널은 LibreChat의 인증 스택을 재사용하며 자체 사용자 데이터베이스를 가지고 있지 않습니다. 두 가지 로그인 경로가 지원됩니다:
+
+- **로컬 계정**: 관리자 액세스 확인을 통과한 모든 LibreChat 사용자의 사용자 이름/비밀번호입니다.
+- **Single sign-on**: OpenID Connect, SAML 및 LibreChat 인스턴스에 이미 구성된 소셜 OAuth 제공업체입니다. 비밀번호 양식을 완전히 숨기려면 `ADMIN_SSO_ONLY=true`로 설정하세요.
+
+LibreChat은 모든 요청에 대해 서버 측에서 관리자 권한을 확인합니다. 계정은 다음 중 하나여야 합니다:
+
+1. MongoDB에서 `role: 'ADMIN'`을 가지고 있거나, **또는**
+2. `access:admin` 시스템 권한을 보유해야 합니다 (관리자 패널 자체를 통해 다른 주체에게 할당됨; [System Grants](/docs/features/access_control#layer-3-system-grants-admin-capabilities) 참조).
+
+세션은 쿠키 기반이며, `SESSION_SECRET`으로 암호화되고, `ADMIN_SESSION_IDLE_TIMEOUT_MS`에 따라 유휴 상태에서 만료됩니다.
+
+## 구성 관리 [#configuration-management]
+
+이 패널은 LibreChat 설정을 설정 스키마에 의해 구동되는 동적 폼으로 렌더링합니다. 여기에는 두 가지 유용한 속성이 있습니다:
+
+- **Forward-compatible**: LibreChat이 새로운 설정 필드를 출시하면, 패널이 스키마에서 이를 자동으로 감지합니다. 관리자 패널 업그레이드나 재배포가 필요하지 않습니다.
+- **계층형 재정의(Layered overrides)**: 기본 설정(`librechat.yaml`에서 가져옴)은 역할 또는 그룹별로 범위가 지정된 주체별(per-principal) 재정의에 의해 가려질 수 있습니다. 사용자가 로그인하면 재정의가 우선순위에 따라 해결되고 기본 설정 위에 병합되어 해당 사용자가 보게 될 최종 설정이 생성됩니다.
+
+이것은 LibreChat의 [DB-backed per-principal configuration override system](https://github.com/danny-avila/LibreChat/pull/12354)을 뒷받침하는 표면입니다. 일반적인 사용 사례는 다음과 같습니다:
+
+- "Research" 그룹에 더 높은 `recursionLimit`와 추가적인 endpoint를 부여하세요
+- "FinanceAdmins" 역할이 MCP 서버를 관리하게 하고 일반 사용자는 이를 사용만 할 수 있도록 설정하세요.
+- 외부 계약자 그룹에 대해 더 엄격한 `interface` 권한을 적용하세요
+
+## 관련 항목 [#related]
+
+- [Access Control](/docs/features/access_control): 관리자 패널이 기반으로 하는 권한 모델
+- [Interface Configuration](/docs/configuration/librechat_yaml/object_structure/interface): 패널이 편집하는 기능 플래그
+- [Authentication](/docs/features/authentication): LibreChat 사용자 인증
+- [v0.8.5 변경 로그](/changelog/v0.8.5): admin API 기반 마련
+- [GitHub: ClickHouse/librechat-admin-panel](https://github.com/ClickHouse/librechat-admin-panel): 소스, 이슈, 릴리스

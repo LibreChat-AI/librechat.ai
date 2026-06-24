@@ -1,0 +1,400 @@
+---
+title: Pembuatan & Penyuntingan Gambar
+icon: Image
+description: >-
+  Panduan komprehensif untuk alat pembuatan dan penyuntingan gambar bawaan
+  LibreChat
+---
+
+LibreChat hadir dengan alat gambar bawaan yang dapat Anda tambahkan ke [Agent](/docs/features/agents). Setiap alat memiliki model, titik harga, dan pengaturannya sendiri, biasanya hanya berupa kunci API atau URL. Tidak ada halaman gambar terpisah: Anda membuat atau mengedit gambar dengan mengobrol bersama Agent yang telah mengaktifkan alat gambar.
+
+<Callout type="info" title="Cara kerja pembuatan gambar">
+Unggah gambar saat Anda menginginkan pengeditan, atau kirim prompt teks biasa saat Anda menginginkan gambar baru. Gambar yang dihasilkan mengikuti [`fileStrategy`](/docs/configuration/librechat_yaml/object_structure/config#filestrategy) yang dikonfigurasi dan output alat dikirim ke LLM sebagai bagian dari konteks obrolan segera setelah pembuatan.
+</Callout>
+
+## Memulai Cepat [#quick-start]
+
+Aktifkan pembuatan gambar dalam beberapa menit dengan OpenAI Image Tools.
+
+<Steps>
+<Step>
+
+**Buat agen.** Pilih **Agents** dari menu endpoint, buka Agent Builder dari panel samping, dan buat agen baru. Beri nama seperti "Image Creator".
+
+</Step>
+<Step>
+
+**Tambahkan OpenAI Image Tools.** Buka daftar **Tools** agen, pilih **OpenAI Image Tools**, lalu simpan agen tersebut. Ini akan menambahkan kemampuan pembuatan gambar sekaligus penyuntingan gambar.
+
+</Step>
+<Step>
+
+**Atur kunci API Anda.** Tambahkan baris berikut ke file `.env` Anda:
+
+```bash filename=".env"
+IMAGE_GEN_OAI_API_KEY=sk-your-openai-api-key
+# Optional; defaults to gpt-image-1
+IMAGE_GEN_OAI_MODEL=gpt-image-1
+```
+
+</Step>
+<Step>
+
+**Mulai ulang dan uji.** Mulai ulang LibreChat, lalu kirim pesan seperti "Generate an image of a sunset over mountains" ke agen Anda.
+
+| Deployment | Command                                       |
+| ---------- | --------------------------------------------- |
+| Docker     | `docker compose down && docker compose up -d` |
+| Lokal      | Berhenti (Ctrl+C) lalu `npm run backend`      |
+
+</Step>
+</Steps>
+
+<Callout type="info" title="Perlu diketahui">
+- API keys dapat dikosongkan agar pengguna dapat memasukkan kunci mereka sendiri dari UI.
+- Output gambar dikirim ke LLM hanya segera setelah pembuatan, bukan pada setiap pesan. Selebihnya, LLM mendapatkan konteks visual hanya dari gambar yang dilampirkan pada pesan pengguna. Lihat [Image Storage and Handling](#image-storage-and-handling).
+- Alat server MCP juga dapat mengeluarkan gambar, meskipun mungkin tidak selalu menggunakan format yang benar. Lihat [bagian MCP](#model-context-protocol-mcp).
+</Callout>
+
+## Alat Gambar OpenAI [#openai-image-tools]
+
+"OpenAI Image Tools" adalah perangkat alat agen yang terdiri dari dua alat terpisah:
+
+- **Image Generation** membuat gambar baru dari perintah teks (tidak perlu unggah).
+- **Image Editing** mengedit atau mengubah gambar yang Anda unggah: mengubah warna, menambahkan objek, memperluas kanvas, dan banyak lagi.
+
+Keduanya secara default menggunakan **GPT-Image-1** untuk mengikuti instruksi, rendering teks, pengeditan mendetail, dan pengetahuan dunia nyata. Gunakan `IMAGE_GEN_OAI_MODEL` untuk memilih model gambar OpenAI yang berbeda saat deployment Anda mendukungnya. Lihat [dokumentasi Pembuatan Gambar](https://platform.openai.com/docs/guides/image-generation?image-generation-model=gpt-image-1) OpenAI untuk detail lebih lanjut.
+
+### Generasi vs. Penyuntingan [#generation-vs-editing]
+
+| Kasus penggunaan        | Memanggil              |
+| ----------------------- | -------------------- |
+| "Mulai dari awal"      | **Image Generation** |
+| "Gunakan gambar yang ada" | **Image Editing**    |
+
+Kedua alat tersebut selalu tersedia, dan agen akan memilih alat yang tepat berdasarkan permintaan:
+
+- **Image Generation** membuat gambar baru hanya dari deskripsi teks.
+- **Image Editing** memodifikasi atau meremix gambar yang sudah ada menggunakan ID gambar tersebut. Gambar-gambar ini bisa berasal dari pesan saat ini atau gambar yang sebelumnya telah dibuat dan direferensikan. LLM melacak ID gambar selama gambar tersebut tetap berada dalam jendela konteks dan menyertakannya dalam output alat.
+
+<Callout type="warning" title="Pengeditan gambar bergantung pada ID gambar">
+- ID Gambar dipertahankan dalam riwayat obrolan. Saat file diunggah ke permintaan saat ini, ID file tersebut ditambahkan ke konteks LLM sebelum token apa pun dibuat.
+- ID gambar yang sebelumnya direferensikan atau dibuat dapat digunakan untuk penyuntingan selama ID tersebut tetap berada dalam jendela konteks. LLM menyertakan ID yang relevan dalam array `image_ids` saat memanggil alat penyuntingan.
+- Anda dapat melampirkan gambar yang sebelumnya telah diunggah dari panel samping tanpa perlu mengunggahnya kembali. Hal ini juga memberikan konteks gambar kepada model vision, yang dapat membantu memberikan informasi untuk `prompt` pada alat penyuntingan.
+</Callout>
+
+### Parameter [#parameters]
+
+**Pembuatan Gambar**
+
+- **prompt**: deskripsi teks (wajib)
+- **size**: `auto` (default), `1024x1024` (persegi), `1536x1024` (lanskap), atau `1024x1536` (potret)
+- **quality**: `auto` (default), `high`, `medium`, atau `low`
+- **background**: `auto` (default), `transparent`, atau `opaque` (transparent memerlukan format PNG atau WebP)
+
+**Pengeditan Gambar**
+
+- **image_ids**: array ID gambar yang akan digunakan sebagai referensi untuk penyuntingan (wajib)
+- **prompt**: deskripsi teks mengenai perubahan (wajib)
+- **size**: `auto` (default), `1024x1024`, `1536x1024`, `1024x1536`, `256x256`, atau `512x512`
+- **quality**: `auto` (default), `high`, `medium`, atau `low`
+
+### Pengaturan [#setup]
+
+Buat atau gunakan kembali kunci OpenAI dan tambahkan ke `.env`, lalu tambahkan "OpenAI Image Tools" ke daftar **Tools** agen Anda:
+
+```bash filename=".env"
+IMAGE_GEN_OAI_API_KEY=sk-...
+# optional extras
+IMAGE_GEN_OAI_MODEL=gpt-image-1
+IMAGE_GEN_OAI_BASEURL=https://...
+```
+
+Untuk deployment Azure OpenAI, pertama-tama ajukan akses di https://aka.ms/oai/gptimage1access, kemudian tambahkan kredensial Anda ke `.env`:
+
+```bash filename=".env"
+IMAGE_GEN_OAI_API_KEY=your-api-key
+# optional extras
+IMAGE_GEN_OAI_MODEL=gpt-image-1
+IMAGE_GEN_OAI_BASEURL=https://deploymentname.openai.azure.com/openai/deployments/gpt-image-1/
+IMAGE_GEN_OAI_AZURE_API_VERSION=2025-04-01-preview
+```
+
+### Konfigurasi Lanjutan [#advanced-configuration]
+
+Sesuaikan deskripsi alat dan panduan prompt dengan variabel lingkungan berikut:
+
+```bash filename=".env"
+# Image Model
+IMAGE_GEN_OAI_MODEL=gpt-image-1
+
+# Image Generation Tool Descriptions
+IMAGE_GEN_OAI_DESCRIPTION=...
+IMAGE_GEN_OAI_PROMPT_DESCRIPTION=...
+
+# Image Editing Tool Descriptions
+IMAGE_EDIT_OAI_DESCRIPTION=...
+IMAGE_EDIT_OAI_PROMPT_DESCRIPTION=...
+```
+
+### Harga [#pricing]
+
+Lihat [halaman harga GPT-Image-1](https://platform.openai.com/docs/models/gpt-image-1) dan [dokumentasi Pembuatan Gambar](https://platform.openai.com/docs/guides/image-generation?image-generation-model=gpt-image-1#cost-and-latency) untuk biaya pembuatan gambar.
+
+## Alat Gambar Gemini [#gemini-image-tools]
+
+Gemini Image Tools mengintegrasikan model pembuatan gambar terbaru dari Google, yang mendukung pembuatan teks-ke-gambar serta penyuntingan gambar yang peka terhadap konteks.
+
+- **Pembuatan teks-ke-gambar**: buat gambar berkualitas tinggi dari deskripsi teks yang mendetail.
+- **Dukungan konteks gambar**: gunakan gambar yang sudah ada sebagai konteks atau inspirasi untuk pembuatan gambar baru.
+- **Pengeditan gambar**: menghasilkan gambar baru berdasarkan modifikasi pada gambar yang sudah ada (sertakan ID gambar asli).
+- **Multiple models**: pilih `gemini-2.5-flash-image` (default) atau `gemini-3-pro-image-preview`.
+- **Dukungan API ganda**: berfungsi dengan kunci API Gemini sederhana maupun Google Cloud Vertex AI.
+
+### Parameter [#parameters-1]
+
+- **prompt**: deskripsi teks mendetail mengenai gambar yang diinginkan (wajib, hingga 32.000 karakter)
+- **image_ids**: array opsional dari ID gambar yang akan digunakan sebagai konteks visual untuk pembuatan
+
+### Pengaturan [#setup-1]
+
+Untuk Gemini API, dapatkan kunci dari [Google AI Studio](https://aistudio.google.com/app/apikey):
+
+```bash filename=".env"
+GEMINI_API_KEY=your_api_key_here
+```
+
+Untuk Vertex AI (pengguna Google Cloud dengan akses Vertex AI):
+
+```bash filename=".env"
+GOOGLE_SERVICE_KEY_FILE=/path/to/service-account.json
+GOOGLE_CLOUD_LOCATION=us-central1  # optional, default: global
+```
+
+### Pemilihan Model [#model-selection]
+
+```bash filename=".env"
+# Default model (fast and efficient)
+GEMINI_IMAGE_MODEL=gemini-2.5-flash-image
+
+# Higher quality model
+GEMINI_IMAGE_MODEL=gemini-3-pro-image-preview
+```
+
+### Konfigurasi Lanjutan [#advanced-configuration-1]
+
+Sesuaikan deskripsi alat melalui variabel lingkungan:
+
+```bash filename=".env"
+GEMINI_IMAGE_GEN_DESCRIPTION=...
+GEMINI_IMAGE_GEN_PROMPT_DESCRIPTION=...
+GEMINI_IMAGE_IDS_DESCRIPTION=...
+```
+
+Detail lebih lanjut ada di [panduan Gemini Image Gen](/docs/configuration/tools/gemini_image_gen) khusus.
+
+## DALL·E (legacy) [#dalle-legacy]
+
+DALL·E menyediakan pembuatan gambar warisan menggunakan model gambar `dall-e-3` dari OpenAI.
+
+### Parameter [#parameters-2]
+
+- **prompt**: deskripsi teks dari gambar yang diinginkan (wajib, hingga 4000 karakter)
+- **style**: `vivid` (hiper-realistis, dramatis, default) atau `natural` (kurang hiper-realistis)
+- **quality**: `standard` (default) atau `hd`
+- **size**: `1024x1024` (default, persegi), `1792x1024` (lebar), atau `1024x1792` (tinggi)
+
+### Pengaturan [#setup-2]
+
+```bash filename=".env"
+# Required
+DALLE_API_KEY=sk-...  # or DALLE3_API_KEY=sk-...
+
+# Optional
+DALLE_REVERSE_PROXY=https://...  # Alternative endpoint
+DALLE3_BASEURL=https://...  # For Azure or custom endpoints
+DALLE3_AZURE_API_VERSION=2023-12-01-preview  # For Azure deployments
+DALLE3_SYSTEM_PROMPT=...  # Custom system prompt for DALL·E
+```
+
+Aktifkan alat **DALL·E** untuk agen tersebut dan mulailah memberikan perintah (prompt).
+
+### Konfigurasi Lanjutan [#advanced-configuration-2]
+
+Untuk deployment Azure OpenAI, konfigurasikan base URL dan API version:
+
+```bash filename=".env"
+DALLE3_BASEURL=https://your-resource-name.openai.azure.com/openai/deployments/your-deployment-name
+DALLE3_AZURE_API_VERSION=2023-12-01-preview
+DALLE3_API_KEY=your-azure-api-key
+```
+
+### Harga [#pricing-1]
+
+Lihat [halaman harga DALL-E](https://platform.openai.com/docs/models/dall-e-3) dan [dokumentasi Pembuatan Gambar](https://platform.openai.com/docs/guides/image-generation?image-generation-model=dall-e-3) untuk biaya pembuatan gambar.
+
+## Stable Diffusion (lokal) [#stable-diffusion-local]
+
+Jalankan gambar sepenuhnya di mesin atau server Anda sendiri. Arahkan LibreChat ke endpoint Automatic1111 (atau yang kompatibel) mana pun dan Anda siap menggunakannya.
+
+### Parameter [#parameters-3]
+
+- **prompt**: kata kunci mendetail yang mendeskripsikan elemen yang diinginkan dalam gambar (wajib)
+- **negative_prompt**: kata kunci yang mendeskripsikan elemen untuk dikecualikan dari gambar (wajib)
+
+Implementasi Stable Diffusion menggunakan parameter default tetap ini, yang menghasilkan hasil yang baik untuk sebagian besar kasus penggunaan:
+
+- cfg_scale: 4.5
+- langkah: 22
+- width: 1024
+- height: 1024
+
+### Pengaturan [#setup-3]
+
+Tidak diperlukan API key, cukup URL yang dapat diakses dari Automatic1111 WebUI Anda:
+
+```bash filename=".env"
+SD_WEBUI_URL=http://127.0.0.1:7860  # URL to your Automatic1111 WebUI
+```
+
+Detail lebih lanjut mengenai pengaturan Automatic1111 ada di [panduan Stable Diffusion](/docs/configuration/tools/stable_diffusion) khusus.
+
+## Flux [#flux]
+
+Generator cloud dengan penekanan pada kecepatan dan model yang telah disesuaikan (fine-tuned) secara opsional.
+
+- Pembuatan gambar berbasis cloud yang cepat
+- Dukungan untuk model yang telah di-fine-tune
+- Beberapa tingkat kualitas dan rasio aspek
+- Mode raw untuk gambar yang kurang diproses dan terlihat lebih alami
+
+### Parameter [#parameters-4]
+
+Alat Flux mendukung tiga tindakan utama:
+
+1. **generate**: membuat gambar baru dari prompt teks
+2. **generate_finetuned**: membuat gambar menggunakan model yang telah di-fine-tune
+3. **list_finetunes**: mencantumkan model kustom yang tersedia untuk pengguna
+
+Detail lebih lanjut ada di [panduan Flux](/docs/configuration/tools/flux#parameters) khusus.
+
+### Pengaturan [#setup-4]
+
+Pilih alat **Flux** di dalam agen. Prompt berupa teks biasa, dan satu panggilan akan menghasilkan satu gambar.
+
+```bash filename=".env"
+FLUX_API_KEY=flux_live_...
+FLUX_API_BASE_URL=https://api.us1.bfl.ai   # default is fine for most users
+```
+
+### Harga [#pricing-2]
+
+Lihat [halaman harga Flux](https://docs.bfl.ml/pricing/) untuk biaya pembuatan gambar.
+
+## Model Context Protocol (MCP) [#model-context-protocol-mcp]
+
+Output gambar didukung dari server MCP. Sebagai contoh, [Puppeteer MCP Server](https://github.com/modelcontextprotocol/servers-archived/tree/main/src/puppeteer) dapat menghasilkan tangkapan layar halaman web, yang mengeluarkan gambar dalam format yang diharapkan dan diperlakukan sama seperti alat gambar bawaan LibreChat.
+
+<Callout type="warning" title="Dukungan gambar MCP masih dalam tahap pengembangan">
+- Contoh di bawah ini mengasumsikan LibreChat berjalan di luar Docker, langsung menggunakan Node.js. Model Context Protocol adalah kerangka kerja yang relatif baru, dan banyak pengembang masih mempelajari cara menyajikan sistem mereka dengan uv/node untuk distribusi yang dapat diskalakan.
+- Hanya sedikit server pembuat gambar yang tersedia, dan banyak yang belum mengadopsi format respons yang benar untuk gambar.
+- Meskipun banyak server MCP berfungsi dengan baik di dalam Docker, contoh-contoh berikut tidak demikian, atau tidak dapat berfungsi tanpa konfigurasi yang lebih lanjut, yang menunjukkan beberapa ketidakkonsistenan saat ini di antara server-server MCP.
+</Callout>
+
+```yaml filename="librechat.yaml"
+mcpServers:
+  puppeteer:
+    command: npx
+    args:
+      - -y
+      - '@modelcontextprotocol/server-puppeteer'
+```
+
+Berikut adalah contoh dari [Image Generation server](https://github.com/GongRzhe/Image-Generation-MCP-Server) yang menghasilkan gambar menggunakan [Replicate API](https://replicate.com/account/api-tokens), namun mengembalikan URL gambar tersebut, yang tidak sesuai dengan standar respons gambar MCP.
+
+<Callout type="info" title="Instalasi global diperlukan">
+Untuk server khusus ini, instal paket `@gongrzhe/image-gen-server` secara global dengan `npm install -g @gongrzhe/image-gen-server`, kemudian arahkan ke file terkompilasi paket tersebut seperti yang ditunjukkan di bawah ini.
+</Callout>
+
+```yaml filename="librechat.yaml"
+mcpServers:
+  image-gen:
+    command: 'node'
+    # First, install the package globally using npm:
+    # `npm install -g @gongrzhe/image-gen-server`
+    # Then, point to the location of the installed package,
+    # which you can find by running `npm root -g`
+    args:
+      - '{REPLACE_WITH_NODE_MODULES_LOCATION}/@gongrzhe/image-gen-server/build/index.js'
+      # Example with output from `npm root -g`:
+      # - "/home/danny/.nvm/versions/node/v24.16.0/lib/node_modules/@gongrzhe/image-gen-server/build/index.js"
+    env:
+      # Do not hardcode the API token here, use the environment variable instead
+      # The following will pick up the token from your .env file or environment
+      REPLICATE_API_TOKEN: '${REPLICATE_API_TOKEN}'
+      MODEL: 'google/imagen-3'
+```
+
+## Penyimpanan dan Penanganan Gambar [#image-storage-and-handling]
+
+Semua gambar yang dihasilkan adalah:
+
+1. Disimpan sesuai dengan [`fileStrategy`](/docs/configuration/librechat_yaml/object_structure/config#filestrategy) yang dikonfigurasi
+2. Ditampilkan langsung di antarmuka obrolan
+3. Dikirim ke LLM sebagai bagian dari konteks obrolan langsung setelah pembuatan
+
+Beberapa peringatan berlaku untuk poin terakhir tersebut:
+
+- Hal ini dapat menyebabkan masalah pada LLM yang tidak mendukung input gambar. Opsi untuk menonaktifkan perilaku tersebut per agen sedang direncanakan.
+- Output dikirim ke LLM hanya saat pembuatan, bukan pada setiap pesan.
+- Untuk menyertakan gambar pada giliran berikutnya, lampirkan gambar tersebut ke pesan dari panel samping.
+- Singkatnya, LLM mendapatkan konteks visual hanya dari gambar yang dilampirkan pada pesan pengguna, serta dari hasil generasi atau penyuntingan yang terjadi tepat setelahnya.
+
+## Dukungan Proxy [#proxy-support]
+
+Semua alat pembuatan gambar mendukung konfigurasi proksi melalui variabel lingkungan `PROXY`:
+
+```bash filename=".env"
+PROXY=http://proxy-url:port
+```
+
+Saat `PROXY` tidak diatur, klien sisi server yang didukung akan mengikuti `HTTP_PROXY`, `HTTPS_PROXY`, dan `NO_PROXY`/`no_proxy`.
+
+## Penanganan Error [#error-handling]
+
+Jika sebuah tool mengalami error, ia akan mengembalikan pesan yang menjelaskan apa yang salah. Masalah umum meliputi:
+
+- Kunci API tidak valid
+- Ketidaktersediaan API
+- Pelanggaran kebijakan konten
+- Masalah proxy/jaringan
+- Parameter tidak valid
+- Payload gambar tidak didukung (lihat [Image Storage and Handling](#image-storage-and-handling) di atas)
+
+## Prompting [#prompting]
+
+Anda dapat menyesuaikan prompt untuk [OpenAI Image Tools](#advanced-configuration) dan [DALL·E](#advanced-configuration-2), namun tips berikut ini menginformasikan prompt default yang disediakan oleh alat tersebut, yang berguna untuk diketahui bagi penulisan Anda sendiri:
+
+1. Mulai dengan **subjek** dan **gaya** (foto, lukisan cat minyak, dll.).
+2. Tambahkan **komposisi** dan **kamera/medium** ("wide-angle shot of…", "watercolour…").
+3. Sebutkan **pencahayaan dan suasana** ("golden hour", "dramatic shadows").
+4. Selesaikan dengan **kata kunci detail** (tekstur, warna, ekspresi).
+5. Jaga agar hal negatif tetap positif: jelaskan apa yang harus disertakan, bukan apa yang harus dihindari.
+
+Contoh:
+
+> Foto sinematik sebuah perpustakaan antik yang bermandikan cahaya matahari sore yang hangat. Rak kayu tinggi dipenuhi dengan buku-buku bersampul kulit, dan partikel debu berkilauan terkena cahaya. Sebuah lampu meja banker berwarna hijau menerangi atlas terbuka di atas meja mahoni yang dipoles di latar depan. Lensa 85 mm, kedalaman bidang dangkal, warna amber yang kaya, detail ultra-tinggi.
+
+## Halaman Terkait [#related-pages]
+
+<Cards num={3}>
+  <Cards.Card title="Agen" href="/docs/features/agents" arrow>
+    Buat dan konfigurasikan agen AI dengan alat kustom
+  </Cards.Card>
+  <Cards.Card title="Server MCP" href="/docs/features/mcp" arrow>
+    Bawa alat Anda sendiri melalui Model Context Protocol
+  </Cards.Card>
+  <Cards.Card title="Alat Gambar Gemini" href="/docs/configuration/tools/gemini_image_gen" arrow>
+    Panduan pengaturan terperinci untuk pembuatan gambar Google Gemini
+  </Cards.Card>
+</Cards>

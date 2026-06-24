@@ -1,0 +1,163 @@
+---
+title: Amazon S3
+icon: S3
+description: >-
+  Dokumen ini menyediakan instruksi untuk mengatur Amazon S3 sebagai backend
+  penyimpanan file untuk LibreChat.
+---
+
+Amazon S3 adalah layanan penyimpanan objek yang dapat diskalakan dan aman yang dapat digunakan sebagai backend penyimpanan file untuk LibreChat. Ikuti langkah-langkah berikut untuk mengonfigurasi bucket S3 Anda.
+
+## 1. Buat Akun AWS dan Konfigurasi Pengguna IAM (atau Gunakan IRSA) [#1-create-an-aws-account-and-configure-an-iam-user-or-use-irsa]
+
+### Opsi A: Menggunakan Pengguna IAM dengan Kredensial Eksplisit [#option-a-using-an-iam-user-with-explicit-credentials]
+
+1. **Masuk ke AWS:**
+   - Buka [AWS Management Console](https://aws.amazon.com/console/) dan masuk dengan akun Anda.
+
+2. **Buat atau Gunakan Pengguna IAM yang Sudah Ada:**
+   - Arahkan ke bagian **IAM (Identity and Access Management)**.
+   - Buat pengguna IAM baru dengan **Programmatic Access** atau pilih pengguna yang sudah ada.
+   - Lampirkan kebijakan yang sesuai (sebagai contoh, `AmazonS3FullAccess` atau kebijakan kustom dengan izin S3 terbatas).
+   - Setelah membuat pengguna, Anda akan menerima **AWS_ACCESS_KEY_ID** dan **AWS_SECRET_ACCESS_KEY**. Simpan informasi ini dengan aman.
+
+### Opsi B: Menggunakan IRSA (IAM Roles for Service Accounts) di Kubernetes [#option-b-using-irsa-iam-roles-for-service-accounts-in-kubernetes]
+
+Jika Anda men-deploy LibreChat di Kubernetes (misalnya di EKS), Anda dapat menggunakan IRSA untuk menetapkan izin AWS ke pod Anda tanpa harus memberikan kredensial secara eksplisit. Untuk menggunakan IRSA:
+
+1. **Buat Kebijakan Kepercayaan (Trust Policy)** untuk akun layanan EKS Anda (contoh di bawah):
+   ```json
+   {
+     "Version": "2012-10-17",
+     "Statement": [
+       {
+         "Effect": "Allow",
+         "Principal": {
+           "Federated": "arn:aws:iam::{AWS_ACCOUNT}:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/{EKS_OIDC}"
+         },
+         "Action": "sts:AssumeRoleWithWebIdentity",
+         "Condition": {
+           "StringEquals": {
+             "oidc.eks.us-east-1.amazonaws.com/id/{EKS_OIDC}:sub": "system:serviceaccount:librechat:librechat",
+             "oidc.eks.us-east-1.amazonaws.com/id/{EKS_OIDC}:aud": "sts.amazonaws.com"
+           }
+         }
+       }
+     ]
+   }
+   ```
+2. **Buat Kebijakan** yang memberikan izin S3 yang diperlukan (contoh di bawah):
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "VisualEditor0",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:GetObjectAcl",
+        "s3:GetObject",
+        "s3:ListBucket",
+        "s3:DeleteObject"
+      ],
+      "Resource": [
+        "arn:aws:s3:::my-example-librechat-bucket/*",
+        "arn:aws:s3:::my-example-librechat-bucket"
+      ]
+    }
+  ]
+}
+```
+
+3. **Annotasikan ServiceAccount Kubernetes Anda:**  
+   Pastikan pod LibreChat Anda menggunakan service account yang dianotasikan untuk IRSA. Dengan cara ini, AWS SDK di dalam aplikasi Anda (menggunakan kode inisialisasi S3 kami yang telah diperbarui) akan secara otomatis menggunakan kredensial sementara yang disediakan oleh IRSA tanpa memerlukan variabel lingkungan untuk kredensial AWS.
+
+## 2. Buat S3 Bucket [#2-create-an-s3-bucket]
+
+1. **Buka Konsol S3:**
+
+- Buka [konsol Amazon S3](https://s3.console.aws.amazon.com/s3/).
+
+2. **Buat Bucket Baru:**
+
+- Klik **"Create bucket"**.
+- **Nama Bucket:** Masukkan nama unik (contoh: `mylibrechatbucket`).
+- **Wilayah:** Pilih wilayah AWS yang paling dekat dengan pengguna Anda (sebagai contoh, `us-east-1` atau `eu-west-1`).
+- **Opsi Konfigurasi:** Atur opsi lain sesuai kebutuhan, lalu klik **"Create bucket"**.
+
+## 3. Perbarui Variabel Lingkungan Anda [#3-update-your-environment-variables]
+
+Jika Anda **tidak** menggunakan IRSA, buat atau perbarui file `.env` Anda di direktori root proyek dengan konfigurasi berikut:
+
+```bash filename=".env"
+AWS_ACCESS_KEY_ID=your_access_key_id
+AWS_SECRET_ACCESS_KEY=your_secret_access_key
+AWS_REGION=your_selected_region
+AWS_BUCKET_NAME=your_bucket_name
+AWS_ENDPOINT_URL=https://your_endpoint_url
+# AWS_FORCE_PATH_STYLE=false
+```
+
+- **AWS_ACCESS_KEY_ID:** Kunci akses pengguna IAM Anda.
+- **AWS_SECRET_ACCESS_KEY:** Kunci rahasia pengguna IAM Anda.
+- **AWS_REGION:** Wilayah AWS tempat bucket S3 Anda berada.
+- **AWS_BUCKET_NAME:** Nama bucket S3 yang Anda buat.
+- **AWS_ENDPOINT_URL:** (Opsional) URL endpoint AWS kustom. Diperlukan untuk layanan yang kompatibel dengan S3 seperti MinIO, Cloudflare R2, Hetzner Object Storage, Backblaze B2, dan IDrive e2. Sertakan skema URL, seperti `https://a7g8.da.idrivee2-32.com`; nilai tanpa `http://` atau `https://` dapat menyebabkan kesalahan `Invalid URL` saat file di-stream.
+- **AWS_FORCE_PATH_STYLE:** (Opsional) Atur ke `true` untuk penyedia yang memerlukan URL bergaya jalur (`endpoint/bucket/key`) alih-alih gaya virtual-hosted (`bucket.endpoint/key`). Diperlukan untuk Hetzner Object Storage, MinIO, dan penyedia serupa yang sertifikat SSL-nya tidak mencakup subdomain bucket. Tidak diperlukan untuk AWS S3 atau Cloudflare R2. Default: `false`.
+
+Jika Anda menggunakan **IRSA** di Kubernetes, Anda **tidak** perlu mengatur `AWS_ACCESS_KEY_ID` dan `AWS_SECRET_ACCESS_KEY` di lingkungan Anda. AWS SDK akan secara otomatis memperoleh kredensial sementara melalui akun layanan (service account) yang ditetapkan ke pod Anda. Pastikan `AWS_REGION` dan `AWS_BUCKET_NAME` tetap disediakan.
+
+## 4. Konfigurasi LibreChat untuk Menggunakan Amazon S3 [#4-configure-librechat-to-use-amazon-s3]
+
+Perbarui file konfigurasi LibreChat Anda (`librechat.yaml`) untuk menentukan bahwa aplikasi harus menggunakan Amazon S3 untuk penanganan file:
+
+```yaml filename="librechat.yaml"
+version: 1.3.11
+cache: true
+fileStrategy: 's3'
+```
+
+<Callout type="warning" title="URL presigned S3 kedaluwarsa untuk aset visual">
+  S3 tidak menyajikan file melalui CDN. LibreChat mengakses file S3 melalui **presigned URLs**, yaitu token bertanda tangan sementara dengan masa berlaku yang dapat dikonfigurasi (`S3_URL_EXPIRY_SECONDS`). AWS membatasi masa pakai presigned URL hingga 7 hari untuk kredensial pengguna IAM, dan hanya beberapa jam jika menggunakan kredensial sementara (peran STS/IAM seperti IRSA). Setelah URL kedaluwarsa, gambar atau avatar yang dirujuk akan tampak rusak di UI sampai halaman dimuat ulang dan URL baru dibuat.
+
+Logika penyegaran (refresh) di LibreChat tidak diterapkan secara konsisten untuk setiap antarmuka visual. Sebagai contoh, endpoint bergaya daftar (list-style) dapat mengembalikan URL yang tersimpan, sementara endpoint detail menyegarkannya. Hal ini dapat menyebabkan gambar avatar yang rusak terlihat di pemilih model dan UI obrolan. Lihat [diskusi terkait](https://github.com/danny-avila/LibreChat/discussions/10280#discussioncomment-14803903) untuk konteks selengkapnya.
+
+**S3 sangat cocok untuk penyimpanan dokumen** (PDF, file teks, kode) di mana URL unduhan presigned yang berumur pendek sudah memadai. Untuk gambar dan avatar yang perlu dirender secara persisten di seluruh UI, gunakan [CloudFront with S3](/docs/configuration/cdn/cloudfront), [Firebase](/docs/configuration/cdn/firebase), atau konfigurasikan `fileStrategies` untuk merutekan tipe-tipe tersebut saja ke strategi yang didukung CDN:
+
+```yaml filename="librechat.yaml"
+fileStrategies:
+  avatar: 'cloudfront'
+  image: 'cloudfront'
+  document: 's3'
+```
+
+</Callout>
+
+## Ringkasan [#summary]
+
+1. **Buat Akun AWS & Pengguna IAM (atau konfigurasikan IRSA):**
+
+- Untuk penerapan tradisional, buat pengguna IAM dengan akses terprogram dan dapatkan kunci akses Anda.
+- Untuk deployment Kubernetes (contohnya di EKS), siapkan IRSA agar pod Anda secara otomatis mendapatkan kredensial sementara.
+
+2. **Buat S3 Bucket:**
+
+- Gunakan konsol Amazon S3 untuk membuat bucket, dengan memilih nama dan wilayah yang unik.
+
+3. **Perbarui Variabel Lingkungan:**
+
+- Untuk non-IRSA: atur `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, dan `AWS_BUCKET_NAME` di dalam file `.env` Anda.
+- Untuk IRSA: atur hanya `AWS_REGION` dan `AWS_BUCKET_NAME`; pastikan service account pod Anda telah dianotasi dengan benar.
+
+4. **Konfigurasi LibreChat:**
+
+- Atur `fileStrategy` ke `"s3"` di dalam file konfigurasi `librechat.yaml` Anda, atau gunakan `fileStrategies` untuk menyimpan dokumen di S3 sembari mengirimkan gambar dan avatar melalui CloudFront.
+
+Dengan langkah-langkah ini, aplikasi LibreChat Anda akan menggunakan Amazon S3 untuk menangani unggahan, unduhan, dan penghapusan file. Selain itu, dengan dukungan IRSA, aplikasi Anda dapat berjalan dengan aman di Kubernetes tanpa menyematkan kredensial AWS jangka panjang.
+
+<Callout type="info" title="Catatan">
+  Selalu pastikan kredensial AWS Anda tetap aman. Jangan melakukan commit kredensial tersebut ke repositori publik.
+  Sesuaikan kebijakan IAM untuk mengikuti prinsip hak akses paling rendah (principle of least privilege) sesuai kebutuhan.
+</Callout>

@@ -1,0 +1,142 @@
+---
+title: Kimlik Doğrulama Sistemi
+icon: BookOpen
+description: >-
+  Bu kılavuz, güvenli ve kolay e-posta ve sosyal giriş seçenekleri sunan
+  LibreChat kullanıcı kimlik doğrulama sisteminin nasıl kullanılacağını açıklar.
+  Kayıt olma, giriş yapma, şifre sıfırlama ve daha fazlasını nasıl
+  ayarlayacağınızı öğreneceksiniz.
+---
+
+## Genel [#general]
+
+Hızlı bir genel bakış için burada sağlanan kullanıcı kılavuzuna başvurun: [Authentication](/docs/features/authentication)
+
+Genel yapılandırmaya dair bir genel bakış aşağıdadır.
+
+<OptionTable
+  options={[
+    ['ALLOW_EMAIL_LOGIN', 'boolean', 'SADECE e-posta ile girişi etkinleştirin veya devre dışı bırakın.','ALLOW_EMAIL_LOGIN=true'],
+    ['ALLOW_REGISTRATION', 'boolean', 'Yeni kullanıcıların E-posta ile kaydını etkinleştirin veya devre dışı bırakın.','ALLOW_REGISTRATION=true'],
+    ['ALLOW_SOCIAL_LOGIN', 'boolean', 'Kullanıcıların LibreChat\'e çeşitli sosyal ağlarla bağlanmasına izin verin.','ALLOW_SOCIAL_LOGIN=false'],
+    ['ALLOW_SOCIAL_REGISTRATION', 'boolean', 'Çeşitli sosyal ağları kullanarak yeni kullanıcıların kaydını etkinleştirin veya devre dışı bırakın.','ALLOW_SOCIAL_REGISTRATION=false'],
+  ]}
+/>
+
+> **Not:** OpenID ve SAML, yalnızca kaydı devre dışı bırakma özelliğini desteklemez.
+
+Hızlı İpuçları:
+
+- Kayıt özelliği devre dışı bırakılmış olsa bile, aşağıda detaylandırılan [create-user script](#create-user-script) kullanarak kullanıcıları doğrudan veritabanına ekleyebilirsiniz.
+- Bir kullanıcıyı silmek için aşağıda da detaylandırılan [delete-user script](#delete-user-script) aracını kullanabilirsiniz.
+
+
+<ThemeImage
+  light="https://github.com/danny-avila/LibreChat/assets/32828263/4c51dc25-31d3-4c51-8c2a-0cdfb5a25033"
+  dark="https://github.com/danny-avila/LibreChat/assets/32828263/3bc5371d-e51d-4e91-ac68-56db6e85bb2c"
+  alt="Kullanıcı kayıt ekranı"
+/>
+
+
+## Oturum Zaman Aşımı ve Yenileme Belirteci [#session-expiry-and-refresh-token]
+
+- Varsayılan değerler: oturum süresi: 15 dakika, yenileme belirteci süresi: 7 gün
+  - Daha fazla bilgi için: **[GitHub PR #927 - Refresh Token](https://github.com/danny-avila/LibreChat/pull/927)**
+
+<OptionTable
+  options={[
+    ['SESSION_EXPIRY', 'integer (milliseconds)', 'Oturum zaman aşımı süresi.','SESSION_EXPIRY=1000 * 60 * 15'],
+    ['REFRESH_TOKEN_EXPIRY', 'integer (milliseconds)', 'Yenileme belirteci (refresh token) sona erme süresi.','REFRESH_TOKEN_EXPIRY=(1000 * 60 * 60 * 24) * 7'],
+  ]}
+/>
+
+``` mermaid
+sequenceDiagram
+    Client->>Server: Login request with credentials
+    Server->>Passport: Use authentication strategy (e.g., 'local', 'google', etc.)
+    Passport-->>Server: User object or false/error
+    Note over Server: If valid user...
+    Server->>Server: Generate access and refresh tokens
+    Server->>Database: Store hashed refresh token
+    Server-->>Client: Access token and refresh token
+    Client->>Client: Store access token in HTTP Header and refresh token in HttpOnly cookie
+    Client->>Server: Request with access token from HTTP Header
+    Server-->>Client: Requested data
+    Note over Client,Server: Access token expires
+    Client->>Server: Request with expired access token
+    Server-->>Client: Unauthorized
+    Client->>Server: Request with refresh token from HttpOnly cookie
+    Server->>Database: Retrieve hashed refresh token
+    Server->>Server: Compare hash of provided refresh token with stored hash
+    Note over Server: If hashes match...
+    Server-->>Client: New access token and refresh token
+    Client->>Server: Retry request with new access token
+    Server-->>Client: Requested data
+```
+
+## JWT Secret ve Refresh Secret [#jwt-secret-and-refresh-secret]
+
+- Yeni ve güvenli değerler kullanmalısınız. Verilen örnekler 32 baytlık anahtarlardır (onaltılık tabanda 64 karakter).
+  - Hızlıca bazılarını oluşturmak için bu aracı kullanın: **[JWT Keys](/toolkit/creds_generator)**
+
+<OptionTable
+  options={[
+    ['JWT_SECRET', 'string (hex)', 'JWT gizli anahtarı.','JWT_SECRET=16f8c0ef4a5d391b26034086c628469d3f9f497f08163ab9b40137092f2909ef'],
+    ['JWT_REFRESH_SECRET', 'string (hex)', 'JWT yenileme gizli anahtarı.','JWT_REFRESH_SECRET=eaa5191f2914e30b9387fd84e254e4ba6fc51b4654968a9b0803b456a54b8418'],
+  ]}
+/>
+
+---
+
+## Otomatik Denetleme Sistemi (isteğe bağlı) [#automated-moderation-system-optional]
+
+Otomatik Denetleme Sistemi varsayılan olarak etkindir. Kullanıcı ihlallerini takip etmek için bir puanlama mekanizması kullanır. Kullanıcılar aşırı giriş, kayıt veya mesajlaşma gibi eylemlerde bulundukça ihlal puanları biriktirirler. Belirlenen bir eşiğe ulaşıldığında, kullanıcı ve IP adresi geçici olarak yasaklanır. Bu sistem, hızlı veya şüpheli etkinlikleri izleyip cezalandırarak platform güvenliğini sağlar.
+
+Mod sistemini kurmak için [kurulum kılavuzunu](/docs/configuration/mod_system) inceleyin.
+
+> *Lütfen Dikkat: Bunun geliştirme modunda çalışmasını istiyorsanız, kök dizinde `.env.development` adında bir dosya oluşturmanız ve `DOMAIN_CLIENT` değerini `http://localhost:3090` olarak veya `npm run frontend-dev` çalıştırıldığında vite tarafından sağlanan port neyse ona ayarlamanız gerekecektir.*
+
+## Kullanıcı Yönetim Betikleri [#user-management-scripts]
+
+### Kullanıcı Betiği Oluştur [#create-user-script]
+
+create-user betiği, kayıt özelliği devre dışı bırakılmış olsa bile kullanıcıları doğrudan veritabanına eklemenize olanak tanır. Nasıl kullanılacağı aşağıdadır:
+
+1. Varsayılan `docker-compose.yml` için (uygulamayı başlatmak üzere `docker compose up` kullanıyorsanız):
+   ```bash
+   docker compose exec api npm run create-user
+   ```
+
+2. `deploy-compose.yml` için ([Ubuntu Docker Rehberi](/docs/remote/docker_linux) kısmını takip ettiyseniz):
+   ```bash
+   docker exec -it LibreChat-API /bin/sh -c "cd .. && npm run create-user"
+   ```
+
+3. Yerel geliştirme için (proje kök dizininden):
+   ```bash
+   npm run create-user
+   ```
+
+Yeni kullanıcının e-postasını ve şifresini girmek için komutları izleyin.
+
+### Kullanıcı Silme Betiği [#delete-user-script]
+
+Bir kullanıcıyı silmek için delete-user betiğini kullanabilirsiniz:
+
+1. Varsayılan `docker-compose.yml` için (uygulamayı başlatmak üzere `docker compose up` kullanıyorsanız):
+   ```bash
+   docker compose exec api npm run delete-user email@domain.com
+   ```
+
+2. `deploy-compose.yml` için ([Ubuntu Docker Rehberi](/docs/remote/docker_linux) kısmını takip ettiyseniz):
+   ```bash
+   docker exec -it LibreChat-API /bin/sh -c "cd .. && npm run delete-user email@domain.com"
+   ```
+
+3. Yerel geliştirme için (proje kök dizininden):
+   ```bash
+   npm run delete-user email@domain.com
+   ```
+
+`email@domain.com` ifadesini silmek istediğiniz kullanıcının e-posta adresiyle değiştirin.
+

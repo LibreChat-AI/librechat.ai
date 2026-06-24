@@ -1,0 +1,129 @@
+---
+title: 하위 에이전트
+icon: Network
+description: 한 에이전트의 집중 업무를 격리된 하위 에이전트 실행으로 위임합니다.
+---
+
+Subagents를 사용하면 LibreChat Agent가 집중적인 작업을 위해 격리된 하위 실행(child run)을 생성할 수 있습니다. 하위 에이전트는 자체 컨텍스트 창과 도구 실행 흐름을 갖습니다. 부모 에이전트는 모든 중간 도구 호출, 추적 또는 장황한 파일 작업을 자신의 컨텍스트에 포함하지 않고 하위 에이전트의 결과만 전달받습니다.
+
+다음 용도로 서브 에이전트(subagents)를 사용하세요:
+
+- 긴 중간 출력을 생성할 수 있는 연구 하위 작업
+- 특수 에이전트를 통한 검토 통과
+- 부모 컨텍스트 외부에 유지되어야 하는 도구 중심 작업
+- 부모가 조정하고 요약하는 병렬 스타일 분해
+
+## 서브에이전트(Subagents)와 에이전트 체인(Agent Chain)의 차이점 [#how-subagents-differ-from-agent-chain]
+
+Agent Chain은 에이전트가 구성된 체인 단계를 통해 결과를 전달하는 다중 에이전트 그래프를 구축합니다. 하위 에이전트(Subagents)는 실행 중 도구 호출을 통해 에이전트에 의해 생성됩니다.
+
+- **Agent Chain**: 그래프 수준의 멀티 에이전트 워크플로우
+- **Subagents**: 부모 에이전트에서 격리된 자식 실행으로의 런타임 위임
+
+둘 다 기존 에이전트를 사용할 수 있지만, 서브에이전트(subagents)는 단일 에이전트의 추론 루프 내부에서 범위가 지정된 위임을 수행하도록 설계되었습니다.
+
+## 기능 활성화 [#enable-the-capability]
+
+`subagents` 기능은 기본적으로 활성화되어 있습니다. 관리자는 agents 엔드포인트 기능 목록에서 이를 제거하여 해당 기능을 비활성화할 수 있습니다.
+
+```yaml filename="librechat.yaml"
+endpoints:
+  agents:
+    capabilities:
+      - 'deferred_tools'
+      - 'execute_code'
+      - 'file_search'
+      - 'web_search'
+      - 'artifacts'
+      - 'subagents'
+      - 'actions'
+      - 'context'
+      - 'skills'
+      - 'tools'
+      - 'chain'
+      - 'ocr'
+```
+
+## 에이전트 구성하기 [#configure-an-agent]
+
+Agent Builder에서 **Advanced Settings**를 열고 **Subagents**를 활성화하세요.
+
+사용 가능한 설정:
+
+- **Enable subagents**: 에이전트에 subagent spawn 도구를 추가합니다.
+- **Allow self-spawn**: 에이전트가 격리된 컨텍스트에서 자신의 새로운 복사본을 생성할 수 있도록 합니다. 이는 subagents가 활성화되면 기본적으로 활성화됩니다.
+- **추가 하위 에이전트(Additional subagents)**: 부모 에이전트가 생성할 수 있는 특정 에이전트를 선택합니다.
+
+동일한 에이전트 형태:
+
+```yaml filename="agent subagents"
+subagents:
+  enabled: true
+  allowSelf: true
+  agent_ids:
+    - 'agent_researcher'
+    - 'agent_reviewer'
+```
+
+## Model Spec 구성하기 [#configure-a-model-spec]
+
+관리자는 Model Specs에서 생성된 일회성 에이전트에 대해 Subagents를 활성화할 수도 있습니다. 이는 사용자가 영구적인 상위 에이전트를 생성하거나 선택할 필요 없이, Model Specs가 특정 목적에 집중된 에이전트 프로필처럼 작동해야 할 때 유용합니다.
+
+```yaml filename="modelSpecs / subagents"
+modelSpecs:
+  list:
+    - name: 'research-assistant'
+      label: 'Research Assistant'
+      subagents:
+        enabled: true
+        allowSelf: true
+        agent_ids: []
+      preset:
+        endpoint: 'agents'
+        model: 'gpt-4o'
+```
+
+`enabled` 및 `allowSelf`만 시작 구성(startup config)에서 클라이언트로 전송됩니다. `agent_ids` 허용 목록은 서버 측에 유지되며 공유 `MAX_SUBAGENTS` 제한에 따라 검증됩니다. 클라이언트 요청 페이로드는 Model Specs Subagent 구성을 제공하거나 재정의할 수 없습니다.
+
+## 런타임 동작 [#runtime-behavior]
+
+서브 에이전트(subagents)가 활성화되면, 상위 에이전트는 `subagent` 도구를 받게 됩니다. 이 도구는 다음을 생성할 수 있습니다:
+
+- `self` (`allowSelf`가 false가 아닐 때)
+- `agent_ids`에 구성된 모든 하위 에이전트
+
+하위 에이전트는 격리된 컨텍스트에서 실행됩니다. 상위 도구 검색 상태와 누적된 컨텍스트는 하위 실행으로 복사되지 않습니다. 하위 실행 모델 사용량은 상위 트랜잭션으로 청구되며 상위의 총 사용량에 포함됩니다. UI는 하위 실행을 상태, 티커 업데이트 및 최종 결과가 포함된 확장 가능한 에이전트 활동 부분으로 표시합니다.
+
+## 제한 사항 [#limits]
+
+LibreChat은 서브에이전트 그래프를 제한된 범위 내로 유지하기 위해 다음과 같은 제한을 적용합니다:
+
+<OptionTable
+  options={[
+    ['MAX_SUBAGENTS', 'Number', '부모 에이전트당 최대 명시적 하위 에이전트 수.', '10'],
+    ['MAX_SUBAGENT_DEPTH', 'Number', '루트 에이전트로부터의 최대 명시적 서브에이전트 홉(hop) 수.', '5'],
+    [
+      'MAX_SUBAGENT_GRAPH_NODES',
+      'Number',
+      '런타임에 로드되는 최대 고유 명시적 서브에이전트 대상입니다.',
+      '50',
+    ],
+    [
+      'MAX_SUBAGENT_RUN_CONFIGS',
+      'Number',
+      '한 번의 실행 요청에 포함될 수 있는 최대 확장 서브에이전트 구성입니다.',
+      '100',
+    ],
+  ]}
+/>
+
+## Access Control [#access-control]
+
+구성된 하위 에이전트는 사용자에게 보여야 합니다. 사용자가 참조된 에이전트에 대한 보기 권한이 없는 경우, LibreChat은 해당 하위 에이전트를 건너뜁니다. 생성 및 업데이트 요청 시, 유효하지 않거나 권한이 없는 `subagents.agent_ids` 항목은 거부됩니다.
+
+## 디자인 팁 [#design-tips]
+
+- 부모 에이전트의 범위가 이미 잘 설정되어 있고 하위 작업을 위해 새로운 컨텍스트만 필요한 경우 self-spawn을 활성화하세요.
+- 작업에 다른 모델, 지침 세트, 도구 세트 또는 기술 허용 목록이 필요한 경우 특정 하위 에이전트를 추가하세요.
+- 하위 설명(child descriptions)을 명확하게 유지하세요. 부모는 각 하위 이름과 설명을 사용하여 올바른 위임 대상을 선택합니다.
+- 중간 작업에는 하위 에이전트(subagents)를 사용하되, 다른 대화 경로로 영구적으로 전환하는 용도가 아닌 간결한 결과를 반환하는 용도로 사용하세요.

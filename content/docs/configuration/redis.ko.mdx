@@ -1,0 +1,343 @@
+---
+title: Redis
+icon: Redis
+description: 'LibreChat에서 캐싱, 세션 저장소 및 수평적 확장을 위한 Redis 설정하기'
+---
+
+이 가이드는 LibreChat에서 캐싱 및 세션 저장을 위해 Redis를 구성하는 방법을 다룹니다. Redis는 상당한 성능 향상을 제공하며 **수평적 확장을 위해 필수적**입니다. 로드 밸런서 뒤에서 여러 LibreChat 인스턴스를 실행 중인 경우, Redis는 모든 인스턴스 간의 일관된 상태를 보장합니다.
+
+## 목차 [#table-of-contents]
+
+- [기본 설정](#basic-setup)
+- [연결 유형](#connection-types)
+- [보안 구성](#security-configuration)
+- [고급 옵션](#advanced-options)
+- [성능 튜닝](#performance-tuning)
+- [구성 예시](#configuration-examples)
+- [재개 가능한 스트림](#resumable-streams)
+
+## 기본 설정 [#basic-setup]
+
+### Redis 활성화 [#enable-redis]
+
+LibreChat에서 Redis를 활성화하려면 `.env` 파일에 다음 환경 변수를 설정하세요:
+
+```bash
+USE_REDIS=true
+```
+
+**중요**: `USE_REDIS=true`로 설정할 경우, `REDIS_URI`도 반드시 제공해야 합니다. 연결 URI 없이 Redis를 활성화하면 애플리케이션에서 오류가 발생합니다.
+
+## 연결 유형 [#connection-types]
+
+### 단일 Redis 인스턴스 [#single-redis-instance]
+
+표준 단일 Redis 서버 설정의 경우:
+
+```bash
+# Local Redis instance
+REDIS_URI=redis://127.0.0.1:6379
+
+# Remote Redis instance
+REDIS_URI=redis://your-redis-host:6379
+```
+
+### Redis Cluster [#redis-cluster]
+
+여러 노드를 사용하는 Redis 클러스터 배포의 경우:
+
+```bash
+# Multiple Redis cluster nodes
+REDIS_URI=redis://127.0.0.1:7001,redis://127.0.0.1:7002,redis://127.0.0.1:7003
+```
+
+여러 개의 URI가 제공되면 애플리케이션이 자동으로 클러스터 모드를 감지합니다.
+
+Redis 클러스터의 URI가 하나뿐인 경우, `USE_REDIS_CLUSTER` 환경 변수를 사용하여 클러스터 모드를 활성화할 수 있습니다:
+
+```bash
+# Redis cluster with single URI
+REDIS_URI=redis://127.0.0.1:7001
+USE_REDIS_CLUSTER=true
+```
+
+### 단일 엔드포인트 관리형 Redis 서비스 [#single-endpoint-managed-redis-services]
+
+AWS ElastiCache Serverless 및 AWS의 Redis Enterprise Cloud를 포함한 일부 관리형 Redis 서비스는 내부적으로 키를 샤딩(sharding)하면서 단일 연결 endpoint를 노출합니다. 이러한 설정에서는 LibreChat을 단일 노드 연결 모드로 유지하되, 캐시 삭제 시 `CROSSSLOT Keys in request don't hash to the same slot` 오류가 발생하면 클러스터 안전 삭제(cluster-safe deletes) 기능을 활성화하십시오.
+
+```bash
+USE_REDIS=true
+REDIS_URI=rediss://your-managed-redis-endpoint:6379
+USE_REDIS_CLUSTER=false
+REDIS_CLUSTER_SAFE_DELETE=true
+```
+
+`REDIS_CLUSTER_SAFE_DELETE=true`는 LibreChat이 다중 키 `DEL` 명령을 보내는 대신 일치하는 캐시 키를 하나씩 삭제하도록 합니다. 이는 LibreChat이 Redis에 연결하는 방식을 변경하지 않고도 `CROSSSLOT` 오류를 방지합니다.
+
+LibreChat이 Redis Cluster 클라이언트를 생성해야 하는 경우에만 `USE_REDIS_CLUSTER=true`를 사용하세요. 단일 엔드포인트 관리형 서비스의 경우 `REDIS_CLUSTER_SAFE_DELETE=true`가 더 안전한 옵션입니다.
+
+### TLS/SSL을 사용하는 Redis [#redis-with-tlsssl]
+
+보안 Redis 연결의 경우:
+
+```bash
+# Redis with TLS encryption
+REDIS_URI=rediss://127.0.0.1:6380
+
+# Path to CA certificate for TLS verification
+REDIS_CA=/path/to/ca-cert.pem
+```
+
+## 보안 구성 [#security-configuration]
+
+### 인증 [#authentication]
+
+Redis 인증 자격 증명 구성:
+
+```bash
+# Method 1: Include credentials in URI
+# With both username and password
+REDIS_URI=redis://myuser:mypassword@127.0.0.1:6379
+
+
+# Method 2: Separate environment variables
+REDIS_URI=redis://127.0.0.1:6379
+REDIS_USERNAME=your_redis_username
+REDIS_PASSWORD=your_redis_password
+```
+
+**참고**: 사용자 이름/비밀번호 변수와 URI 내 자격 증명이 모두 제공된 경우, 별도의 사용자 이름/비밀번호 변수가 우선 적용됩니다.
+
+### TLS 구성 [#tls-configuration]
+
+암호화된 연결의 경우:
+
+```bash
+# Enable TLS with rediss:// protocol
+REDIS_URI=rediss://your-redis-host:6380
+
+# Provide CA certificate for verification
+REDIS_CA=/path/to/your/ca-certificate.pem
+```
+
+### Elasticache를 사용한 TLS [#tls-with-elasticache]
+
+Elasticache는 TLS 연결을 위해 대체 dnsLookup을 사용해야 할 수도 있습니다. 이 웹페이지의 "Special Note: Aws Elasticache Clusters with TLS" 섹션을 참조하세요: https://www.npmjs.com/package/ioredis
+
+```bash
+# Enable redis alternate dnsLookup
+REDIS_USE_ALTERNATIVE_DNS_LOOKUP=true
+```
+
+## 고급 옵션 [#advanced-options]
+
+### Key Prefixing [#key-prefixing]
+
+Redis key prefixing은 동일한 Redis 서버를 공유하는 서로 다른 환경, 버전 또는 인스턴스 간의 캐시 데이터를 격리하여 배포 간 오염을 방지합니다. 이는 다음 사항에 필수적입니다:
+
+- **Multi-tenant deployments**: 스테이징, 프로덕션 및 개발 환경 분리
+- **Blue-green deployments**: 서로 다른 애플리케이션 버전 간의 캐시를 격리합니다.
+
+```bash
+# Option 1: Dynamic prefix from environment variable (recommended for cloud)
+
+# Google Cloud Platform - Cloud Run
+REDIS_KEY_PREFIX_VAR=K_REVISION
+
+# AWS - ECS/Fargate
+REDIS_KEY_PREFIX_VAR=AWS_EXECUTION_ENV
+
+# Azure Container Instances
+REDIS_KEY_PREFIX_VAR=CONTAINER_NAME
+
+# Kubernetes - Pod name or deployment
+REDIS_KEY_PREFIX_VAR=HOSTNAME
+REDIS_KEY_PREFIX_VAR=POD_NAME
+
+# Kubernetes - Custom deployment identifier
+REDIS_KEY_PREFIX_VAR=DEPLOYMENT_ID
+
+# Heroku
+REDIS_KEY_PREFIX_VAR=DYNO
+
+# Option 2: Static prefix (for manual control)
+REDIS_KEY_PREFIX=librechat-prod-v2
+REDIS_KEY_PREFIX=staging-branch-feature-x
+REDIS_KEY_PREFIX=dev-john-local
+```
+
+**중요**: `REDIS_KEY_PREFIX_VAR`와 `REDIS_KEY_PREFIX`를 동시에 설정할 수 없습니다.
+
+**접두사 없이 오염된 예시**:
+
+- 스테이징 배포에 의해 프로덕션 캐시가 덮어쓰여졌습니다
+- 기능 브랜치 테스트가 메인 브랜치 캐시를 손상시킴
+- 오래된 배포 버전이 캐시된 구식 데이터를 제공함
+
+**키 접두사 형식**:
+
+- IoRedis 클라이언트: `{prefix}::{key}`
+- Keyv client: 스토어 계층에서 처리됨
+
+### 연결 제한 [#connection-limits]
+
+Redis 연결 제한 구성:
+
+```bash
+# Maximum number of event listeners (default: 40)
+REDIS_MAX_LISTENERS=40
+```
+
+### Connection Keep-Alive [#connection-keep-alive]
+
+연결을 유지하기 위해 Redis 핑(ping) 간격을 구성합니다:
+
+```bash
+# Redis ping interval in seconds (default: 0 = disabled)
+# When set to a positive integer (in seconds), Redis clients will ping the server at this interval
+# When unset or 0, no pinging is performed (recommended for most use cases)
+# Example: 300 = ping every 5 minutes
+REDIS_PING_INTERVAL=300
+```
+
+**중요**:
+
+- `REDIS_PING_INTERVAL=0`으로 설정하거나 생략하면 핑(ping) 기능이 완전히 비활성화됩니다.
+- 연결 시간 초과 문제가 발생하는 경우에만 양수 값(초 단위)을 설정하세요.
+- 간격은 초 단위로 지정되며 IoRedis 및 Keyv Redis 클라이언트 모두에 적용됩니다.
+- 예시 값: `300` (5분), `600` (10분), `60` (1분)
+
+### 선택적 인메모리 캐싱 [#selective-in-memory-caching]
+
+Redis가 활성화된 경우에도 특정 캐시 네임스페이스가 인메모리 스토리지를 사용하도록 강제합니다:
+
+```bash
+# Comma-separated list of cache keys
+FORCED_IN_MEMORY_CACHE_NAMESPACES=ROLES,MESSAGES
+```
+
+유효한 캐시 키 (`librechat-data-provider`의 `CacheKeys` enum에서 가져옴):
+
+| Key                       | Description               |
+| ------------------------- | ------------------------- |
+| `CONFIG_STORE`            | 구성 저장소               |
+| `ROLES`                   | 사용자 역할               |
+| `PLUGINS`                 | 플러그인 데이터           |
+| `GEN_TITLE`               | 생성된 제목               |
+| `TOOLS`                   | 도구 데이터               |
+| `MODELS_CONFIG`           | 모델 구성                 |
+| `MODEL_QUERIES`           | 모델 쿼리                 |
+| `STARTUP_CONFIG`          | 시작 구성                 |
+| `ENDPOINT_CONFIG`         | endpoint 구성             |
+| `TOKEN_CONFIG`            | 토큰 구성                 |
+| `APP_CONFIG`              | 애플리케이션 구성         |
+| `ABORT_KEYS`              | 중단 키                   |
+| `BANS`                    | 차단 데이터               |
+| `ENCODED_DOMAINS`         | 인코딩된 도메인           |
+| `AUDIO_RUNS`              | 오디오 처리 실행          |
+| `MESSAGES`                | 메시지                    |
+| `FLOWS`                   | 흐름 데이터               |
+| `PENDING_REQ`             | 대기 중인 요청            |
+| `S3_EXPIRY_INTERVAL`      | S3 만료 간격              |
+| `OPENID_EXCHANGED_TOKENS` | OpenID 교환 토큰          |
+| `OPENID_SESSION`          | OpenID 세션               |
+| `SAML_SESSION`            | SAML 세션                 |
+
+<Callout type="warn" title="유효하지 않은 키">
+  유효하지 않은 키(예: 더 이상 사용되지 않는 `STATIC_CONFIG`)를 사용하면 시작 오류가 발생합니다. 위의 표에 있는 키만 사용하십시오.
+</Callout>
+
+## 성능 튜닝 [#performance-tuning]
+
+### Connection Keep-Alive [#connection-keep-alive-1]
+
+이 애플리케이션은 구성 가능한 연결 유지(keep-alive) 기능을 구현합니다:
+
+- 핑 간격은 `REDIS_PING_INTERVAL` 환경 변수로 제어됩니다.
+- 기본 동작: 핑 없음 (대부분의 배포 환경에 권장됨)
+- 활성화되면, 지정된 간격으로 IoRedis 및 Keyv Redis 클라이언트 모두에 핑(ping)을 보냅니다.
+- 연결 끊김/종료 이벤트 발생 시 ping 간격을 자동으로 지웁니다.
+
+### 캐시 전략 [#cache-strategy]
+
+이 애플리케이션은 이중 클라이언트 방식을 사용합니다:
+
+- **IoRedis client**: 자동 접두사(prefixing)가 포함된 기본 Redis 작업
+- **Keyv Redis client**: `cacheFactory.js` 내 접두사(prefix) 처리를 포함한 저장소 계층 작업
+
+### 메모리 최적화 [#memory-optimization]
+
+`FORCED_IN_MEMORY_CACHE_NAMESPACES`를 사용하여 자주 액세스하는 작은 데이터 세트는 메모리에 유지하고, 더 큰 캐시에는 Redis를 사용하여 성능을 최적화하세요.
+
+## 구성 예시 [#configuration-examples]
+
+### 개발 환경 설정 [#development-setup]
+
+```bash
+USE_REDIS=true
+REDIS_URI=redis://127.0.0.1:6379
+REDIS_KEY_PREFIX=librechat-dev
+```
+
+### 프로덕션 설정 [#production-setup]
+
+```bash
+USE_REDIS=true
+REDIS_URI=rediss://prod-redis.company.com:6380
+REDIS_USERNAME=librechat_user
+REDIS_PASSWORD=secure_password_here
+REDIS_CA=/etc/ssl/redis-ca.pem
+REDIS_KEY_PREFIX_VAR=DEPLOYMENT_ID
+REDIS_MAX_LISTENERS=100
+REDIS_PING_INTERVAL=300
+FORCED_IN_MEMORY_CACHE_NAMESPACES=ROLES,MESSAGES
+```
+
+### 클러스터 설정 [#cluster-setup]
+
+```bash
+USE_REDIS=true
+REDIS_URI=redis://cluster-node1:7001,redis://cluster-node2:7002,redis://cluster-node3:7003
+REDIS_USERNAME=cluster_user
+REDIS_PASSWORD=cluster_password
+REDIS_KEY_PREFIX=librechat-cluster
+```
+
+## 재개 가능한 스트림 (Resumable Streams) [#resumable-streams]
+
+Redis는 수평적으로 확장된 배포를 위해 [Resumable Streams](/docs/features/resumable_streams) 기능을 활성화합니다. 이 기능이 활성화되면, AI 응답이 서버 인스턴스 간에 원활하게 재연결되고 재개될 수 있습니다.
+
+**중요:** `USE_REDIS=true`일 때, 재개 가능한 스트림은 인스턴스 간 조정을 위해 자동으로 Redis를 사용합니다. 이는 사용자가 서로 다른 서버 인스턴스에 연결될 수 있는 수평적 확장 배포 환경에서 권장되는 설정입니다.
+
+**참고:** 단일 LibreChat 인스턴스를 실행 중이라면, 재개 가능한 스트림을 위한 Redis는 일반적으로 과도한 설정입니다. 내장된 인메모리 모드로도 충분히 잘 작동합니다. Redis는 로드 밸런서 뒤에 여러 LibreChat 인스턴스가 있어 사용자의 재연결이 스트림이 시작된 서버가 아닌 다른 서버로 연결될 수 있는 경우에 필수적입니다.
+
+### 구성 [#configuration]
+
+```bash
+# Redis enabled = resumable streams automatically use Redis
+USE_REDIS=true
+REDIS_URI=redis://127.0.0.1:6379
+
+# Optional: explicitly control resumable streams behavior
+# USE_REDIS_STREAMS=true  # Enabled by default when USE_REDIS=true
+```
+
+### 주요 이점 (수평적 확장을 위한) [#key-benefits-for-horizontal-scaling]
+
+- **인스턴스 간 연속성**: 사용자가 한 서버에서 생성을 시작하고 다른 서버에서 이어서 진행할 수 있습니다.
+- **롤링 배포**: 서버 재시작 시에도 활성 스트림이 유지됨
+- **Multi-tab sync**: 로드 밸런싱 환경에서 동일한 대화가 여러 브라우저 탭 간에 동기화됩니다.
+- **연결 복원력**: 요청을 처리하는 서버와 관계없이 자동 재연결
+
+### 클러스터 구성 [#cluster-configuration]
+
+Redis Cluster 배포의 경우, LibreChat은 스트림 작업이 동일한 클러스터 슬롯 내에서 유지되도록 자동으로 해시 태그가 지정된 키를 사용합니다:
+
+```bash
+USE_REDIS=true
+USE_REDIS_STREAMS=true
+USE_REDIS_CLUSTER=true
+REDIS_URI=redis://node1:7001,redis://node2:7002,redis://node3:7003
+```
+
+이 기능에 대한 자세한 내용은 [Resumable Streams](/docs/features/resumable_streams)를 참조하세요.

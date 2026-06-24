@@ -1,0 +1,276 @@
+---
+title: CloudFront với S3
+icon: AWS
+description: >-
+  Cấu hình Amazon CloudFront làm lớp CDN cho các tệp LibreChat được lưu trữ
+  trong S3, bao gồm các liên kết phương tiện ổn định, cookie đã ký và URL tải
+  xuống đã ký.
+---
+
+CloudFront cho phép LibreChat lưu trữ các tệp trong S3 trong khi vẫn phân phối hình ảnh, ảnh đại diện và tệp tải xuống thông qua các URL CDN ổn định. Đây là thiết lập AWS được khuyến nghị khi bạn muốn tận dụng độ bền của S3 mà không cần để người dùng tiếp xúc với các URL hình ảnh S3 presigned có thời hạn.
+
+## Khi nào nên sử dụng CloudFront [#when-to-use-cloudfront]
+
+Sử dụng CloudFront khi bạn muốn:
+
+- Các URL hình ảnh và avatar ổn định giúp duy trì hiển thị trên toàn bộ giao diện người dùng
+- Bộ nhớ đệm biên toàn cầu phía trước một S3 bucket
+- Cookie đã ký cho hình ảnh nội tuyến và ảnh đại diện riêng tư
+- Các URL đã ký được xác thực bởi backend cho việc tải xuống
+- Tùy chọn vô hiệu hóa bộ nhớ đệm khi tệp bị xóa
+
+<Callout type="info" title="Vẫn cần có S3">
+  Chiến lược tệp `cloudfront` lưu trữ các đối tượng trong S3 và trả về các URL CloudFront. Hãy cấu hình các biến môi trường S3 trước, sau đó thêm khối `cloudfront` vào `librechat.yaml`.
+</Callout>
+
+## Yêu cầu [#requirements]
+
+- Một S3 bucket riêng tư
+- Một CloudFront distribution với S3 bucket làm origin
+- Một Origin Access Control (OAC) hoặc chính sách truy cập origin tương đương để CloudFront có thể đọc từ S3
+- `AWS_REGION` và `AWS_BUCKET_NAME`
+- `AWS_ACCESS_KEY_ID` và `AWS_SECRET_ACCESS_KEY`, trừ khi quá trình triển khai của bạn sử dụng nhà cung cấp danh tính AWS như IRSA
+- `CLOUDFRONT_KEY_PAIR_ID` và `CLOUDFRONT_PRIVATE_KEY` khi sử dụng signed cookies hoặc signed download URLs
+
+## Các biến môi trường [#environment-variables]
+
+```bash filename=".env"
+AWS_ACCESS_KEY_ID=your_access_key_id
+AWS_SECRET_ACCESS_KEY=your_secret_access_key
+AWS_REGION=us-east-1
+AWS_BUCKET_NAME=your_bucket_name
+
+# Required for signed cookies and signed CloudFront download URLs
+CLOUDFRONT_KEY_PAIR_ID=K1234567890ABC
+CLOUDFRONT_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----"
+```
+
+`CLOUDFRONT_PRIVATE_KEY` phải chứa toàn bộ khóa riêng tư PEM. Trong `.env`, hãy đặt nó trong dấu ngoặc kép và giữ nguyên các dòng mới, hoặc chèn nó từ trình quản lý bí mật trên nền tảng của bạn.
+
+## Cấu hình cơ bản [#basic-configuration]
+
+Sử dụng `fileStrategies` khi bạn muốn dùng CloudFront cho hình ảnh và ảnh đại diện trong khi vẫn giữ các tài liệu trên các URL đã ký (signed URLs) của S3:
+
+```yaml filename="librechat.yaml"
+version: 1.3.11
+
+fileStrategies:
+  avatar: 'cloudfront'
+  image: 'cloudfront'
+  document: 's3'
+
+cloudfront:
+  domain: 'https://cdn.example.com'
+  imageSigning: 'none'
+  urlExpiry: 3600
+```
+
+Sử dụng `fileStrategy` nếu mọi loại tệp đều nên sử dụng CloudFront:
+
+```yaml filename="librechat.yaml"
+fileStrategy: 'cloudfront'
+
+cloudfront:
+  domain: 'https://cdn.example.com'
+```
+
+## Signed Cookies [#signed-cookies]
+
+Signed cookies là chế độ bảo mật cho hình ảnh nội tuyến và ảnh đại diện riêng tư. Chúng cho phép LibreChat duy trì các URL CloudFront ổn định trong tin nhắn và bản ghi, đồng thời cấp quyền truy cập bằng cookie có thời hạn ngắn.
+
+```yaml filename="librechat.yaml"
+fileStrategies:
+  avatar: 'cloudfront'
+  image: 'cloudfront'
+  document: 's3'
+
+cloudfront:
+  domain: 'https://cdn.example.com'
+  imageSigning: 'cookies'
+  cookieDomain: '.example.com'
+  cookieExpiry: 1800
+  urlExpiry: 3600
+  requireSignedAccess: true
+```
+
+### Yêu cầu về tên miền [#domain-requirements]
+
+Đối với cookie đã ký, API LibreChat và tên máy chủ CloudFront phải dùng chung một tên miền gốc:
+
+- API: `https://api.example.com`
+- CloudFront CNAME: `https://cdn.example.com`
+- `cookieDomain: ".example.com"`
+
+`cookieDomain` phải bắt đầu bằng một dấu chấm. Trình duyệt sẽ không gửi cookie CloudFront đến một tên miền không liên quan.
+
+### Cookie bảo vệ những gì [#what-cookies-protect]
+
+LibreChat giới hạn phạm vi cookie đã ký cho các đường dẫn phương tiện nội dòng:
+
+- `/i/...` các hình ảnh riêng tư đã tải lên hoặc được tạo, giới hạn trong phạm vi người dùng
+- `/a/...` các tài nguyên ảnh đại diện, được giới hạn theo tenant khi có `tenantId`
+
+Các tài liệu, tệp tải lên chung và đầu ra mã nguồn nằm ngoài các đường dẫn phương tiện nội dòng đó. Các tệp tải xuống được xác thực bởi backend và được trả về dưới dạng các URL CloudFront đã ký.
+
+### Làm mới Cookie [#cookie-refresh]
+
+Khi chế độ signed-cookie được kích hoạt, LibreChat sẽ quảng bá một endpoint làm mới cookie trong cấu hình khởi động:
+
+```text
+POST /api/auth/cloudfront/refresh
+```
+
+Các phiên đã xác thực sẽ làm mới cookie trong các luồng xác thực, làm mới token và các đường dẫn thử lại hình ảnh CloudFront. Phản hồi làm mới bao gồm thời hạn của cookie và thời điểm làm mới được khuyến nghị.
+
+## Tải xuống đã ký [#signed-downloads]
+
+LibreChat sử dụng các URL CloudFront đã ký để tải xuống được ủy quyền. Cài đặt `urlExpiry` kiểm soát thời gian tồn tại của chúng tính bằng giây:
+
+```yaml filename="librechat.yaml"
+cloudfront:
+  domain: 'https://cdn.example.com'
+  imageSigning: 'cookies'
+  cookieDomain: '.example.com'
+  urlExpiry: 3600
+```
+
+Để ghi đè tên tệp và content-type khi tải xuống trực tiếp, hãy cấu hình chính sách yêu cầu origin/cache của CloudFront để chuyển tiếp các chuỗi truy vấn này tới S3:
+
+- `response-content-disposition`
+- `response-content-type`
+
+Đối với các đường dẫn tải xuống, hãy đính kèm một chính sách tiêu đề phản hồi với:
+
+- `X-Content-Type-Options: nosniff`
+- Một Content Security Policy hạn chế, chẳng hạn như `default-src 'none'`
+
+## Vô hiệu hóa bộ nhớ đệm (Cache Invalidation) [#cache-invalidation]
+
+Theo mặc định, LibreChat sẽ xóa đối tượng S3 và không tạo yêu cầu vô hiệu hóa (invalidation) cho CloudFront. Hãy bật tính năng vô hiệu hóa khi các tệp đã xóa cần phải biến mất khỏi bộ nhớ đệm biên (edge cache) ngay lập tức:
+
+```yaml filename="librechat.yaml"
+cloudfront:
+  domain: 'https://cdn.example.com'
+  distributionId: 'E1234ABCD'
+  invalidateOnDelete: true
+```
+
+`distributionId` là bắt buộc khi `invalidateOnDelete` là `true`. Danh tính AWS được LibreChat sử dụng cũng cần quyền `cloudfront:CreateInvalidation`.
+
+## Các đường dẫn đối tượng đa vùng (Multi-Region Object Paths) [#multi-region-object-paths]
+
+`includeRegionInPath` thêm vùng lưu trữ vào các khóa đối tượng mới được tạo:
+
+```yaml filename="librechat.yaml"
+cloudfront:
+  domain: 'https://cdn.example.com'
+  storageRegion: 'us-east-2'
+  includeRegionInPath: true
+```
+
+Khi được bật, các khóa mới sẽ bao gồm các phân đoạn đường dẫn nhận biết khu vực, ví dụ:
+
+```text
+/i/r/us-east-2/t/tenantId/images/userId/file.png
+/a/r/us-east-2/t/tenantId/avatars/userId/avatar.png
+/r/us-east-2/t/tenantId/images/userId/file.pdf
+```
+
+Điều này chỉ ảnh hưởng đến các khóa mới được tạo. Các tệp hiện có sẽ không bị di chuyển. LibreChat không tự cấu hình CloudFront origins, Route 53 hoặc định tuyến theo khu vực cho bạn.
+
+## Tham chiếu khối CloudFront [#cloudfront-block-reference]
+
+<OptionTable
+  options={[
+    [
+      'domain',
+      'string',
+      'Tên miền phân phối CloudFront hoặc CNAME. Bắt buộc.',
+      'domain: "https://cdn.example.com"',
+    ],
+    [
+      'distributionId',
+      'string',
+      'ID phân phối được sử dụng cho việc vô hiệu hóa bộ nhớ đệm.',
+      'distributionId: "E1234ABCD"',
+    ],
+    [
+      'invalidateOnDelete',
+      'boolean',
+      'Tạo một invalidation CloudFront khi một tệp bị xóa. Mặc định: false.',
+      'invalidateOnDelete: false',
+    ],
+    [
+      'imageSigning',
+      'string',
+      'Chế độ truy cập phương tiện nội dòng. Sử dụng `"none"` cho quyền truy cập CloudFront công khai hoặc `"cookies"` cho cookie đã ký. `"url"` được dành riêng và chưa được triển khai cho hình ảnh.',
+      'imageSigning: "cookies"',
+    ],
+    [
+      'cookieDomain',
+      'string',
+      'Tên miền cha dùng chung cho cookie đã ký. Bắt buộc khi `imageSigning` là `"cookies"`.',
+      'cookieDomain: ".example.com"',
+    ],
+    [
+      'cookieExpiry',
+      'number',
+      'Thời gian tồn tại của cookie đã ký tính bằng giây. Mặc định: 1800. Tối đa: 604800.',
+      'cookieExpiry: 1800',
+    ],
+    [
+      'urlExpiry',
+      'number',
+      'Thời hạn của URL tải xuống đã ký tính bằng giây. Mặc định: 3600.',
+      'urlExpiry: 3600',
+    ],
+    [
+      'storageRegion',
+      'string',
+      'Nhãn vùng tùy chọn cho các đường dẫn đối tượng nhận biết vùng.',
+      'storageRegion: "us-east-2"',
+    ],
+    [
+      'includeRegionInPath',
+      'boolean',
+      'Bao gồm `storageRegion` trong các khóa đối tượng mới được tạo. Mặc định: false.',
+      'includeRegionInPath: false',
+    ],
+    [
+      'requireSignedAccess',
+      'boolean',
+      'Ngắt khởi động nếu không thể khởi tạo quyền truy cập CloudFront bằng signed-cookie. Mặc định: false.',
+      'requireSignedAccess: true',
+    ],
+  ]}
+/>
+
+## Các quyền AWS được đề xuất [#suggested-aws-permissions]
+
+Sử dụng quyền IAM đặc quyền tối thiểu (least-privilege) cho S3 bucket. Chỉ thêm quyền vô hiệu hóa CloudFront nếu `invalidateOnDelete` được bật.
+
+```json filename="iam-policy.json"
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["s3:PutObject", "s3:GetObject", "s3:DeleteObject", "s3:ListBucket"],
+      "Resource": ["arn:aws:s3:::my-librechat-bucket", "arn:aws:s3:::my-librechat-bucket/*"]
+    },
+    {
+      "Effect": "Allow",
+      "Action": "cloudfront:CreateInvalidation",
+      "Resource": "arn:aws:cloudfront::123456789012:distribution/E1234ABCD"
+    }
+  ]
+}
+```
+
+## Khắc phục sự cố [#troubleshooting]
+
+- Nhật ký khởi động `CloudFront domain is required`: thêm `cloudfront.domain`.
+- Nhật ký khởi động `S3 must be initialized`: hãy cấu hình các biến môi trường S3 trước.
+- Cookie đã ký không được thiết lập: hãy xác nhận `imageSigning: "cookies"`, `cookieDomain`, `CLOUDFRONT_KEY_PAIR_ID`, và `CLOUDFRONT_PRIVATE_KEY`.
+- Trình duyệt vẫn không thể tải hình ảnh: hãy xác nhận rằng các hostname của API và CDN có chung domain cha đã cấu hình và cookie được cho phép với `Secure` và `SameSite=None`.
+- Bỏ qua tên tệp/loại nội dung khi tải xuống: cập nhật chính sách yêu cầu gốc/bộ nhớ đệm CloudFront để chuyển tiếp các chuỗi truy vấn ghi đè phản hồi.
