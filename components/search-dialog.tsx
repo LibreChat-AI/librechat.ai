@@ -5,6 +5,7 @@ import { useDocsSearch } from 'fumadocs-core/search/client'
 import { oramaStaticClient } from 'fumadocs-core/search/client/orama-static'
 import { create, type AnyOrama } from '@orama/orama'
 import { i18n } from '@/lib/i18n'
+import { SEARCH_LANGUAGE_BY_LOCALE } from '@/lib/search-languages'
 import {
   SearchDialog,
   SearchDialogClose,
@@ -34,17 +35,9 @@ import {
  * 'english'), so a custom one is required here.
  */
 
-/** Orama built-in stemmers — keyed by our i18n code, valued by Orama language name. */
-const ORAMA_LANGUAGES: Record<string, string> = {
-  en: 'english',
-  es: 'spanish',
-  fr: 'french',
-  de: 'german',
-}
-
 async function initOrama(locale?: string): Promise<AnyOrama> {
-  // Chinese/Japanese have no built-in stemmer. Load their (large) dictionaries
-  // lazily so they only reach readers who actually search those locales.
+  // These locales need custom tokenizers. Load them lazily so they only reach
+  // readers who actually search those locales.
   if (locale === 'zh') {
     const { createTokenizer } = await import('@orama/tokenizers/mandarin')
     return create({ schema: { _: 'string' }, components: { tokenizer: createTokenizer() } })
@@ -53,7 +46,25 @@ async function initOrama(locale?: string): Promise<AnyOrama> {
     const { createTokenizer } = await import('@orama/tokenizers/japanese')
     return create({ schema: { _: 'string' }, components: { tokenizer: createTokenizer() } })
   }
-  return create({ schema: { _: 'string' }, language: ORAMA_LANGUAGES[locale ?? 'en'] ?? 'english' })
+  if (locale === 'ko') {
+    const { createKoreanTokenizer } = await import('@/lib/unicode-tokenizer')
+    return create({ schema: { _: 'string' }, components: { tokenizer: createKoreanTokenizer() } })
+  }
+  if (locale === 'pl') {
+    const { createPolishTokenizer } = await import('@/lib/unicode-tokenizer')
+    return create({ schema: { _: 'string' }, components: { tokenizer: createPolishTokenizer() } })
+  }
+  if (locale === 'vi') {
+    const { createVietnameseTokenizer } = await import('@/lib/unicode-tokenizer')
+    return create({
+      schema: { _: 'string' },
+      components: { tokenizer: createVietnameseTokenizer() },
+    })
+  }
+  return create({
+    schema: { _: 'string' },
+    language: SEARCH_LANGUAGE_BY_LOCALE[locale ?? 'en'] ?? 'english',
+  })
 }
 
 export default function StaticSearchDialog(props: SharedProps) {

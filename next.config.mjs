@@ -97,7 +97,7 @@ const cdnCacheHeaders = [
   // Localized docs (/<locale>/docs/...). Without this they match no cache rule,
   // so Cloudflare never edge-caches them and every language switch is a full
   // origin round-trip — including the 307 that untranslated pages redirect with.
-  '/(zh|es|fr|de|ja)/docs/:path*',
+  '/(zh|es|fr|de|ja|pt-BR|it|nl|pl|vi|ko|id|tr)/docs/:path*',
   '/(blog|changelog|authors|privacy|tos|cookie)(.*)',
 ].flatMap((source) => [
   {

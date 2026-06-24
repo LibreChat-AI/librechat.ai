@@ -334,6 +334,45 @@ export const fr: UIStrings = {
       cookiePolicy: 'Politique relative aux cookies',
     },
   },
+  toolkit: {
+    credentials: {
+      generate: 'Générer les identifiants',
+      regenerate: 'Régénérer les identifiants',
+      generateAria: 'Générer de nouveaux identifiants',
+      regionAria: 'Identifiants générés',
+      copy: 'Copier',
+      copied: 'Copié',
+      copyAria: 'Copier {label}',
+      valueAria: 'Valeur de {label}',
+      copyAll: 'Tout copier en .env',
+      copiedAll: 'Copié dans le presse-papiers !',
+      copyAllAria: 'Copier tous les identifiants sous forme de bloc .env',
+      allCopiedStatus: 'Les 5 identifiants ont été copiés au format KEY=value',
+      emptyPrefix:
+        'Cliquez sur le bouton ci-dessus pour générer des identifiants aléatoires sécurisés pour votre',
+      emptySuffix: 'fichier.',
+      hints: {
+        CREDS_KEY: 'Clé de chiffrement des identifiants stockés',
+        CREDS_IV: "Vecteur d'initialisation pour le chiffrement",
+        JWT_SECRET: "Secret de signature des jetons d'accès",
+        JWT_REFRESH_SECRET: "Secret de signature des jetons d'actualisation",
+        MEILI_KEY: 'Clé maître MeiliSearch',
+      },
+    },
+    yaml: {
+      dropFile: 'Déposez le fichier YAML ici',
+      placeholder: 'Collez le contenu de librechat.yaml ici, ou glissez-déposez un fichier...',
+      empty:
+        'Les résultats de validation apparaîtront ici dès que vous collerez ou déposerez du contenu YAML.',
+      valid: 'Le YAML est valide !',
+      clear: 'Effacer',
+      clearAria: "Effacer l'éditeur",
+      badIndentation:
+        'Indentation incorrecte à la ligne {line}. Chaque entrée YAML doit être correctement indentée.',
+      errorAtLine: '{reason} à la ligne {line}',
+      unknownError: 'Erreur YAML inconnue',
+    },
+  },
   home: {
     metaTitle: 'LibreChat - La plateforme IA open source',
     metaDescription:

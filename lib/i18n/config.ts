@@ -3,7 +3,21 @@
  * NOTE: this module uses build-time env and must not be imported by app/ components.
  */
 export const DEFAULT_LOCALE = 'en'
-export const TARGET_LOCALES = ['zh', 'es', 'fr', 'de', 'ja'] as const
+export const TARGET_LOCALES = [
+  'zh',
+  'es',
+  'fr',
+  'de',
+  'ja',
+  'pt-BR',
+  'it',
+  'nl',
+  'pl',
+  'vi',
+  'ko',
+  'id',
+  'tr',
+] as const
 
 /**
  * Bump to intentionally invalidate the whole translation memory (e.g. after a

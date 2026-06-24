@@ -3,8 +3,22 @@ import { TARGET_LOCALES, DEFAULT_LOCALE, TRANSLATE_MODEL, GLOSSARY } from './con
 import { MT_BANNER } from '../i18n'
 
 describe('i18n config', () => {
-  it('targets the five non-default locales', () => {
-    expect([...TARGET_LOCALES]).toEqual(['zh', 'es', 'fr', 'de', 'ja'])
+  it('targets the configured non-default locales', () => {
+    expect([...TARGET_LOCALES]).toEqual([
+      'zh',
+      'es',
+      'fr',
+      'de',
+      'ja',
+      'pt-BR',
+      'it',
+      'nl',
+      'pl',
+      'vi',
+      'ko',
+      'id',
+      'tr',
+    ])
     expect(DEFAULT_LOCALE).toBe('en')
   })
 

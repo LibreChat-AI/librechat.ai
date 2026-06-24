@@ -1,5 +1,11 @@
 import { docsSource } from '@/lib/source'
 import { i18n } from '@/lib/i18n'
+import { SEARCH_LANGUAGE_BY_LOCALE } from '@/lib/search-languages'
+import {
+  createKoreanTokenizer,
+  createPolishTokenizer,
+  createVietnameseTokenizer,
+} from '@/lib/unicode-tokenizer'
 import { createFromSource, type ExportedData } from 'fumadocs-core/search/server'
 import { createTokenizer as createMandarinTokenizer } from '@orama/tokenizers/mandarin'
 import { createTokenizer as createJapaneseTokenizer } from '@orama/tokenizers/japanese'
@@ -23,8 +29,8 @@ export function generateStaticParams() {
 }
 
 // localeMap drives how each locale's index is tokenized at build time. Orama's
-// built-in stemmers cover en/es/fr/de (string = Orama language name). Chinese
-// and Japanese have no built-in stemmer, so they use the dedicated
+// built-in stemmers expect language names like "english", not locale codes.
+// Chinese and Japanese use dedicated
 // @orama/tokenizers via a top-level `tokenizer` field (createDB reads
 // `tokenizer ?? components.tokenizer`). The client's initOrama MUST mirror this
 // map so query tokenization matches how the documents were indexed.
@@ -50,12 +56,12 @@ const localeFilteredSource: typeof docsSource = {
 
 const searchServer = createFromSource(localeFilteredSource, {
   localeMap: {
-    en: 'english',
-    es: 'spanish',
-    fr: 'french',
-    de: 'german',
+    ...SEARCH_LANGUAGE_BY_LOCALE,
     zh: { tokenizer: createMandarinTokenizer() },
     ja: { tokenizer: createJapaneseTokenizer() },
+    ko: { tokenizer: createKoreanTokenizer() },
+    pl: { tokenizer: createPolishTokenizer() },
+    vi: { tokenizer: createVietnameseTokenizer() },
   },
 })
 

@@ -13,8 +13,34 @@ import type { I18nConfig } from 'fumadocs-core/i18n'
  */
 export const i18n: I18nConfig = {
   defaultLanguage: 'en',
-  languages: ['en', 'zh', 'es', 'fr', 'de', 'ja'],
+  languages: [
+    'en',
+    'zh',
+    'es',
+    'fr',
+    'de',
+    'ja',
+    'pt-BR',
+    'it',
+    'nl',
+    'pl',
+    'vi',
+    'ko',
+    'id',
+    'tr',
+  ],
   hideLocale: 'default-locale',
+}
+
+/**
+ * Locales with complete UI/home dictionaries. Docs content can be translated
+ * before the landing page chrome is, so keep home routes and home hreflang
+ * alternates limited to locales that do not fall back to English UI strings.
+ */
+export const LOCALIZED_HOME_LOCALES = ['en', 'zh', 'es', 'fr', 'de', 'ja'] as const
+
+export function hasLocalizedHome(lang?: string): boolean {
+  return !!lang && (LOCALIZED_HOME_LOCALES as readonly string[]).includes(lang)
 }
 
 /**
@@ -35,14 +61,19 @@ export function localizedDocsHref(href: string, lang?: string): string {
 
 /**
  * The landing-page URL for a locale. The default language lives at `/` (no
- * prefix, matching `hideLocale: 'default-locale'`); every other locale at
- * `/<locale>`. Used for the navbar/logo link so clicking it from a localized
- * surface keeps the reader in their language instead of dropping them onto the
- * prefix-less English home.
+ * prefix, matching `hideLocale: 'default-locale'`); translated home locales
+ * live at `/<locale>`. Docs-only locales intentionally return `/` until they
+ * have complete UI/home dictionaries.
  */
 export function localizedHomeHref(lang?: string): string {
-  if (!lang || lang === i18n.defaultLanguage) return '/'
+  if (!lang || lang === i18n.defaultLanguage || !hasLocalizedHome(lang)) return '/'
   return `/${lang}`
+}
+
+export function localizedHomeAlternates(): Record<string, string> {
+  return Object.fromEntries(
+    LOCALIZED_HOME_LOCALES.map((locale) => [locale, localizedHomeHref(locale)]),
+  )
 }
 
 /** Cookie that records an explicit language choice (read by the proxy's auto-detect). */
@@ -67,6 +98,14 @@ export const LOCALE_NAMES: Record<string, string> = {
   fr: 'Français',
   de: 'Deutsch',
   ja: '日本語',
+  'pt-BR': 'Português (Brasil)',
+  it: 'Italiano',
+  nl: 'Nederlands',
+  pl: 'Polski',
+  vi: 'Tiếng Việt',
+  ko: '한국어',
+  id: 'Bahasa Indonesia',
+  tr: 'Türkçe',
 }
 
 /** Localized strings for the machine-translation notice banner. */
@@ -95,5 +134,45 @@ export const MT_BANNER: Record<string, { notice: string; original: string; impro
     notice: 'このページは機械翻訳されており、誤りが含まれている可能性があります。',
     original: '英語の原文を表示',
     improve: 'この翻訳を改善する',
+  },
+  'pt-BR': {
+    notice: 'Esta página foi traduzida por máquina e pode conter erros.',
+    original: 'Ver o original em inglês',
+    improve: 'Melhorar esta tradução',
+  },
+  it: {
+    notice: 'Questa pagina è stata tradotta automaticamente e potrebbe contenere errori.',
+    original: "Vedi l'originale in inglese",
+    improve: 'Migliora questa traduzione',
+  },
+  nl: {
+    notice: 'Deze pagina is machinaal vertaald en kan fouten bevatten.',
+    original: 'Engels origineel bekijken',
+    improve: 'Deze vertaling verbeteren',
+  },
+  pl: {
+    notice: 'Ta strona została przetłumaczona maszynowo i może zawierać błędy.',
+    original: 'Zobacz oryginał po angielsku',
+    improve: 'Popraw to tłumaczenie',
+  },
+  vi: {
+    notice: 'Trang này được dịch bằng máy và có thể có lỗi.',
+    original: 'Xem bản gốc tiếng Anh',
+    improve: 'Cải thiện bản dịch này',
+  },
+  ko: {
+    notice: '이 페이지는 기계 번역되었으며 오류가 포함될 수 있습니다.',
+    original: '영어 원문 보기',
+    improve: '이 번역 개선하기',
+  },
+  id: {
+    notice: 'Halaman ini diterjemahkan mesin dan mungkin berisi kesalahan.',
+    original: 'Lihat versi asli bahasa Inggris',
+    improve: 'Perbaiki terjemahan ini',
+  },
+  tr: {
+    notice: 'Bu sayfa makine çevirisiyle çevrilmiştir ve hatalar içerebilir.',
+    original: 'İngilizce aslına bak',
+    improve: 'Bu çeviriyi iyileştir',
   },
 }

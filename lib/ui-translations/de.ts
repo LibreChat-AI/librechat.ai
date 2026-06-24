@@ -335,6 +335,46 @@ export const de: UIStrings = {
       cookiePolicy: 'Cookie-Richtlinie',
     },
   },
+  toolkit: {
+    credentials: {
+      generate: 'Anmeldedaten generieren',
+      regenerate: 'Anmeldedaten neu generieren',
+      generateAria: 'Neue Anmeldedaten generieren',
+      regionAria: 'Generierte Anmeldedaten',
+      copy: 'Kopieren',
+      copied: 'Kopiert',
+      copyAria: '{label} kopieren',
+      valueAria: 'Wert von {label}',
+      copyAll: 'Alles als .env kopieren',
+      copiedAll: 'In die Zwischenablage kopiert!',
+      copyAllAria: 'Alle Anmeldedaten als .env-Block kopieren',
+      allCopiedStatus: 'Alle 5 Anmeldedaten im Format KEY=value kopiert',
+      emptyPrefix:
+        'Klicken Sie auf die Schaltfläche oben, um sichere zufällige Anmeldedaten für Ihre',
+      emptySuffix: 'Datei zu generieren.',
+      hints: {
+        CREDS_KEY: 'Verschlüsselungsschlüssel für gespeicherte Anmeldedaten',
+        CREDS_IV: 'Initialisierungsvektor für die Verschlüsselung',
+        JWT_SECRET: 'Secret zum Signieren von Zugriffstokens',
+        JWT_REFRESH_SECRET: 'Secret zum Signieren von Aktualisierungstokens',
+        MEILI_KEY: 'MeiliSearch-Hauptschlüssel',
+      },
+    },
+    yaml: {
+      dropFile: 'YAML-Datei hier ablegen',
+      placeholder:
+        'Fügen Sie hier den Inhalt Ihrer librechat.yaml ein oder ziehen Sie eine Datei hierher...',
+      empty:
+        'Die Validierungsergebnisse werden hier angezeigt, sobald Sie YAML-Inhalt einfügen oder ablegen.',
+      valid: 'YAML ist gültig!',
+      clear: 'Leeren',
+      clearAria: 'Editor leeren',
+      badIndentation:
+        'Falsche Einrückung in Zeile {line}. Jeder YAML-Eintrag muss richtig eingerückt sein.',
+      errorAtLine: '{reason} in Zeile {line}',
+      unknownError: 'Unbekannter YAML-Fehler',
+    },
+  },
   home: {
     metaTitle: 'LibreChat - Die Open-Source-KI-Plattform',
     metaDescription:

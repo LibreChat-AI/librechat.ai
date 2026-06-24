@@ -4,13 +4,15 @@ import { useState, useEffect, useCallback } from 'react'
 import dynamic from 'next/dynamic'
 import jsYaml from 'js-yaml'
 import { CheckCircle, XCircle, Trash2, Upload } from 'lucide-react'
+import { fmt, getUI } from '@/lib/ui-i18n'
 
 const YamlAceEditor = dynamic(() => import('./YamlAceEditor'), {
   ssr: false,
   loading: () => <div className="h-[500px] animate-pulse rounded-lg bg-fd-muted" />,
 })
 
-export default function YAMLValidator() {
+export default function YAMLValidator({ lang }: { lang?: string }) {
+  const t = getUI(lang).toolkit.yaml
   const [yaml, setYaml] = useState('')
   const [validationResult, setValidationResult] = useState<{
     valid: boolean
@@ -31,22 +33,29 @@ export default function YAMLValidator() {
     return () => observer.disconnect()
   }, [])
 
-  const validateYAML = useCallback((yamlContent: string) => {
-    try {
-      const result = jsYaml.load(yamlContent)
-      setErrorLine(null)
-      return { valid: true, result: JSON.stringify(result, null, 2) }
-    } catch (error: unknown) {
-      const yamlError = error as { reason?: string; mark?: { line?: number } }
-      const line = yamlError.mark?.line
-      setErrorLine(line ?? null)
-      const errorMessage =
-        yamlError.reason === 'bad indentation of a mapping entry'
-          ? `Incorrect indentation at line ${(line ?? 0) + 1}. Each entry in YAML should be properly indented.`
-          : `${yamlError.reason} at line ${(line ?? 0) + 1}`
-      return { valid: false, error: errorMessage }
-    }
-  }, [])
+  const validateYAML = useCallback(
+    (yamlContent: string) => {
+      try {
+        const result = jsYaml.load(yamlContent)
+        setErrorLine(null)
+        return { valid: true, result: JSON.stringify(result, null, 2) }
+      } catch (error: unknown) {
+        const yamlError = error as { reason?: string; mark?: { line?: number } }
+        const line = yamlError.mark?.line
+        const lineNumber = (line ?? 0) + 1
+        setErrorLine(line ?? null)
+        const errorMessage =
+          yamlError.reason === 'bad indentation of a mapping entry'
+            ? fmt(t.badIndentation, { line: lineNumber })
+            : fmt(t.errorAtLine, {
+                reason: yamlError.reason ?? t.unknownError,
+                line: lineNumber,
+              })
+        return { valid: false, error: errorMessage }
+      }
+    },
+    [t],
+  )
 
   const handleFileDrop = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault()
@@ -98,7 +107,7 @@ export default function YAMLValidator() {
           <div className="absolute inset-0 z-10 flex items-center justify-center bg-fd-background/80 backdrop-blur-sm">
             <div className="flex items-center gap-2 text-sm font-medium text-fd-primary">
               <Upload className="size-5" aria-hidden="true" />
-              Drop YAML file here
+              {t.dropFile}
             </div>
           </div>
         )}
@@ -107,7 +116,7 @@ export default function YAMLValidator() {
           theme={isDark ? 'twilight' : 'chrome'}
           markers={errorMarkers}
           onChange={setYaml}
-          placeholder="Paste your librechat.yaml content here, or drag & drop a file..."
+          placeholder={t.placeholder}
         />
       </div>
 
@@ -115,12 +124,12 @@ export default function YAMLValidator() {
         <div className="min-w-0 flex-1" role="status" aria-live="polite">
           {validationResult === null ? (
             <p className="rounded-lg border border-dashed border-fd-border px-4 py-3 text-sm text-fd-muted-foreground">
-              Validation results will appear here once you paste or drop YAML content.
+              {t.empty}
             </p>
           ) : validationResult.valid ? (
             <div className="flex items-center gap-2 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm font-medium text-emerald-600 dark:text-emerald-400">
               <CheckCircle className="size-4 shrink-0" aria-hidden="true" />
-              YAML is valid!
+              {t.valid}
             </div>
           ) : (
             <div className="flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-600 dark:text-red-400">
@@ -134,10 +143,10 @@ export default function YAMLValidator() {
           <button
             onClick={() => setYaml('')}
             className="flex shrink-0 items-center gap-1.5 rounded-lg border border-fd-border px-3 py-2.5 text-sm text-fd-muted-foreground transition-colors hover:bg-fd-accent hover:text-fd-foreground"
-            aria-label="Clear editor"
+            aria-label={t.clearAria}
           >
             <Trash2 className="size-3.5" aria-hidden="true" />
-            Clear
+            {t.clear}
           </button>
         )}
       </div>
