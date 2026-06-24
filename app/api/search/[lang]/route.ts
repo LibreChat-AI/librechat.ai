@@ -1,7 +1,11 @@
 import { docsSource } from '@/lib/source'
 import { i18n } from '@/lib/i18n'
 import { SEARCH_LANGUAGE_BY_LOCALE } from '@/lib/search-languages'
-import { createKoreanTokenizer } from '@/lib/korean-tokenizer'
+import {
+  createKoreanTokenizer,
+  createPolishTokenizer,
+  createVietnameseTokenizer,
+} from '@/lib/unicode-tokenizer'
 import { createFromSource, type ExportedData } from 'fumadocs-core/search/server'
 import { createTokenizer as createMandarinTokenizer } from '@orama/tokenizers/mandarin'
 import { createTokenizer as createJapaneseTokenizer } from '@orama/tokenizers/japanese'
@@ -56,6 +60,8 @@ const searchServer = createFromSource(localeFilteredSource, {
     zh: { tokenizer: createMandarinTokenizer() },
     ja: { tokenizer: createJapaneseTokenizer() },
     ko: { tokenizer: createKoreanTokenizer() },
+    pl: { tokenizer: createPolishTokenizer() },
+    vi: { tokenizer: createVietnameseTokenizer() },
   },
 })
 

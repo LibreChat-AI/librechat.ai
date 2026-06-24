@@ -1,15 +1,17 @@
 import type { DefaultTokenizer, DefaultTokenizerConfig } from '@orama/orama'
 import { normalizeToken } from '@orama/orama/internals'
 
-const tokenizerLanguage = 'korean'
-const fallbackTokenPattern = /[\u3131-\u318e\uac00-\ud7a3]+|[A-Za-z0-9_'-]+/g
+const unicodeTokenPattern = /[\p{L}\p{M}\p{N}_'-]+/gu
 const koreanSegmenter =
   typeof Intl.Segmenter === 'function'
     ? new Intl.Segmenter('ko', { granularity: 'word' })
     : undefined
 
-type KoreanTokenizerConfig = Omit<DefaultTokenizerConfig, 'language' | 'stemming' | 'stemmer'> & {
-  language?: typeof tokenizerLanguage
+type UnicodeTokenizerConfig = Omit<DefaultTokenizerConfig, 'language' | 'stemming' | 'stemmer'>
+
+type LocaleTokenizerConfig = UnicodeTokenizerConfig & {
+  language: 'korean' | 'polish' | 'vietnamese'
+  segmenter?: Intl.Segmenter
 }
 
 function trim(text: string[]): string[] {
@@ -23,7 +25,7 @@ function trim(text: string[]): string[] {
 }
 
 function resolveStopWords(
-  stopWords: KoreanTokenizerConfig['stopWords'],
+  stopWords: UnicodeTokenizerConfig['stopWords'],
 ): DefaultTokenizer['stopWords'] {
   if (stopWords === false) return undefined
   if (Array.isArray(stopWords)) return stopWords
@@ -31,20 +33,20 @@ function resolveStopWords(
   return []
 }
 
-function tokenizeKorean(input: string): string[] {
+function tokenizeUnicode(input: string, segmenter?: Intl.Segmenter): string[] {
   const text = input.toLowerCase()
 
-  if (koreanSegmenter) {
-    return Array.from(koreanSegmenter.segment(text))
+  if (segmenter) {
+    return Array.from(segmenter.segment(text))
       .filter((segment) => segment.isWordLike)
       .map((segment) => segment.segment)
   }
 
-  return text.match(fallbackTokenPattern) ?? []
+  return text.match(unicodeTokenPattern) ?? []
 }
 
 function tokenizeInternal(
-  this: DefaultTokenizer,
+  this: DefaultTokenizer & { segmenter?: Intl.Segmenter },
   input: string,
   _language?: string,
   prop?: string,
@@ -58,7 +60,7 @@ function tokenizeInternal(
   const tokens =
     prop && this.tokenizeSkipProperties.has(prop)
       ? [normalize(input.toLowerCase(), withCache)]
-      : tokenizeKorean(input)
+      : tokenizeUnicode(input, this.segmenter)
           .map((token) => normalize(token, withCache))
           .filter(Boolean)
 
@@ -71,10 +73,15 @@ function tokenizeInternal(
   return trimTokens
 }
 
-export function createKoreanTokenizer(config: KoreanTokenizerConfig = {}): DefaultTokenizer {
-  const tokenizerConfig: DefaultTokenizer = {
+function createUnicodeTokenizer({
+  language,
+  segmenter,
+  ...config
+}: LocaleTokenizerConfig): DefaultTokenizer {
+  const tokenizerConfig: DefaultTokenizer & { segmenter?: Intl.Segmenter } = {
     tokenize: tokenizeInternal,
-    language: config.language ?? tokenizerLanguage,
+    language,
+    segmenter,
     stemmerSkipProperties: new Set(
       config.stemmerSkipProperties ? [config.stemmerSkipProperties].flat() : [],
     ),
@@ -90,4 +97,16 @@ export function createKoreanTokenizer(config: KoreanTokenizerConfig = {}): Defau
   tokenizerConfig.tokenize = tokenizeInternal.bind(tokenizerConfig)
 
   return tokenizerConfig
+}
+
+export function createKoreanTokenizer(config: UnicodeTokenizerConfig = {}): DefaultTokenizer {
+  return createUnicodeTokenizer({ ...config, language: 'korean', segmenter: koreanSegmenter })
+}
+
+export function createPolishTokenizer(config: UnicodeTokenizerConfig = {}): DefaultTokenizer {
+  return createUnicodeTokenizer({ ...config, language: 'polish' })
+}
+
+export function createVietnameseTokenizer(config: UnicodeTokenizerConfig = {}): DefaultTokenizer {
+  return createUnicodeTokenizer({ ...config, language: 'vietnamese' })
 }

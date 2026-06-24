@@ -36,8 +36,8 @@ import {
  */
 
 async function initOrama(locale?: string): Promise<AnyOrama> {
-  // CJK locales have no built-in stemmer. Load custom tokenizers lazily so they
-  // only reach readers who actually search those locales.
+  // These locales need custom tokenizers. Load them lazily so they only reach
+  // readers who actually search those locales.
   if (locale === 'zh') {
     const { createTokenizer } = await import('@orama/tokenizers/mandarin')
     return create({ schema: { _: 'string' }, components: { tokenizer: createTokenizer() } })
@@ -47,8 +47,19 @@ async function initOrama(locale?: string): Promise<AnyOrama> {
     return create({ schema: { _: 'string' }, components: { tokenizer: createTokenizer() } })
   }
   if (locale === 'ko') {
-    const { createKoreanTokenizer } = await import('@/lib/korean-tokenizer')
+    const { createKoreanTokenizer } = await import('@/lib/unicode-tokenizer')
     return create({ schema: { _: 'string' }, components: { tokenizer: createKoreanTokenizer() } })
+  }
+  if (locale === 'pl') {
+    const { createPolishTokenizer } = await import('@/lib/unicode-tokenizer')
+    return create({ schema: { _: 'string' }, components: { tokenizer: createPolishTokenizer() } })
+  }
+  if (locale === 'vi') {
+    const { createVietnameseTokenizer } = await import('@/lib/unicode-tokenizer')
+    return create({
+      schema: { _: 'string' },
+      components: { tokenizer: createVietnameseTokenizer() },
+    })
   }
   return create({
     schema: { _: 'string' },
