@@ -17,13 +17,9 @@ on:
   # Convergence sweep. A push only translates after a content change, and adding a
   # new language doesn't touch content/docs at all — so a big batch (several new
   # locales and/or long files) can't fully land in the single push-triggered run
-  # under the flex-tier rate limit; the overflow is skipped and, because the bot
-  # commit carries [skip ci], nothing re-runs to finish it. This half-hourly run
-  # resumes from the translation cache (content/.i18n-cache) and translates whatever is
-  # still missing, converging large batches over successive runs. It is a cheap
-  # no-op once everything is translated (every block is a cache hit → zero API
-  # calls → no commit). The `translate-docs` concurrency group keeps it from
-  # overlapping a push-triggered run.
+  # under the flex-tier rate limit. This half-hourly run writes generated docs to
+  # TRANSLATE_BRANCH and keeps translation memory in the Actions cache, so main stays
+  # free of partial progress commits and cache files.
   schedule:
     - cron: '*/30 * * * *'
   workflow_dispatch:
@@ -36,6 +32,9 @@ on:
 permissions:
   contents: write
 
+env:
+  TRANSLATE_BRANCH: automation/docs-translations
+
 concurrency:
   group: translate-docs
   cancel-in-progress: false
@@ -47,9 +46,42 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # Full history so the bot commit can be rebased onto an advanced main
-          # before pushing (see the Commit step's rebase-and-retry loop).
+          # Full history so the long-lived translation branch can merge current
+          # main before each convergence pass.
           fetch-depth: 0
+
+      - name: Prepare translation branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin "+refs/heads/main:refs/remotes/origin/main"
+          if git fetch origin "+refs/heads/${TRANSLATE_BRANCH}:refs/remotes/origin/${TRANSLATE_BRANCH}" 2>/dev/null; then
+            git switch -c "$TRANSLATE_BRANCH" "origin/$TRANSLATE_BRANCH"
+            git merge --no-edit origin/main
+          else
+            git switch -c "$TRANSLATE_BRANCH" origin/main
+          fi
+
+      - name: Restore translation memory
+        uses: actions/cache@v4
+        with:
+          path: content/.i18n-cache
+          key: translate-docs-${{ github.run_id }}
+          restore-keys: |
+            translate-docs-
+
+      - name: Seed translation memory from git history
+        run: |
+          if [ -d content/.i18n-cache ]; then
+            exit 0
+          fi
+          # First run after removing cache files from main: seed from the parent of
+          # the cache-removal commit, then unstage it so the files stay out of git.
+          seed_commit=$(git rev-list -n 1 HEAD -- content/.i18n-cache || true)
+          if [ -n "$seed_commit" ]; then
+            git checkout "${seed_commit}^" -- content/.i18n-cache || true
+            git reset -- content/.i18n-cache || true
+          fi
 
       - uses: pnpm/action-setup@v4
 
@@ -71,36 +103,45 @@ jobs:
           fi
           npx tsx scripts/translate.ts $FLAGS
 
-      - name: Commit translations
+      - name: Commit translations to branch
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add content/docs content/.i18n-cache
+          git add content/docs
           if git diff --cached --quiet; then
             echo "No translation changes to commit"
           else
-            # [skip ci] so this bot commit doesn't re-trigger the push-on-main
-            # workflows (ci, bundle analysis, embeddings, links). Without it, every
-            # translation commit fans out a redundant ~4-workflow cascade.
+            # [skip ci] keeps the long-lived translation branch from running CI on
+            # every half-hourly convergence commit. Main only changes when this branch
+            # is intentionally merged.
             git commit --no-verify -m "chore: update docs translations [skip ci]"
-            # main may have advanced while translating (e.g. an unrelated non-docs
-            # commit that does not queue another translate run). Rebase the bot
-            # commit onto the latest main and retry so a non-fast-forward rejection
-            # doesn't silently drop the generated translations. Only locale files
-            # and the cache are touched here, so a rebase onto other changes is
-            # conflict-free in practice.
-            pushed=false
-            for attempt in 1 2 3 4 5; do
-              git pull --rebase origin main
-              if git push; then
-                pushed=true
-                break
-              fi
-              echo "push attempt $attempt rejected (remote advanced); retrying"
-              sleep 5
-            done
-            if [ "$pushed" != "true" ]; then
-              echo "::error::failed to push translations after 5 attempts"
-              exit 1
+          fi
+
+          if git show-ref --verify --quiet "refs/remotes/origin/${TRANSLATE_BRANCH}"; then
+            base="origin/${TRANSLATE_BRANCH}"
+          else
+            base="origin/main"
+          fi
+          ahead=$(git rev-list --count "${base}..HEAD")
+          if [ "$ahead" -eq 0 ]; then
+            echo "Translation branch already up to date"
+            exit 0
+          fi
+
+          pushed=false
+          for attempt in 1 2 3 4 5; do
+            if git push origin HEAD:"$TRANSLATE_BRANCH"; then
+              pushed=true
+              break
             fi
+            echo "push attempt $attempt rejected (remote advanced); merging latest branch/main"
+            git fetch origin "+refs/heads/main:refs/remotes/origin/main"
+            git fetch origin "+refs/heads/${TRANSLATE_BRANCH}:refs/remotes/origin/${TRANSLATE_BRANCH}" || true
+            if git show-ref --verify --quiet "refs/remotes/origin/${TRANSLATE_BRANCH}"; then
+              git merge --no-edit "origin/${TRANSLATE_BRANCH}"
+            fi
+            git merge --no-edit origin/main
+            sleep 5
+          done
+          if [ "$pushed" != "true" ]; then
+            echo "::error::failed to push translations to $TRANSLATE_BRANCH after 5 attempts"
+            exit 1
           fi
