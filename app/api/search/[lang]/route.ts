@@ -32,8 +32,10 @@ export function generateStaticParams() {
 // built-in stemmers expect language names like "english", not locale codes.
 // Chinese and Japanese use dedicated
 // @orama/tokenizers via a top-level `tokenizer` field (createDB reads
-// `tokenizer ?? components.tokenizer`). The client's initOrama MUST mirror this
-// map so query tokenization matches how the documents were indexed.
+// `tokenizer ?? components.tokenizer`). Korean uses a lightweight Unicode
+// tokenizer so Hangul terms are kept instead of being treated as separators.
+// The client's initOrama MUST mirror this map so query tokenization matches how
+// the documents were indexed.
 //
 // Restrict each non-default locale's index to pages that have a real translated
 // file (path ends `.<locale>.mdx`). getLanguages() otherwise includes the English
