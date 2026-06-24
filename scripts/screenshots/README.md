@@ -28,6 +28,9 @@ against the demo's current UI.
 
 ### Required env
 
+The GitHub workflow runs in the `Production` Environment, so define these
+secrets/variables there.
+
 | Name                   | Where                              | Purpose                                 |
 | ---------------------- | ---------------------------------- | --------------------------------------- |
 | `DEMO_EMAIL`           | secret / `.env.local`              | demo account login                      |
