@@ -28,12 +28,12 @@ against the demo's current UI.
 
 ### Required env
 
-| Name | Where | Purpose |
-| --- | --- | --- |
-| `DEMO_EMAIL` | secret / `.env.local` | demo account login |
-| `DEMO_PASSWORD` | secret / `.env.local` | demo account password |
-| `DEMO_CONVERSATION_ID` | secret / `.env.local` | hero conversation id |
-| `DEMO_BASE_URL` | variable / `.env.local` (optional) | defaults to `https://chat.librechat.ai` |
+| Name                   | Where                              | Purpose                                 |
+| ---------------------- | ---------------------------------- | --------------------------------------- |
+| `DEMO_EMAIL`           | secret / `.env.local`              | demo account login                      |
+| `DEMO_PASSWORD`        | secret / `.env.local`              | demo account password                   |
+| `DEMO_CONVERSATION_ID` | secret / `.env.local`              | hero conversation id                    |
+| `DEMO_BASE_URL`        | variable / `.env.local` (optional) | defaults to `https://chat.librechat.ai` |
 
 ### Run locally
 

@@ -32,16 +32,16 @@ zero. Screenshots regenerate automatically and land in a reviewable PR.
 
 ## Decisions (locked)
 
-| Decision | Choice |
-| --- | --- |
-| Representation | Automated real screenshots via Playwright |
-| Trigger | Scheduled GitHub Action (weekly cron) + manual `workflow_dispatch`, opens a PR |
-| Content | Curated conversations on a dedicated demo account |
-| Capture source | Logged-in demo account on `chat.librechat.ai`, full app view |
-| Login risk | None. The demo has no captcha and will not add one |
+| Decision         | Choice                                                                                |
+| ---------------- | ------------------------------------------------------------------------------------- |
+| Representation   | Automated real screenshots via Playwright                                             |
+| Trigger          | Scheduled GitHub Action (weekly cron) + manual `workflow_dispatch`, opens a PR        |
+| Content          | Curated conversations on a dedicated demo account                                     |
+| Capture source   | Logged-in demo account on `chat.librechat.ai`, full app view                          |
+| Login risk       | None. The demo has no captcha and will not add one                                    |
 | Content creation | One-time DB seed (fabricated replies, no AI credits); recurring cron only re-captures |
-| Secrets in CI | Login credentials only. DB access is used once at setup, never in the cron |
-| Component change | None. The script overwrites the same four files in place |
+| Secrets in CI    | Login credentials only. DB access is used once at setup, never in the cron            |
+| Component change | None. The script overwrites the same four files in place                              |
 
 ## Architecture
 
@@ -116,12 +116,12 @@ Behaviour:
 Variant matrix (aspect preserved from current assets). Current files are:
 desktop ~2546x1428 (≈16:9), mobile ~512x1117 (portrait, ≈ iPhone 390x844 ratio):
 
-| Variant | Viewport (logical) | DSF | Output target |
-| --- | --- | --- | --- |
-| desktop light | 1280x720 | 2 | `demo_light.png` |
-| desktop dark | 1280x720 | 2 | `demo_dark.png` |
-| mobile light | 390x844 (phone portrait) | 2 | `demo_mobile_light.png` |
-| mobile dark | 390x844 (phone portrait) | 2 | `demo_mobile_dark.png` |
+| Variant       | Viewport (logical)       | DSF | Output target           |
+| ------------- | ------------------------ | --- | ----------------------- |
+| desktop light | 1280x720                 | 2   | `demo_light.png`        |
+| desktop dark  | 1280x720                 | 2   | `demo_dark.png`         |
+| mobile light  | 390x844 (phone portrait) | 2   | `demo_mobile_light.png` |
+| mobile dark   | 390x844 (phone portrait) | 2   | `demo_mobile_dark.png`  |
 
 The current mobile assets are **portrait phone shots**, so the script captures a phone
 viewport in portrait. Exact output pixel sizes may differ from today's files, but the

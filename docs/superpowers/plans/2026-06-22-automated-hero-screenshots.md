@@ -35,10 +35,12 @@
 ### Task 1: Screenshot config module + unit tests
 
 **Files:**
+
 - Create: `scripts/screenshots/config.ts`
 - Test: `scripts/screenshots/config.test.ts`
 
 **Interfaces:**
+
 - Consumes: nothing (pure module).
 - Produces:
   - `BASE_URL: string` (`'https://chat.librechat.ai'`)
@@ -201,11 +203,13 @@ git commit -m "feat: add screenshot capture config and tests"
 ### Task 2: Capture script, npm script, and README
 
 **Files:**
+
 - Create: `scripts/screenshots/capture.ts`
 - Create: `scripts/screenshots/README.md`
 - Modify: `package.json` (add `screenshots` script under `"scripts"`)
 
 **Interfaces:**
+
 - Consumes from Task 1: `BASE_URL`, `ZOOM`, `VARIANTS`, `Variant`, `outputPath`, `themeBootstrap`.
 - Produces: the executable `pnpm screenshots` command that writes the four PNGs.
 
@@ -335,7 +339,7 @@ main().catch((err) => {
 
 Create `scripts/screenshots/README.md`:
 
-```markdown
+````markdown
 # Landing-page demo screenshots
 
 Regenerates the four hero images in `components/home/img/` from the live
@@ -366,12 +370,12 @@ against the demo's current UI.
 
 ### Required env
 
-| Name | Where | Purpose |
-| --- | --- | --- |
-| `DEMO_EMAIL` | secret / `.env.local` | demo account login |
-| `DEMO_PASSWORD` | secret / `.env.local` | demo account password |
-| `DEMO_CONVERSATION_ID` | secret / `.env.local` | hero conversation id |
-| `DEMO_BASE_URL` | variable / `.env.local` (optional) | defaults to `https://chat.librechat.ai` |
+| Name                   | Where                              | Purpose                                 |
+| ---------------------- | ---------------------------------- | --------------------------------------- |
+| `DEMO_EMAIL`           | secret / `.env.local`              | demo account login                      |
+| `DEMO_PASSWORD`        | secret / `.env.local`              | demo account password                   |
+| `DEMO_CONVERSATION_ID` | secret / `.env.local`              | hero conversation id                    |
+| `DEMO_BASE_URL`        | variable / `.env.local` (optional) | defaults to `https://chat.librechat.ai` |
 
 ### Run locally
 
@@ -380,6 +384,7 @@ against the demo's current UI.
 set -a && source .env.local && set +a
 pnpm screenshots
 ```
+````
 
 The four PNGs in `components/home/img/` will be overwritten. Review them, then
 preview in the hero with `pnpm dev`.
@@ -390,7 +395,8 @@ preview in the hero with `pnpm dev`.
 the theme `localStorage` key. If the demo's markup changes, update `SELECTORS` and
 `THEME_STORAGE_KEY` (in `config.ts`). Discover current values with the
 `agent-browser` CLI or browser devtools against the live demo.
-```
+
+````
 
 - [ ] **Step 4: Verify selectors and theme key against the live demo, then run**
 
@@ -439,16 +445,18 @@ Expected: no errors.
 ```bash
 git add scripts/screenshots/capture.ts scripts/screenshots/README.md package.json components/home/img
 git commit -m "feat: add automated demo screenshot capture script"
-```
+````
 
 ---
 
 ### Task 3: Scheduled GitHub Actions workflow
 
 **Files:**
+
 - Create: `.github/workflows/update-screenshots.yml`
 
 **Interfaces:**
+
 - Consumes: the `pnpm screenshots` command from Task 2; repo secrets/variables.
 - Produces: a scheduled + manually dispatchable workflow that opens a PR with refreshed images.
 
@@ -563,4 +571,7 @@ is opened (or shows "no changes" if the UI is identical). Review the image diff 
 - **Default `GITHUB_TOKEN`:** PRs opened by the default token do not themselves trigger
   further workflows; acceptable for an image-only PR. If CI must run on the PR, swap to a
   PAT in the `create-pull-request` step later.
+
+```
+
 ```
