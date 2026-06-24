@@ -325,6 +325,44 @@ export const ja: UIStrings = {
       cookiePolicy: 'Cookie ポリシー',
     },
   },
+  toolkit: {
+    credentials: {
+      generate: '認証情報を生成',
+      regenerate: '認証情報を再生成',
+      generateAria: '新しい認証情報を生成',
+      regionAria: '生成された認証情報',
+      copy: 'コピー',
+      copied: 'コピー済み',
+      copyAria: '{label} をコピー',
+      valueAria: '{label} の値',
+      copyAll: 'すべて .env としてコピー',
+      copiedAll: 'クリップボードにコピーしました！',
+      copyAllAria: 'すべての認証情報を .env ブロックとしてコピー',
+      allCopiedStatus: '5 件の認証情報を KEY=value 形式でコピーしました',
+      emptyPrefix: '上のボタンをクリックして、安全なランダム認証情報を',
+      emptySuffix: 'ファイル用に生成します。',
+      hints: {
+        CREDS_KEY: '保存された認証情報の暗号化キー',
+        CREDS_IV: '暗号化の初期化ベクトル',
+        JWT_SECRET: 'アクセストークン署名用のシークレット',
+        JWT_REFRESH_SECRET: 'リフレッシュトークン署名用のシークレット',
+        MEILI_KEY: 'MeiliSearch マスターキー',
+      },
+    },
+    yaml: {
+      dropFile: 'YAML ファイルをここにドロップ',
+      placeholder:
+        'librechat.yaml の内容をここに貼り付けるか、ファイルをドラッグ＆ドロップしてください...',
+      empty: 'YAML 内容を貼り付けるかドロップすると、ここに検証結果が表示されます。',
+      valid: 'YAML は有効です！',
+      clear: 'クリア',
+      clearAria: 'エディターをクリア',
+      badIndentation:
+        '{line} 行目のインデントが正しくありません。YAML の各項目は正しくインデントする必要があります。',
+      errorAtLine: '{reason}（{line} 行目）',
+      unknownError: '不明な YAML エラー',
+    },
+  },
   home: {
     metaTitle: 'LibreChat - オープンソースの AI プラットフォーム',
     metaDescription:

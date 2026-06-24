@@ -13,6 +13,15 @@ describe('localizeDocsHref', () => {
     expect(localizeDocsHref('/docs/local/docker', '/docs/configuration')).toBe('/docs/local/docker')
   })
 
+  it('canonicalizes legacy toolkit aliases before locale prefixing', () => {
+    expect(localizeDocsHref('/toolkit/creds_generator', '/docs/configuration')).toBe(
+      '/docs/toolkit/credentials-generator',
+    )
+    expect(localizeDocsHref('/toolkit/yaml_checker', '/fr/docs/configuration')).toBe(
+      '/fr/docs/toolkit/yaml-validator',
+    )
+  })
+
   it('does not touch external links, anchors, non-docs paths, or raw markdown', () => {
     expect(localizeDocsHref('https://example.com/docs/x', '/de/docs/x')).toBe(
       'https://example.com/docs/x',

@@ -335,6 +335,44 @@ export const es: UIStrings = {
       cookiePolicy: 'Política de cookies',
     },
   },
+  toolkit: {
+    credentials: {
+      generate: 'Generar credenciales',
+      regenerate: 'Regenerar credenciales',
+      generateAria: 'Generar nuevas credenciales',
+      regionAria: 'Credenciales generadas',
+      copy: 'Copiar',
+      copied: 'Copiado',
+      copyAria: 'Copiar {label}',
+      valueAria: 'Valor de {label}',
+      copyAll: 'Copiar todo como .env',
+      copiedAll: '¡Copiado al portapapeles!',
+      copyAllAria: 'Copiar todas las credenciales como bloque .env',
+      allCopiedStatus: 'Las 5 credenciales se copiaron en formato KEY=value',
+      emptyPrefix:
+        'Haz clic en el botón de arriba para generar credenciales aleatorias seguras para tu',
+      emptySuffix: 'archivo.',
+      hints: {
+        CREDS_KEY: 'Clave de cifrado para credenciales almacenadas',
+        CREDS_IV: 'Vector de inicialización para cifrado',
+        JWT_SECRET: 'Secreto para firmar tokens de acceso',
+        JWT_REFRESH_SECRET: 'Secreto para firmar tokens de actualización',
+        MEILI_KEY: 'Clave maestra de MeiliSearch',
+      },
+    },
+    yaml: {
+      dropFile: 'Suelta el archivo YAML aquí',
+      placeholder: 'Pega el contenido de librechat.yaml aquí, o arrastra y suelta un archivo...',
+      empty: 'Los resultados de validación aparecerán aquí cuando pegues o sueltes contenido YAML.',
+      valid: '¡El YAML es válido!',
+      clear: 'Limpiar',
+      clearAria: 'Limpiar editor',
+      badIndentation:
+        'Sangría incorrecta en la línea {line}. Cada entrada de YAML debe tener la sangría adecuada.',
+      errorAtLine: '{reason} en la línea {line}',
+      unknownError: 'Error YAML desconocido',
+    },
+  },
   home: {
     metaTitle: 'LibreChat - La plataforma de IA de código abierto',
     metaDescription:

@@ -4,6 +4,8 @@ import { DocsHub } from '@/components/DocsHub'
 import { QuickStartHub } from '@/components/QuickStartHub'
 import { FeaturesHub } from '@/components/FeaturesHub'
 import { LocalInstallHub } from '@/components/LocalInstallHub'
+import { CredentialsGeneratorMDX } from '@/components/tools/CredentialsGeneratorMDX'
+import { YAMLValidatorMDX } from '@/components/tools/YAMLValidatorMDX'
 import { DocsPage, DocsBody, DocsTitle, DocsDescription } from 'fumadocs-ui/page'
 import { notFound, redirect } from 'next/navigation'
 import { LLMCopyButton, ViewOptions } from '@/components/page-actions'
@@ -40,15 +42,17 @@ export default async function Page(props: PageProps) {
 
   const MDX = page.data.body
 
-  // The hub components render localized chrome but are invoked from MDX without
-  // props. Bind the current locale to them per request so they pick up the right
-  // dictionary on /<locale>/docs pages.
+  // Interactive MDX widgets render localized chrome but are invoked from MDX
+  // without props. Bind the current locale to them per request so they pick up
+  // the right dictionary on /<locale>/docs pages.
   const components = {
     ...mdxComponents,
     DocsHub: () => <DocsHub lang={params.lang} />,
     QuickStartHub: () => <QuickStartHub lang={params.lang} />,
     FeaturesHub: () => <FeaturesHub lang={params.lang} />,
     LocalInstallHub: () => <LocalInstallHub lang={params.lang} />,
+    CredentialsGeneratorMDX: () => <CredentialsGeneratorMDX lang={params.lang} />,
+    YAMLValidatorMDX: () => <YAMLValidatorMDX lang={params.lang} />,
   }
 
   // Fumadocs 14.7.7 falls back to the English page for a non-default locale that
