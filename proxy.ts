@@ -26,12 +26,18 @@ function isMarkdownPreferred(request: NextRequest): boolean {
  * set by the language switcher) wins; otherwise the best `Accept-Language`
  * match among the locales we build; falling back to the default language.
  */
-function preferredLocale(
+export function preferredLocale(
   request: NextRequest,
   locales: readonly string[] = i18n.languages,
 ): string {
   const cookie = request.cookies.get(LOCALE_COOKIE)?.value
-  if (cookie && locales.includes(cookie)) return cookie
+  if (cookie) {
+    if (locales.includes(cookie)) return cookie
+    // A valid docs-only locale cookie is still an explicit language choice; on
+    // `/`, keep those readers on the default home instead of falling through to
+    // an unrelated Accept-Language redirect.
+    if (i18n.languages.includes(cookie)) return i18n.defaultLanguage
+  }
 
   const header = request.headers.get('accept-language')
   if (!header) return i18n.defaultLanguage
