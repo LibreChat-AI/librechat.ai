@@ -1,20 +1,19 @@
 import { NextRequest, NextResponse, type NextFetchEvent } from 'next/server'
 import { createI18nMiddleware } from 'fumadocs-core/i18n/middleware'
-import { i18n, LOCALE_COOKIE } from '@/lib/i18n'
+import { i18n, LOCALIZED_HOME_LOCALES, LOCALE_COOKIE } from '@/lib/i18n'
 
 const i18nMiddleware = createI18nMiddleware(i18n)
-const localeByLowercase = new Map(i18n.languages.map((locale) => [locale.toLowerCase(), locale]))
 
-function matchLocale(tag: string): string | null {
+function matchLocale(tag: string, locales: readonly string[]): string | null {
   const normalized = tag.toLowerCase()
-  const exact = localeByLowercase.get(normalized)
+  const exact = locales.find((locale) => locale.toLowerCase() === normalized)
   if (exact) return exact
 
   const base = normalized.split('-')[0]
-  const baseLocale = localeByLowercase.get(base)
+  const baseLocale = locales.find((locale) => locale.toLowerCase() === base)
   if (baseLocale) return baseLocale
 
-  return i18n.languages.find((locale) => locale.toLowerCase().split('-')[0] === base) ?? null
+  return locales.find((locale) => locale.toLowerCase().split('-')[0] === base) ?? null
 }
 
 function isMarkdownPreferred(request: NextRequest): boolean {
@@ -27,9 +26,12 @@ function isMarkdownPreferred(request: NextRequest): boolean {
  * set by the language switcher) wins; otherwise the best `Accept-Language`
  * match among the locales we build; falling back to the default language.
  */
-function preferredLocale(request: NextRequest): string {
+function preferredLocale(
+  request: NextRequest,
+  locales: readonly string[] = i18n.languages,
+): string {
   const cookie = request.cookies.get(LOCALE_COOKIE)?.value
-  if (cookie && i18n.languages.includes(cookie)) return cookie
+  if (cookie && locales.includes(cookie)) return cookie
 
   const header = request.headers.get('accept-language')
   if (!header) return i18n.defaultLanguage
@@ -43,7 +45,7 @@ function preferredLocale(request: NextRequest): string {
     .sort((a, b) => b.q - a.q)
 
   for (const { tag } of ranked) {
-    const locale = matchLocale(tag)
+    const locale = matchLocale(tag, locales)
     if (locale) return locale
   }
   return i18n.defaultLanguage
@@ -65,11 +67,11 @@ export default function proxy(request: NextRequest, event: NextFetchEvent) {
   }
 
   // Browser-language auto-detection, scoped to the prefix-less home page. A
-  // reader whose browser prefers a translated locale is forwarded to its
-  // landing page (`/<locale>`); English readers and explicit English choosers
-  // stay on `/`. Deliberately limited to `/`: the content routes (/docs, /blog,
-  // …) are shared-CDN-cached, and an Accept-Language redirect there would be
-  // cached and served to every reader regardless of their language.
+  // reader whose browser prefers a locale with a translated landing page is
+  // forwarded to `/<locale>`; docs-only locales stay on `/` until their UI/home
+  // dictionary exists. Deliberately limited to `/`: the content routes (/docs,
+  // /blog, …) are shared-CDN-cached, and an Accept-Language redirect there
+  // would be cached and served to every reader regardless of their language.
   //
   // The decision depends on Cookie + Accept-Language, so BOTH outcomes must stay
   // out of any shared cache: a cached English `/` 200 (not just the redirect)
@@ -77,7 +79,7 @@ export default function proxy(request: NextRequest, event: NextFetchEvent) {
   // re-running, bypassing detection. `Vary` alone isn't enough — Cloudflare
   // ignores it — so mark both responses `private, no-store`.
   if (pathname === '/') {
-    const locale = preferredLocale(request)
+    const locale = preferredLocale(request, LOCALIZED_HOME_LOCALES)
     let response: NextResponse
     if (locale === i18n.defaultLanguage) {
       response = NextResponse.next()

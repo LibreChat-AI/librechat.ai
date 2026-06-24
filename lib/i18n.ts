@@ -33,6 +33,17 @@ export const i18n: I18nConfig = {
 }
 
 /**
+ * Locales with complete UI/home dictionaries. Docs content can be translated
+ * before the landing page chrome is, so keep home routes and home hreflang
+ * alternates limited to locales that do not fall back to English UI strings.
+ */
+export const LOCALIZED_HOME_LOCALES = ['en', 'zh', 'es', 'fr', 'de', 'ja'] as const
+
+export function hasLocalizedHome(lang?: string): boolean {
+  return !!lang && (LOCALIZED_HOME_LOCALES as readonly string[]).includes(lang)
+}
+
+/**
  * Prefix an internal `/docs` path with the active locale so links from
  * localized surfaces (landing page CTAs, navbar, footer) keep the reader in
  * their language instead of dropping them onto the prefix-less English docs.
@@ -50,14 +61,19 @@ export function localizedDocsHref(href: string, lang?: string): string {
 
 /**
  * The landing-page URL for a locale. The default language lives at `/` (no
- * prefix, matching `hideLocale: 'default-locale'`); every other locale at
- * `/<locale>`. Used for the navbar/logo link so clicking it from a localized
- * surface keeps the reader in their language instead of dropping them onto the
- * prefix-less English home.
+ * prefix, matching `hideLocale: 'default-locale'`); translated home locales
+ * live at `/<locale>`. Docs-only locales intentionally return `/` until they
+ * have complete UI/home dictionaries.
  */
 export function localizedHomeHref(lang?: string): string {
-  if (!lang || lang === i18n.defaultLanguage) return '/'
+  if (!lang || lang === i18n.defaultLanguage || !hasLocalizedHome(lang)) return '/'
   return `/${lang}`
+}
+
+export function localizedHomeAlternates(): Record<string, string> {
+  return Object.fromEntries(
+    LOCALIZED_HOME_LOCALES.map((locale) => [locale, localizedHomeHref(locale)]),
+  )
 }
 
 /** Cookie that records an explicit language choice (read by the proxy's auto-detect). */

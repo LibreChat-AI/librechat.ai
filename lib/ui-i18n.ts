@@ -465,6 +465,8 @@ const dictionaries: Record<string, UIStrings> = {
   ja,
 }
 
+export const UI_DICTIONARY_LOCALES = Object.freeze(Object.keys(dictionaries))
+
 /** Returns the UI strings for a locale, falling back to English. */
 export function getUI(lang?: string): UIStrings {
   return (lang && dictionaries[lang]) || en

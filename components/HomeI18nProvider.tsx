@@ -3,10 +3,10 @@
 import { I18nProvider } from 'fumadocs-ui/contexts/i18n'
 import { useRouter } from 'next/navigation'
 import type { ReactNode } from 'react'
-import { i18n, LOCALE_NAMES, rememberLocale } from '@/lib/i18n'
+import { i18n, LOCALIZED_HOME_LOCALES, LOCALE_NAMES, rememberLocale } from '@/lib/i18n'
 import { uiI18n } from '@/lib/ui-i18n'
 
-const locales = i18n.languages.map((locale) => ({
+const locales = LOCALIZED_HOME_LOCALES.map((locale) => ({
   locale,
   name: LOCALE_NAMES[locale] ?? locale,
 }))
@@ -14,9 +14,9 @@ const locales = i18n.languages.map((locale) => ({
 /**
  * Language switcher context for the landing page. Mirrors DocsI18nProvider but
  * routes between the home URLs: the default language lives at `/` (no prefix,
- * matching hideLocale: 'default-locale') and every other locale at `/<locale>`.
- * The whole landing page is translated for all locales, so the switcher offers
- * them all.
+ * matching hideLocale: 'default-locale') and translated home locales live at
+ * `/<locale>`. Docs-only locales are omitted until their UI/home dictionary
+ * exists, so the switcher never advertises an English fallback page as localized.
  */
 export function HomeI18nProvider({ locale, children }: { locale: string; children: ReactNode }) {
   const router = useRouter()
