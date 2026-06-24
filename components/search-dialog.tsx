@@ -36,8 +36,8 @@ import {
  */
 
 async function initOrama(locale?: string): Promise<AnyOrama> {
-  // Chinese/Japanese have no built-in stemmer. Load their (large) dictionaries
-  // lazily so they only reach readers who actually search those locales.
+  // CJK locales have no built-in stemmer. Load custom tokenizers lazily so they
+  // only reach readers who actually search those locales.
   if (locale === 'zh') {
     const { createTokenizer } = await import('@orama/tokenizers/mandarin')
     return create({ schema: { _: 'string' }, components: { tokenizer: createTokenizer() } })
@@ -45,6 +45,10 @@ async function initOrama(locale?: string): Promise<AnyOrama> {
   if (locale === 'ja') {
     const { createTokenizer } = await import('@orama/tokenizers/japanese')
     return create({ schema: { _: 'string' }, components: { tokenizer: createTokenizer() } })
+  }
+  if (locale === 'ko') {
+    const { createKoreanTokenizer } = await import('@/lib/korean-tokenizer')
+    return create({ schema: { _: 'string' }, components: { tokenizer: createKoreanTokenizer() } })
   }
   return create({
     schema: { _: 'string' },

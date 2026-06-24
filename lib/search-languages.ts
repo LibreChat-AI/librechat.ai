@@ -14,5 +14,4 @@ export const SEARCH_LANGUAGE_BY_LOCALE: Record<string, string> = {
   // tokenizer instead of passing unsupported language codes at build time.
   pl: 'english',
   vi: 'english',
-  ko: 'english',
 }

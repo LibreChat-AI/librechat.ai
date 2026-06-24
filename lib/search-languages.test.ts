@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { i18n } from './i18n'
 import { SEARCH_LANGUAGE_BY_LOCALE } from './search-languages'
 
-const CUSTOM_TOKENIZER_LOCALES = new Set(['zh', 'ja'])
+const CUSTOM_TOKENIZER_LOCALES = new Set(['zh', 'ja', 'ko'])
 
 describe('search locale languages', () => {
   it('maps every locale that does not use a custom tokenizer', () => {
@@ -19,5 +19,9 @@ describe('search locale languages', () => {
     expect(SEARCH_LANGUAGE_BY_LOCALE.nl).toBe('dutch')
     expect(SEARCH_LANGUAGE_BY_LOCALE.id).toBe('indonesian')
     expect(SEARCH_LANGUAGE_BY_LOCALE.tr).toBe('turkish')
+  })
+
+  it('does not map Korean to a Latin-only tokenizer', () => {
+    expect(SEARCH_LANGUAGE_BY_LOCALE.ko).toBeUndefined()
   })
 })
