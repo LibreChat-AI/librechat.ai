@@ -1,5 +1,6 @@
 import Image from 'next/image'
 import Link from 'next/link'
+import { getAuthorById } from '@/lib/authors'
 import { blog } from '@/lib/source'
 import type { Metadata } from 'next'
 
@@ -14,7 +15,9 @@ interface FeedEntry {
   date: string
   dateFormatted: string
   url: string
-  author?: string
+  authorName?: string
+  authorSubtitle?: string
+  authorAvatar?: string
   ogImage?: string
   ogImagePosition?: string
 }
@@ -36,13 +39,16 @@ export default function BlogPage() {
   for (const post of blog) {
     const iso =
       typeof post.date === 'string' ? post.date : new Date(post.date).toISOString().split('T')[0]
+    const author = post.author ? getAuthorById(post.author) : undefined
     entries.push({
       title: post.title,
       description: post.description,
       date: iso,
       dateFormatted: dateFormatter.format(new Date(iso + 'T00:00:00Z')),
       url: `/blog/${getSlug(post.info.path)}`,
-      author: post.author,
+      authorName: author?.name ?? post.author,
+      authorSubtitle: author?.subtitle,
+      authorAvatar: author?.avatar,
       ogImage: post.ogImage,
       ogImagePosition: post.ogImagePosition,
     })
@@ -95,8 +101,32 @@ export default function BlogPage() {
                 {entry.description && (
                   <p className="text-sm text-muted-foreground line-clamp-2">{entry.description}</p>
                 )}
-                {entry.author && (
-                  <p className="mt-auto pt-3 text-xs text-muted-foreground">by {entry.author}</p>
+                {entry.authorName && (
+                  <div className="mt-auto flex items-center gap-2.5 pt-4">
+                    {entry.authorAvatar ? (
+                      <Image
+                        src={entry.authorAvatar}
+                        alt=""
+                        width={32}
+                        height={32}
+                        className="size-8 rounded-full object-cover outline outline-1 -outline-offset-1 outline-black/10 transition-transform duration-300 ease-out group-hover:scale-105 dark:outline-white/10"
+                      />
+                    ) : (
+                      <span className="flex size-8 items-center justify-center rounded-full bg-muted text-xs font-semibold text-muted-foreground">
+                        {entry.authorName.charAt(0)}
+                      </span>
+                    )}
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-foreground">
+                        {entry.authorName}
+                      </p>
+                      {entry.authorSubtitle && (
+                        <p className="truncate text-xs text-muted-foreground">
+                          {entry.authorSubtitle}
+                        </p>
+                      )}
+                    </div>
+                  </div>
                 )}
               </div>
             </Link>

@@ -29,14 +29,30 @@ export const authors: Author[] = [
   {
     id: 'berry',
     name: 'Berry',
-    subtitle: 'Collaborator for LibreChat',
-    bio: '// TODO: Become a software engineer !self_taught++; // Debugging life, coding solutions',
+    subtitle: 'Core Contributor to LibreChat',
+    bio: 'Berry is a core LibreChat contributor focused on the product surfaces people rely on every day. His work spans Agent Builder, speech and voice tooling, accessibility, navigation, documentation, interface polish, and release-facing fixes, with an emphasis on making complex workflows feel clearer, faster, and more dependable over repeated use.',
     avatar: '/images/people/berry.png',
     socials: [
       { label: 'GitHub', url: 'https://github.com/Berry-13' },
+      { label: 'Website', url: 'https://me.berry13.com/' },
       { label: 'LinkedIn', url: 'https://www.linkedin.com/in/marco-beretta-berry/' },
       { label: 'X', url: 'https://x.com/berry13000' },
+      { label: 'ORCID', url: 'https://orcid.org/0009-0007-2492-8531' },
       { label: 'Email', url: 'mailto:berry@librechat.ai' },
+    ],
+  },
+  {
+    id: 'dustinhealy',
+    name: 'Dustin Healy',
+    subtitle: 'Core Contributor to LibreChat',
+    bio:
+      'Dustin Healy is a full stack software engineer with a passion for building and maintaining agentic applications and their supporting technologies within the open source community. ' +
+      "As a contributor, he has worked across every facet of LibreChat's core functionality, with contributions spanning from high-touch surfaces like the user interface to foundational work on MCP support, provider compatibility, prompt caching, multi-modality, file handling, TypeScript migration, accessibility improvements, bug fixes, documentation, role based access controls, deployment configuration, and the LibreChat admin panel.",
+    avatar: '/images/people/dustinhealy.jpg',
+    socials: [
+      { label: 'Website', url: 'https://www.dustinhealy.com/' },
+      { label: 'GitHub', url: 'https://github.com/dustinhealy' },
+      { label: 'LinkedIn', url: 'https://www.linkedin.com/in/dustinhealy' },
     ],
   },
   {
@@ -82,8 +98,8 @@ export const authors: Author[] = [
   {
     id: 'anon',
     name: 'Anon',
-    subtitle: '(>_<)',
-    bio: 'Lorem ipsum dolor sit amet, consectetur adipiscing elit. Nulla litora ridiculus magna et etiam mi. Dolor etiam id elit morbi ipsum mauris. Non dapibus urna platea elementum fusce vulputate.',
+    subtitle: 'Project Notes',
+    bio: 'Anonymous LibreChat posts cover shared guides, maintenance notes, and updates that belong to the project rather than a single named author.',
     avatar: '/images/people/anon.png',
     socials: [{ label: 'Email', url: 'mailto:contact@librechat.ai' }],
   },
