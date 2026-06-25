@@ -14,9 +14,8 @@ const locales = LOCALIZED_HOME_LOCALES.map((locale) => ({
 /**
  * Language switcher context for the landing page. Mirrors DocsI18nProvider but
  * routes between the home URLs: the default language lives at `/` (no prefix,
- * matching hideLocale: 'default-locale') and translated home locales live at
- * `/<locale>`. Docs-only locales are omitted until their UI/home dictionary
- * exists, so the switcher never advertises an English fallback page as localized.
+ * matching hideLocale: 'default-locale') and every other implemented locale
+ * lives at `/<locale>`.
  */
 export function HomeI18nProvider({ locale, children }: { locale: string; children: ReactNode }) {
   const router = useRouter()
