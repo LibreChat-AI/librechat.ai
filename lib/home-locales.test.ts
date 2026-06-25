@@ -6,10 +6,15 @@ import {
   localizedHomeAlternates,
   localizedHomeHref,
 } from './i18n'
+import { UI_DICTIONARY_LOCALES } from './ui-i18n'
 
 describe('localized home locales', () => {
   it('exposes home pages for every implemented locale', () => {
     expect([...LOCALIZED_HOME_LOCALES]).toEqual(i18n.languages)
+  })
+
+  it('has a custom UI dictionary for every implemented locale', () => {
+    expect(UI_DICTIONARY_LOCALES).toEqual(i18n.languages)
   })
 
   it('localizes every non-default implemented home page', () => {
