@@ -1,6 +1,6 @@
 import type { NextRequest } from 'next/server'
 import { describe, expect, it } from 'vitest'
-import { i18n, LOCALIZED_HOME_LOCALES, LOCALE_COOKIE } from '@/lib/i18n'
+import { LOCALIZED_HOME_LOCALES, LOCALE_COOKIE } from '@/lib/i18n'
 import { preferredLocale } from '../proxy'
 
 function requestWithPreferences({
@@ -21,13 +21,13 @@ function requestWithPreferences({
 }
 
 describe('preferredLocale', () => {
-  it('treats docs-only locale cookies as an explicit default-home preference', () => {
+  it('honors implemented locale cookies for home preference', () => {
     const request = requestWithPreferences({
       cookie: 'pt-BR',
       acceptLanguage: 'de-DE,de;q=0.9',
     })
 
-    expect(preferredLocale(request, LOCALIZED_HOME_LOCALES)).toBe(i18n.defaultLanguage)
+    expect(preferredLocale(request, LOCALIZED_HOME_LOCALES)).toBe('pt-BR')
   })
 
   it('uses Accept-Language when there is no locale cookie', () => {

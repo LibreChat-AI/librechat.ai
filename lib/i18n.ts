@@ -33,14 +33,13 @@ export const i18n: I18nConfig = {
 }
 
 /**
- * Locales with complete UI/home dictionaries. Docs content can be translated
- * before the landing page chrome is, so keep home routes and home hreflang
- * alternates limited to locales that do not fall back to English UI strings.
+ * Every implemented locale gets the same route surface: home page, language
+ * switcher, browser-language detection, hreflang alternates, and docs links.
  */
-export const LOCALIZED_HOME_LOCALES = ['en', 'zh', 'es', 'fr', 'de', 'ja'] as const
+export const LOCALIZED_HOME_LOCALES = i18n.languages as readonly string[]
 
 export function hasLocalizedHome(lang?: string): boolean {
-  return !!lang && (LOCALIZED_HOME_LOCALES as readonly string[]).includes(lang)
+  return !!lang && (LOCALIZED_HOME_LOCALES).includes(lang)
 }
 
 /**
@@ -61,9 +60,8 @@ export function localizedDocsHref(href: string, lang?: string): string {
 
 /**
  * The landing-page URL for a locale. The default language lives at `/` (no
- * prefix, matching `hideLocale: 'default-locale'`); translated home locales
- * live at `/<locale>`. Docs-only locales intentionally return `/` until they
- * have complete UI/home dictionaries.
+ * prefix, matching `hideLocale: 'default-locale'`); every other implemented
+ * locale lives at `/<locale>`.
  */
 export function localizedHomeHref(lang?: string): string {
   if (!lang || lang === i18n.defaultLanguage || !hasLocalizedHome(lang)) return '/'
