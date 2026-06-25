@@ -1,4 +1,4 @@
-import { chromium, type Browser, type BrowserContext } from 'playwright'
+import { chromium, type Browser, type BrowserContext, type Page } from 'playwright'
 import { mkdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import {
@@ -32,26 +32,38 @@ const SELECTORS = {
 const DISABLE_MOTION_CSS =
   '*,*::before,*::after{transition:none!important;animation:none!important;caret-color:transparent!important;scroll-behavior:auto!important}'
 
+const NAVIGATION_TIMEOUT = 60_000
+const POST_LOGIN_TIMEOUT = 45_000
+const READY_STATE_TIMEOUT = 15_000
+
+async function openAppPage(page: Page, url: string, label: string) {
+  console.log(`loading ${label}: ${url}`)
+  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: NAVIGATION_TIMEOUT })
+  await page.waitForLoadState('load', { timeout: READY_STATE_TIMEOUT }).catch(() => {
+    console.warn(`${label}: load event did not settle within ${READY_STATE_TIMEOUT}ms`)
+  })
+}
+
 async function login(browser: Browser) {
   const context = await browser.newContext()
-  const page = await context.newPage()
-  await page.goto(`${baseURL}/login`, { waitUntil: 'networkidle' })
-  await page.fill(SELECTORS.email, EMAIL!)
-  await page.fill(SELECTORS.password, PASSWORD!)
-  await page.click(SELECTORS.submit)
-  // Logged-in app routes are under /c/...; fall back to network idle if URL differs.
-  await page
-    .waitForURL(`${baseURL}/c/**`, { timeout: 30_000 })
-    .catch(() => page.waitForLoadState('networkidle'))
-  // Hard-fail if we are still on the login page (bad credentials, rate limit,
-  // etc.) so withRetry retries and ultimately exits non-zero instead of
-  // capturing screenshots of the login/error screen.
-  if (new URL(page.url()).pathname.startsWith('/login')) {
-    throw new Error(`Login failed: still on ${page.url()} after submitting credentials`)
+  try {
+    const page = await context.newPage()
+    await openAppPage(page, `${baseURL}/login`, 'login')
+    await page.waitForSelector(SELECTORS.email, { timeout: 20_000 })
+    await page.fill(SELECTORS.email, EMAIL!)
+    await page.fill(SELECTORS.password, PASSWORD!)
+    await page.click(SELECTORS.submit)
+    await page.waitForURL(`${baseURL}/c/**`, { timeout: POST_LOGIN_TIMEOUT }).catch(() => undefined)
+    // Hard-fail if we are still on the login page (bad credentials, rate limit,
+    // etc.) so withRetry retries and ultimately exits non-zero instead of
+    // capturing screenshots of the login/error screen.
+    if (new URL(page.url()).pathname.startsWith('/login')) {
+      throw new Error(`Login failed: still on ${page.url()} after submitting credentials`)
+    }
+    return await context.storageState()
+  } finally {
+    await context.close()
   }
-  const state = await context.storageState()
-  await context.close()
-  return state
 }
 
 async function captureVariant(
@@ -68,23 +80,26 @@ async function captureVariant(
     colorScheme: variant.theme,
   })
   await context.addInitScript(themeBootstrap(variant.theme))
-  const page = await context.newPage()
-  await page.goto(`${baseURL}/c/${CONVERSATION_ID}`, { waitUntil: 'networkidle' })
-  await page.waitForSelector(SELECTORS.message, { timeout: 20_000 })
-  await page.addStyleTag({ content: DISABLE_MOTION_CSS })
-  await page.evaluate((zoom) => {
-    document.documentElement.style.setProperty('zoom', String(zoom))
-  }, ZOOM)
-  // Await web fonts without returning a non-serializable value to Playwright.
-  await page.evaluate(async () => {
-    await document.fonts.ready
-  })
-  await page.waitForLoadState('networkidle')
-  const file = outputPath(variant)
-  await mkdir(dirname(file), { recursive: true })
-  await page.screenshot({ path: file, animations: 'disabled' })
-  await context.close()
-  console.log(`captured ${variant.name} -> ${variant.outputFile}`)
+  try {
+    const page = await context.newPage()
+    await openAppPage(page, `${baseURL}/c/${CONVERSATION_ID}`, variant.name)
+    await page.waitForSelector(SELECTORS.message, { timeout: 30_000 })
+    await page.addStyleTag({ content: DISABLE_MOTION_CSS })
+    await page.evaluate((zoom) => {
+      document.documentElement.style.setProperty('zoom', String(zoom))
+    }, ZOOM)
+    // Await web fonts without returning a non-serializable value to Playwright.
+    await page.evaluate(async () => {
+      await document.fonts.ready
+    })
+    await page.waitForTimeout(500)
+    const file = outputPath(variant)
+    await mkdir(dirname(file), { recursive: true })
+    await page.screenshot({ path: file, animations: 'disabled' })
+    console.log(`captured ${variant.name} -> ${variant.outputFile}`)
+  } finally {
+    await context.close()
+  }
 }
 
 async function withRetry<T>(label: string, fn: () => Promise<T>, attempts = 2): Promise<T> {
