@@ -33,9 +33,8 @@ export function preferredLocale(
   const cookie = request.cookies.get(LOCALE_COOKIE)?.value
   if (cookie) {
     if (locales.includes(cookie)) return cookie
-    // A valid docs-only locale cookie is still an explicit language choice; on
-    // `/`, keep those readers on the default home instead of falling through to
-    // an unrelated Accept-Language redirect.
+    // A valid implemented locale cookie is still an explicit language choice,
+    // even if the caller passes a narrower locale set.
     if (i18n.languages.includes(cookie)) return i18n.defaultLanguage
   }
 
@@ -73,9 +72,8 @@ export default function proxy(request: NextRequest, event: NextFetchEvent) {
   }
 
   // Browser-language auto-detection, scoped to the prefix-less home page. A
-  // reader whose browser prefers a locale with a translated landing page is
-  // forwarded to `/<locale>`; docs-only locales stay on `/` until their UI/home
-  // dictionary exists. Deliberately limited to `/`: the content routes (/docs,
+  // reader whose browser prefers an implemented non-default locale is forwarded
+  // to `/<locale>`. Deliberately limited to `/`: the content routes (/docs,
   // /blog, …) are shared-CDN-cached, and an Accept-Language redirect there
   // would be cached and served to every reader regardless of their language.
   //
