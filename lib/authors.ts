@@ -53,6 +53,7 @@ export const authors: Author[] = [
       { label: 'Website', url: 'https://www.dustinhealy.com/' },
       { label: 'GitHub', url: 'https://github.com/dustinhealy' },
       { label: 'LinkedIn', url: 'https://www.linkedin.com/in/dustinhealy' },
+      { label: 'Email', url: 'mailto:dustin@librechat.ai' },
     ],
   },
   {
