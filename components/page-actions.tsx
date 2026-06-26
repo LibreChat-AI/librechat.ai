@@ -1,26 +1,37 @@
 'use client'
 import { useCallback, useMemo, useRef, useState, type JSX } from 'react'
-import { Check, ChevronDown, Copy, ExternalLinkIcon } from 'lucide-react'
+import { Check, ChevronDown, Copy, ExternalLinkIcon, XCircle } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { cva } from 'class-variance-authority'
 import { getUI } from '@/lib/ui-i18n'
 
+type CopyStatus = 'idle' | 'pending' | 'success' | 'error'
+
 function useCopyButton(
   onCopy: () => Promise<void> | void,
-): [checked: boolean, onClick: () => void] {
-  const [checked, setChecked] = useState(false)
+): [status: CopyStatus, onClick: () => void] {
+  const [status, setStatus] = useState<CopyStatus>('idle')
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   const onClick = useCallback(() => {
-    void Promise.resolve(onCopy()).then(() => {
-      setChecked(true)
-      clearTimeout(timeoutRef.current)
-      timeoutRef.current = setTimeout(() => setChecked(false), 1500)
-    })
+    clearTimeout(timeoutRef.current)
+    setStatus('pending')
+
+    void Promise.resolve(onCopy())
+      .then(() => {
+        setStatus('success')
+      })
+      .catch((error) => {
+        console.error('Copy failed:', error)
+        setStatus('error')
+      })
+      .finally(() => {
+        timeoutRef.current = setTimeout(() => setStatus('idle'), 2000)
+      })
   }, [onCopy])
 
-  return [checked, onClick]
+  return [status, onClick]
 }
 
 const fdButtonVariants = cva(
@@ -42,28 +53,26 @@ const cache = new Map<string, string>()
 
 export function LLMCopyButton({ markdownUrl, lang }: { markdownUrl: string; lang?: string }) {
   const t = getUI(lang).pageActions
-  const [isLoading, setLoading] = useState(false)
-  const [checked, onClick] = useCopyButton(async () => {
+  const [copyStatus, onClick] = useCopyButton(async () => {
     const cached = cache.get(markdownUrl)
     if (cached) return navigator.clipboard.writeText(cached)
 
-    setLoading(true)
+    const res = await fetch(markdownUrl)
+    if (!res.ok) throw new Error(`Failed to fetch Markdown: ${res.status}`)
 
-    try {
-      await navigator.clipboard.write([
-        new ClipboardItem({
-          'text/plain': fetch(markdownUrl).then(async (res) => {
-            const content = await res.text()
-            cache.set(markdownUrl, content)
-
-            return content
-          }),
-        }),
-      ])
-    } finally {
-      setLoading(false)
-    }
+    const content = await res.text()
+    cache.set(markdownUrl, content)
+    await navigator.clipboard.writeText(content)
   })
+  const isLoading = copyStatus === 'pending'
+  const buttonText =
+    copyStatus === 'pending'
+      ? t.copying
+      : copyStatus === 'success'
+        ? t.copied
+        : copyStatus === 'error'
+          ? t.copyFailed
+          : t.copyMarkdown
 
   return (
     <button
@@ -78,8 +87,14 @@ export function LLMCopyButton({ markdownUrl, lang }: { markdownUrl: string; lang
       onClick={onClick}
       aria-label={t.copyMarkdownAria}
     >
-      {checked ? <Check /> : <Copy />}
-      {t.copyMarkdown}
+      {copyStatus === 'success' ? (
+        <Check className="text-emerald-500" />
+      ) : copyStatus === 'error' ? (
+        <XCircle className="text-red-500" />
+      ) : (
+        <Copy />
+      )}
+      {buttonText}
     </button>
   )
 }

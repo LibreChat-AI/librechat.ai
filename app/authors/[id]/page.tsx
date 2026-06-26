@@ -1,8 +1,12 @@
 import Image from 'next/image'
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
-import { ArrowLeft, ExternalLink } from 'lucide-react'
+import type { CSSProperties } from 'react'
+import { ArrowLeft } from 'lucide-react'
+import { AuthorSocialLinks } from '@/components/authors/AuthorSocialLinks'
 import { authors, getAuthorById } from '@/lib/authors'
+import { getAuthorAccent } from '@/lib/author-profile'
+import { cn } from '@/lib/utils'
 import type { Metadata } from 'next'
 
 interface AuthorPageProps {
@@ -42,52 +46,87 @@ export default async function AuthorPage({ params }: AuthorPageProps) {
     notFound()
   }
 
+  const accent = getAuthorAccent(author)
+
   return (
-    <main id="main-content" tabIndex={-1} className="mx-auto max-w-2xl px-4 py-16">
-      <nav aria-label="Breadcrumb" className="mb-8">
-        <Link
-          href="/authors"
-          className="inline-flex items-center gap-1.5 text-sm text-fd-muted-foreground hover:text-fd-foreground"
-        >
-          <ArrowLeft className="size-4" aria-hidden="true" />
-          All authors
-        </Link>
-      </nav>
+    <main
+      id="main-content"
+      tabIndex={-1}
+      className="relative isolate min-h-dvh overflow-hidden bg-background"
+    >
+      <div
+        aria-hidden="true"
+        className="absolute inset-0 -z-10 bg-[linear-gradient(115deg,hsl(var(--background))_0%,hsl(var(--muted))_52%,hsl(var(--background))_100%)]"
+      />
+      <div
+        aria-hidden="true"
+        className="absolute inset-0 -z-10 opacity-50 [background-image:linear-gradient(hsl(var(--border))_1px,transparent_1px),linear-gradient(90deg,hsl(var(--border))_1px,transparent_1px)] [background-size:48px_48px]"
+      />
 
-      <article className="text-center">
-        <Image
-          src={author.avatar}
-          alt={`${author.name}'s profile picture`}
-          width={120}
-          height={120}
-          className="mx-auto rounded-full"
-          priority
-        />
-        <h1 className="mt-6 text-3xl font-bold tracking-tight">{author.name}</h1>
-        <p className="mt-2 text-fd-muted-foreground">{author.subtitle}</p>
-        <p className="mt-6 text-fd-muted-foreground">{author.bio}</p>
+      <section className="px-4 py-10 sm:px-6 sm:py-14 lg:px-8">
+        <div className="mx-auto max-w-6xl">
+          <nav aria-label="Breadcrumb">
+            <Link
+              href="/authors"
+              className="author-social-link author-hero-piece inline-flex min-h-11 items-center gap-2 rounded-full bg-background/80 px-4 py-2.5 text-sm font-medium text-muted-foreground backdrop-blur-xl hover:bg-muted hover:text-foreground active:scale-[0.96] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+              style={{ '--author-index': 0 } as CSSProperties}
+            >
+              <ArrowLeft className="size-4" aria-hidden="true" />
+              All authors
+            </Link>
+          </nav>
 
-        {author.socials.length > 0 && (
-          <section aria-label="Social links" className="mt-8">
-            <h2 className="sr-only">Social links</h2>
-            <ul className="flex flex-wrap justify-center gap-3">
-              {author.socials.map((social) => (
-                <li key={social.label}>
-                  <a
-                    href={social.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1.5 rounded-md border border-fd-border px-3 py-1.5 text-sm transition-colors hover:bg-fd-accent"
-                  >
-                    {social.label}
-                    <ExternalLink className="size-3" aria-hidden="true" />
-                  </a>
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
-      </article>
+          <article className="grid gap-10 py-12 lg:grid-cols-[0.8fr_1.2fr] lg:items-end lg:py-16">
+            <div
+              className="author-detail-visual author-hero-piece relative mx-auto w-full max-w-sm lg:mx-0"
+              style={{ '--author-index': 1 } as CSSProperties}
+            >
+              <div
+                aria-hidden="true"
+                className={cn(
+                  'author-detail-glow absolute inset-0 translate-x-4 translate-y-4 rounded-[48px] bg-gradient-to-br opacity-80',
+                  accent.wash,
+                )}
+              />
+              <Image
+                src={author.avatar}
+                alt={`${author.name}'s profile picture`}
+                width={480}
+                height={480}
+                priority
+                className={cn(
+                  'author-detail-image relative aspect-square w-full rounded-[42px] object-cover outline outline-1 -outline-offset-1 outline-black/10 ring-4 dark:outline-white/10',
+                  accent.imageRing,
+                )}
+              />
+            </div>
+
+            <div className="author-hero-piece" style={{ '--author-index': 2 } as CSSProperties}>
+              <span
+                className={cn(
+                  'inline-flex rounded-full px-3.5 py-1.5 text-sm font-medium ring-1',
+                  accent.badge,
+                )}
+              >
+                {author.subtitle}
+              </span>
+              <h1 className="mt-5 text-balance text-5xl font-semibold leading-tight text-foreground sm:text-6xl">
+                {author.name}
+              </h1>
+              <p className="mt-6 max-w-3xl text-pretty text-lg leading-8 text-muted-foreground">
+                {author.bio}
+              </p>
+
+              {author.socials.length > 0 && (
+                <section aria-label="Social links" className="mt-8">
+                  <h2 className="sr-only">Social links</h2>
+                  <AuthorSocialLinks socials={author.socials} authorName={author.name} showLabels />
+                </section>
+              )}
+            </div>
+          </article>
+        </div>
+      </section>
     </main>
   )
 }
