@@ -61,6 +61,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   const rawScarfId = process.env.NEXT_PUBLIC_SCARF_PIXEL_ID ?? ''
   const scarfPixelId = /^[\w-]+$/.test(rawScarfId) ? rawScarfId : ''
   const askAIEnabled = Boolean(process.env.OPENROUTER_API_KEY)
+  const plausibleEnabled = process.env.NODE_ENV === 'production'
 
   const cwvProjectId = process.env.NEXT_PUBLIC_CWV_PROJECT_ID?.trim() || DEFAULT_CWV_PROJECT_ID
   const cwvEndpoint = normalizeCwvEndpoint(
@@ -98,24 +99,28 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         </Banner>
         <Provider>{children}</Provider>
         {askAIEnabled && <AskAILoader />}
-        {/* Privacy-friendly analytics by Plausible */}
-        <Script
-          id="plausible-init"
-          strategy="beforeInteractive"
-          dangerouslySetInnerHTML={{
-            __html: `
-              window.plausible=window.plausible||function(){(plausible.q=plausible.q||[]).push(arguments)},plausible.init=plausible.init||function(i){plausible.o=i||{}};
-              plausible.init()
-            `,
-          }}
-        />
-        <Script
-          async
-          id="plausible-script"
-          src="/js/pa-AxQn4zbc0KTWDDkxjlFGs.js"
-          data-api="/api/e"
-          strategy="afterInteractive"
-        />
+        {plausibleEnabled && (
+          <>
+            {/* Privacy-friendly analytics by Plausible */}
+            <Script
+              id="plausible-init"
+              strategy="beforeInteractive"
+              dangerouslySetInnerHTML={{
+                __html: `
+                  window.plausible=window.plausible||function(){(plausible.q=plausible.q||[]).push(arguments)},plausible.init=plausible.init||function(i){plausible.o=i||{}};
+                  plausible.init()
+                `,
+              }}
+            />
+            <Script
+              async
+              id="plausible-script"
+              src="/js/pa-AxQn4zbc0KTWDDkxjlFGs.js"
+              data-api="/api/e"
+              strategy="afterInteractive"
+            />
+          </>
+        )}
         {cwvEnabled && (
           <CoreWebVitalsMonitor
             projectId={cwvProjectId}

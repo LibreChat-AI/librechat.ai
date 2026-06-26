@@ -39,7 +39,7 @@ export const i18n: I18nConfig = {
 export const LOCALIZED_HOME_LOCALES = i18n.languages as readonly string[]
 
 export function hasLocalizedHome(lang?: string): boolean {
-  return !!lang && (LOCALIZED_HOME_LOCALES).includes(lang)
+  return !!lang && LOCALIZED_HOME_LOCALES.includes(lang)
 }
 
 /**
