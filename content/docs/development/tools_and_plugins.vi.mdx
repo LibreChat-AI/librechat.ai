@@ -1,0 +1,360 @@
+---
+title: Công cụ và Plugin
+icon: Wrench
+description: >-
+  Tài liệu này hướng dẫn bạn cách tạo các plugin tùy chỉnh cho LibreChat bằng
+  cách mở rộng lớp `Tool` của LangChain. Bạn sẽ học cách sử dụng các API và hàm
+  khác nhau với plugin của mình, cũng như cách tích hợp chúng với framework
+  LangChain.
+---
+
+**Trang này đã lỗi thời. Vui lòng tham khảo [Hướng dẫn về Agents](/docs/features/agents) để biết thông tin cập nhật nhất về cách sử dụng công cụ.**
+
+**Bạn nên sử dụng [Model Context Protocol](/docs/features/agents#model-context-protocol-mcp) hoặc [OpenAPI Actions](/docs/features/agents#actions) để tích hợp các công cụ tùy chỉnh.**
+
+# Tạo Tools/Plugins của riêng bạn [#making-your-own-toolsplugins]
+
+<Callout type="warning" title="Cảnh báo">
+  Vui lòng tham khảo các công cụ mới nhất được sử dụng với các trợ lý trong `api/app/clients/tools/structured/` vì các plugin sẽ sớm bị loại bỏ để thay thế bằng các công cụ trong tương lai gần.
+</Callout>
+
+Việc tạo các plugin tùy chỉnh cho dự án này bao gồm việc mở rộng lớp `Tool` từ mô-đun `langchain/tools`.
+
+**Lưu ý:** Tôi sẽ sử dụng từ plugin thay thế cho tool, vì từ sau mang tính đặc thù của LangChain và chúng ta chủ yếu tuân thủ theo thư viện này.
+
+Về cơ bản, bạn đang tạo ra DynamicTools theo ngôn ngữ của LangChain. Xem **[tài liệu LangChainJS](https://js.langchain.com/docs/how_to/custom_tools/)** để biết thêm thông tin.
+
+Hướng dẫn này sẽ giúp bạn thực hiện quy trình tạo các plugin tùy chỉnh của riêng mình, sử dụng các công cụ `StableDiffusionAPI` và `WolframAlphaAPI` làm ví dụ.
+
+Khi sử dụng Functions Agent (chế độ mặc định cho các plugin), các công cụ sẽ được chuyển đổi thành **[OpenAI functions](https://openai.com/blog/function-calling-and-other-api-updates)**; trong mọi trường hợp, các plugin/công cụ được gọi theo điều kiện dựa trên việc LLM tạo ra một định dạng cụ thể mà chúng tôi phân tích cú pháp.
+
+Việc triển khai plugin phổ biến nhất là thực hiện một lệnh gọi API dựa trên đầu vào ngôn ngữ tự nhiên từ AI, nhưng hầu như không có giới hạn nào trong các trường hợp sử dụng theo lập trình.
+
+---
+
+## Những điểm chính cần lưu ý [#key-takeaways]
+
+Dưới đây là những điểm chính cần lưu ý để tạo plugin của riêng bạn:
+
+**1.** [**Nhập các mô-đun bắt buộc:**](#step-1-import-required-modules) Nhập các mô-đun cần thiết cho plugin của bạn, bao gồm lớp `Tool` từ `langchain/tools` và bất kỳ mô-đun nào khác mà plugin của bạn có thể cần.
+
+**2.** [**Định nghĩa lớp Plugin của bạn:**](#step-2-define-your-tool-class) Định nghĩa một lớp cho plugin của bạn kế thừa từ lớp `Tool`. Thiết lập các thuộc tính `name` và `description` trong hàm khởi tạo (constructor). Nếu plugin của bạn yêu cầu thông tin xác thực hoặc các biến khác, hãy thiết lập chúng từ tham số fields hoặc từ một phương thức truy xuất chúng từ môi trường process của bạn. Lưu ý: nếu plugin của bạn yêu cầu các hướng dẫn dài và chi tiết, bạn có thể thêm thuộc tính `description_for_model` và làm cho `description` trở nên tổng quát hơn.
+
+**3.** [**Định nghĩa các phương thức hỗ trợ:**](#step-3-define-helper-methods) Định nghĩa các phương thức hỗ trợ trong lớp của bạn để xử lý các tác vụ cụ thể nếu cần.
+
+**4.** [**Triển khai phương thức `_call`:**](#step-4-implement-the-_call-method) Triển khai phương thức `_call` nơi định nghĩa chức năng chính của plugin. Phương thức này được gọi khi mô hình ngôn ngữ quyết định sử dụng plugin của bạn. Nó sẽ nhận tham số `input` và trả về một kết quả. Nếu xảy ra lỗi, hàm nên trả về một chuỗi đại diện cho lỗi đó thay vì ném ra một ngoại lệ. Nếu plugin của bạn yêu cầu nhiều đầu vào từ LLM, hãy đọc phần [StructuredTools](#StructuredTools).
+
+**5.** [**Xuất Plugin của bạn và nhập vào handleTools.js:**](#step-5-export-your-plugin-and-import-into-handletoolsjs) Xuất plugin của bạn và nhập nó vào `handleTools.js`. Thêm plugin của bạn vào đối tượng `toolConstructors` trong hàm `loadTools`. Nếu plugin của bạn yêu cầu khởi tạo nâng cao hơn, hãy thêm nó vào đối tượng `customConstructors`.
+
+**6.** [**Xuất Plugin của bạn vào index.js:**](#step-6-export-your-plugin-into-indexjs) Xuất plugin của bạn vào `index.js` trong thư mục `tools`. Thêm plugin của bạn vào `module.exports` của `index.js`, vì vậy bạn cũng cần khai báo nó dưới dạng `const` trong tệp này.
+
+**7.** [**Thêm Plugin của bạn vào manifest.json:**](#step-7-add-your-plugin-to-manifestjson) Thêm plugin của bạn vào `manifest.json`. Tuân thủ định dạng nghiêm ngặt cho từng trường của đối tượng "plugin". Nếu plugin của bạn yêu cầu xác thực, hãy thêm các chi tiết đó vào `authConfig` dưới dạng một mảng. `pluginKey` phải khớp với `name` của lớp Tool mà bạn đã tạo, và thuộc tính `authField` phải khớp với tên biến process.env.
+
+Hãy nhớ rằng, chìa khóa để tạo một plugin tùy chỉnh là mở rộng lớp `Tool` và triển khai phương thức `_call`. Phương thức `_call` là nơi bạn xác định chức năng của plugin. Bạn cũng có thể định nghĩa các phương thức và thuộc tính hỗ trợ trong lớp của mình để phục vụ cho chức năng của plugin.
+
+**Lưu ý: Bạn có thể tìm thấy tất cả các tệp được đề cập trong hướng dẫn này trong thư mục `.\api\app\langchain\tools`.**
+
+---
+
+## StructuredTools [#structuredtools]
+
+**Multi-Input Plugins**
+
+Nếu bạn muốn tạo một plugin có thể tận dụng nhiều đầu vào từ LLM thay vì chỉ một chuỗi đầu vào duy nhất như chúng ta sẽ xem xét, bạn cần tạo một **[StructuredTool](https://blog.langchain.dev/structured-tools/)** của LangChain. Một hướng dẫn chi tiết cho việc này đang được thực hiện, nhưng hiện tại, bạn có thể tham khảo cách tôi đã tạo các StructuredTools trong thư mục này: `api\app\clients\tools\structured\`. Hướng dẫn này là nền tảng để hiểu về StructuredTools, và bạn nên tiếp tục đọc để hiểu rõ hơn về các công cụ của LangChain trước. Bài blog được liên kết ở trên cũng rất hữu ích sau khi bạn đã đọc xong hướng dẫn này.
+
+---
+
+## Bước 1: Nhập các mô-đun cần thiết [#step-1-import-required-modules]
+
+Bắt đầu bằng việc import các module cần thiết. Việc này sẽ bao gồm lớp `Tool` từ `langchain/tools` và bất kỳ module nào khác mà công cụ của bạn có thể cần. Ví dụ:
+
+```javascript
+const { Tool } = require('langchain/tools')
+// ... whatever else you need
+```
+
+## Bước 2: Định nghĩa lớp Tool của bạn [#step-2-define-your-tool-class]
+
+Tiếp theo, hãy định nghĩa một lớp cho plugin của bạn kế thừa từ lớp `Tool`. Lớp này cần có một hàm khởi tạo (constructor) gọi phương thức `super()` và thiết lập các thuộc tính `name` và `description`. Các thuộc tính này sẽ được mô hình ngôn ngữ sử dụng để xác định thời điểm gọi công cụ của bạn và với những tham số nào.
+
+**Quan trọng:** bạn nên thiết lập thông tin xác thực/các biến cần thiết từ tham số fields, hoặc thay thế bằng một phương thức lấy chúng từ môi trường process của bạn
+
+```javascript
+class StableDiffusionAPI extends Tool {
+  constructor(fields) {
+    super();
+    this.name = 'stable-diffusion';
+    this.url = fields.SD_WEBUI_URL || this.getServerURL(); // <--- important!
+    this.description = `You can generate images with 'stable-diffusion'. This tool is exclusively for visual content...`;
+  }
+  ...
+}
+```
+
+**Tùy chọn:** Kể từ phiên bản v0.5.8, khi sử dụng Functions, bạn có thể thêm các hướng dẫn chi tiết và dài hơn với thuộc tính `description_for_model`. Khi thực hiện việc này, bạn nên làm cho thuộc tính `description` trở nên tổng quát hơn để tối ưu hóa token. Mỗi dòng trong thuộc tính này được thêm tiền tố `// ` để phản ánh cách prompt được tạo cho ChatGPT (chat.openai.com). Định dạng này bám sát hơn với kỹ thuật prompt của các plugin ChatGPT chính thức.
+
+```js
+// ...
+this.description_for_model = `// Generate images and visuals using text with 'stable-diffusion'.
+// Guidelines:
+// - ALWAYS use {{"prompt": "7+ detailed keywords", "negative_prompt": "7+ detailed keywords"}} structure for queries.
+// - Visually describe the moods, details, structures, styles, and/or proportions of the image. Remember, the focus is on visual attributes.
+// - Craft your input by "showing" and not "telling" the imagery. Think in terms of what you'd want to see in a photograph or a painting.
+// - Here's an example for generating a realistic portrait photo of a man:
+// "prompt":"photo of a man in black clothes, half body, high detailed skin, coastline, overcast weather, wind, waves, 8k uhd, dslr, soft lighting, high quality, film grain, Fujifilm XT3"
+// "negative_prompt":"semi-realistic, cgi, 3d, render, sketch, cartoon, drawing, anime, out of frame, low quality, ugly, mutation, deformed"
+// - Generate images only once per human query unless explicitly requested by the user`
+this.description =
+  "You can generate images using text with 'stable-diffusion'. This tool is exclusively for visual content."
+// ...
+```
+
+Trong constructor, lưu ý rằng chúng ta đang lấy một biến nhạy cảm từ đối tượng fields hoặc từ phương thức **getServerURL** mà chúng ta định nghĩa để truy cập vào một biến môi trường.
+
+```js
+this.url = fields.SD_WEBUI_URL || this.getServerURL()
+```
+
+Bất kỳ thông tin xác thực cần thiết nào cũng được truyền qua `fields` khi người dùng cung cấp từ giao diện người dùng (frontend); nếu không, quản trị viên có thể "ủy quyền" plugin cho tất cả người dùng thông qua các biến môi trường. Tất cả thông tin xác thực được truyền từ giao diện người dùng đều được mã hóa.
+
+```js
+// It's recommended you follow this convention when accessing environment variables.
+  getServerURL() {
+    const url = process.env.SD_WEBUI_URL || '';
+    if (!url) {
+      throw new Error('Missing SD_WEBUI_URL environment variable.');
+    }
+    return url;
+  }
+```
+
+## Bước 3: Xác định các phương thức hỗ trợ [#step-3-define-helper-methods]
+
+Bạn có thể định nghĩa các phương thức hỗ trợ trong lớp của mình để xử lý các tác vụ cụ thể nếu cần. Ví dụ, lớp `StableDiffusionAPI` bao gồm các phương thức như `replaceNewLinesWithSpaces`, `getMarkdownImageUrl` và `getServerURL` để xử lý nhiều tác vụ khác nhau.
+
+```javascript
+class StableDiffusionAPI extends Tool {
+  ...
+  replaceNewLinesWithSpaces(inputString) {
+    return inputString.replace(/\r\n|\r|\n/g, ' ');
+  }
+  ...
+}
+```
+
+## Bước 4: Triển khai phương thức `_call` [#step-4-implement-the-_call-method]
+
+Phương thức `_call` là nơi triển khai chức năng chính của plugin của bạn. Phương thức này được gọi khi mô hình ngôn ngữ quyết định sử dụng plugin của bạn. Nó sẽ nhận một tham số `input` và trả về một kết quả.
+
+> Trong một Tool cơ bản, LLM sẽ tạo ra một giá trị chuỗi làm đầu vào. Nếu plugin của bạn yêu cầu nhiều đầu vào từ LLM, hãy đọc phần **[StructuredTools](#StructuredTools)**.
+
+```javascript
+class StableDiffusionAPI extends Tool {
+  ...
+  async _call(input) {
+    // Your tool's functionality goes here
+    ...
+    return this.result;
+  }
+}
+```
+
+**Quan trọng:** Hàm \_call là hàm mà tác nhân (agent) sẽ thực sự gọi. Khi xảy ra lỗi, hàm nên trả về một chuỗi đại diện cho lỗi đó bất cứ khi nào có thể, thay vì ném ra một lỗi (throwing an error). Điều này cho phép lỗi được truyền đến LLM và LLM có thể quyết định cách xử lý. Nếu một lỗi bị ném ra, quá trình thực thi của tác nhân sẽ dừng lại.
+
+## Bước 5: Xuất Plugin của bạn và nhập vào handleTools.js [#step-5-export-your-plugin-and-import-into-handletoolsjs]
+
+**Quá trình này sẽ được tự động hóa một phần trong tương lai, miễn là bạn có plugin/công cụ của mình trong `api\app\langchain\tools`**
+
+```javascript
+// Export
+module.exports = StableDiffusionAPI
+```
+
+```js
+/* api\app\langchain\tools\handleTools.js */
+const StableDiffusionAPI = require('./StableDiffusion');
+...
+```
+
+Trong handleTools.js, hãy tìm phần đầu của hàm `loadTools` và thêm plugin/công cụ của bạn vào đối tượng toolConstructors.
+
+```js
+const loadTools = async ({ user, model, tools = [], options = {} }) => {
+  const toolConstructors = {
+    calculator: Calculator,
+    google: GoogleSearchAPI,
+    wolfram: WolframAlphaAPI,
+    'dall-e': OpenAICreateImage,
+    'stable-diffusion': StableDiffusionAPI // <----- Newly Added. Note: the key is the 'name' provided in the class.
+    // We will now refer to this name as the `pluginKey`
+  };
+```
+
+Nếu lớp Tool của bạn yêu cầu khởi tạo nâng cao hơn, bạn sẽ thêm nó vào đối tượng customConstructors.
+
+Việc khởi tạo mặc định có thể được thấy trong hàm `loadToolWithAuth`, và hầu hết các plugin tùy chỉnh nên được khởi tạo theo cách này.
+
+Dưới đây là một vài customConstructors, có các cách khởi tạo khác nhau
+
+```javascript
+const customConstructors = {
+  browser: async () => {
+    let openAIApiKey = process.env.OPENAI_API_KEY
+    if (!openAIApiKey) {
+      openAIApiKey = await getUserPluginAuthValue(user, 'OPENAI_API_KEY')
+    }
+    return new WebBrowser({ model, embeddings: new OpenAIEmbeddings({ openAIApiKey }) })
+  },
+  // ...
+  plugins: async () => {
+    return [
+      new HttpRequestTool(),
+      await AIPluginTool.fromPluginUrl(
+        'https://www.klarna.com/.well-known/ai-plugin.json',
+        new ChatOpenAI({ openAIApiKey: options.openAIApiKey, temperature: 0 }),
+      ),
+    ]
+  },
+}
+```
+
+## Bước 6: Xuất Plugin của bạn vào index.js [#step-6-export-your-plugin-into-indexjs]
+
+Tìm `index.js` trong `api/app/clients/tools`. Bạn cần đưa plugin của mình vào `module.exports`, để biên dịch được, bạn cũng sẽ cần khai báo plugin của mình dưới dạng `consts`:
+
+```js
+const StructuredSD = require('./structured/StableDiffusion');
+const StableDiffusionAPI = require('./StableDiffusion');
+...
+module.exports = {
+  ...
+  StableDiffusionAPI,
+  StructuredSD,
+  ...
+}
+```
+
+## Bước 7: Thêm Plugin của bạn vào manifest.json [#step-7-add-your-plugin-to-manifestjson]
+
+Quá trình này sẽ được tự động hóa một phần trong tương lai cùng với bước 5, miễn là bạn đã có plugin/công cụ của mình trong `api\app\langchain\tools` và plugin của bạn có thể được khởi tạo bằng phương thức mặc định.
+
+```json
+  {
+    "name": "Calculator",
+    "pluginKey": "calculator",
+    "description": "Perform simple and complex mathematical calculations.",
+    "icon": "https://i.imgur.com/RHsSG5h.png",
+    "isAuthRequired": "false",
+    "authConfig": []
+  },
+  {
+    "name": "Stable Diffusion",
+    "pluginKey": "stable-diffusion",
+    "description": "Generate photo-realistic images given any text input.",
+    "icon": "https://i.imgur.com/Yr466dp.png",
+    "authConfig": [
+      {
+        "authField": "SD_WEBUI_URL",
+        "label": "Your Stable Diffusion WebUI API URL",
+        "description": "You need to provide the URL of your Stable Diffusion WebUI API. For instructions on how to obtain this, see <a href='url'>Our Docs</a>."
+      }
+    ]
+  },
+```
+
+Mỗi trường trong đối tượng "plugin" đều rất quan trọng. Hãy tuân thủ nghiêm ngặt định dạng này. Nếu plugin của bạn yêu cầu xác thực, bạn sẽ thêm các chi tiết đó vào `authConfig` dưới dạng một mảng vì có thể có nhiều biến xác thực. Xem plugin Calculator để biết ví dụ về plugin không yêu cầu xác thực, trong đó authConfig là một mảng trống (luôn bắt buộc phải có một mảng).
+
+**Lưu ý:** như đã đề cập trước đó, `pluginKey` phải khớp với `name` của lớp Tool mà bạn đã tạo.
+**Lưu ý:** thuộc tính `authField` phải khớp với tên biến trong process.env.
+**Lưu ý:** các mục trong `authConfig` có thể bao gồm `sensitive`. Hãy bỏ qua hoặc đặt nó là `true` cho các khóa API và bí mật. Đặt `sensitive: false` cho các giá trị thiết lập không bảo mật như URL, tên người dùng, tên triển khai hoặc ID dự án để giao diện người dùng hiển thị dưới dạng trường văn bản thuần thay vì trường nhập liệu bí mật.
+
+Dưới đây là ví dụ về một plugin có nhiều hơn một biến thông tin xác thực
+
+```json
+  [
+  {
+    "name": "Google",
+    "pluginKey": "google",
+    "description": "Use Google Search to find information about the weather, news, sports, and more.",
+    "icon": "https://i.imgur.com/SMmVkNB.png",
+    "authConfig": [
+      {
+        "authField": "GOOGLE_CSE_ID",
+        "label": "Google CSE ID",
+        "description": "This is your Google Custom Search Engine ID. For instructions on how to obtain this, see <a href='https://github.com/danny-avila/LibreChat/blob/main/docs/features/plugins/google_search.md'>Our Docs</a>.",
+        "sensitive": false
+      },
+      {
+        "authField": "GOOGLE_SEARCH_API_KEY",
+        "label": "Google API Key",
+        "description": "This is your Google Custom Search API Key. For instructions on how to obtain this, see <a href='https://github.com/danny-avila/LibreChat/blob/main/docs/features/plugins/google_search.md'>Our Docs</a>.",
+        "sensitive": true
+      }
+    ]
+  },
+```
+
+## Ví dụ: Công cụ WolframAlphaAPI [#example-wolframalphaapi-tool]
+
+Dưới đây là một ví dụ khác về công cụ tùy chỉnh, công cụ `WolframAlphaAPI`. Công cụ này sử dụng mô-đun `axios` để thực hiện các yêu cầu HTTP tới Wolfram Alpha API.
+
+```javascript
+const axios = require('axios')
+const { Tool } = require('langchain/tools')
+
+class WolframAlphaAPI extends Tool {
+  constructor(fields) {
+    super()
+    this.name = 'wolfram'
+    this.apiKey = fields.WOLFRAM_APP_ID || this.getAppId()
+    this.description = `Access computation, math, curated knowledge & real-time data through wolframAlpha...`
+  }
+
+  async fetchRawText(url) {
+    try {
+      const response = await axios.get(url, { responseType: 'text' })
+      return response.data
+    } catch (error) {
+      console.error(`Error fetching raw text: ${error}`)
+      throw error
+    }
+  }
+
+  getAppId() {
+    const appId = process.env.WOLFRAM_APP_ID || ''
+    if (!appId) {
+      throw new Error('Missing WOLFRAM_APP_ID environment variable.')
+    }
+    return appId
+  }
+
+  createWolframAlphaURL(query) {
+    const formattedQuery = query.replaceAll(/`/g, '').replaceAll(/\n/g, ' ')
+    const baseURL = 'https://www.wolframalpha.com/api/v1/llm-api'
+    const encodedQuery = encodeURIComponent(formattedQuery)
+    const appId = this.apiKey || this.getAppId()
+    const url = `${baseURL}?input=${encodedQuery}&appid=${appId}`
+    return url
+  }
+
+  async _call(input) {
+    try {
+      const url = this.createWolframAlphaURL(input)
+      const response = await this.fetchRawText(url)
+      return response
+    } catch (error) {
+      if (error.response && error.response.data) {
+        console.log('Error data:', error.response.data)
+        return error.response.data
+      } else {
+        console.log(`Error querying Wolfram Alpha`, error.message)
+        return 'There was an error querying Wolfram Alpha.'
+      }
+    }
+  }
+}
+
+module.exports = WolframAlphaAPI
+```
+
+Trong ví dụ này, lớp `WolframAlphaAPI` có các phương thức hỗ trợ như `fetchRawText`, `getAppId` và `createWolframAlphaURL` để xử lý các tác vụ cụ thể. Phương thức `_call` thực hiện một yêu cầu HTTP tới Wolfram Alpha API và trả về phản hồi.

@@ -1,0 +1,294 @@
+---
+title: Salesforce MCP
+icon: Salesforce
+description: External Client App 및 사용자별 OAuth를 사용하여 LibreChat에서 Salesforce 호스팅 MCP 서버 구성하기
+---
+
+Salesforce 호스팅 MCP 서버를 통해 LibreChat 사용자는 사용자별 OAuth를 사용하여 Salesforce에 연결할 수 있습니다.
+각 도구 호출은 필드 수준 보안, 개체 권한 및 공유 규칙을 포함하여 인증된 Salesforce 사용자의 권한으로 실행됩니다.
+
+<Callout type="warning" title="외부 클라이언트 앱 사용">
+  Salesforce 호스팅 MCP 서버는 External Client App이 필요합니다. 클래식 Salesforce Connected Apps는 호스팅 MCP 인증을 지원하지 않습니다.
+</Callout>
+
+## 구성할 내용 [#what-you-will-configure]
+
+이 가이드는 가장 안전한 첫 번째 연결이기 때문에 읽기 전용 SObject 서버로 시작합니다. 그 후에는 더 광범위한 Salesforce 서버로 전환할 수 있습니다.
+
+| 서버 | 액세스 수준 | 프로덕션 URL | 샌드박스 또는 스크래치 URL |
+| ----------------- | ---------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| SObject Reads | 읽기, 쿼리, 검색, 관계 | `https://api.salesforce.com/platform/mcp/v1/platform/sobject-reads` | `https://api.salesforce.com/platform/mcp/v1/sandbox/platform/sobject-reads` |
+| SObject Mutations | 읽기, 생성, 업데이트, 삭제 불가 | `https://api.salesforce.com/platform/mcp/v1/platform/sobject-mutations` | `https://api.salesforce.com/platform/mcp/v1/sandbox/platform/sobject-mutations` |
+| SObject Deletes | 삭제 중심 워크플로우 | `https://api.salesforce.com/platform/mcp/v1/platform/sobject-deletes` | `https://api.salesforce.com/platform/mcp/v1/sandbox/platform/sobject-deletes` |
+| SObject All | 전체 생성, 읽기, 업데이트, 삭제 | `https://api.salesforce.com/platform/mcp/v1/platform/sobject-all` | `https://api.salesforce.com/platform/mcp/v1/sandbox/platform/sobject-all` |
+
+<Callout type="info" title="OAuth 콜백 경로">
+  LibreChat의 MCP OAuth 콜백 경로는 `BASE_URL/api/mcp/SERVER_NAME/oauth/callback`입니다.
+  `SERVER_NAME`은 `librechat.yaml`의 `mcpServers` 아래에 있는 키입니다. 아래 예시에서는 `salesforce`를 사용하므로, 로컬 콜백은 `http://localhost:3080/api/mcp/salesforce/oauth/callback`이 됩니다.
+</Callout>
+
+## 필수 조건 [#prerequisites]
+
+- Hosted MCP 서버와 API 액세스를 지원하는 Salesforce 조직.
+- System Administrator 권한 또는 External Client App을 생성하고 MCP 서버를 활성화할 수 있는 동등한 권한.
+- `librechat.yaml`이 마운트되거나 로드된 상태로 실행 중인 LibreChat 인스턴스.
+- 사용자가 LibreChat을 열 때 사용하는 공개 기본 URL입니다. 예를 들어 로컬 개발 환경의 경우 `http://localhost:3080`, 프로덕션 환경의 경우 `https://chat.example.com`을 사용합니다.
+
+아직 Salesforce 조직이 없다면 [developer.salesforce.com/signup](https://developer.salesforce.com/signup)에서 무료 Developer Edition 조직을 생성하고, 이메일을 통해 계정을 인증한 다음 [login.salesforce.com](https://login.salesforce.com)에 로그인하세요. 이 가이드에 나오는 Salesforce 설정 메뉴가 조직에서 보이지 않는 경우, Hosted MCP 서버가 활성화된 지원되는 프로덕션, 샌드박스 또는 체험판 조직을 사용하세요.
+
+## 설정 [#setup]
+
+<Steps>
+  <Step>
+
+### Salesforce MCP 서버 활성화 [#activate-the-salesforce-mcp-server]
+
+Salesforce에서 **Setup**을 엽니다.
+
+1. **Quick Find**에서 `MCP Servers`를 검색하세요.
+2. **API Catalog**에서 **MCP Servers**를 여세요.
+3. 사용하려는 서버를 활성화하세요. 초기 설정의 경우 `platform/sobject-reads`를 활성화하세요.
+4. 서버가 활성화될 때까지 최대 2분 정도 기다려 주세요.
+
+full-access 예제를 사용할 계획이라면, 대신 `platform/sobject-all`을 활성화하세요.
+
+  </Step>
+  <Step>
+
+### 외부 클라이언트 앱 생성 [#create-an-external-client-app]
+
+Salesforce 설정에서:
+
+1. **Quick Find**에서 `External Client App Manager`를 검색하세요.
+2. **New External Client App**을 클릭합니다.
+3. 기본 앱 정보를 입력하세요. `LibreChat Salesforce MCP`와 같이 명확한 이름을 사용하세요.
+4. **API (Enable OAuth Settings)**를 확장하고 OAuth를 활성화하세요.
+5. LibreChat 콜백 URL을 추가하세요.
+
+로컬 개발 환경의 경우:
+
+```text
+http://localhost:3080/api/mcp/salesforce/oauth/callback
+```
+
+프로덕션 환경의 경우, 기본 URL을 귀하의 공개 LibreChat URL로 교체하세요:
+
+```text
+https://chat.example.com/api/mcp/salesforce/oauth/callback
+```
+
+  </Step>
+  <Step>
+
+### OAuth 범위 및 보안 구성 [#configure-oauth-scopes-and-security]
+
+External Client App OAuth 설정에서 다음 스코프(scopes)를 추가하세요:
+
+```text
+mcp_api
+refresh_token
+```
+
+Hosted MCP 서버에는 표준 Salesforce `api` scope를 사용하지 마십시오. MCP 서버는 `mcp_api` scope를 사용해야 합니다.
+
+External Client App 보안 설정에서:
+
+- **Issue JSON Web Token (JWT)-based access tokens for named users**(지정된 사용자를 위한 JSON Web Token(JWT) 기반 액세스 토큰 발급)을 선택하세요.
+- **Require Proof Key for Code Exchange (PKCE) extension for Supported Authorization Flows**를 선택하세요.
+- 이 가이드의 기본 설정을 위해서는 **Require Secret for Web Server Flow**를 비활성화 상태로 두십시오.
+- 이 가이드의 기본 설정을 위해서는 **Require Secret for Refresh Token Flow**를 비활성화 상태로 두십시오.
+
+**Create**를 클릭한 다음, 앱 설정을 열고 **Consumer Key**를 복사합니다. Salesforce에 따르면 새로운 External Client App을 사용할 수 있게 되기까지 최대 30분이 소요될 수 있습니다.
+
+<Callout type="info" title="선택적 클라이언트 시크릿">
+  LibreChat은 클라이언트 시크릿을 서버 측에 저장할 수 있습니다. Salesforce 관리자가 **Require Secret for Web Server Flow**를 활성화한 경우, 클라이언트 시크릿도 생성하여 이 가이드 뒷부분에 나오는 선택적 `client_secret` 필드를 포함하십시오.
+</Callout>
+
+  </Step>
+  <Step>
+
+### `.env`에 Salesforce 클라이언트 ID 추가하기 [#add-the-salesforce-client-id-to-env]
+
+LibreChat `.env` 파일에 External Client App 소비자 키(consumer key)를 추가하세요:
+
+```bash filename=".env"
+SALESFORCE_MCP_CLIENT_ID=your-salesforce-consumer-key
+```
+
+**Require Secret for Web Server Flow**를 활성화한 경우, 다음도 추가하세요:
+
+```bash filename=".env"
+SALESFORCE_MCP_CLIENT_SECRET=your-salesforce-client-secret
+```
+
+  </Step>
+  <Step>
+
+### `librechat.yaml`에 Salesforce MCP 추가하기 [#add-salesforce-mcp-to-librechatyaml]
+
+이 예시는 프로덕션 또는 Developer Edition 조직을 위한 읽기 전용 SObject 서버를 구성합니다:
+
+```yaml filename="librechat.yaml"
+mcpServers:
+  salesforce:
+    type: streamable-http
+    url: 'https://api.salesforce.com/platform/mcp/v1/platform/sobject-reads'
+    timeout: 90000
+    initTimeout: 150000
+    requiresOAuth: true
+    startup: false
+    oauth:
+      authorization_url: 'https://login.salesforce.com/services/oauth2/authorize'
+      token_url: 'https://login.salesforce.com/services/oauth2/token'
+      client_id: '${SALESFORCE_MCP_CLIENT_ID}'
+      scope: 'mcp_api refresh_token'
+      redirect_uri: 'http://localhost:3080/api/mcp/salesforce/oauth/callback'
+```
+
+샌드박스 또는 스크래치 조직의 경우, 샌드박스 MCP URL과 Salesforce 샌드박스 OAuth endpoint를 사용하세요:
+
+```yaml filename="librechat.yaml"
+mcpServers:
+  salesforce:
+    type: streamable-http
+    url: 'https://api.salesforce.com/platform/mcp/v1/sandbox/platform/sobject-reads'
+    timeout: 90000
+    initTimeout: 150000
+    requiresOAuth: true
+    startup: false
+    oauth:
+      authorization_url: 'https://test.salesforce.com/services/oauth2/authorize'
+      token_url: 'https://test.salesforce.com/services/oauth2/token'
+      client_id: '${SALESFORCE_MCP_CLIENT_ID}'
+      scope: 'mcp_api refresh_token'
+      redirect_uri: 'http://localhost:3080/api/mcp/salesforce/oauth/callback'
+```
+
+외부 클라이언트 앱에 클라이언트 시크릿이 필요한 경우, `oauth` 내부에 다음 필드를 추가하세요:
+
+```yaml filename="librechat.yaml"
+oauth:
+  client_secret: '${SALESFORCE_MCP_CLIENT_SECRET}'
+  token_exchange_method: default_post
+  token_endpoint_auth_methods_supported: ['client_secret_post']
+```
+
+LibreChat가 공용 URL에 배포된 경우, `redirect_uri`를 Salesforce에 등록된 정확한 콜백 URL과 일치하도록 업데이트하세요.
+
+<Callout type="info" title="엄격한 MCP 도메인 허용 목록">
+  `librechat.yaml`에서 `mcpSettings.allowedDomains`를 구성하는 경우, `api.salesforce.com`을 추가하세요.
+  Salesforce 샌드박스 OAuth endpoint를 사용하고 정책이 OAuth 호스트에도 적용되는 경우, `test.salesforce.com` 또는 샌드박스 My Domain 호스트도 허용해야 합니다.
+</Callout>
+
+  </Step>
+  <Step>
+
+### 필요한 경우 전체 Salesforce 액세스로 전환 [#switch-to-full-salesforce-access-if-needed]
+
+읽기 전용 서버가 작동한 후, `url`을 변경하여 다른 활성화된 Salesforce 서버로 전환할 수 있습니다.
+
+프로덕션 또는 Developer Edition 조직에서 전체 SObject 액세스를 사용하려면:
+
+```yaml filename="librechat.yaml"
+url: 'https://api.salesforce.com/platform/mcp/v1/platform/sobject-all'
+```
+
+샌드박스 또는 스크래치 조직에서 전체 SObject 액세스를 사용하려면:
+
+```yaml filename="librechat.yaml"
+url: 'https://api.salesforce.com/platform/mcp/v1/sandbox/platform/sobject-all'
+```
+
+어시스턴트를 통해 Salesforce 레코드를 생성, 업데이트 또는 삭제할 수 있는 권한이 있는 사용자에게만 변경(mutation) 또는 삭제가 가능한 서버를 노출하십시오.
+
+  </Step>
+  <Step>
+
+### LibreChat 재시작 [#restart-librechat]
+
+`.env` 및 `librechat.yaml`을 다시 불러올 수 있도록 LibreChat을 재시작하세요.
+
+| 배포 | 명령어 |
+| ---------- | ------------------------------------ |
+| Docker     | `docker compose up -d`               |
+| Local      | 서버를 중지한 후 다시 시작하세요 |
+
+Docker에서 서버가 로드되었는지 확인하려면 API 로그를 확인하세요:
+
+```bash
+docker logs LibreChat --tail 200 | grep MCP
+```
+
+  </Step>
+  <Step>
+
+### LibreChat에서 Salesforce 연결하기 [#connect-salesforce-in-librechat]
+
+LibreChat을 열고, **MCP Settings** 또는 채팅 입력창의 **MCP Servers** 드롭다운을 엽니다.
+
+1. Salesforce 서버에 대해 **Connect**를 클릭하세요.
+2. Salesforce OAuth 흐름을 완료하세요.
+3. 요청된 `mcp_api` 및 `refresh_token` 범위를 검토하세요.
+4. OAuth 성공 페이지가 닫힌 후 LibreChat으로 돌아오세요.
+
+OAuth가 성공하고 MCP 연결이 초기화되면, Salesforce 도구를 채팅과 Agent Builder에서 사용할 수 있게 됩니다.
+
+  </Step>
+</Steps>
+
+## 테스트 [#testing]
+
+활성화한 서버와 일치하는 프롬프트를 시도해 보세요:
+
+| 서버 | 프롬프트 |
+| ------------------ | -------------------------------------------------------------------------------- |
+| Any SObject 서버 | "Who am I in Salesforce?" |
+| SObject Reads | "Show me my five most recently viewed accounts." |
+| SObject Reads | "Find open cases related to Acme Corp and summarize them." |
+| SObject Mutations | "Create a follow-up task for this account. Ask me before saving anything." |
+| SObject All | "Update this opportunity stage to Closed Won after confirming the exact record." |
+
+더 낮은 수준의 정상 작동 확인(sanity check)을 위해 Postman 또는 MCP Inspector를 사용하여 동일한 Salesforce 서버를 테스트하십시오. 만약 해당 도구에서는 작동하지만 LibreChat에서는 작동하지 않는다면, LibreChat의 콜백 URL, OAuth 범위(scopes) 및 서버 URL을 정상 작동하는 클라이언트와 비교해 보십시오.
+
+## 문제 해결 [#troubleshooting]
+
+| 증상 | 확인해야 할 사항 |
+| ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Salesforce에서 `redirect_uri_mismatch` 오류 발생 | External Client App 콜백 URL은 프로토콜, 호스트 이름, 포트, 서버 이름 및 경로를 포함하여 `librechat.yaml`의 `redirect_uri`와 정확히 일치해야 합니다. |
+| Salesforce 로그인 기록에 `Invalid Code Verifier` 표시 | PKCE 상태가 콜백과 일치하지 않습니다. 한 번에 여러 OAuth 흐름을 시작하지 마십시오. 다중 복제본 배포 환경에서는 LibreChat이 Redis와 같은 공유 OAuth 흐름 저장소를 사용하여 승인 및 콜백 요청이 서로 다른 복제본에서 안전하게 처리될 수 있도록 하십시오. |
+| Salesforce에서 `JWT Token is required` 반환 | Salesforce MCP 액세스 토큰 없이 서버가 호출되고 있습니다. LibreChat에서 OAuth를 완료하고, `requiresOAuth: true`인지 확인하며, 사용자가 External Client App을 승인했는지 확인하십시오. |
+| Salesforce에서 `Invalid token` 반환 | External Client App이 `mcp_api`를 사용하고, JWT 기반 액세스 토큰을 발급하며, PKCE가 활성화되어 있는지 확인하십시오. 또한 MCP URL과 OAuth 엔드포인트가 동일한 조직 유형(운영 환경 vs 샌드박스)을 가리키고 있는지 확인하십시오. |
+| Salesforce에서 `Server definition not found for: sobject-all` 반환 | 서버가 활성화되지 않았거나, 아직 전파 중이거나, URL이 운영 환경/샌드박스 경로 중 잘못된 경로를 사용 중입니다. Salesforce 설정에서 서버를 활성화하고 최대 2분 정도 기다려 주십시오. |
+| 범위(scope) 관련 오류로 토큰 갱신 실패 | 구성된 범위로 `mcp_api refresh_token`을 사용하십시오. Hosted MCP에는 일반 Salesforce `api` 범위를 대신 사용하지 마십시오. |
+| LibreChat에 Salesforce는 표시되지만 도구가 없음 | LibreChat UI에서 서버를 연결하십시오. OAuth가 활성화된 원격 서버는 사용자가 인증을 완료하고 서버가 초기화된 후에 도구를 노출합니다. |
+| LibreChat 도메인 정책에 의해 MCP 요청이 차단됨 | `mcpSettings.allowedDomains`가 구성된 경우, `api.salesforce.com` 및 배포 환경에서 사용하는 모든 Salesforce OAuth 호스트를 허용하십시오. |
+
+## 보안 참고 사항 [#security-notes]
+
+- 사용자가 실제로 쓰기 또는 삭제 권한이 필요한 경우가 아니라면 `platform/sobject-reads`로 시작하세요.
+- Salesforce는 인증된 사용자의 권한을 적용하지만, 어시스턴트는 여전히 광범위한 작업을 제안할 수 있습니다. 쓰기 및 삭제 작업은 신중하게 검토하십시오.
+- Salesforce 권한 세트와 외부 클라이언트 앱(External Client App) 정책을 사용하여 MCP 클라이언트를 승인할 수 있는 사용자를 제한하세요.
+- Salesforce 레코드를 신뢰할 수 없는 입력으로 취급하세요. 레코드에는 어시스턴트에 영향을 주려는 간접적인 프롬프트 주입 시도가 포함될 수 있습니다.
+- 여러 LibreChat API 복제본을 사용하는 프로덕션 배포의 경우, PKCE 콜백이 복제본 간에 유지될 수 있도록 OAuth 흐름 상태에 공유 스토리지를 사용하세요.
+
+## 관련 페이지 [#related-pages]
+
+<Cards num={3}>
+  <Cards.Card title="MCP" href="/docs/features/mcp" arrow>
+    LibreChat에서 MCP 서버가 작동하는 방식을 알아보세요.
+  </Cards.Card>
+  <Cards.Card
+    title="MCP 서버 객체 구조"
+    href="/docs/configuration/librechat_yaml/object_structure/mcp_servers"
+    arrow
+  >
+    사용 가능한 모든 `mcpServers` 구성 필드를 검토하세요.
+  </Cards.Card>
+  <Cards.Card
+    title="Salesforce 호스팅 MCP 서버"
+    href="https://developer.salesforce.com/docs/platform/hosted-mcp-servers/guide/hosted-mcp-servers-overview.html"
+    arrow
+  >
+    Salesforce의 공식 Hosted MCP 설정 문서를 읽어보세요.
+  </Cards.Card>
+</Cards>

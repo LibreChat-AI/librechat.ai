@@ -1,0 +1,345 @@
+---
+title: Redis
+icon: Redis
+description: >-
+  Menyiapkan Redis untuk caching, penyimpanan sesi, dan penskalaan horizontal di
+  LibreChat
+---
+
+Panduan ini membahas cara mengonfigurasi Redis untuk caching dan penyimpanan sesi di LibreChat. Redis memberikan peningkatan performa yang signifikan dan **diperlukan untuk penskalaan horizontal**—jika Anda menjalankan beberapa instance LibreChat di belakang load balancer, Redis memastikan status yang konsisten di semua instance.
+
+## Daftar Isi [#table-of-contents]
+
+- [Pengaturan Dasar](#basic-setup)
+- [Tipe Koneksi](#connection-types)
+- [Konfigurasi Keamanan](#security-configuration)
+- [Opsi Lanjutan](#advanced-options)
+- [Penyesuaian Performa](#performance-tuning)
+- [Contoh Konfigurasi](#configuration-examples)
+- [Resumable Streams](#resumable-streams)
+
+## Pengaturan Dasar [#basic-setup]
+
+### Aktifkan Redis [#enable-redis]
+
+Untuk mengaktifkan Redis di LibreChat, atur variabel lingkungan berikut di dalam file `.env` Anda:
+
+```bash
+USE_REDIS=true
+```
+
+**Penting**: Saat `USE_REDIS=true`, Anda juga harus menyediakan `REDIS_URI`. Aplikasi akan menampilkan error jika Redis diaktifkan tanpa URI koneksi.
+
+## Tipe Koneksi [#connection-types]
+
+### Instans Redis Tunggal [#single-redis-instance]
+
+Untuk pengaturan server Redis tunggal standar:
+
+```bash
+# Local Redis instance
+REDIS_URI=redis://127.0.0.1:6379
+
+# Remote Redis instance
+REDIS_URI=redis://your-redis-host:6379
+```
+
+### Redis Cluster [#redis-cluster]
+
+Untuk penyebaran cluster Redis dengan beberapa node:
+
+```bash
+# Multiple Redis cluster nodes
+REDIS_URI=redis://127.0.0.1:7001,redis://127.0.0.1:7002,redis://127.0.0.1:7003
+```
+
+Aplikasi secara otomatis mendeteksi mode klaster ketika beberapa URI disediakan.
+
+Jika klaster redis Anda hanya memiliki satu URI, Anda dapat menggunakan variabel lingkungan `USE_REDIS_CLUSTER` untuk mengaktifkan mode klaster:
+
+```bash
+# Redis cluster with single URI
+REDIS_URI=redis://127.0.0.1:7001
+USE_REDIS_CLUSTER=true
+```
+
+### Layanan Redis Terkelola Endpoint Tunggal [#single-endpoint-managed-redis-services]
+
+Beberapa layanan Redis terkelola, termasuk AWS ElastiCache Serverless dan Redis Enterprise Cloud di AWS, mengekspos satu endpoint koneksi tunggal sambil melakukan sharding kunci secara internal. Dalam pengaturan tersebut, biarkan LibreChat dalam mode koneksi single-node, tetapi aktifkan penghapusan yang aman untuk cluster (cluster-safe deletes) jika pembersihan cache gagal dengan pesan `CROSSSLOT Keys in request don't hash to the same slot`.
+
+```bash
+USE_REDIS=true
+REDIS_URI=rediss://your-managed-redis-endpoint:6379
+USE_REDIS_CLUSTER=false
+REDIS_CLUSTER_SAFE_DELETE=true
+```
+
+`REDIS_CLUSTER_SAFE_DELETE=true` membuat LibreChat menghapus kunci cache yang cocok satu per satu alih-alih mengirim perintah `DEL` multi-kunci. Hal ini menghindari kesalahan `CROSSSLOT` tanpa mengubah cara LibreChat terhubung ke Redis.
+
+Gunakan `USE_REDIS_CLUSTER=true` hanya jika LibreChat perlu membuat klien Redis Cluster. Untuk layanan terkelola dengan satu endpoint, `REDIS_CLUSTER_SAFE_DELETE=true` adalah opsi yang lebih aman.
+
+### Redis dengan TLS/SSL [#redis-with-tlsssl]
+
+Untuk koneksi Redis yang aman:
+
+```bash
+# Redis with TLS encryption
+REDIS_URI=rediss://127.0.0.1:6380
+
+# Path to CA certificate for TLS verification
+REDIS_CA=/path/to/ca-cert.pem
+```
+
+## Konfigurasi Keamanan [#security-configuration]
+
+### Autentikasi [#authentication]
+
+Konfigurasikan kredensial autentikasi Redis:
+
+```bash
+# Method 1: Include credentials in URI
+# With both username and password
+REDIS_URI=redis://myuser:mypassword@127.0.0.1:6379
+
+
+# Method 2: Separate environment variables
+REDIS_URI=redis://127.0.0.1:6379
+REDIS_USERNAME=your_redis_username
+REDIS_PASSWORD=your_redis_password
+```
+
+**Catatan**: Variabel username/password terpisah akan mengesampingkan kredensial di dalam URI jika keduanya disediakan.
+
+### Konfigurasi TLS [#tls-configuration]
+
+Untuk koneksi terenkripsi:
+
+```bash
+# Enable TLS with rediss:// protocol
+REDIS_URI=rediss://your-redis-host:6380
+
+# Provide CA certificate for verification
+REDIS_CA=/path/to/your/ca-certificate.pem
+```
+
+### TLS dengan Elasticache [#tls-with-elasticache]
+
+Elasticache mungkin perlu menggunakan dnsLookup alternatif untuk koneksi TLS. lihat "Special Note: Aws Elasticache Clusters with TLS" pada halaman web ini: https://www.npmjs.com/package/ioredis
+
+```bash
+# Enable redis alternate dnsLookup
+REDIS_USE_ALTERNATIVE_DNS_LOOKUP=true
+```
+
+## Opsi Lanjutan [#advanced-options]
+
+### Awalan Kunci (Key Prefixing) [#key-prefixing]
+
+Awalan kunci Redis mencegah kontaminasi lintas penyebaran dengan mengisolasi data cache antar lingkungan, versi, atau instans yang berbeda yang menggunakan server Redis yang sama. Hal ini sangat penting untuk:
+
+- **Multi-tenant deployments**: Memisahkan lingkungan staging, production, dan development
+- **Blue-green deployments**: Mengisolasi cache di antara versi aplikasi yang berbeda
+
+```bash
+# Option 1: Dynamic prefix from environment variable (recommended for cloud)
+
+# Google Cloud Platform - Cloud Run
+REDIS_KEY_PREFIX_VAR=K_REVISION
+
+# AWS - ECS/Fargate
+REDIS_KEY_PREFIX_VAR=AWS_EXECUTION_ENV
+
+# Azure Container Instances
+REDIS_KEY_PREFIX_VAR=CONTAINER_NAME
+
+# Kubernetes - Pod name or deployment
+REDIS_KEY_PREFIX_VAR=HOSTNAME
+REDIS_KEY_PREFIX_VAR=POD_NAME
+
+# Kubernetes - Custom deployment identifier
+REDIS_KEY_PREFIX_VAR=DEPLOYMENT_ID
+
+# Heroku
+REDIS_KEY_PREFIX_VAR=DYNO
+
+# Option 2: Static prefix (for manual control)
+REDIS_KEY_PREFIX=librechat-prod-v2
+REDIS_KEY_PREFIX=staging-branch-feature-x
+REDIS_KEY_PREFIX=dev-john-local
+```
+
+**Penting**: Anda tidak dapat mengatur `REDIS_KEY_PREFIX_VAR` dan `REDIS_KEY_PREFIX` secara bersamaan.
+
+**Contoh kontaminasi tanpa awalan**:
+
+- Cache produksi ditimpa oleh deployment staging
+- Pengujian branch fitur merusak cache branch utama
+- Versi deployment lama yang menyajikan data cache usang
+
+**Format awalan kunci**:
+
+- Klien IoRedis: `{prefix}::{key}`
+- Klien Keyv: Ditangani oleh lapisan penyimpanan
+
+### Batas Koneksi [#connection-limits]
+
+Konfigurasi batas koneksi Redis:
+
+```bash
+# Maximum number of event listeners (default: 40)
+REDIS_MAX_LISTENERS=40
+```
+
+### Connection Keep-Alive [#connection-keep-alive]
+
+Konfigurasikan interval ping Redis untuk menjaga koneksi:
+
+```bash
+# Redis ping interval in seconds (default: 0 = disabled)
+# When set to a positive integer (in seconds), Redis clients will ping the server at this interval
+# When unset or 0, no pinging is performed (recommended for most use cases)
+# Example: 300 = ping every 5 minutes
+REDIS_PING_INTERVAL=300
+```
+
+**Penting**:
+
+- Mengatur `REDIS_PING_INTERVAL=0` atau menghilangkannya akan menonaktifkan ping sepenuhnya
+- Hanya tetapkan nilai positif (dalam detik) jika Anda mengalami masalah waktu tunggu koneksi (connection timeout)
+- Interval ditentukan dalam detik dan berlaku untuk klien IoRedis maupun Keyv Redis.
+- Nilai contoh: `300` (5 menit), `600` (10 menit), `60` (1 menit)
+
+### Selective In-Memory Caching [#selective-in-memory-caching]
+
+Paksa namespace cache tertentu untuk menggunakan penyimpanan in-memory meskipun Redis diaktifkan:
+
+```bash
+# Comma-separated list of cache keys
+FORCED_IN_MEMORY_CACHE_NAMESPACES=ROLES,MESSAGES
+```
+
+Kunci cache yang valid (dari enum `CacheKeys` di `librechat-data-provider`):
+
+| Key                       | Description               |
+| ------------------------- | ------------------------- |
+| `CONFIG_STORE`            | Penyimpanan konfigurasi   |
+| `ROLES`                   | Peran pengguna            |
+| `PLUGINS`                 | Data plugin               |
+| `GEN_TITLE`               | Judul yang dihasilkan     |
+| `TOOLS`                   | Data alat                 |
+| `MODELS_CONFIG`           | Konfigurasi model         |
+| `MODEL_QUERIES`           | Kueri model               |
+| `STARTUP_CONFIG`          | Konfigurasi awal          |
+| `ENDPOINT_CONFIG`         | Konfigurasi endpoint      |
+| `TOKEN_CONFIG`            | Konfigurasi token         |
+| `APP_CONFIG`              | Konfigurasi aplikasi      |
+| `ABORT_KEYS`              | Kunci pembatalan          |
+| `BANS`                    | Data pemblokiran          |
+| `ENCODED_DOMAINS`         | Domain terenkripsi        |
+| `AUDIO_RUNS`              | Proses pemrosesan audio   |
+| `MESSAGES`                | Pesan                     |
+| `FLOWS`                   | Data alur                 |
+| `PENDING_REQ`             | Permintaan tertunda       |
+| `S3_EXPIRY_INTERVAL`      | Interval kedaluwarsa S3   |
+| `OPENID_EXCHANGED_TOKENS` | Token yang ditukar OpenID |
+| `OPENID_SESSION`          | Sesi OpenID               |
+| `SAML_SESSION`            | Sesi SAML                 |
+
+<Callout type="warn" title="Kunci tidak valid">
+  Menggunakan kunci yang tidak valid (contohnya, `STATIC_CONFIG` yang sudah tidak digunakan lagi) akan menyebabkan kesalahan saat memulai. Hanya gunakan kunci dari tabel di atas.
+</Callout>
+
+## Penyetelan Performa [#performance-tuning]
+
+### Connection Keep-Alive [#connection-keep-alive-1]
+
+Aplikasi ini mengimplementasikan keep-alive koneksi yang dapat dikonfigurasi:
+
+- Interval ping dikontrol oleh variabel lingkungan `REDIS_PING_INTERVAL`
+- Perilaku default: Tidak ada ping (direkomendasikan untuk sebagian besar deployment)
+- Saat diaktifkan, melakukan ping ke klien IoRedis dan Keyv Redis pada interval yang ditentukan
+- Secara otomatis menghapus interval ping pada peristiwa pemutusan/penutupan
+
+### Strategi Cache [#cache-strategy]
+
+Aplikasi ini menggunakan pendekatan klien ganda:
+
+- **Klien IoRedis**: Operasi Redis utama dengan pemberian awalan otomatis
+- **Klien Keyv Redis**: Operasi lapisan penyimpanan dengan penanganan awalan di `cacheFactory.js`
+
+### Optimalisasi Memori [#memory-optimization]
+
+Gunakan `FORCED_IN_MEMORY_CACHE_NAMESPACES` untuk mengoptimalkan performa dengan menyimpan dataset kecil yang sering diakses di dalam memori, sementara tetap menggunakan Redis untuk cache yang lebih besar.
+
+## Contoh Konfigurasi [#configuration-examples]
+
+### Pengaturan Pengembangan [#development-setup]
+
+```bash
+USE_REDIS=true
+REDIS_URI=redis://127.0.0.1:6379
+REDIS_KEY_PREFIX=librechat-dev
+```
+
+### Pengaturan Produksi [#production-setup]
+
+```bash
+USE_REDIS=true
+REDIS_URI=rediss://prod-redis.company.com:6380
+REDIS_USERNAME=librechat_user
+REDIS_PASSWORD=secure_password_here
+REDIS_CA=/etc/ssl/redis-ca.pem
+REDIS_KEY_PREFIX_VAR=DEPLOYMENT_ID
+REDIS_MAX_LISTENERS=100
+REDIS_PING_INTERVAL=300
+FORCED_IN_MEMORY_CACHE_NAMESPACES=ROLES,MESSAGES
+```
+
+### Pengaturan Klaster [#cluster-setup]
+
+```bash
+USE_REDIS=true
+REDIS_URI=redis://cluster-node1:7001,redis://cluster-node2:7002,redis://cluster-node3:7003
+REDIS_USERNAME=cluster_user
+REDIS_PASSWORD=cluster_password
+REDIS_KEY_PREFIX=librechat-cluster
+```
+
+## Resumable Streams [#resumable-streams]
+
+Redis mengaktifkan [Resumable Streams](/docs/features/resumable_streams) untuk deployment yang diskalakan secara horizontal. Saat diaktifkan, respons AI dapat terhubung kembali dan dilanjutkan dengan mulus di seluruh instance server.
+
+**Penting:** Saat `USE_REDIS=true`, aliran yang dapat dilanjutkan (resumable streams) secara otomatis menggunakan Redis untuk koordinasi lintas instans. Ini adalah pengaturan yang direkomendasikan untuk penyebaran berskala horizontal di mana pengguna mungkin terhubung ke instans server yang berbeda.
+
+**Catatan:** Jika Anda menjalankan satu instans LibreChat, Redis untuk *resumable streams* biasanya berlebihan—mode *in-memory* bawaan sudah berfungsi dengan baik. Redis menjadi penting ketika Anda memiliki beberapa instans LibreChat di belakang *load balancer*, di mana penyambungan kembali pengguna mungkin diarahkan ke server yang berbeda dari tempat *stream* mereka dimulai.
+
+### Konfigurasi [#configuration]
+
+```bash
+# Redis enabled = resumable streams automatically use Redis
+USE_REDIS=true
+REDIS_URI=redis://127.0.0.1:6379
+
+# Optional: explicitly control resumable streams behavior
+# USE_REDIS_STREAMS=true  # Enabled by default when USE_REDIS=true
+```
+
+### Manfaat Utama (untuk Penskalaan Horizontal) [#key-benefits-for-horizontal-scaling]
+
+- **Cross-instance continuity**: Pengguna dapat memulai pembuatan di satu server dan melanjutkannya di server lain
+- **Rolling deployments**: Stream aktif tetap bertahan saat server dimulai ulang
+- **Sinkronisasi multi-tab**: Percakapan yang sama tersinkronisasi di berbagai tab browser dalam lingkungan *load-balanced*
+- **Ketahanan koneksi**: Penyambungan kembali otomatis terlepas dari server mana yang menangani permintaan tersebut
+
+### Konfigurasi Klaster [#cluster-configuration]
+
+Untuk penyebaran Redis Cluster, LibreChat secara otomatis menggunakan kunci dengan hash-tag untuk memastikan operasi stream tetap berada dalam slot cluster yang sama:
+
+```bash
+USE_REDIS=true
+USE_REDIS_STREAMS=true
+USE_REDIS_CLUSTER=true
+REDIS_URI=redis://node1:7001,redis://node2:7002,redis://node3:7003
+```
+
+Lihat [Resumable Streams](/docs/features/resumable_streams) untuk detail lebih lanjut mengenai fitur ini.

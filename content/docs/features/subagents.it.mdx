@@ -1,0 +1,129 @@
+---
+title: Sottoagenti
+icon: Network
+description: Delega il lavoro mirato da un agente a esecuzioni di agenti secondari isolati.
+---
+
+I Subagent consentono a un Agente LibreChat di generare un'esecuzione secondaria isolata per attività mirate. L'agente secondario ottiene la propria finestra di contesto e il proprio flusso di esecuzione degli strumenti. L'agente principale riceve il risultato del secondario senza assorbire ogni chiamata di strumento intermedia, traccia o operazione verbosa sui file nel proprio contesto.
+
+Usa i subagenti per:
+
+- Sottotitoli di ricerca che potrebbero generare output intermedi lunghi
+- Revisioni superate con un agente specializzato
+- Lavoro intensivo basato su strumenti che dovrebbe rimanere al di fuori del contesto principale
+- Decomposizione in stile parallelo in cui il genitore coordina e riassume
+
+## In che modo i Subagent differiscono dalle Agent Chain [#how-subagents-differ-from-agent-chain]
+
+Agent Chain costruisce un grafo multi-agente in cui gli agenti trasmettono i risultati attraverso passaggi di catena configurati. I subagenti vengono generati da un agente come chiamata di strumento durante un'esecuzione.
+
+- **Agent Chain**: flusso di lavoro multi-agente a livello di grafo
+- **Subagents**: delegazione in fase di runtime da un agente genitore a esecuzioni secondarie isolate
+
+Entrambi possono utilizzare agenti esistenti, ma i subagent sono progettati per la delega con ambito limitato dall'interno del ciclo di ragionamento di un singolo agente.
+
+## Abilitare la funzionalità [#enable-the-capability]
+
+La funzionalità `subagents` è abilitata per impostazione predefinita. Gli amministratori possono rimuoverla dall'elenco delle funzionalità dell'endpoint agents per disabilitare la funzione.
+
+```yaml filename="librechat.yaml"
+endpoints:
+  agents:
+    capabilities:
+      - 'deferred_tools'
+      - 'execute_code'
+      - 'file_search'
+      - 'web_search'
+      - 'artifacts'
+      - 'subagents'
+      - 'actions'
+      - 'context'
+      - 'skills'
+      - 'tools'
+      - 'chain'
+      - 'ocr'
+```
+
+## Configurare un Agent [#configure-an-agent]
+
+Nell'Agent Builder, apri **Advanced Settings** e abilita **Subagents**.
+
+Impostazioni disponibili:
+
+- **Abilita subagent**: aggiunge lo strumento di generazione di subagent all'agente.
+- **Allow self-spawn**: consente all'agente di generare una copia fresca di se stesso in un contesto isolato. Questa opzione è abilitata per impostazione predefinita quando i subagent sono abilitati.
+- **Sottoagenti aggiuntivi**: seleziona gli agenti specifici che il genitore può generare.
+
+Forma dell'agente equivalente:
+
+```yaml filename="agent subagents"
+subagents:
+  enabled: true
+  allowSelf: true
+  agent_ids:
+    - 'agent_researcher'
+    - 'agent_reviewer'
+```
+
+## Configurare una Model Spec [#configure-a-model-spec]
+
+Gli amministratori possono anche abilitare i Subagents per gli agenti effimeri creati da un Model Specs. Questo è utile quando un Model Specs deve comportarsi come un profilo agente focalizzato, senza richiedere agli utenti di creare o selezionare un agente genitore persistente.
+
+```yaml filename="modelSpecs / subagents"
+modelSpecs:
+  list:
+    - name: 'research-assistant'
+      label: 'Research Assistant'
+      subagents:
+        enabled: true
+        allowSelf: true
+        agent_ids: []
+      preset:
+        endpoint: 'agents'
+        model: 'gpt-4o'
+```
+
+Solo `enabled` e `allowSelf` vengono inviati ai client nella configurazione di avvio. La whitelist `agent_ids` rimane lato server e viene convalidata rispetto al limite condiviso `MAX_SUBAGENTS`. I payload delle richieste dei client non possono fornire o sovrascrivere la configurazione dei Subagent di Model Specs.
+
+## Comportamento in fase di esecuzione [#runtime-behavior]
+
+Quando i subagenti sono abilitati, l'agente principale riceve uno strumento `subagent`. Lo strumento può generare:
+
+- `self`, quando `allowSelf` non è false
+- Qualsiasi agente figlio configurato in `agent_ids`
+
+Gli agenti secondari (child agents) vengono eseguiti con un contesto isolato. Lo stato della ricerca di strumenti (tool-search) del genitore e il contesto accumulato non vengono copiati nell'esecuzione secondaria. L'utilizzo del modello dell'esecuzione secondaria viene addebitato nella transazione del genitore e incluso nei totali di utilizzo del genitore. L'interfaccia utente mostra l'esecuzione secondaria come una parte espandibile dell'attività dell'agente con stato, aggiornamenti in tempo reale e il risultato finale.
+
+## Limiti [#limits]
+
+LibreChat impone questi limiti per mantenere delimitati i grafi dei subagent:
+
+<OptionTable
+  options={[
+    ['MAX_SUBAGENTS', 'Number', 'Numero massimo di subagenti espliciti per agente genitore.', '10'],
+    ['MAX_SUBAGENT_DEPTH', 'Number', 'Numero massimo di hop espliciti del subagente da un agente root.', '5'],
+    [
+      'MAX_SUBAGENT_GRAPH_NODES',
+      'Number',
+      'Numero massimo di target subagent espliciti univoci caricati in fase di runtime.',
+      '50',
+    ],
+    [
+      'MAX_SUBAGENT_RUN_CONFIGS',
+      'Number',
+      'Configurazioni massime di subagent espansi incorporate in una singola richiesta di esecuzione.',
+      '100',
+    ],
+  ]}
+/>
+
+## Controllo degli accessi [#access-control]
+
+Gli agenti secondari configurati devono essere visibili all'utente. Se l'utente non dispone dell'accesso in visualizzazione a un agente referenziato, LibreChat salta quel sottoagente. Per le richieste di creazione e aggiornamento, le voci `subagents.agent_ids` non valide o non autorizzate vengono rifiutate.
+
+## Suggerimenti per il design [#design-tips]
+
+- Abilita l'auto-generazione (self-spawn) quando l'agente genitore è già ben definito e necessita solo di un contesto aggiornato per un sottocompito.
+- Aggiungi agenti secondari specifici quando l'attività richiede un modello, un set di istruzioni, un set di strumenti o una whitelist di competenze differenti.
+- Mantieni le descrizioni dei figli chiare. Il genitore utilizza il nome e la descrizione di ogni figlio per scegliere il target di delega corretto.
+- Usa i subagent per lavori intermedi che dovrebbero restituire un risultato compatto, non per passaggi permanenti a un altro percorso di conversazione.

@@ -1,0 +1,276 @@
+---
+title: S3 ile CloudFront
+icon: AWS
+description: >-
+  S3'te depolanan LibreChat dosyaları için kararlı medya bağlantıları, imzalı
+  çerezler ve imzalı indirme URL'leri dahil olmak üzere Amazon CloudFront'u CDN
+  katmanı olarak yapılandırın.
+---
+
+CloudFront, LibreChat'in dosyaları S3'te tutarken görselleri, avatarları ve indirilenleri kararlı CDN URL'leri üzerinden sunmasını sağlar. Bu, kullanıcıları süresi dolan S3 önceden imzalı (presigned) görsel URL'lerine maruz bırakmadan S3 dayanıklılığından yararlanmak istediğinizde önerilen AWS kurulumudur.
+
+## CloudFront Ne Zaman Kullanılmalı [#when-to-use-cloudfront]
+
+Şu durumlarda CloudFront kullanın:
+
+- UI genelinde görüntülenmeye devam eden kararlı avatar ve görsel URL'leri
+- S3 bucket'ının önünde küresel uç (edge) önbelleğe alma
+- Özel satır içi görseller ve avatarlar için imzalı çerezler
+- İndirmeler için backend yetkili imzalı URL'ler
+- Dosyalar silindiğinde isteğe bağlı önbellek geçersiz kılma
+
+<Callout type="info" title="S3 hala gereklidir">
+  `cloudfront` dosya stratejisi, nesneleri S3'te depolar ve CloudFront URL'lerini döndürür. Öncelikle S3 ortam değişkenlerini yapılandırın, ardından `librechat.yaml` dosyasına `cloudfront` bloğunu ekleyin.
+</Callout>
+
+## Gereksinimler [#requirements]
+
+- Özel bir S3 bucket
+- S3 bucket'ını origin olarak kullanan bir CloudFront dağıtımı
+- CloudFront'un S3'ten okuma yapabilmesi için bir Origin Access Control (OAC) veya eşdeğer bir origin erişim politikası
+- `AWS_REGION` ve `AWS_BUCKET_NAME`
+- `AWS_ACCESS_KEY_ID` ve `AWS_SECRET_ACCESS_KEY` (dağıtımınız IRSA gibi bir AWS kimlik sağlayıcısı kullanmıyorsa)
+- İmzalı çerezler veya imzalı indirme URL'leri kullanılırken `CLOUDFRONT_KEY_PAIR_ID` ve `CLOUDFRONT_PRIVATE_KEY`
+
+## Ortam Değişkenleri [#environment-variables]
+
+```bash filename=".env"
+AWS_ACCESS_KEY_ID=your_access_key_id
+AWS_SECRET_ACCESS_KEY=your_secret_access_key
+AWS_REGION=us-east-1
+AWS_BUCKET_NAME=your_bucket_name
+
+# Required for signed cookies and signed CloudFront download URLs
+CLOUDFRONT_KEY_PAIR_ID=K1234567890ABC
+CLOUDFRONT_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----"
+```
+
+`CLOUDFRONT_PRIVATE_KEY`, tam PEM özel anahtarını içermelidir. `.env` dosyasında, tırnak içine alın ve satır sonlarını koruyun ya da platformunuzun gizli yönetici (secret manager) aracılığıyla enjekte edin.
+
+## Temel Yapılandırma [#basic-configuration]
+
+Görüntüler ve avatarlar için CloudFront kullanmak, belgeleri ise S3 imzalı URL'lerde tutmak istediğinizde `fileStrategies` kullanın:
+
+```yaml filename="librechat.yaml"
+version: 1.3.11
+
+fileStrategies:
+  avatar: 'cloudfront'
+  image: 'cloudfront'
+  document: 's3'
+
+cloudfront:
+  domain: 'https://cdn.example.com'
+  imageSigning: 'none'
+  urlExpiry: 3600
+```
+
+Her dosya türünün CloudFront kullanması gerekiyorsa `fileStrategy` kullanın:
+
+```yaml filename="librechat.yaml"
+fileStrategy: 'cloudfront'
+
+cloudfront:
+  domain: 'https://cdn.example.com'
+```
+
+## İmzalı Çerezler (Signed Cookies) [#signed-cookies]
+
+İmzalı çerezler (signed cookies), özel satır içi görseller ve avatarlar için güvenli moddur. LibreChat'in mesajlarda ve kayıtlarda kararlı CloudFront URL'lerini korumasını sağlarken, kısa ömürlü çerezlerle erişim yetkilendirmesi yapılmasına olanak tanırlar.
+
+```yaml filename="librechat.yaml"
+fileStrategies:
+  avatar: 'cloudfront'
+  image: 'cloudfront'
+  document: 's3'
+
+cloudfront:
+  domain: 'https://cdn.example.com'
+  imageSigning: 'cookies'
+  cookieDomain: '.example.com'
+  cookieExpiry: 1800
+  urlExpiry: 3600
+  requireSignedAccess: true
+```
+
+### Etki Alanı Gereksinimleri [#domain-requirements]
+
+İmzalı çerezler için, LibreChat API ve CloudFront ana bilgisayar adı aynı üst etki alanını (parent domain) paylaşmalıdır:
+
+- API: `https://api.example.com`
+- CloudFront CNAME: `https://cdn.example.com`
+- `cookieDomain: ".example.com"`
+
+`cookieDomain` bir nokta ile başlamalıdır. Tarayıcı, CloudFront çerezlerini ilişkisiz bir domaine göndermeyecektir.
+
+### Çerezlerin Koruduğu Şeyler [#what-cookies-protect]
+
+LibreChat, imzalı çerezleri satır içi medya yollarıyla sınırlar:
+
+- `/i/...` kullanıcıya özel, yüklenmiş veya oluşturulmuş gizli görseller
+- `/a/...` avatar varlıkları, `tenantId` mevcut olduğunda kiracıya (tenant) göre kapsamlandırılır
+
+Belgeler, genel yüklemeler ve kod çıktıları bu satır içi medya yollarının dışında kalır. İndirmeler arka uç tarafından yetkilendirilir ve imzalı CloudFront URL'leri olarak döndürülür.
+
+### Çerez Yenileme [#cookie-refresh]
+
+Signed-cookie modu etkin olduğunda, LibreChat başlangıç yapılandırmasında bir çerez yenileme endpoint'i duyurur:
+
+```text
+POST /api/auth/cloudfront/refresh
+```
+
+Kimliği doğrulanmış oturumlar; kimlik doğrulama akışları, token yenileme ve CloudFront görsel yeniden deneme yolları sırasında çerezleri yeniler. Yenileme yanıtı, çerez ömrünü ve önerilen yenileme zamanlamasını içerir.
+
+## İmzalı İndirmeler [#signed-downloads]
+
+LibreChat, yetkili indirmeler için imzalı CloudFront URL'lerini kullanır. `urlExpiry` ayarı, bunların ömrünü saniye cinsinden kontrol eder:
+
+```yaml filename="librechat.yaml"
+cloudfront:
+  domain: 'https://cdn.example.com'
+  imageSigning: 'cookies'
+  cookieDomain: '.example.com'
+  urlExpiry: 3600
+```
+
+Doğrudan indirme dosya adı ve içerik türü geçersiz kılmaları için, bu sorgu dizelerini S3'e iletmek üzere CloudFront önbellek/kaynak isteği politikasını yapılandırın:
+
+- `response-content-disposition`
+- `response-content-type`
+
+İndirme yolları için, aşağıdakileri içeren bir yanıt üstbilgisi (response headers) ilkesi ekleyin:
+
+- `X-Content-Type-Options: nosniff`
+- `default-src 'none'` gibi kısıtlayıcı bir İçerik Güvenliği Politikası (Content Security Policy)
+
+## Önbellek Geçersiz Kılma (Cache Invalidation) [#cache-invalidation]
+
+Varsayılan olarak LibreChat, S3 nesnesini siler ve bir CloudFront geçersiz kılma (invalidation) işlemi oluşturmaz. Silinen dosyaların uç önbellekten (edge cache) hemen kaybolması gerektiğinde geçersiz kılmayı etkinleştirin:
+
+```yaml filename="librechat.yaml"
+cloudfront:
+  domain: 'https://cdn.example.com'
+  distributionId: 'E1234ABCD'
+  invalidateOnDelete: true
+```
+
+`invalidateOnDelete` değeri `true` olduğunda `distributionId` gereklidir. LibreChat tarafından kullanılan AWS kimliğinin ayrıca `cloudfront:CreateInvalidation` iznine sahip olması gerekir.
+
+## Çok Bölgeli Nesne Yolları [#multi-region-object-paths]
+
+`includeRegionInPath`, yeni oluşturulan nesne anahtarlarına depolama bölgesini ekler:
+
+```yaml filename="librechat.yaml"
+cloudfront:
+  domain: 'https://cdn.example.com'
+  storageRegion: 'us-east-2'
+  includeRegionInPath: true
+```
+
+Etkinleştirildiğinde, yeni anahtarlar bölgeye duyarlı yol segmentleri içerir, örneğin:
+
+```text
+/i/r/us-east-2/t/tenantId/images/userId/file.png
+/a/r/us-east-2/t/tenantId/avatars/userId/avatar.png
+/r/us-east-2/t/tenantId/images/userId/file.pdf
+```
+
+Bu durum yalnızca yeni oluşturulan anahtarları etkiler. Mevcut dosyalar taşınmaz. LibreChat sizin için CloudFront kaynaklarını, Route 53'ü veya bölgesel yönlendirmeyi yapılandırmaz.
+
+## CloudFront Blok Referansı [#cloudfront-block-reference]
+
+<OptionTable
+  options={[
+    [
+      'domain',
+      'string',
+      'CloudFront dağıtım alanı adı veya CNAME. Gereklidir.',
+      'domain: "https://cdn.example.com"',
+    ],
+    [
+      'distributionId',
+      'string',
+      'Önbellek geçersiz kılma işlemleri için kullanılan Dağıtım Kimliği (Distribution ID).',
+      'distributionId: "E1234ABCD"',
+    ],
+    [
+      'invalidateOnDelete',
+      'boolean',
+      'Bir dosya silindiğinde CloudFront geçersiz kılma (invalidation) oluştur. Varsayılan: false.',
+      'invalidateOnDelete: false',
+    ],
+    [
+      'imageSigning',
+      'string',
+      'Satır içi medya erişim modu. Genel CloudFront erişimi için `"none"` veya imzalı çerezler için `"cookies"` kullanın. `"url"` değeri ayrılmıştır ve görseller için henüz uygulanmamıştır.',
+      'imageSigning: "cookies"',
+    ],
+    [
+      'cookieDomain',
+      'string',
+      'İmzalı çerezler için paylaşılan üst alan adı. `imageSigning` değeri `"cookies"` olduğunda gereklidir.',
+      'cookieDomain: ".example.com"',
+    ],
+    [
+      'cookieExpiry',
+      'number',
+      'İmzalı çerez ömrü (saniye cinsinden). Varsayılan: 1800. Maksimum: 604800.',
+      'cookieExpiry: 1800',
+    ],
+    [
+      'urlExpiry',
+      'number',
+      'İmzalı indirme URL\'sinin saniye cinsinden ömrü. Varsayılan: 3600.',
+      'urlExpiry: 3600',
+    ],
+    [
+      'storageRegion',
+      'string',
+      'Bölgeye duyarlı nesne yolları için isteğe bağlı bölge etiketi.',
+      'storageRegion: "us-east-2"',
+    ],
+    [
+      'includeRegionInPath',
+      'boolean',
+      'Yeni oluşturulan nesne anahtarlarına `storageRegion` dahil edin. Varsayılan: false.',
+      'includeRegionInPath: false',
+    ],
+    [
+      'requireSignedAccess',
+      'boolean',
+      'İmzalı çerez CloudFront erişimi başlatılamazsa başlatmayı başarısız kıl. Varsayılan: false.',
+      'requireSignedAccess: true',
+    ],
+  ]}
+/>
+
+## Önerilen AWS İzinleri [#suggested-aws-permissions]
+
+S3 bucket'ı için en az ayrıcalıklı IAM izinlerini kullanın. Yalnızca `invalidateOnDelete` etkinleştirilmişse CloudFront geçersiz kılma (invalidation) izni ekleyin.
+
+```json filename="iam-policy.json"
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["s3:PutObject", "s3:GetObject", "s3:DeleteObject", "s3:ListBucket"],
+      "Resource": ["arn:aws:s3:::my-librechat-bucket", "arn:aws:s3:::my-librechat-bucket/*"]
+    },
+    {
+      "Effect": "Allow",
+      "Action": "cloudfront:CreateInvalidation",
+      "Resource": "arn:aws:cloudfront::123456789012:distribution/E1234ABCD"
+    }
+  ]
+}
+```
+
+## Sorun Giderme [#troubleshooting]
+
+- Başlatma günlüklerinde `CloudFront domain is required` hatası: `cloudfront.domain` ekleyin.
+- Başlatma günlükleri `S3 must be initialized`: önce S3 ortam değişkenlerini yapılandırın.
+- İmzalı çerezler ayarlanmadı: `imageSigning: "cookies"`, `cookieDomain`, `CLOUDFRONT_KEY_PAIR_ID` ve `CLOUDFRONT_PRIVATE_KEY` değerlerini doğrulayın.
+- Tarayıcı hala görselleri yükleyemiyorsa: API ve CDN ana bilgisayar adlarının yapılandırılmış üst etki alanını paylaştığını ve çerezlere `Secure` ve `SameSite=None` ile izin verildiğini doğrulayın.
+- İndirmeler dosya adını/içerik türünü yoksayıyor: Yanıt geçersiz kılma sorgu dizelerini iletmek için CloudFront önbellek/kaynak isteği politikasını güncelleyin.

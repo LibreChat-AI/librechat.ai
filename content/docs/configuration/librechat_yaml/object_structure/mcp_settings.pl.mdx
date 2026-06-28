@@ -1,0 +1,160 @@
+---
+title: Struktura obiektu ustawień MCP
+icon: Blocks
+---
+
+## Przegląd [#overview]
+
+Konfiguracja `mcpSettings` zapewnia globalne ustawienia dotyczące bezpieczeństwa i zachowania serwerów MCP (Model Context Protocol). Konfiguracja ta jest oddzielona od `mcpServers` i kontroluje sposób, w jaki serwery MCP mogą łączyć się z określonymi domenami i adresami IP.
+
+## Przykład [#example]
+
+```yaml filename="MCP Settings Object Structure"
+# Example MCP Settings Configuration
+mcpSettings:
+  # Strict whitelist mode:
+  # allowedDomains:
+  #   - "example.com"                    # Specific domain
+  #   - "*.example.com"                  # All subdomains using wildcard
+  #   - "https://api.example.com:8443"   # With protocol and port
+  #   - "http://mcp-server:3000"         # Internal service, explicitly whitelisted
+
+  # Default SSRF mode with private service exemptions:
+  allowedAddresses:
+    - "host.docker.internal:8080"        # Permit one private host on one port
+    - "10.0.0.5:8000"                    # Permit one private IP on one port
+```
+
+## Konfiguracja [#configuration]
+
+### Podklucze [#subkeys]
+
+<OptionTable
+  options={[
+    ['allowedDomains', 'Array of Strings', 'Lista określająca dozwolone domeny dla połączeń z serwerem MCP.', 'When configured, only listed domains are allowed. When not configured, SSRF targets are blocked but all other domains are allowed.'],
+    ['allowedAddresses', 'Array of Strings', 'Lista wyjątków SSRF, ograniczona do prywatnej przestrzeni adresów IP. Pary nazwa hosta/IP + port wymienione tutaj omijają domyślną blokadę SSRF, gdy `allowedDomains` nie jest skonfigurowane.', 'Use when you want default SSRF protection AND specific internal MCP servers, without flipping `allowedDomains` into strict-whitelist mode.'],
+  ]}
+/>
+
+### Kontekst bezpieczeństwa (ochrona SSRF) [#security-context-ssrf-protection]
+
+LibreChat zawiera ochronę przed SSRF (Server-Side Request Forgery) o następującym działaniu:
+
+**Gdy `allowedDomains` NIE jest skonfigurowane:**
+- Cele podatne na SSRF są **domyślnie blokowane**
+- Wszystkie inne domeny zewnętrzne są **dozwolone**
+
+**Gdy `allowedDomains` JEST skonfigurowane:**
+- **Tylko** domeny znajdujące się na liście są dozwolone
+- Cele wewnętrzne/SSRF można zezwolić, dodając je jawnie do listy
+
+**Zablokowane cele SSRF obejmują:**
+- Adresy **localhost** (`localhost`, `127.0.0.1`, `::1`)
+- **Prywatne zakresy IP** (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`)
+- **Adresy link-local** (`169.254.0.0/16`, obejmują adresy IP metadanych chmury)
+- **Wewnętrzne TLD** (`.internal`, `.local`, `.localhost`)
+- **Typowe nazwy usług wewnętrznych** (`redis`, `mongodb`, `postgres`, `api`, `rag_api` itp.)
+
+Jeśli Twoje serwery MCP muszą łączyć się z usługami wewnętrznymi lub kontenerami Docker, dodaj je do ścisłej białej listy `allowedDomains` lub pozostaw `allowedDomains` nieustawione i dodaj konkretną usługę prywatną do `allowedAddresses`.
+
+### Formaty wzorców [#pattern-formats]
+
+Tablica `allowedDomains` obsługuje kilka formatów wzorców:
+
+1. **Dokładne dopasowanie domeny**
+   ```yaml
+   allowedDomains:
+     - "example.com"
+   ```
+   Zezwala na połączenia wyłącznie z dokładnie `example.com` (dowolny protokół/port)
+
+2. **Dopasowanie wieloznaczne subdomen (Wildcard Subdomain Match)**
+   ```yaml
+   allowedDomains:
+     - "*.example.com"
+   ```
+   Umożliwia połączenia ze wszystkimi subdomenami `example.com` (np. `api.example.com`, `mcp.example.com`)
+
+3. **Określony adres IP**
+   ```yaml
+   allowedDomains:
+     - "192.168.1.100"
+     - "172.24.1.165"
+   ```
+   Umożliwia połączenia z określonymi adresami IP
+
+4. **Lokalne domeny Docker**
+   ```yaml
+   allowedDomains:
+     - "mcp-server"
+     - "host.docker.internal"
+   ```
+   Umożliwia połączenia z nazwami kontenerów Docker lub specjalnymi domenami Docker
+
+5. **Z protokołem i portem**
+   ```yaml
+   allowedDomains:
+     - "https://api.example.com:8443"
+     - "http://internal-mcp:3000"
+   ```
+   Ogranicza połączenia do określonych kombinacji protokołów i portów
+
+### Komunikaty o błędach [#error-messages]
+
+Jeśli widzisz błędy typu:
+```bash
+  error: [MCPServersRegistry] Failed to inspect server "my-mcp": Domain "http://172.24.1.165:8000" is not allowed
+  error: [MCP][my-mcp] Failed to initialize: Domain "http://172.24.1.165:8000" is not allowed
+```
+
+Prawdopodobnie oznacza to, że prywatny host i port serwera MCP muszą zostać dodane do `allowedAddresses`, chyba że celowo używasz `allowedDomains` jako ścisłej białej listy:
+
+```yaml
+mcpSettings:
+  allowedAddresses:
+    - "172.24.1.165:8000"    # Add the private host/IP and MCP port
+```
+
+## allowedAddresses
+
+`allowedAddresses` to **lista wyjątków** dla blokady prywatnych adresów IP SSRF — nie jest to biała lista domen. Jest to właściwe narzędzie, gdy chcesz zezwolić na dostęp do jednej lub dwóch konkretnych usług prywatnych/wewnętrznych, nie ograniczając przy tym tego, do czego Twoje serwery MCP mogą uzyskiwać dostęp w publicznym Internecie.
+
+### Kiedy używać tego zamiast `allowedDomains` [#when-to-use-it-instead-of-alloweddomains]
+
+`allowedDomains` to ścisła biała lista: gdy jest ustawiona, osiągalne są **tylko** wymienione wpisy. Dodanie tam prywatnego adresu IP, aby zezwolić na przykład na własny serwer MCP, blokuje również wszystkie publiczne miejsca docelowe (`api.example.com`, `*.googleapis.com` itd.), których również nie uwzględniłeś na liście.
+
+`allowedAddresses` jest używane tylko wtedy, gdy `allowedDomains` nie jest skonfigurowane. Pozwala na dostęp do określonych prywatnych celów `host:port`, pozostawiając resztę publicznego internetu dostępną zgodnie z domyślną polityką SSRF. Typowa konfiguracja:
+
+```yaml filename="default SSRF + permitted private host"
+mcpSettings:
+  allowedAddresses:
+    - "host.docker.internal:8080"
+    - "10.0.0.5:8000"
+  # allowedDomains is intentionally not set — public destinations
+  # remain reachable, only listed private host:port services are exempted.
+```
+
+Jeśli `allowedDomains` jest skonfigurowane, jest ono nadrzędne: usługi prywatne muszą być tam wymienione zamiast polegania na `allowedAddresses`.
+
+### Dopuszczalne wpisy [#acceptable-entries]
+
+- **Nazwy hostów z portem**: `host.docker.internal:8080`, `mcp-server:3000`, `localhost:3001`
+- **Prywatne literały IPv4 z portem**: `10.0.0.5:8000`, `127.0.0.1:3001`, `192.168.1.10:443`, `169.254.169.254:80`
+- **Literały IPv6 w nawiasach kwadratowych z portem**: `[::1]:3001`, `[fc00::1]:8080`, `[fe80::1]:8080`
+
+### Odrzucone wpisy (zweryfikowane podczas ładowania konfiguracji) [#rejected-entries-validated-at-config-load]
+
+- **Adresy URL / ścieżki / zakresy CIDR**: `http://10.0.0.5`, `10.0.0.0/24`, `/path`
+- **Same nazwy hostów lub adresy IP**: `localhost`, `10.0.0.5`, `::1`, `[::1]` — każdy wpis musi zawierać port
+- **Nieprawidłowe porty**: `localhost:0`, `localhost:65536`, `localhost:http`
+- **Literały publicznych adresów IP**: `8.8.8.8:53`, `1.1.1.1:53`, `[2001:4860::8888]:443` — pole jest ograniczone do prywatnej przestrzeni adresów IP; publiczne adresy IP nie są celami SSRF, a wyłączenie dla publicznych adresów IP nie ma celu defensywnego
+
+### Zaufanie do nazwy hosta [#hostname-trust]
+
+Wpis nazwy hosta ufa dowolnemu adresowi IP, na który ta nazwa hosta wskazuje w czasie wykonywania na podanym porcie. Jeśli DNS dla wymienionej nazwy hosta zostanie zmieniony lub przejęty, aby wskazywać na inny prywatny adres IP, wyłączenie będzie miało zastosowanie również do niego. Wymieniaj tylko te nazwy hostów, których DNS kontrolujesz. **Jeśli to możliwe, preferuj bezpośrednie adresy IP.**
+
+## Referencje [#references]
+
+- [Konfiguracja serwerów MCP](/docs/configuration/librechat_yaml/object_structure/mcp_servers)
+- [Funkcje MCP](/docs/features/mcp)
+- [Actions allowedAddresses](/docs/configuration/librechat_yaml/object_structure/actions#allowedaddresses) (podobna koncepcja dla Actions)

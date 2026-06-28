@@ -1,0 +1,180 @@
+---
+title: NGINX
+icon: Nginx
+description: >-
+  Hướng dẫn từng bước để bảo mật triển khai LibreChat của bạn với Nginx làm
+  reverse proxy và HTTPS
+---
+
+Hướng dẫn này bao gồm các bước thiết yếu để bảo mật triển khai LibreChat của bạn bằng chứng chỉ SSL/TLS cho HTTPS, thiết lập Nginx làm reverse proxy và cấu hình tên miền của bạn.
+
+## Điều kiện tiên quyết [#prerequisites]
+
+1. Một máy chủ đám mây (ví dụ: AWS, Google Cloud, Azure, Digital Ocean).
+2. Một tên miền đã đăng ký.
+3. Truy cập Terminal vào máy chủ đám mây của bạn.
+4. Node.js `v24.16.0` và npm `v11.16.0` nếu bạn chạy LibreChat trực tiếp trên máy chủ.
+
+## Thiết lập ban đầu [#initial-setup]
+
+### Trỏ tên miền của bạn về máy chủ [#pointing-your-domain-to-your-server]
+
+Trước khi tiến hành lấy chứng chỉ, hãy trỏ tên miền của bạn về địa chỉ IP của máy chủ đám mây. Bước này là nền tảng và phải được thực hiện trước khi thiết lập chứng chỉ SSL do thời gian cần thiết để các bản ghi DNS lan truyền trên toàn cầu.
+
+1. Đăng nhập vào bảng điều khiển của nhà đăng ký tên miền của bạn.
+2. Điều hướng đến cài đặt DNS.
+3. Tạo một `A record` trỏ tên miền của bạn đến địa chỉ IP của máy chủ đám mây.
+4. Đợi các thay đổi DNS được cập nhật trên toàn cầu (bạn có thể kiểm tra bằng cách ping tên miền của mình: `ping your_domain.com`).
+
+## Nhận chứng chỉ SSL/TLS [#obtain-an-ssltls-certificate]
+
+Để bảo mật ứng dụng LibreChat của bạn bằng HTTPS, bạn sẽ cần một chứng chỉ SSL/TLS. Let's Encrypt cung cấp các chứng chỉ miễn phí:
+
+1. Cài đặt Certbot:
+    - Đối với Ubuntu: `sudo apt-get install certbot python3-certbot-nginx`
+    - Đối với CentOS: `sudo yum install certbot python2-certbot-nginx`
+
+2. Nhận Chứng chỉ:
+    - Chạy `sudo certbot --nginx` để lấy và cài đặt chứng chỉ tự động cho Nginx.
+    - Làm theo các hướng dẫn trên màn hình. Certbot sẽ yêu cầu thông tin và hoàn tất quá trình xác thực.
+    - Sau khi thành công, Certbot sẽ lưu trữ các tệp chứng chỉ của bạn.
+
+## Thiết lập Nginx làm Reverse Proxy [#set-up-nginx-as-a-reverse-proxy]
+
+Nginx đóng vai trò là reverse proxy, chuyển tiếp các yêu cầu của client đến ứng dụng LibreChat của bạn. Có hai tùy chọn triển khai:
+
+### Tùy chọn A: Sử dụng `deploy-compose.yml` Docker Compose (Khuyên dùng) [#option-a-using-the-deploy-composeyml-docker-compose-recommended]
+
+Tệp `deploy-compose.yml` bao gồm một container Nginx và sử dụng tệp `client/nginx.conf` để cấu hình Nginx. Tuy nhiên, vì `sudo certbot --nginx` trích xuất chứng chỉ vào cấu hình máy chủ (host), bạn cần sao chép chứng chỉ đó vào các container Docker.
+
+1. Cập nhật `client/nginx.conf` với tên miền và đường dẫn chứng chỉ của bạn.
+2. Cập nhật `deploy-compose.yml` trong phần `client` để mount các tệp chứng chỉ từ host:
+
+```yaml
+client:
+  # ...
+  volumes:
+    - ./client/nginx.conf:/etc/nginx/conf.d/default.conf
+    - /etc/letsencrypt/live/<your-domain>:/etc/letsencrypt/live/<your-domain>
+    - /etc/letsencrypt/archive/<your-domain>:/etc/letsencrypt/archive/<your-domain>
+    - /etc/letsencrypt/options-ssl-nginx.conf:/etc/letsencrypt/options-ssl-nginx.conf
+    - /etc/letsencrypt/ssl-dhparams.pem:/etc/letsencrypt/ssl-dhparams.pem
+```
+
+3. Dừng bất kỳ instance nào đang chạy: `npm run stop:deployed`
+4. Commit các thay đổi vào một nhánh Git mới.
+5. Rebase instance đã triển khai: `npm run rebase:deployed`
+
+### Tùy chọn B: Triển khai dựa trên máy chủ không sử dụng Docker [#option-b-host-based-deployment-without-docker]
+
+Nếu bạn không sử dụng Docker, bạn có thể cài đặt và cấu hình Nginx trực tiếp trên máy chủ:
+
+1. Cài đặt Nginx:
+    - Ubuntu: `sudo apt-get install nginx`
+    - CentOS: `sudo yum install nginx`
+
+2. Khởi động Nginx: `sudo systemctl start nginx`
+
+3. Mở tệp cấu hình Nginx: `sudo nano /etc/nginx/sites-available/default`
+
+4. Thay thế nội dung tệp bằng nội dung sau, đảm bảo thay thế `your_domain.com` bằng tên miền của bạn và `app_port` bằng cổng ứng dụng của bạn:
+
+```nginx filename="/etc/nginx/sites-available/default"
+server {
+    listen 80;
+    server_name your_domain.com;
+
+    location / {
+        proxy_pass http://localhost:app_port;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+    }
+}
+```
+
+5. Kiểm tra cấu hình Nginx: `sudo nginx -t`
+6. Tải lại Nginx: `sudo systemctl reload nginx`
+
+## Chạy ứng dụng [#run-the-application]
+
+1. Điều hướng đến thư mục ứng dụng của bạn:
+
+```bash filename="Replace 'LibreChat' with your actual application directory.
+cd LibreChat
+```
+
+2. Khởi chạy ứng dụng của bạn bằng Docker Compose:
+
+```bash filename="Start your application"
+sudo docker compose -f ./deploy-compose.yml up -d
+```
+
+## Gia hạn chứng chỉ khi sử dụng nginx [#renewing-certificates-when-using-nginx]
+
+Nếu bạn đã thiết lập nginx bằng cách sử dụng Tùy chọn A được khuyến nghị ở trên, hãy sử dụng các bước sau để gia hạn chứng chỉ:
+
+1. Điều hướng đến thư mục ứng dụng của bạn
+```bash filename="Replace 'LibreChat' with your actual application directory.
+cd LibreChat
+```
+
+2. Dừng các Docker container đang chạy của bạn
+
+```bash filename="Stop your application"
+sudo docker compose -f ./deploy-compose.yml down -d
+```
+
+3. gia hạn chứng chỉ
+
+```bash
+sudo certbot renew
+```
+
+4. Khởi động lại ứng dụng của bạn
+
+```bash filename="Start your application"
+sudo docker compose -f ./deploy-compose.yml up -d
+```
+
+Lưu ý: certbot có thể khởi động lại nginx của máy chủ. Bạn có thể tắt nó bằng lệnh `sudo pkill nginx`
+
+## Tường lửa ứng dụng web (Web Application Firewall) [#web-application-firewall]
+
+Nginx có thể được cấu hình để hoạt động như một tường lửa ứng dụng web (WAF) bằng cách tận dụng OWASP Core Rule Set (CRS), cung cấp một bộ quy tắc mạnh mẽ để bảo vệ chống lại các lỗ hổng và tấn công ứng dụng web phổ biến. Việc sử dụng OWASP CRS với Nginx có thể tăng cường bảo mật cho quá trình triển khai LibreChat của bạn bằng cách thêm một lớp bảo vệ bổ sung.
+
+1. Cài đặt OWASP CRS:
+
+    - Ubuntu: `sudo apt-get install nginx-modsecurity-crs`
+
+2. Bật ModSecurity trong Nginx:
+    - Mở tệp cấu hình Nginx của bạn (ví dụ: `/etc/nginx/nginx.conf`).
+    - Thêm các dòng sau vào bên trong khối `http`:
+
+      ```yaml filename="nginx.conf"
+      modsecurity on;
+      modsecurity_rules_file /usr/share/nginx/modsecurity-crs/nginx-modsecurity.conf;
+      ```
+
+3. Cấu hình OWASP CRS:
+    - Gói OWASP CRS thường bao gồm một tệp cấu hình (ví dụ: `/etc/nginx/modsecurity.d/nginx-modsecurity.conf`), nơi bạn có thể điều chỉnh các cài đặt và bộ quy tắc khác nhau dựa trên yêu cầu của mình.
+
+4. Tải lại Nginx:
+    - `sudo systemctl reload nginx`
+
+Bằng cách kích hoạt OWASP CRS trong cấu hình Nginx của bạn, bạn có thể tận dụng bộ quy tắc toàn diện do dự án cung cấp để phát hiện và giảm thiểu các lỗ hổng cũng như các cuộc tấn công vào ứng dụng web khác nhau, chẳng hạn như SQL injection, cross-site scripting (XSS), remote file inclusion, và nhiều hơn nữa.
+
+## Bộ nhớ đệm và nén tệp tĩnh [#static-file-caching-and-compression]
+
+LibreChat hiện đã hỗ trợ bộ nhớ đệm tệp tĩnh và nén một cách nguyên bản. Nếu bạn đang sử dụng NGINX để xử lý nén, bạn nên tắt tính năng nén trong LibreChat để tránh xử lý dư thừa. Bạn có thể thực hiện việc này bằng cách đặt biến môi trường `DISABLE_COMPRESSION` thành `true` trong cấu hình LibreChat của bạn.
+
+```.env
+# .env file
+DISABLE_COMPRESSION=true
+```
+
+Điều này sẽ ngăn LibreChat nén các tệp tĩnh, cho phép NGINX xử lý việc nén hiệu quả hơn.
+
+Để biết thêm thông tin về cách xử lý tệp tĩnh trong LibreChat, bao gồm các tùy chọn bộ nhớ đệm, hãy tham khảo tài liệu [Static File Handling](/docs/configuration/dotenv#static-file-handling).

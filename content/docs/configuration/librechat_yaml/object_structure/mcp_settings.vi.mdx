@@ -1,0 +1,160 @@
+---
+title: Cấu trúc đối tượng cài đặt MCP
+icon: Blocks
+---
+
+## Tổng quan [#overview]
+
+Cấu hình `mcpSettings` cung cấp các thiết lập toàn cục cho bảo mật và hành vi của máy chủ MCP (Model Context Protocol). Cấu hình này tách biệt với `mcpServers` và kiểm soát cách các máy chủ MCP có thể kết nối với các tên miền và địa chỉ IP nhất định.
+
+## Ví dụ [#example]
+
+```yaml filename="MCP Settings Object Structure"
+# Example MCP Settings Configuration
+mcpSettings:
+  # Strict whitelist mode:
+  # allowedDomains:
+  #   - "example.com"                    # Specific domain
+  #   - "*.example.com"                  # All subdomains using wildcard
+  #   - "https://api.example.com:8443"   # With protocol and port
+  #   - "http://mcp-server:3000"         # Internal service, explicitly whitelisted
+
+  # Default SSRF mode with private service exemptions:
+  allowedAddresses:
+    - "host.docker.internal:8080"        # Permit one private host on one port
+    - "10.0.0.5:8000"                    # Permit one private IP on one port
+```
+
+## Cấu hình [#configuration]
+
+### Subkeys [#subkeys]
+
+<OptionTable
+  options={[
+    ['allowedDomains', 'Array of Strings', 'Danh sách chỉ định các tên miền được phép cho kết nối máy chủ MCP.', 'When configured, only listed domains are allowed. When not configured, SSRF targets are blocked but all other domains are allowed.'],
+    ['allowedAddresses', 'Array of Strings', 'Một danh sách miễn trừ SSRF, giới hạn trong không gian IP riêng. Các cặp Hostname/IP + cổng được liệt kê tại đây sẽ bỏ qua chặn SSRF mặc định khi `allowedDomains` chưa được cấu hình.', 'Use when you want default SSRF protection AND specific internal MCP servers, without flipping `allowedDomains` into strict-whitelist mode.'],
+  ]}
+/>
+
+### Bối cảnh bảo mật (Bảo vệ SSRF) [#security-context-ssrf-protection]
+
+LibreChat bao gồm tính năng bảo vệ SSRF (Server-Side Request Forgery) với hành vi như sau:
+
+**Khi `allowedDomains` KHÔNG được cấu hình:**
+- Các mục tiêu dễ bị SSRF sẽ bị **chặn theo mặc định**
+- Tất cả các tên miền bên ngoài khác đều được **cho phép**
+
+**Khi `allowedDomains` ĐƯỢC cấu hình:**
+- **Chỉ** các tên miền trong danh sách mới được cho phép
+- Các mục tiêu Internal/SSRF có thể được cho phép bằng cách thêm chúng một cách rõ ràng vào danh sách
+
+**Các mục tiêu SSRF bị chặn bao gồm:**
+- Các địa chỉ **Localhost** (`localhost`, `127.0.0.1`, `::1`)
+- **Dải IP riêng** (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`)
+- **Các địa chỉ link-local** (`169.254.0.0/16`, bao gồm các IP metadata của cloud)
+- **Các TLD nội bộ** (`.internal`, `.local`, `.localhost`)
+- **Các tên dịch vụ nội bộ phổ biến** (`redis`, `mongodb`, `postgres`, `api`, `rag_api`, v.v.)
+
+Nếu các máy chủ MCP của bạn cần kết nối với các dịch vụ nội bộ hoặc các container Docker, hãy thêm chúng vào danh sách trắng `allowedDomains` nghiêm ngặt, hoặc để trống `allowedDomains` và thêm chính xác dịch vụ riêng tư đó vào `allowedAddresses`.
+
+### Định dạng mẫu [#pattern-formats]
+
+Mảng `allowedDomains` hỗ trợ một số định dạng mẫu:
+
+1. **Khớp tên miền chính xác**
+   ```yaml
+   allowedDomains:
+     - "example.com"
+   ```
+   Chỉ cho phép kết nối chính xác tới `example.com` (bất kỳ giao thức/cổng nào)
+
+2. **Khớp tên miền phụ đại diện (Wildcard Subdomain Match)**
+   ```yaml
+   allowedDomains:
+     - "*.example.com"
+   ```
+   Cho phép kết nối tới tất cả các subdomain của `example.com` (ví dụ: `api.example.com`, `mcp.example.com`)
+
+3. **Địa chỉ IP cụ thể**
+   ```yaml
+   allowedDomains:
+     - "192.168.1.100"
+     - "172.24.1.165"
+   ```
+   Cho phép kết nối tới các địa chỉ IP cụ thể
+
+4. **Các tên miền Docker cục bộ**
+   ```yaml
+   allowedDomains:
+     - "mcp-server"
+     - "host.docker.internal"
+   ```
+   Cho phép kết nối đến các tên container Docker hoặc các tên miền Docker đặc biệt
+
+5. **Với Giao thức và Cổng**
+   ```yaml
+   allowedDomains:
+     - "https://api.example.com:8443"
+     - "http://internal-mcp:3000"
+   ```
+   Giới hạn các kết nối đối với các tổ hợp giao thức và cổng cụ thể
+
+### Thông báo lỗi [#error-messages]
+
+Nếu bạn thấy các lỗi như:
+```bash
+  error: [MCPServersRegistry] Failed to inspect server "my-mcp": Domain "http://172.24.1.165:8000" is not allowed
+  error: [MCP][my-mcp] Failed to initialize: Domain "http://172.24.1.165:8000" is not allowed
+```
+
+Điều này có khả năng cho thấy host và port riêng của MCP server cần được thêm vào `allowedAddresses`, trừ khi bạn cố ý sử dụng `allowedDomains` như một danh sách trắng nghiêm ngặt:
+
+```yaml
+mcpSettings:
+  allowedAddresses:
+    - "172.24.1.165:8000"    # Add the private host/IP and MCP port
+```
+
+## allowedAddresses
+
+`allowedAddresses` là một **danh sách miễn trừ** cho khối IP riêng SSRF — không phải là danh sách trắng tên miền. Đây là công cụ phù hợp khi bạn muốn cho phép một hoặc hai dịch vụ nội bộ/riêng tư cụ thể mà không hạn chế những gì các máy chủ MCP của bạn có thể truy cập trên internet công cộng.
+
+### Khi nào nên sử dụng thay vì `allowedDomains` [#when-to-use-it-instead-of-alloweddomains]
+
+`allowedDomains` là một danh sách trắng nghiêm ngặt: khi được thiết lập, **chỉ** những mục được liệt kê mới có thể truy cập được. Việc thêm một IP riêng vào đó để cho phép, ví dụ, một máy chủ MCP tự lưu trữ cũng sẽ chặn mọi đích đến công khai (`api.example.com`, `*.googleapis.com`, v.v.) mà bạn chưa liệt kê.
+
+`allowedAddresses` chỉ được sử dụng khi `allowedDomains` không được cấu hình. Nó cho phép các mục tiêu `host:port` riêng tư cụ thể trong khi vẫn giữ cho phần còn lại của internet công cộng có thể truy cập được thông qua chính sách SSRF mặc định. Cấu hình phổ biến:
+
+```yaml filename="default SSRF + permitted private host"
+mcpSettings:
+  allowedAddresses:
+    - "host.docker.internal:8080"
+    - "10.0.0.5:8000"
+  # allowedDomains is intentionally not set — public destinations
+  # remain reachable, only listed private host:port services are exempted.
+```
+
+Nếu `allowedDomains` được cấu hình, nó sẽ là nguồn xác thực chính: các dịch vụ riêng tư phải được liệt kê tại đó thay vì dựa vào `allowedAddresses`.
+
+### Các mục nhập hợp lệ [#acceptable-entries]
+
+- **Tên máy chủ kèm cổng**: `host.docker.internal:8080`, `mcp-server:3000`, `localhost:3001`
+- **Các ký tự IPv4 riêng tư kèm cổng**: `10.0.0.5:8000`, `127.0.0.1:3001`, `192.168.1.10:443`, `169.254.169.254:80`
+- **Các ký tự IPv6 riêng tư trong ngoặc vuông kèm cổng**: `[::1]:3001`, `[fc00::1]:8080`, `[fe80::1]:8080`
+
+### Các mục bị từ chối (được xác thực khi tải cấu hình) [#rejected-entries-validated-at-config-load]
+
+- **URLs / đường dẫn / dải CIDR**: `http://10.0.0.5`, `10.0.0.0/24`, `/path`
+- **Tên máy chủ hoặc địa chỉ IP thuần**: `localhost`, `10.0.0.5`, `::1`, `[::1]` — mọi mục nhập phải bao gồm cổng
+- **Các cổng không hợp lệ**: `localhost:0`, `localhost:65536`, `localhost:http`
+- **Các IP công khai (Public IP literals)**: `8.8.8.8:53`, `1.1.1.1:53`, `[2001:4860::8888]:443` — trường này được giới hạn trong không gian IP riêng tư; các IP công khai không phải là mục tiêu SSRF và việc miễn trừ IP công khai không có mục đích phòng thủ nào.
+
+### Tin cậy hostname [#hostname-trust]
+
+Một mục hostname tin tưởng bất kỳ IP nào mà hostname đó phân giải tới tại thời điểm chạy trên cổng được liệt kê. Nếu DNS cho một hostname được liệt kê bị xoay vòng hoặc bị chiếm quyền điều khiển để trỏ đến một IP riêng khác, thì ngoại lệ đó sẽ đi theo. Chỉ liệt kê các hostname mà bạn kiểm soát DNS. **Hãy ưu tiên sử dụng IP cụ thể khi có thể.**
+
+## Tài liệu tham khảo [#references]
+
+- [Cấu hình MCP Servers](/docs/configuration/librechat_yaml/object_structure/mcp_servers)
+- [Các tính năng MCP](/docs/features/mcp)
+- [Actions allowedAddresses](/docs/configuration/librechat_yaml/object_structure/actions#allowedaddresses) (khái niệm tương tự cho Actions)

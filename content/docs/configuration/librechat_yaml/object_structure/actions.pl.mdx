@@ -1,0 +1,135 @@
+---
+title: Struktura obiektu Actions
+icon: Webhook
+---
+
+Akcje (Actions) mogą być używane do dynamicznego tworzenia narzędzi na podstawie specyfikacji OpenAPI. Struktura obiektu `actions` pozwala na określenie dozwolonych domen dla akcji agenta/asystenta.
+
+Więcej informacji: [Agenci - Akcje](/docs/features/agents#actions)
+
+## Przykład [#example]
+
+```yaml filename="Actions Object Structure"
+# Example Actions Object Structure
+actions:
+  # Strict whitelist mode:
+  # allowedDomains:
+  #   - "swapi.dev"
+  #   - "librechat.ai"
+  #   - "google.com"
+  #   - "https://api.example.com:8443"  # With protocol and port
+
+  # Default SSRF mode with private service exemptions:
+  allowedAddresses:
+    - "host.docker.internal:11434"    # Permit one private host on one port
+    - "10.0.0.5:8080"                 # Permit one private IP on one port
+```
+
+## allowedDomains
+
+**Klucz:**
+<OptionTable
+  options={[
+    ['allowedDomains', 'Array of Strings', 'Lista określająca dozwolone domeny dla działań agenta/asystenta.', 'When configured, only listed domains are allowed. When not configured, SSRF targets are blocked but all other domains are allowed.'],
+  ]}
+/>
+
+**Opcjonalne**
+
+### Kontekst bezpieczeństwa (ochrona SSRF) [#security-context-ssrf-protection]
+
+LibreChat zawiera ochronę przed SSRF (Server-Side Request Forgery) o następującym działaniu:
+
+**Gdy `allowedDomains` NIE jest skonfigurowane:**
+- Cele podatne na SSRF są **domyślnie blokowane**
+- Wszystkie inne domeny zewnętrzne są **dozwolone**
+
+**Gdy `allowedDomains` JEST skonfigurowane:**
+- **Tylko** domeny znajdujące się na liście są dozwolone
+- Cele wewnętrzne/SSRF można zezwolić, dodając je jawnie do listy
+
+**Zablokowane cele SSRF obejmują:**
+- Adresy **localhost** (`localhost`, `127.0.0.1`, `::1`)
+- **Prywatne zakresy IP** (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`)
+- **Adresy link-local** (`169.254.0.0/16`, obejmują adresy IP metadanych chmury)
+- **Wewnętrzne TLD** (`.internal`, `.local`, `.localhost`)
+- **Typowe nazwy usług wewnętrznych** (`redis`, `mongodb`, `postgres`, `api` itp.)
+
+Jeśli Twoje akcje muszą uzyskiwać dostęp do usług wewnętrznych, dodaj je do ścisłej białej listy `allowedDomains` lub pozostaw `allowedDomains` nieustawione i dodaj konkretną usługę prywatną do `allowedAddresses`.
+
+### Formaty wzorców [#pattern-formats]
+
+Tablica `allowedDomains` obsługuje kilka formatów:
+
+1. **Tylko domena** - Zezwala na wszystkie protokoły i porty:
+   ```yaml
+   allowedDomains:
+     - "api.example.com"
+   ```
+
+2. **Z protokołem** - Ogranicza do określonego protokołu:
+   ```yaml
+   allowedDomains:
+     - "https://api.example.com"
+   ```
+
+3. **Z protokołem i portem** - Ogranicza do określonego protokołu i portu:
+   ```yaml
+   allowedDomains:
+     - "https://api.example.com:8443"
+   ```
+
+4. **Wewnętrzne adresy** (muszą być jawnie dozwolone):
+   ```yaml
+   allowedDomains:
+     - "192.168.1.100"
+     - "internal-api.local"
+   ```
+
+**Przykład:**
+```yaml filename="actions / allowedDomains"
+allowedDomains:
+  - "swapi.dev"
+  - "librechat.ai"
+  - "google.com"
+  - "https://secure-api.example.com:443"
+  - "192.168.1.50"  # Internal service (explicitly allowed)
+```
+
+## allowedAddresses
+
+`allowedAddresses` to **lista wyjątków** dla blokady prywatnych adresów IP SSRF — nie jest to biała lista domen. Jest to właściwe narzędzie, gdy chcesz zezwolić na dostęp do jednej lub dwóch konkretnych usług prywatnych/wewnętrznych, nie ograniczając przy tym tego, do czego Twoje Actions mogą uzyskiwać dostęp w publicznym Internecie.
+
+### Kiedy używać tego zamiast `allowedDomains` [#when-to-use-it-instead-of-alloweddomains]
+
+`allowedDomains` to ścisła biała lista: gdy jest ustawiona, osiągalne są **tylko** wymienione wpisy. Dodanie tam prywatnego adresu IP, aby zezwolić na przykład na wewnętrzne API hostowane we własnym zakresie, blokuje również każdy publiczny punkt końcowy (endpoint) akcji, którego również nie uwzględniono na liście.
+
+`allowedAddresses` jest używane tylko wtedy, gdy `allowedDomains` nie jest skonfigurowane. Pozwala ono na dostęp do określonych prywatnych celów `host:port`, pozostawiając resztę publicznego internetu dostępną zgodnie z domyślną polityką SSRF.
+
+```yaml filename="default SSRF + permitted private host"
+actions:
+  allowedAddresses:
+    - "host.docker.internal:11434"
+    - "10.0.0.5:8080"
+  # allowedDomains is intentionally not set — public destinations
+  # remain reachable, only listed private host:port services are exempted.
+```
+
+Jeśli `allowedDomains` jest skonfigurowane, jest ono nadrzędne: usługi prywatne muszą być tam wymienione zamiast polegania na `allowedAddresses`.
+
+### Dopuszczalne wpisy [#acceptable-entries]
+
+- **Nazwy hostów z portem**: `host.docker.internal:11434`, `ollama.internal:8080`, `localhost:11434`
+- **Prywatne literały IPv4 z portem**: `10.0.0.5:8080`, `127.0.0.1:11434`, `192.168.1.10:443`, `169.254.169.254:80`
+- **Prywatne literały IPv6 w nawiasach z portem**: `[::1]:11434`, `[fc00::1]:8080`, `[fe80::1]:8080`
+
+### Odrzucone wpisy (zweryfikowane podczas ładowania konfiguracji) [#rejected-entries-validated-at-config-load]
+
+- **Adresy URL / ścieżki / zakresy CIDR**: `http://10.0.0.5`, `10.0.0.0/24`, `/path`
+- **Same nazwy hostów lub adresy IP**: `localhost`, `10.0.0.5`, `::1`, `[::1]` — każdy wpis musi zawierać port
+- **Nieprawidłowe porty**: `localhost:0`, `localhost:65536`, `localhost:http`
+- **Literały publicznych adresów IP**: `8.8.8.8:53`, `1.1.1.1:53`, `[2001:4860::8888]:443` — pole jest ograniczone do prywatnej przestrzeni adresów IP; publiczne adresy IP nie są celami SSRF, a wyłączenie dla publicznych adresów IP nie ma celu defensywnego
+
+### Zaufanie do nazwy hosta [#hostname-trust]
+
+Wpis nazwy hosta ufa dowolnemu adresowi IP, na który ta nazwa hosta wskazuje w czasie wykonywania na podanym porcie. Jeśli DNS dla wymienionej nazwy hosta zostanie zmieniony lub przejęty, aby wskazywać na inny prywatny adres IP, wyłączenie będzie miało zastosowanie również do niego. Wymieniaj tylko te nazwy hostów, których DNS kontrolujesz. **Jeśli to możliwe, preferuj bezpośrednie adresy IP.**

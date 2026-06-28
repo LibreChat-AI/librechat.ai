@@ -1,0 +1,231 @@
+---
+title: 액세스 제어
+icon: ShieldCheck
+description: >-
+  LibreChat의 세분화된 권한 부여 시스템 - 사용자, 그룹, 역할 및 인스턴스 수준에서 에이전트, 프롬프트, MCP 서버 및 기타
+  리소스를 사용, 공유, 편집 및 관리할 수 있는 대상을 제어합니다.
+---
+
+# Granular Access Control [#granular-access-control]
+
+LibreChat은 인증 위에 완전한 권한 부여 시스템을 갖추고 있습니다. 액세스는 "전부 아니면 전무(all-or-nothing)" 방식이 아닙니다. 앱 내의 모든 공유 가능한 엔티티(에이전트, 프롬프트, MCP 서버, 원격 에이전트, 파일, 대화)는 고유한 액세스 제어 목록(ACL)을 가지며, 모든 기능은 **사용자**, **그룹**, **역할** 또는 **공개** 단위로 독립적으로 활성화하거나 제한할 수 있습니다.
+
+이 페이지에서는 소규모 팀의 자유로운 공유 환경부터 Entra ID 그룹 동기화, 사용자 지정 역할, 위임된 관리자를 사용하는 엔터프라이즈 배포에 이르기까지, 조직에 맞게 권한을 모델링할 수 있도록 각 구성 요소가 어떻게 결합되는지 설명합니다.
+
+<Callout type="info" title="관리자 패널">
+  전용 [**LibreChat Admin Panel**](/docs/features/admin_panel)은 [v0.8.5](/changelog/v0.8.5)에서 도입된 사용자, 그룹, 역할, 사용자 지정 권한 프로필 및 시스템 전체 권한을 관리하기 위한 향후 UI입니다. 이 페이지는 현재 LibreChat에서 사용할 수 있는 기본 모델에 대해 설명합니다.
+</Callout>
+
+## 액세스 모델 한눈에 보기 [#the-access-model-at-a-glance]
+
+LibreChat의 권한 부여는 함께 구성되는 세 가지 독립적인 계층으로 이루어져 있습니다:
+
+| 계층 | 범위 | 제어 항목 |
+| :--- | :--- | :--- |
+| **기능 권한 (Feature Permissions)** | 역할별 (USER, ADMIN, 사용자 지정) | 주체가 기능 클래스(에이전트, 프롬프트, MCP 서버, 메모리, 웹 검색 등)를 _사용_, _생성_, _공유_ 또는 _공개 공유_할 수 있는지 여부. `librechat.yaml` 또는 관리자 패널에서 구성. |
+| **리소스 ACL (Resource ACLs)** | 개별 리소스별 | 특정 에이전트, 프롬프트, MCP 서버 등을 누가 보고, 편집하고, 삭제하거나 다시 공유할 수 있는지 여부. 리소스 소유자가 앱 내 공유 대화 상자를 통해 관리. |
+| **시스템 권한 (System Grants)** | 플랫폼 전체 | 관리자 기능 (예: `manage:users`, `manage:roles`, `read:usage`). 관리자 패널에서 사용. |
+
+이 세 가지 모두 동일한 네 가지 주요 유형에 대해 평가됩니다:
+
+- **사용자**: 개별 LibreChat 계정
+- **Group**: 사용자 모음(로컬 또는 Entra ID에서 동기화됨)
+- **Role**: 명명된 권한 프로필 (예: `USER`, `ADMIN` 또는 기타 사용자 지정 역할)
+- **Public**: 인스턴스의 모든 인증된 사용자
+
+## Layer 1: Feature Permissions (Role-Based) [#layer-1-feature-permissions-role-based]
+
+기능 수준 권한(Feature-level permissions)은 특정 역할에 대해 앱의 전체 기능을 제어합니다. 이는 _"이 역할의 사용자가 에이전트를 생성할 수 있는가?"_, _"프롬프트를 공개적으로 공유할 수 있는가?"_, _"코드 인터프리터를 호출할 수 있는가?"_와 같은 질문에 대한 답을 제공합니다.
+
+### 내장 시스템 역할 [#built-in-system-roles]
+
+LibreChat은 항상 존재하며 삭제할 수 없는 두 가지 시스템 역할을 기본으로 제공합니다:
+
+- **`ADMIN`**: 인스턴스에 처음 등록된 계정에 할당됩니다. 관리자는 모든 리소스를 확인하고, 설정을 수정하며, 관리자 패널에 액세스하고, 플랫폼 전체의 동작을 구성할 수 있습니다.
+- **`USER`**: 모든 새 계정에 할당되는 기본 역할입니다.
+
+관리자는 MongoDB에서 사용자 문서를 업데이트하여 수동으로 승격시킬 수 있습니다. [Administrator Controls](/docs/features/agents#administrator-controls)를 참조하세요.
+
+### 권한 유형 [#permission-types]
+
+각 역할은 **권한 유형 × 작업**의 행렬을 가집니다:
+
+| 권한 유형 | 사용 가능한 작업 |
+| ---------------- | --------------------------------------------------------- |
+| `AGENTS`         | `USE`, `CREATE`, `SHARE`, `SHARE_PUBLIC`                  |
+| `PROMPTS`        | `USE`, `CREATE`, `SHARE`, `SHARE_PUBLIC`                  |
+| `MCP_SERVERS`    | `USE`, `CREATE`, `SHARE`, `SHARE_PUBLIC`, `CONFIGURE_OBO` |
+| `REMOTE_AGENTS`  | `USE`, `CREATE`, `SHARE`, `SHARE_PUBLIC`                  |
+| `SKILLS`         | `USE`, `CREATE`, `SHARE`, `SHARE_PUBLIC`                  |
+| `SHARED_LINKS`   | `CREATE`, `SHARE`, `SHARE_PUBLIC`                         |
+| `MEMORIES`       | `USE`, `CREATE`, `UPDATE`, `READ`, `OPT_OUT`              |
+| `BOOKMARKS`      | `USE`                                                     |
+| `MULTI_CONVO`    | `USE`                                                     |
+| `TEMPORARY_CHAT` | `USE`                                                     |
+| `RUN_CODE`       | `USE`                                                     |
+| `WEB_SEARCH`     | `USE`                                                     |
+| `FILE_SEARCH`    | `USE`                                                     |
+| `FILE_CITATIONS` | `USE`                                                     |
+| `MARKETPLACE`    | `USE`                                                     |
+| `PEOPLE_PICKER`  | `VIEW_USERS`, `VIEW_GROUPS`, `VIEW_ROLES`                 |
+
+`SHARE`와 `SHARE_PUBLIC`의 구분은 중요합니다. 특정 사용자나 그룹과 에이전트를 공유할 수 있는 권한(`SHARE`)을 부여하면서, 인스턴스의 _모든_ 사용자에게 에이전트를 공개하는 권한(`SHARE_PUBLIC`)은 부여하지 않을 수 있습니다.
+
+### 기능 권한 구성 [#configuring-feature-permissions]
+
+기능 권한을 관리하는 권장 방법은 [**LibreChat Admin Panel**](/docs/features/admin_panel)을 사용하는 것입니다. 이 패널은 각 역할(생성한 사용자 지정 역할 포함)에 대한 권한 매트릭스를 직접 편집합니다. 변경 사항은 LibreChat을 재배포할 필요 없이 즉시 적용되며, 전역 `USER` 기본값이 아닌 수정하려는 특정 역할에만 적용됩니다.
+
+<Callout type="warning" title="레거시: `librechat.yaml` 인터페이스 블록">
+  `librechat.yaml`의 [`interface` 블록](/docs/configuration/librechat_yaml/object_structure/interface)은 여전히 시작 시 기본 `USER` 역할에 대한 권한을 시드(seed)할 수 있으며, 새로운 인스턴스를 부트스트래핑하거나 완전히 파일 기반으로 배포하는 경우에 유용합니다. 하지만 이 블록은 `USER` 역할만을 대상으로 하며 사용자 지정 역할 간의 차이를 표현할 수는 없습니다. 지속적인 권한 관리를 위해서는 관리자 패널을 사용하는 것을 권장합니다.
+</Callout>
+
+### 사용자 지정 역할 [#custom-roles]
+
+`USER` 및 `ADMIN` 외에도, 관리자는 고유한 기능 권한 매트릭스를 가진 **사용자 지정 역할(custom roles)**을 생성할 수 있습니다(v0.8.5에서 도입됨; [#12528](https://github.com/danny-avila/LibreChat/pull/12528) 참조). 사용자는 여러 역할을 가질 수 있으며, 사용자의 최종 권한은 보유한 모든 역할의 권한을 합친 결과가 됩니다. 사용자 지정 역할은 관리자 패널에서 관리합니다.
+
+### 역할 및 그룹 범위의 구성 재정의(Overrides) [#role--and-group-scoped-configuration-overrides]
+
+기능 플래그 외에도 v0.8.5에서는 **DB 기반 구성 재정의(DB-backed configuration override)** 시스템([#12354](https://github.com/danny-avila/LibreChat/pull/12354))이 도입되었습니다. 이를 통해 특정 그룹이나 역할에 _다른 `librechat.yaml` 스타일의 구성_을 할당할 수 있습니다. 예를 들어, "Research" 그룹은 기본 구성보다 더 많은 endpoint, 더 높은 재귀 제한, 그리고 다른 에이전트 기능을 사용할 수 있습니다. 재정의는 로그인 시점에 해결되며 기본 구성 위에 구성됩니다.
+
+## Layer 2: Resource ACLs (엔티티별 공유) [#layer-2-resource-acls-per-entity-sharing]
+
+LibreChat의 모든 공유 가능한 리소스는 역할 기반 권한과는 독립적인 자체 액세스 제어 목록(Access Control List)을 가지고 있습니다. 이것이 바로 `SHARE` 권한을 가진 개별 사용자가 자신의 에이전트, 프롬프트 또는 MCP 서버에 액세스할 수 있는 대상을 선택하는 방식입니다.
+
+### 리소스 유형 [#resource-types]
+
+리소스 ACL은 현재 다음에 적용됩니다:
+
+- **에이전트** (`agent`)
+- **프롬프트 / 프롬프트 그룹** (`promptGroup`)
+- **MCP Servers** (`mcpServer`)
+- **원격 에이전트** (`remoteAgent`), [Agents API](/docs/features/agents_api)용
+- **파일** (`file`), 일반적으로 이를 사용하는 리소스에서 상속됨
+- **Projects** (`project`)는 상속을 지원하므로, 프로젝트에 공유된 리소스는 자동으로 ACL을 상속받습니다.
+
+### 액세스 역할 (권한 프리셋) [#access-roles-permission-presets]
+
+최종 사용자에게 원시 권한 비트를 노출하는 대신, 공유 기능은 리소스 유형당 세 가지 명명된 역할을 사용합니다:
+
+| 역할 | 권한 비트 | 권한 부여 대상이 할 수 있는 작업 |
+| ---------- | ----------------------------------------------- | ------------------------------------------------------------------- |
+| **Viewer** | `VIEW` (`0b0001`) | 리소스 사용 / 상호작용 |
+| **Editor** | `VIEW` + `EDIT` (`0b0011`) | 리소스의 설정, 지침, 도구, 파일 보기 및 수정 |
+| **Owner**  | `VIEW` + `EDIT` + `DELETE` + `SHARE` (`0b1111`) | 전체 제어: 편집, 삭제 및 타인에게 재공유 |
+
+내부적으로 권한은 각 (리소스, 주체) 쌍에 대한 비트마스크(`permBits`)로 저장됩니다. 상위 집합은 자동으로 처리되므로, 편집자(Editor) 권한을 부여하면 뷰어(Viewer) 권한도 자동으로 포함됩니다.
+
+### UI에서 액세스 권한 부여 [#granting-access-from-the-ui]
+
+1. 리소스(에이전트 빌더, 프롬프트 폼, MCP 서버 설정 등)를 엽니다.
+2. **공유(Share)** 버튼을 클릭하세요 (본인이 소유자이거나, 관리자이거나, `SHARE` 권한을 부여받은 경우에 표시됩니다)
+3. 공유 대화 상자에서:
+   - 사람 선택 도구를 사용하여 추가할 **사용자**, **그룹** 또는 **역할**을 검색하세요.
+   - 주체별로 액세스 역할(Viewer / Editor / Owner)을 선택하세요
+   - 선택적으로 **Public access**를 토글하여 인스턴스의 모든 사용자가 해당 리소스를 볼 수 있도록 설정할 수 있습니다(`SHARE_PUBLIC` 기능 권한이 필요합니다).
+4. 저장하세요. 권한을 부여받은 사용자는 다음에 새로고침할 때 해당 리소스를 확인할 수 있습니다.
+
+<Callout type="warning" title="데이터 유출 방지">
+  Editor 및 Owner 권한을 가진 사용자는 시스템 지침, 첨부 파일, 도구를 포함하여 해당 리소스에 구성된 모든 내용을 볼 수 있습니다. 또한 모든 에이전트는 대화 출력을 통해 첨부된 데이터를 유출할 수 있으므로, 편집 권한을 부여하거나 에이전트를 공개하기 전에 지침이 프롬프트 인젝션에 대해 강력하게 보호되는지 확인하십시오.
+</Callout>
+
+### 수혜자가 보는 화면 [#what-grantees-see]
+
+- **Viewers**는 관련 선택기(예: 에이전트 드롭다운)에서 리소스를 바로 사용할 수 있는 항목으로 확인합니다. 이들은 빌더를 열거나, 원본 지침을 보거나, 설정을 수정할 수 없습니다.
+- **Editors**는 리소스의 구성을 열고 수정할 수 있지만, 삭제하거나 다시 공유할 수는 없습니다.
+- **Owners**는 원작자와 동일한 UI를 가지며, 자유롭게 삭제하고 다시 공유할 수 있습니다.
+- **The original author**는 ACL 상태와 관계없이 항상 모든 제어 권한을 유지하며, 관리자는 인스턴스의 모든 리소스를 관리할 수 있습니다.
+
+### 프로젝트 상속 (Project Inheritance) [#project-inheritance]
+
+권한은 상위 **project**로부터 상속될 수 있습니다. ACL 항목이 상속되면 `inheritedFrom` 링크가 소스 항목을 가리킵니다. 이것이 LibreChat의 "Global" project를 구동하는 원리이며, 글로벌 프로젝트에 추가된 리소스는 각 주체(principal)별로 항목을 생성할 필요 없이 모든 사용자에게 제공됩니다.
+
+## Layer 3: System Grants (관리자 권한) [#layer-3-system-grants-admin-capabilities]
+
+시스템 권한(System grants)은 **관리자 수준의 기능**을 위한 별도의 권한 테이블로, _"이 사용자가 관리자 패널에 액세스할 수 있는가?"_ 또는 _"이 그룹이 MCP 서버를 전역적으로 관리할 수 있는가?"_와 같은 질문에 답하는 역할을 합니다. 이는 항상 주체(사용자, 그룹 또는 역할)와 기능 문자열(capability string)에 범위가 지정됩니다.
+
+표준 기능은 다음과 같습니다:
+
+| 기능 | 목적 |
+| ------------------------------------ | --------------------------------------------- |
+| `access:admin`                       | 관리자 패널에 대한 전체 접근 권한 |
+| `read:users` / `manage:users`        | 사용자 계정 조회 / 수정 |
+| `read:groups` / `manage:groups`      | 그룹 조회 / 수정 |
+| `read:roles` / `manage:roles`        | 사용자 지정 역할 조회 / 수정 |
+| `read:configs` / `manage:configs`    | 시스템 구성 조회 / 수정 |
+| `assign:configs:{user\|group\|role}` | 주체(principal)에 구성 재정의 프로필 할당 |
+| `read:usage`                         | 플랫폼 사용량 및 원격 측정 데이터 조회 |
+| `read:agents` / `manage:agents`      | 인스턴스의 모든 에이전트 조회 / 관리 |
+| `read:prompts` / `manage:prompts`    | 모든 프롬프트 조회 / 관리 |
+| `manage:mcpservers`                  | MCP 서버 전역 관리 |
+
+관리(manage) 기능은 해당 읽기(read) 기능을 포함합니다(예: `manage:users` 권한을 보유하면 자동으로 `read:users` 권한이 부여됨). `SystemRoles.ADMIN` 사용자는 모든 기능을 암묵적으로 보유합니다. 권한 부여(grants)를 사용하면 관리자가 아닌 주체에게 전체 관리자 권한을 부여하지 않고도 관리자 권한의 일부를 **위임**할 수 있습니다.
+
+시스템 권한은 관리자 패널을 통해 부여 및 취소됩니다.
+
+## Principals in Depth [#principals-in-depth]
+
+### 사용자 [#users]
+
+표준 LibreChat 계정입니다. 사용자는 **로컬**(이메일/비밀번호) 또는 **연합**(OAuth2, OIDC, SAML, LDAP) 계정일 수 있습니다. 연합 사용자는 외부 ID(`idOnTheSource`)와 매칭될 수 있으며, Entra ID의 경우 이는 그룹 동기화를 가능하게 하는 OID입니다.
+
+### 그룹 [#groups]
+
+그룹은 사용자의 명명된 집합입니다. LibreChat은 두 가지 소스를 지원합니다:
+
+- **로컬 그룹**: 관리자 패널에서 생성 및 관리하거나 데이터베이스에서 직접 관리합니다. 멤버는 LibreChat 사용자 ID입니다.
+- **Entra ID (Azure AD) 그룹**: [token reuse](/docs/configuration/authentication/OAuth2-OIDC/token-reuse)가 활성화된 상태에서 사용자가 Azure OIDC를 통해 로그인하면 Microsoft Graph에서 동기화됩니다. 동기화된 각 그룹은 Entra Object ID를 `idOnTheSource`로 저장하며, 이를 통해 LibreChat은 테넌트 멤버십과 동기화 상태를 유지합니다.
+
+그룹은 모든 ACL, `peoplePicker` 검색, 그리고 설정 재정의나 시스템 권한 부여를 위한 주체 대상(principal target)으로 나타날 수 있습니다. 500명 규모의 그룹과 공유된 단일 리소스는 500개의 ACL 항목이 아닌 단 하나의 항목으로 처리되며, Entra에서의 멤버십 변경 사항은 다음 로그인 시 자동으로 반영됩니다.
+
+### 역할 [#roles]
+
+모든 시스템 또는 사용자 지정 역할을 주체(principal)로 사용할 수 있습니다. 에이전트를 역할(예: `SupportEngineers`)과 공유하면 해당 역할을 가진 모든 사용자가 개별적으로 지정할 필요 없이 즉시 액세스 권한을 갖게 됩니다. 역할 기반 공유가 관리자 전용 기능인 환경의 경우, [`interface.peoplePicker.roles`](/docs/configuration/librechat_yaml/object_structure/interface#peoplepicker)를 통해 사용자 선택기(people picker)에서 역할을 숨길 수 있습니다.
+
+### Public [#public]
+
+모든 인증된 사용자와 일치하는 특별한 주체(principal)입니다. 공개 권한 부여는 해당 리소스 유형에 대해 `SHARE_PUBLIC` 기능 권한을 가진 사용자만 수행할 수 있습니다.
+
+## People Picker 가시성 [#people-picker-visibility]
+
+인스턴스 수준에서 피플 피커(공유 대화 상자의 검색 상자)를 제한하여 배포 환경과 관련 없는 주체 유형을 숨길 수 있습니다:
+
+```yaml filename="librechat.yaml"
+interface:
+  peoplePicker:
+    users: true
+    groups: true
+    roles: false
+```
+
+이는 _검색 UI_에만 영향을 미치며, 숨겨진 주체 유형에 대한 기존 ACL 항목은 계속 작동하고 정상적으로 적용됩니다.
+
+## ACL 이전 버전에서의 마이그레이션 [#migrations-from-pre-acl-versions]
+
+v0.8.0-rc3 이전 버전은 더 단순한 소유권 모델을 사용했습니다. 업그레이드하려면 기존 에이전트와 프롬프트에 계속 액세스할 수 있도록 ACL 마이그레이션을 실행해야 합니다:
+
+**Dry run (변경 사항 미리보기):**
+
+```bash
+npm run migrate:agent-permissions:dry-run
+npm run migrate:prompt-permissions:dry-run
+```
+
+**실행:**
+
+```bash
+npm run migrate:agent-permissions
+npm run migrate:prompt-permissions
+```
+
+Docker 변형 및 배치 크기 옵션에 대한 내용은 [에이전트 마이그레이션 가이드](/docs/features/agents#migration-required-v080-rc3)를 참조하세요.
+
+## 관련 문서 [#related-documentation]
+
+- [에이전트: 공유 및 권한](/docs/features/agents#sharing-and-permissions)
+- [인터페이스 구성 (기능 권한)](/docs/configuration/librechat_yaml/object_structure/interface)
+- [인증](/docs/features/authentication)
+- [OpenID Connect 토큰 재사용 (Entra ID 그룹 동기화에 필수)](/docs/configuration/authentication/OAuth2-OIDC/token-reuse)
+- [Azure / Entra ID OAuth2](/docs/configuration/authentication/OAuth2-OIDC/azure)
+- [SharePoint 통합](/docs/configuration/sharepoint)
+- [Agents API (Remote Agents)](/docs/features/agents_api)
+- [LibreChat 관리자 패널](/docs/features/admin_panel)

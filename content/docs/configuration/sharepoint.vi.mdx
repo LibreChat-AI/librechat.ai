@@ -1,0 +1,327 @@
+---
+title: Tích hợp SharePoint
+icon: SharePoint
+description: Cấu hình tích hợp SharePoint Online và OneDrive for Business với LibreChat
+---
+
+LibreChat cung cấp khả năng tích hợp cấp doanh nghiệp với SharePoint Online và OneDrive for Business, cho phép người dùng duyệt, chọn và đính kèm tệp từ môi trường Microsoft 365 của họ một cách liền mạch ngay trong các cuộc trò chuyện.
+
+## Tổng quan [#overview]
+
+Tích hợp SharePoint cho phép người dùng:
+- Duyệt các thư viện tài liệu SharePoint và tệp OneDrive
+- Chọn nhiều tệp cùng lúc (mặc định tối đa là 10 tệp)
+- Xem tiến trình tải xuống theo thời gian thực
+- Đính kèm tệp từ SharePoint vào các cuộc trò chuyện
+- Duy trì bảo mật doanh nghiệp với các biện pháp kiểm soát truy cập phù hợp
+
+<Callout type="info" title="Tính năng doanh nghiệp">
+Tính năng này yêu cầu Microsoft 365/SharePoint Online và được thiết kế cho các triển khai doanh nghiệp sử dụng xác thực Azure Entra ID (trước đây là Azure AD).
+</Callout>
+
+## Điều kiện tiên quyết [#prerequisites]
+
+Trước khi định cấu hình tích hợp SharePoint, hãy đảm bảo bạn đã có:
+
+1. **Azure Entra ID Authentication** đã được cấu hình và đang hoạt động
+2. **Token Reuse** được bật (`OPENID_REUSE_TOKENS=true`)
+3. **Một phạm vi API bị lộ** cho LibreChat, ví dụ như `api://<client-id>/access_as_user`
+4. **Quyền truy cập quản trị viên** (Admin access) vào tenant Azure của bạn để cấp quyền ứng dụng
+5. **HTTPS** đã được bật (bắt buộc đối với môi trường production)
+
+<Callout type="error" title="Yêu cầu quan trọng">
+Tích hợp SharePoint sẽ không hoạt động nếu thiếu `OPENID_REUSE_TOKENS=true` vì tính năng này dựa vào luồng token on-behalf-of để truy cập các API Microsoft Graph.
+</Callout>
+
+## Thiết lập Đăng ký Ứng dụng Azure [#azure-app-registration-setup]
+
+### Bước 1: Cấu hình quyền API [#step-1-configure-api-permissions]
+
+1. Điều hướng đến đăng ký ứng dụng của bạn trong [Azure Portal](https://portal.azure.com)
+2. Đi tới **API permissions** trong menu bên trái
+3. Nhấp vào **Add a permission**
+
+### Bước 2: Hiển thị và Cấp quyền Phạm vi API LibreChat [#step-2-expose-and-grant-a-librechat-api-scope]
+
+Luồng on-behalf-of cần mã truy cập (access token) OpenID ban đầu để nhắm mục tiêu đến API ứng dụng LibreChat của bạn, chứ không phải Microsoft Graph. Hãy hiển thị một phạm vi (scope) API để Azure có thể cấp mã thông báo với LibreChat là đối tượng (audience).
+
+1. Đi tới **Expose an API** trong menu bên trái
+2. Đặt **Application ID URI** thành `api://<client-id>` nếu nó chưa được cấu hình.
+3. Nhấp vào **Add a scope**
+4. Đặt tên cho scope là `access_as_user`
+5. Lưu phạm vi (scope), sau đó sao chép toàn bộ giá trị phạm vi:
+
+```text
+api://<client-id>/access_as_user
+```
+
+Sau đó, cấp phạm vi đó cho đăng ký ứng dụng:
+
+1. Quay lại **API permissions**
+2. Nhấp vào **Add a permission**
+3. Chọn **APIs my organization uses**
+4. Tìm kiếm và chọn đăng ký ứng dụng LibreChat của bạn
+5. Chọn **Delegated permissions**
+6. Chọn `access_as_user`
+7. Nhấp vào **Add permissions**
+
+Sử dụng giá trị scope đầy đủ `api://<client-id>/access_as_user` trong `OPENID_SCOPE` ở phần sau của hướng dẫn này.
+
+### Bước 3: Thêm quyền SharePoint [#step-3-add-sharepoint-permissions]
+
+Đối với giao diện chọn tệp:
+
+1. Chọn **SharePoint** từ danh sách API
+2. Chọn **Delegated permissions**
+3. Tìm kiếm và chọn:
+   - `AllSites.Read` - Đọc các mục trong tất cả các tập hợp trang web
+4. Nhấp vào **Add permissions**
+
+### Bước 4: Thêm quyền Microsoft Graph [#step-4-add-microsoft-graph-permissions]
+
+Đối với việc tải xuống tệp:
+
+1. Nhấp vào **Add a permission** một lần nữa
+2. Chọn **Microsoft Graph**
+3. Chọn **Delegated permissions**
+4. Tìm kiếm và chọn:
+   - `Files.Read.All` - Đọc tất cả các tệp mà người dùng có thể truy cập
+5. Nhấp vào **Add permissions**
+
+### Bước 5: Cấp quyền quản trị (Admin Consent) [#step-5-grant-admin-consent]
+
+1. Sau khi thêm các quyền, bạn sẽ thấy chúng được liệt kê
+2. Nhấp vào **Grant admin consent for [Your Organization]**
+3. Xác nhận sự đồng ý trong cửa sổ bật lên
+
+Các quyền của bạn sẽ trông như thế này:
+
+| Tên API / Quyền | Loại | Mô tả | Trạng thái |
+|------------------------|------|-------------|---------|
+| Microsoft Graph - Files.Read.All | Delegated | Đọc tất cả các tệp mà người dùng có thể truy cập | ✅ Đã cấp |
+| SharePoint - AllSites.Read | Delegated | Đọc các mục trong tất cả các bộ sưu tập trang web | ✅ Đã cấp |
+| LibreChat - access_as_user | Delegated | Cho phép LibreChat nhận token tương thích với OBO | ✅ Đã cấp |
+
+## Cấu hình môi trường [#environment-configuration]
+
+Thêm các biến môi trường sau vào tệp `.env` của bạn:
+
+```bash filename=".env"
+# OpenID token reuse and OBO-compatible audience
+OPENID_REUSE_TOKENS=true
+OPENID_SCOPE=openid profile email offline_access api://<client-id>/access_as_user
+OPENID_ON_BEHALF_FLOW_FOR_USERINFO_REQUIRED=true
+
+# Enable SharePoint file picker
+ENABLE_SHAREPOINT_FILEPICKER=true
+
+# Your SharePoint tenant base URL
+# Format: https://[your-tenant-name].sharepoint.com
+SHAREPOINT_BASE_URL=https://contoso.sharepoint.com
+
+# SharePoint scope for the file picker
+# Replace 'contoso' with your actual tenant name
+SHAREPOINT_PICKER_SHAREPOINT_SCOPE=https://contoso.sharepoint.com/AllSites.Read
+
+# Microsoft Graph scope for file downloads
+SHAREPOINT_PICKER_GRAPH_SCOPE=Files.Read.All
+```
+
+<Callout type="warning" title="Tên khách thuê">
+Hãy đảm bảo bạn thay thế `contoso` trong các ví dụ trên bằng tên tenant SharePoint thực tế của bạn. Tên này phải khớp chính xác với URL SharePoint của bạn.
+</Callout>
+
+<Callout type="warning" title="Đối tượng phạm vi OpenID">
+Thay thế `<client-id>` bằng Application (client) ID trong phần đăng ký ứng dụng Azure của bạn. Scope `api://<client-id>/access_as_user` cung cấp cho Azure một audience dành riêng cho ứng dụng để thực hiện OBO assertion. Nếu `OPENID_SCOPE` chỉ bao gồm các scope OpenID tiêu chuẩn, Azure có thể cấp một access token với audience là Graph, loại token này không thể được trao đổi lại để truy cập SharePoint hoặc Graph.
+</Callout>
+
+<Callout type="info" title="Trao đổi Token Userinfo">
+`OPENID_ON_BEHALF_FLOW_FOR_USERINFO_REQUIRED=true` cho phép LibreChat trao đổi mã truy cập (access token) dành cho đối tượng ứng dụng lấy một mã tương thích với userinfo trước khi gọi endpoint userinfo của OpenID. Điều này là bắt buộc đối với các thiết lập Azure Entra ID nơi `OPENID_SCOPE` bao gồm phạm vi API của LibreChat ở trên.
+</Callout>
+
+## Cách thức hoạt động [#how-it-works]
+
+### Quy trình xác thực [#authentication-flow]
+
+1. Người dùng xác thực thông qua Azure Entra ID
+2. Khi truy cập trình chọn SharePoint, LibreChat sẽ trao đổi token của người dùng để lấy quyền truy cập SharePoint.
+3. Các token được lưu vào bộ nhớ đệm để đạt hiệu suất tối ưu (thường là 50 phút)
+4. Các phạm vi riêng biệt đảm bảo nguyên tắc đặc quyền tối thiểu
+
+### Quy trình chọn tệp [#file-selection-process]
+
+1. Người dùng nhấp vào "From SharePoint" trong menu đính kèm
+2. Trình chọn tệp SharePoint Online mở trong một iframe nhúng
+3. Người dùng duyệt và chọn tệp bằng giao diện SharePoint quen thuộc
+4. Các tệp đã chọn đang được xếp hàng để tải xuống
+
+### Quy trình tải xuống [#download-process]
+
+1. Các tệp được tải xuống theo từng đợt (tối đa 3 lượt tải xuống đồng thời)
+2. Chỉ báo tiến trình hiển thị tệp hiện tại và tỷ lệ phần trăm hoàn thành
+3. Các tệp đã tải xuống được đính kèm vào cuộc trò chuyện
+4. Các tệp tải xuống bị lỗi sẽ được tự động thử lại
+
+## Trải nghiệm người dùng [#user-experience]
+
+### Truy cập tệp SharePoint [#accessing-sharepoint-files]
+
+Khi được cấu hình đúng cách, người dùng sẽ thấy một tùy chọn mới trong menu đính kèm tệp:
+
+1. Nhấp vào biểu tượng đính kèm trong phần nhập tin nhắn
+2. Chọn "From SharePoint" từ menu
+3. Trình chọn tệp SharePoint sẽ mở ra
+4. Duyệt và chọn tệp khi cần
+5. Nhấp vào "Select" để bắt đầu tải xuống
+
+### Các tính năng khả dụng [#features-available]
+
+- **Chọn nhiều tệp**: Chọn tối đa 10 tệp cùng một lúc
+- **Giao diện quen thuộc**: Sử dụng trình chọn tệp gốc của SharePoint
+- **Theo dõi tiến trình**: Xem tiến trình tải xuống theo thời gian thực
+- **Xử lý lỗi**: Thông báo rõ ràng cho mọi vấn đề phát sinh
+- **Localization**: Hỗ trợ đa ngôn ngữ
+
+## Các cân nhắc về bảo mật [#security-considerations]
+
+### Kiểm soát truy cập [#access-control]
+
+- Chỉ những tệp mà người dùng có quyền truy cập trong SharePoint mới khả dụng
+- Tuân thủ tất cả các quyền và chính sách của SharePoint
+- Không có quyền truy cập nâng cao hoặc bỏ qua các kiểm soát bảo mật
+
+### Bảo mật Token [#token-security]
+
+- Sử dụng luồng on-behalf-of an toàn để trao đổi token
+- Các token có thời hạn ngắn và được tự động làm mới
+- Không lưu trữ lâu dài thông tin xác thực SharePoint
+
+### Cách ly phạm vi [#scope-isolation]
+
+- Phạm vi SharePoint bị giới hạn chỉ ở các thao tác đọc
+- Phạm vi Graph API bị giới hạn ở quyền truy cập đọc tệp
+- Không thể sửa đổi hoặc xóa tệp thông qua LibreChat
+
+## Khắc phục sự cố [#troubleshooting]
+
+### Các vấn đề thường gặp [#common-issues]
+
+#### Tùy chọn "From SharePoint" không xuất hiện [#from-sharepoint-option-not-appearing]
+
+**Nguyên nhân**: Tính năng chưa được bật đúng cách hoặc gặp sự cố xác thực
+
+**Giải pháp**:
+1. Xác minh `ENABLE_SHAREPOINT_FILEPICKER=true` trong `.env`
+2. Xác nhận `OPENID_REUSE_TOKENS=true` đã được thiết lập
+3. Kiểm tra xem người dùng đã được xác thực thông qua Azure Entra ID hay chưa
+4. Khởi động lại LibreChat sau khi thay đổi cấu hình
+
+#### Trình chọn tệp không mở được [#file-picker-fails-to-open]
+
+**Nguyên nhân**: Thiếu hoặc sai quyền truy cập
+
+**Giải pháp**:
+1. Xác minh quyền SharePoint đã được cấp trong Azure
+2. Đảm bảo đã có sự đồng ý của quản trị viên
+3. Kiểm tra để đảm bảo `SHAREPOINT_BASE_URL` khớp chính xác với tenant của bạn
+4. Xác nhận `SHAREPOINT_PICKER_SHAREPOINT_SCOPE` sử dụng URL đầy đủ của tenant, ví dụ như `https://contoso.sharepoint.com/AllSites.Read`
+5. Xác nhận HTTPS đã được bật trong môi trường production
+
+#### Trình chọn tệp mở ra một trang trắng [#file-picker-opens-to-a-blank-white-page]
+
+**Nguyên nhân**: Azure có thể đang từ chối trao đổi on-behalf-of vì mã truy cập OpenID có đối tượng (audience) không chính xác, hoặc do tính năng trao đổi mã userinfo chưa được bật.
+
+**Giải pháp**:
+1. Xác nhận rằng đăng ký ứng dụng Azure của bạn đã có một phạm vi API được hiển thị (exposed API scope), ví dụ như `api://<client-id>/access_as_user`
+2. Thêm phạm vi đầy đủ đó vào `OPENID_SCOPE`
+3. Đặt `OPENID_ON_BEHALF_FLOW_FOR_USERINFO_REQUIRED=true`
+4. Khởi động lại LibreChat và đăng nhập lại để Azure cấp các token OpenID mới
+
+#### Tải xuống thất bại hoặc hết thời gian chờ [#downloads-fail-or-timeout]
+
+**Nguyên nhân**: Quyền Graph API hoặc các vấn đề về mạng
+
+**Giải pháp**:
+1. Xác minh quyền `Files.Read.All` đã được cấp
+2. Kiểm tra kết nối mạng tới SharePoint
+3. Đảm bảo các token chưa hết hạn (xác thực lại nếu cần)
+4. Kiểm tra bảng điều khiển trình duyệt để biết các thông báo lỗi cụ thể
+
+### Chế độ gỡ lỗi (Debug Mode) [#debug-mode]
+
+Để khắc phục sự cố, hãy bật tính năng ghi nhật ký gỡ lỗi (debug logging):
+
+```bash filename=".env"
+DEBUG_LOGGING=true
+DEBUG_CONSOLE=true
+```
+
+Điều này sẽ cung cấp các bản ghi chi tiết về:
+- Các quy trình trao đổi token
+- Các lệnh gọi API tới SharePoint và Graph
+- Tiến trình tải xuống và lỗi
+- Các luồng xác thực
+
+## Tối ưu hóa hiệu năng [#performance-optimization]
+
+### Token Caching [#token-caching]
+
+- Các token được lưu vào bộ nhớ đệm để giảm bớt chi phí xác thực.
+- Thời lượng bộ nhớ đệm khớp với thời gian tồn tại của token (thường là 50 phút)
+- Tự động làm mới trước khi hết hạn
+
+### Tải xuống đồng thời [#concurrent-downloads]
+
+- Tải xuống tối đa 3 tệp cùng lúc
+- Ngăn chặn tình trạng quá tải cho trình duyệt hoặc máy chủ
+- Tối ưu hóa cho cả tốc độ và độ ổn định
+
+### Các lưu ý về kích thước tệp [#file-size-considerations]
+
+- Các tệp lớn có thể mất thời gian để tải xuống
+- Chỉ báo tiến trình giúp quản lý kỳ vọng của người dùng
+- Hãy cân nhắc các giới hạn tải tệp lên trong cấu hình LibreChat của bạn
+
+## Các phương pháp tốt nhất [#best-practices]
+
+### Dành cho Quản trị viên [#for-administrators]
+
+1. **Kiểm tra quyền định kỳ**: Xem xét quyền của ứng dụng theo định kỳ
+2. **Theo dõi mức sử dụng**: Theo dõi mức sử dụng tích hợp SharePoint trong nhật ký (logs)
+3. **Cập nhật tài liệu**: Giữ cho các tài liệu nội bộ luôn được cập nhật với các thông tin cụ thể về tenant của bạn
+4. **Kiểm tra kỹ lưỡng**: Xác minh chức năng sau bất kỳ thay đổi nào đối với Azure AD
+
+### Dành cho người dùng cuối [#for-end-users]
+
+1. **Tổ chức tệp**: Các thư viện SharePoint được tổ chức tốt giúp cải thiện trải nghiệm người dùng
+2. **Kích thước tệp**: Hãy lưu ý các tệp lớn có thể làm chậm cuộc trò chuyện
+3. **Quyền**: Đảm bảo bạn có quyền truy cập vào các tệp trước khi chia sẻ
+4. **Tải xuống của người dùng**: Cho phép thời gian đối với các tệp lớn hoặc nhiều tệp
+
+## Cấu hình nâng cao [#advanced-configuration]
+
+### Custom Scopes [#custom-scopes]
+
+Đối với các tổ chức có yêu cầu cụ thể, bạn có thể tùy chỉnh các phạm vi (scopes):
+
+```bash filename=".env"
+# Example: Limiting to specific site collections
+SHAREPOINT_PICKER_SHAREPOINT_SCOPE=https://contoso.sharepoint.com/sites/Engineering/AllSites.Read
+
+# Example: Using more restrictive Graph permissions
+SHAREPOINT_PICKER_GRAPH_SCOPE=Files.Read
+```
+
+### Tích hợp với Information Barriers [#integration-with-information-barriers]
+
+Nếu tổ chức của bạn sử dụng Information Barriers:
+- Tích hợp SharePoint tuân thủ tất cả các chính sách rào cản
+- Người dùng chỉ thấy nội dung mà họ được phép truy cập
+- Không yêu cầu cấu hình bổ sung
+
+## Tài liệu liên quan [#related-documentation]
+
+- [Xác thực Azure Entra](/docs/configuration/authentication/OAuth2-OIDC/azure)
+- [Tái sử dụng OpenID Token](/docs/configuration/authentication/OAuth2-OIDC/token-reuse)
+- [Tích hợp Microsoft Graph API](/docs/configuration/authentication/OAuth2-OIDC/azure#advanced-microsoft-graph-api-integration)
+- [Cấu hình tải tệp lên](/docs/configuration/librechat_yaml/object_structure/file_config)

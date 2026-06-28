@@ -1,0 +1,124 @@
+---
+title: 재개 가능한 스트림
+icon: Zap
+description: '연결이 끊긴 후 진행 중인 AI 응답을 복구하고, 탭과 기기 간에 동일한 채팅을 동기화하며, 확장된 인스턴스 전반에서 스트림을 유지하세요.'
+---
+
+재개 가능한 스트림(Resumable streams)을 사용하면 연결이 끊겨도 진행 중인 AI 응답이 유지됩니다. 네트워크가 끊기거나, 브라우저가 새로고침되거나, 탭 또는 기기를 전환하더라도 LibreChat은 이미 스트리밍된 콘텐츠를 재구성하여 중단된 지점부터 계속 이어갑니다. 동일한 메커니즘을 통해 하나의 대화를 여러 명의 사용자가 동시에 시청할 때도 동기화 상태가 유지됩니다.
+
+## 제공되는 기능 [#what-you-get]
+
+- **응답 손실 없음.** 네트워크 끊김, 브라우저 새로고침, 서버 재시작 시에도 스트리밍된 콘텐츠는 삭제되지 않습니다.
+- **탭이 동기화 상태로 유지됩니다.** 하나의 대화를 두 개의 브라우저 탭에서 열면 두 탭 모두 실시간으로 동일한 업데이트를 받습니다.
+- **기기 간 전환.** 데스크톱에서 생성을 시작하고 휴대폰에서 결과를 확인하세요.
+- **백그라운드 생성.** 긴 응답을 시작한 후 다른 탭이나 앱으로 이동해도, 돌아오면 전체 응답이 완료되어 있습니다.
+- **공유 대화.** 공유된 채팅을 보는 모든 사용자는 콘텐츠가 동시에 스트리밍되는 것을 볼 수 있습니다.
+
+## 작동 방식 [#how-it-works]
+
+메시지를 보낼 때, LibreChat은 스트리밍되는 모든 델타를 기록하는 생성 작업을 생성합니다. 연결이 끊어질 경우:
+
+1. 클라이언트가 연결 해제를 감지합니다.
+2. 재연결 시, 서버는 작업의 기록된 델타(deltas)로부터 지금까지 스트리밍된 콘텐츠를 재구성합니다.
+3. 누락된 콘텐츠는 단일 동기화 이벤트로 전달됩니다.
+4. 현재 위치에서 스트리밍이 계속됩니다.
+
+이 작업은 자동으로 실행되며 사용자 작업이 필요하지 않습니다.
+
+## 배포 모드 [#deployment-modes]
+
+LibreChat은 재개 가능한 스트림을 위한 두 가지 백엔드를 제공합니다.
+
+### 단일 인스턴스 모드 (기본값) [#single-instance-mode-default]
+
+스트림 상태를 메모리에 저장하며 pub/sub을 위해 Node.js `EventEmitter`를 사용합니다. 이는 기본 설정이며 별도의 구성이 필요하지 않습니다. 로컬 개발, 단일 서버 배포 및 Docker Compose 설정에 적합합니다.
+
+### Redis 모드 (프로덕션) [#redis-mode-production]
+
+Redis Streams 및 Pub/Sub을 사용하여 인스턴스 간에 스트림 상태를 공유합니다. Kubernetes 클러스터를 포함하여 수평적 확장, 로드 밸런싱 또는 고가용성 배포 환경에서 사용하십시오. Redis를 사용하면 한 인스턴스에서 시작된 생성을 다른 인스턴스에서 재개할 수 있으므로, 롤링 배포 및 자동 확장 중에도 활성 스트림이 유지됩니다.
+
+<Callout type="info" title="단일 인스턴스인가요? 이 경우 Redis는 필요하지 않을 가능성이 높습니다">
+In-memory 모드는 단일 LibreChat 인스턴스에 대한 모든 것을 처리합니다. 로드 밸런서 뒤에서 여러 인스턴스를 실행할 때 Redis가 필요해집니다. Redis는 단일 인스턴스 배포에서도 캐싱 및 세션 저장을 위해 여전히 유용하지만, 특히 재개 가능한 스트림(resumable streams)을 위한 것은 아닙니다.
+</Callout>
+
+## 구성 [#configuration]
+
+### Redis Streams 활성화 [#enable-redis-streams]
+
+`USE_REDIS=true`를 설정하면 재개 가능한 스트림(resumable streams)에서 Redis를 자동으로 사용하게 됩니다. 이를 명시적으로 제어하려면 `USE_REDIS_STREAMS`를 사용하세요.
+
+```bash filename=".env"
+USE_REDIS=true
+REDIS_URI=redis://localhost:6379
+# Resumable streams use Redis automatically when USE_REDIS=true.
+# Set USE_REDIS_STREAMS to control it explicitly:
+USE_REDIS_STREAMS=true
+```
+
+### Redis Cluster [#redis-cluster]
+
+Redis Cluster의 경우, 클러스터 모드를 활성화하고 `REDIS_URI`에 노드들을 나열하세요.
+
+```bash filename=".env"
+USE_REDIS_STREAMS=true
+USE_REDIS_CLUSTER=true
+REDIS_URI=redis://node1:7001,redis://node2:7002,redis://node3:7003
+```
+
+LibreChat은 다중 키 작업이 동일한 클러스터 슬롯에서 처리되도록 해시 태그가 지정된 키를 사용합니다.
+
+## 재구성되는 항목 [#what-gets-reconstructed]
+
+재연결 시, LibreChat은 기록된 델타 이벤트를 집계하여 다음을 재구성합니다:
+
+- 메시지 콘텐츠 (텍스트, 도구 호출, 인용)
+- 에이전트 실행 단계 및 중간 추론
+- 메타데이터 및 상태 정보
+
+저장소 메커니즘은 배포 모드에 따라 다릅니다:
+
+| 구성 요소 | 저장 메커니즘 |
+|-----------|-------------------|
+| Chunks | Redis Streams (`XADD`/`XRANGE`) |
+| Job metadata | Redis Hash 구조 |
+| Real-time events | Redis Pub/Sub 채널 |
+| Expiration | 스트림 완료 후 자동 TTL |
+
+LibreChat은 비용을 절감하기 위해 몇 가지 최적화를 적용합니다:
+
+- **메모리 우선 복구(Memory-first recovery).** 동일한 인스턴스에 다시 연결하면 로컬 캐시에서 읽어오므로 Redis 왕복을 방지합니다.
+- **액세스 시 정리.** 오래된 작업 항목은 쿼리 중에 제거되며, 완료된 스트림은 자동으로 만료됩니다.
+- **가비지 컬렉션 스토리지.** 인메모리 모드는 `WeakRef`를 사용하여 스트림 그래프를 저장하므로, 대화가 종료되면 자동으로 수집됩니다.
+
+## 테스트 [#testing]
+
+기능이 작동하는지 확인하려면, 아무 모델로나 스트리밍 대화를 시작한 다음 다음 중 하나를 시도해 보세요:
+
+- **탭.** 동일한 채팅을 두 번째 탭에서 여십시오. 두 탭 모두 동기화되어야 합니다.
+- **연결 해제.** 네트워크를 잠시 끊었다가 다시 연결하세요.
+- **탐색.** 스트리밍 도중에 다른 곳으로 이동했다가 다시 돌아오세요.
+
+각 사례는 누락된 내용 없이 완전한 응답을 생성해야 합니다.
+
+## 문제 해결 [#troubleshooting]
+
+**스트림이 재개되지 않음.** Redis에 연결할 수 있는지, 그리고 `USE_REDIS_STREAMS`가 설정되어 있는지 확인하세요.
+
+```bash
+docker exec -it librechat-redis redis-cli ping
+# Expected: PONG
+
+echo $USE_REDIS_STREAMS
+```
+
+**콘텐츠가 중복되어 나타납니다.** 이는 일반적으로 클라이언트 버전이 일치하지 않을 때 발생합니다. LibreChat을 최신 버전으로 업데이트하세요.
+
+**단일 인스턴스 모드에서의 높은 메모리 사용량.** 완료된 스트림은 가비지 컬렉션됩니다. 메모리 사용량이 계속 높다면, 완료되지 않고 매우 오래 실행되는 스트림이나 정리되지 않고 오류가 발생한 스트림을 확인하십시오.
+
+## 관련 문서 [#related-documentation]
+
+- [Redis Configuration](/docs/configuration/redis): 캐싱 및 수평적 확장을 위한 Redis 설정
+- [Agents](/docs/features/agents): 도구 사용이 가능한 AI 에이전트
+- [Docker Deployment](/docs/local/docker): 컨테이너 기반 배포
+
+구현 세부 정보는 [PR #10926](https://github.com/danny-avila/LibreChat/pull/10926)을 참조하세요.

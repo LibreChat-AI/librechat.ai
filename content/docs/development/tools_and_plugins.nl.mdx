@@ -1,0 +1,360 @@
+---
+title: Tools en Plugins
+icon: Wrench
+description: >-
+  Dit document laat zien hoe je aangepaste plugins voor LibreChat maakt door de
+  LangChain `Tool` class uit te breiden. Je leert hoe je verschillende API's en
+  functies gebruikt met je plugins, en hoe je deze integreert met het LangChain
+  framework.
+---
+
+**Deze pagina is verouderd. Raadpleeg de [Agents Guide](/docs/features/agents) voor de meest actuele informatie over het gebruik van tools.**
+
+**Het wordt sterk aanbevolen om het [Model Context Protocol](/docs/features/agents#model-context-protocol-mcp) of [OpenAPI Actions](/docs/features/agents#actions) te gebruiken voor het integreren van aangepaste tools.**
+
+# Je eigen Tools/Plugins maken [#making-your-own-toolsplugins]
+
+<Callout type="warning" title="Waarschuwing">
+  Raadpleeg de meest recente tools die worden gebruikt met assistants in `api/app/clients/tools/structured/`, aangezien plugins in de nabije toekomst zullen worden uitgefaseerd ten gunste van tools.
+</Callout>
+
+Het maken van aangepaste plugins voor dit project houdt in dat de `Tool` klasse uit de `langchain/tools` module wordt uitgebreid.
+
+**Opmerking:** Ik zal de term plugin uitwisselbaar gebruiken met tool, aangezien de laatste specifiek is voor LangChain en we ons voornamelijk aan de bibliotheek conformeren.
+
+Je creëert in feite DynamicTools in LangChain-termen. Zie de **[LangChainJS docs](https://js.langchain.com/docs/how_to/custom_tools/)** voor meer informatie.
+
+Deze handleiding leidt je door het proces van het maken van je eigen aangepaste plugins, waarbij de `StableDiffusionAPI` en `WolframAlphaAPI` tools als voorbeelden worden gebruikt.
+
+Bij gebruik van de Functions Agent (de standaardmodus voor plugins), worden tools geconverteerd naar **[OpenAI functions](https://openai.com/blog/function-calling-and-other-api-updates)**; in elk geval worden plugins/tools voorwaardelijk aangeroepen op basis van het feit dat de LLM een specifiek formaat genereert dat wij parsen.
+
+De meest gebruikelijke implementatie van een plugin is het maken van een API-aanroep op basis van de natuurlijke taalinput van de AI, maar er is vrijwel geen limiet aan het programmatische gebruik.
+
+---
+
+## Belangrijkste punten [#key-takeaways]
+
+Dit zijn de belangrijkste punten voor het maken van je eigen plugin:
+
+**1.** [**Importeer vereiste modules:**](#step-1-import-required-modules) Importeer de benodigde modules voor je plugin, inclusief de `Tool` klasse van `langchain/tools` en alle andere modules die je plugin mogelijk nodig heeft.
+
+**2.** [**Definieer je Plugin-klasse:**](#step-2-define-your-tool-class) Definieer een klasse voor je plugin die de `Tool` klasse uitbreidt. Stel de `name` en `description` eigenschappen in de constructor in. Als je plugin inloggegevens of andere variabelen vereist, stel deze dan in vanuit de fields-parameter of vanuit een methode die ze ophaalt uit je procesomgeving. Let op: als je plugin lange, gedetailleerde instructies vereist, kun je een `description_for_model` eigenschap toevoegen en de `description` algemener maken.
+
+**3.** [**Definieer helpermethoden:**](#step-3-define-helper-methods) Definieer helpermethoden binnen je klasse om specifieke taken af te handelen indien nodig.
+
+**4.** [**Implementeer de `_call` methode:**](#step-4-implement-the-_call-method) Implementeer de `_call` methode waar de hoofdfunctionaliteit van je plugin wordt gedefinieerd. Deze methode wordt aangeroepen wanneer het taalmodel besluit om je plugin te gebruiken. Het moet een `input` parameter accepteren en een resultaat retourneren. Als er een fout optreedt, moet de functie een string retourneren die een fout vertegenwoordigt, in plaats van een fout te werpen. Als je plugin meerdere inputs van de LLM vereist, lees dan de [StructuredTools](#StructuredTools) sectie.
+
+**5.** [**Exporteer je plugin en importeer deze in handleTools.js:**](#step-5-export-your-plugin-and-import-into-handletoolsjs) Exporteer je plugin en importeer deze in `handleTools.js`. Voeg je plugin toe aan het `toolConstructors` object in de `loadTools` functie. Als je plugin geavanceerdere initialisatie vereist, voeg deze dan toe aan het `customConstructors` object.
+
+**6.** [**Exporteer je plugin naar index.js:**](#step-6-export-your-plugin-into-indexjs) Exporteer je plugin naar `index.js` onder `tools`. Voeg je plugin toe aan de `module.exports` van de `index.js`, dus je moet deze ook declareren als `const` in dit bestand.
+
+**7.** [**Voeg je plugin toe aan manifest.json:**](#step-7-add-your-plugin-to-manifestjson) Voeg je plugin toe aan `manifest.json`. Volg het strikte formaat voor elk van de velden van het "plugin" object. Als je plugin authenticatie vereist, voeg die details dan toe onder `authConfig` als een array. De `pluginKey` moet overeenkomen met de class `name` van de Tool-klasse die je hebt gemaakt, en de `authField` prop moet overeenkomen met de naam van de process.env variabele.
+
+Onthoud dat de sleutel tot het maken van een aangepaste plugin het uitbreiden van de `Tool` klasse is en het implementeren van de `_call` methode. De `_call` methode is waar je definieert wat je plugin doet. Je kunt ook hulpmethoden en eigenschappen in je klasse definiëren om de functionaliteit van je plugin te ondersteunen.
+
+**Let op: Je kunt alle bestanden die in deze handleiding worden genoemd vinden in de map `.\api\app\langchain\tools`.**
+
+---
+
+## StructuredTools [#structuredtools]
+
+**Multi-Input Plugins**
+
+Als je een plugin wilt maken die baat zou hebben bij meerdere inputs van de LLM, in plaats van een enkelvoudige input-string zoals we zullen bespreken, moet je in plaats daarvan een LangChain **[StructuredTool](https://blog.langchain.dev/structured-tools/)** maken. Een gedetailleerde handleiding hiervoor is in de maak, maar voor nu kun je kijken naar hoe ik StructuredTools heb gemaakt in deze map: `api\app\clients\tools\structured\`. Deze handleiding is fundamenteel voor het begrijpen van StructuredTools, en het wordt aanbevolen dat je eerst verder leest om LangChain-tools beter te begrijpen. De hierboven gelinkte blog is ook nuttig zodra je deze handleiding hebt doorgelezen.
+
+---
+
+## Stap 1: Vereiste modules importeren [#step-1-import-required-modules]
+
+Begin met het importeren van de benodigde modules. Dit omvat de `Tool` klasse uit `langchain/tools` en alle andere modules die je tool mogelijk nodig heeft. Bijvoorbeeld:
+
+```javascript
+const { Tool } = require('langchain/tools')
+// ... whatever else you need
+```
+
+## Stap 2: Definieer je Tool-klasse [#step-2-define-your-tool-class]
+
+Definieer vervolgens een klasse voor je plugin die de `Tool` klasse uitbreidt. De klasse moet een constructor hebben die de `super()` methode aanroept en de `name` en `description` eigenschappen instelt. Deze eigenschappen worden door het taalmodel gebruikt om te bepalen wanneer je tool moet worden aangeroepen en met welke parameters.
+
+**Belangrijk:** je moet de inloggegevens/benodigde variabelen instellen vanuit de fields parameter, of alternatief vanuit een methode die deze ophaalt uit je process environment
+
+```javascript
+class StableDiffusionAPI extends Tool {
+  constructor(fields) {
+    super();
+    this.name = 'stable-diffusion';
+    this.url = fields.SD_WEBUI_URL || this.getServerURL(); // <--- important!
+    this.description = `You can generate images with 'stable-diffusion'. This tool is exclusively for visual content...`;
+  }
+  ...
+}
+```
+
+**Optioneel:** Sinds v0.5.8 kun je bij het gebruik van Functions langere, meer gedetailleerde instructies toevoegen met de `description_for_model` eigenschap. Wanneer je dit doet, wordt het aanbevolen om de `description` eigenschap algemener te maken om tokens te optimaliseren. Elke regel in deze eigenschap krijgt het voorvoegsel `// ` om de manier waarop de prompt wordt gegenereerd voor ChatGPT (chat.openai.com) te spiegelen. Dit formaat sluit nauwer aan bij de prompt engineering van officiële ChatGPT-plugins.
+
+```js
+// ...
+this.description_for_model = `// Generate images and visuals using text with 'stable-diffusion'.
+// Guidelines:
+// - ALWAYS use {{"prompt": "7+ detailed keywords", "negative_prompt": "7+ detailed keywords"}} structure for queries.
+// - Visually describe the moods, details, structures, styles, and/or proportions of the image. Remember, the focus is on visual attributes.
+// - Craft your input by "showing" and not "telling" the imagery. Think in terms of what you'd want to see in a photograph or a painting.
+// - Here's an example for generating a realistic portrait photo of a man:
+// "prompt":"photo of a man in black clothes, half body, high detailed skin, coastline, overcast weather, wind, waves, 8k uhd, dslr, soft lighting, high quality, film grain, Fujifilm XT3"
+// "negative_prompt":"semi-realistic, cgi, 3d, render, sketch, cartoon, drawing, anime, out of frame, low quality, ugly, mutation, deformed"
+// - Generate images only once per human query unless explicitly requested by the user`
+this.description =
+  "You can generate images using text with 'stable-diffusion'. This tool is exclusively for visual content."
+// ...
+```
+
+Binnen de constructor, merk op dat we een gevoelige variabele ophalen uit ofwel het fields-object of uit de **getServerURL**-methode die we definiëren om toegang te krijgen tot een omgevingsvariabele.
+
+```js
+this.url = fields.SD_WEBUI_URL || this.getServerURL()
+```
+
+Alle benodigde inloggegevens worden doorgegeven via `fields` wanneer de gebruiker deze verstrekt vanuit de frontend; anders kan de beheerder de plugin voor alle gebruikers "autoriseren" via omgevingsvariabelen. Alle inloggegevens die vanuit de frontend worden doorgegeven, zijn versleuteld.
+
+```js
+// It's recommended you follow this convention when accessing environment variables.
+  getServerURL() {
+    const url = process.env.SD_WEBUI_URL || '';
+    if (!url) {
+      throw new Error('Missing SD_WEBUI_URL environment variable.');
+    }
+    return url;
+  }
+```
+
+## Stap 3: Helper-methoden definiëren [#step-3-define-helper-methods]
+
+Je kunt helper-methoden binnen je klasse definiëren om specifieke taken af te handelen indien nodig. De `StableDiffusionAPI` klasse bevat bijvoorbeeld methoden zoals `replaceNewLinesWithSpaces`, `getMarkdownImageUrl` en `getServerURL` om verschillende taken uit te voeren.
+
+```javascript
+class StableDiffusionAPI extends Tool {
+  ...
+  replaceNewLinesWithSpaces(inputString) {
+    return inputString.replace(/\r\n|\r|\n/g, ' ');
+  }
+  ...
+}
+```
+
+## Stap 4: Implementeer de `_call` methode [#step-4-implement-the-_call-method]
+
+De `_call` methode is waar de hoofdfunctionaliteit van je plugin wordt geïmplementeerd. Deze methode wordt aangeroepen wanneer het taalmodel besluit om je plugin te gebruiken. Het moet een `input` parameter accepteren en een resultaat retourneren.
+
+> Bij een basis Tool zal de LLM één stringwaarde genereren als invoer. Als je plugin meerdere invoeren van de LLM vereist, lees dan de sectie **[StructuredTools](#StructuredTools)**.
+
+```javascript
+class StableDiffusionAPI extends Tool {
+  ...
+  async _call(input) {
+    // Your tool's functionality goes here
+    ...
+    return this.result;
+  }
+}
+```
+
+**Belangrijk:** De \_call functie is wat de agent daadwerkelijk zal aanroepen. Wanneer er een fout optreedt, moet de functie, indien mogelijk, een string retourneren die een fout vertegenwoordigt, in plaats van een fout te werpen (throwing an error). Hierdoor kan de fout worden doorgegeven aan de LLM en kan de LLM beslissen hoe deze moet worden afgehandeld. Als er een fout wordt geworpen, zal de uitvoering van de agent stoppen.
+
+## Stap 5: Exporteer je plugin en importeer deze in handleTools.js [#step-5-export-your-plugin-and-import-into-handletoolsjs]
+
+**Dit proces zal in de toekomst enigszins geautomatiseerd worden, zolang je je plugin/tool in `api\app\langchain\tools` hebt staan**
+
+```javascript
+// Export
+module.exports = StableDiffusionAPI
+```
+
+```js
+/* api\app\langchain\tools\handleTools.js */
+const StableDiffusionAPI = require('./StableDiffusion');
+...
+```
+
+Zoek in handleTools.js naar het begin van de `loadTools` functie en voeg je plugin/tool toe aan het toolConstructors object.
+
+```js
+const loadTools = async ({ user, model, tools = [], options = {} }) => {
+  const toolConstructors = {
+    calculator: Calculator,
+    google: GoogleSearchAPI,
+    wolfram: WolframAlphaAPI,
+    'dall-e': OpenAICreateImage,
+    'stable-diffusion': StableDiffusionAPI // <----- Newly Added. Note: the key is the 'name' provided in the class.
+    // We will now refer to this name as the `pluginKey`
+  };
+```
+
+Als je Tool-klasse geavanceerdere initialisatie vereist, voeg je deze toe aan het customConstructors-object.
+
+De standaard initialisatie is te zien in de `loadToolWithAuth` functie, en de meeste aangepaste plugins zouden op deze manier geïnitialiseerd moeten worden.
+
+Hier zijn een paar customConstructors, die variërende initialisaties hebben
+
+```javascript
+const customConstructors = {
+  browser: async () => {
+    let openAIApiKey = process.env.OPENAI_API_KEY
+    if (!openAIApiKey) {
+      openAIApiKey = await getUserPluginAuthValue(user, 'OPENAI_API_KEY')
+    }
+    return new WebBrowser({ model, embeddings: new OpenAIEmbeddings({ openAIApiKey }) })
+  },
+  // ...
+  plugins: async () => {
+    return [
+      new HttpRequestTool(),
+      await AIPluginTool.fromPluginUrl(
+        'https://www.klarna.com/.well-known/ai-plugin.json',
+        new ChatOpenAI({ openAIApiKey: options.openAIApiKey, temperature: 0 }),
+      ),
+    ]
+  },
+}
+```
+
+## Stap 6: Exporteer je plugin naar index.js [#step-6-export-your-plugin-into-indexjs]
+
+Zoek het `index.js` bestand onder `api/app/clients/tools`. Je moet je plugin toevoegen aan de `module.exports`. Om het te laten compileren, moet je je plugin ook declareren als `consts`:
+
+```js
+const StructuredSD = require('./structured/StableDiffusion');
+const StableDiffusionAPI = require('./StableDiffusion');
+...
+module.exports = {
+  ...
+  StableDiffusionAPI,
+  StructuredSD,
+  ...
+}
+```
+
+## Stap 7: Voeg je plugin toe aan manifest.json [#step-7-add-your-plugin-to-manifestjson]
+
+**Dit proces zal in de toekomst enigszins worden geautomatiseerd, samen met stap 5, zolang je je plugin/tool in `api\app\langchain\tools` hebt staan en je plugin kan worden geïnitialiseerd met de standaardmethode.**
+
+```json
+  {
+    "name": "Calculator",
+    "pluginKey": "calculator",
+    "description": "Perform simple and complex mathematical calculations.",
+    "icon": "https://i.imgur.com/RHsSG5h.png",
+    "isAuthRequired": "false",
+    "authConfig": []
+  },
+  {
+    "name": "Stable Diffusion",
+    "pluginKey": "stable-diffusion",
+    "description": "Generate photo-realistic images given any text input.",
+    "icon": "https://i.imgur.com/Yr466dp.png",
+    "authConfig": [
+      {
+        "authField": "SD_WEBUI_URL",
+        "label": "Your Stable Diffusion WebUI API URL",
+        "description": "You need to provide the URL of your Stable Diffusion WebUI API. For instructions on how to obtain this, see <a href='url'>Our Docs</a>."
+      }
+    ]
+  },
+```
+
+Elk van de velden van het "plugin" object is belangrijk. Volg dit formaat strikt. Als je plugin authenticatie vereist, voeg je die details toe onder `authConfig` als een array, aangezien er meerdere authenticatievariabelen kunnen zijn. Zie de Calculator plugin voor een voorbeeld van een plugin die geen authenticatie vereist, waarbij de authConfig een lege array is (een array is altijd vereist).
+
+**Let op:** zoals eerder vermeld, komt de `pluginKey` overeen met de class `name` van de Tool-class die je hebt gemaakt.
+**Let op:** de `authField` prop moet overeenkomen met de process.env variabelenaam.
+**Let op:** `authConfig` items kunnen `sensitive` bevatten. Laat dit weg of stel het in op `true` voor API-sleutels en secrets. Stel `sensitive: false` in voor niet-geheime configuratiewaarden zoals URL's, gebruikersnamen, deployment-namen of project-ID's, zodat de UI een tekstveld weergeeft in plaats van een invoerveld voor geheimen.
+
+Hier is een voorbeeld van een plugin met meer dan één inloggegevensvariabele
+
+```json
+  [
+  {
+    "name": "Google",
+    "pluginKey": "google",
+    "description": "Use Google Search to find information about the weather, news, sports, and more.",
+    "icon": "https://i.imgur.com/SMmVkNB.png",
+    "authConfig": [
+      {
+        "authField": "GOOGLE_CSE_ID",
+        "label": "Google CSE ID",
+        "description": "This is your Google Custom Search Engine ID. For instructions on how to obtain this, see <a href='https://github.com/danny-avila/LibreChat/blob/main/docs/features/plugins/google_search.md'>Our Docs</a>.",
+        "sensitive": false
+      },
+      {
+        "authField": "GOOGLE_SEARCH_API_KEY",
+        "label": "Google API Key",
+        "description": "This is your Google Custom Search API Key. For instructions on how to obtain this, see <a href='https://github.com/danny-avila/LibreChat/blob/main/docs/features/plugins/google_search.md'>Our Docs</a>.",
+        "sensitive": true
+      }
+    ]
+  },
+```
+
+## Voorbeeld: WolframAlphaAPI Tool [#example-wolframalphaapi-tool]
+
+Hier is nog een voorbeeld van een aangepaste tool, de `WolframAlphaAPI` tool. Deze tool gebruikt de `axios` module om HTTP-verzoeken te doen aan de Wolfram Alpha API.
+
+```javascript
+const axios = require('axios')
+const { Tool } = require('langchain/tools')
+
+class WolframAlphaAPI extends Tool {
+  constructor(fields) {
+    super()
+    this.name = 'wolfram'
+    this.apiKey = fields.WOLFRAM_APP_ID || this.getAppId()
+    this.description = `Access computation, math, curated knowledge & real-time data through wolframAlpha...`
+  }
+
+  async fetchRawText(url) {
+    try {
+      const response = await axios.get(url, { responseType: 'text' })
+      return response.data
+    } catch (error) {
+      console.error(`Error fetching raw text: ${error}`)
+      throw error
+    }
+  }
+
+  getAppId() {
+    const appId = process.env.WOLFRAM_APP_ID || ''
+    if (!appId) {
+      throw new Error('Missing WOLFRAM_APP_ID environment variable.')
+    }
+    return appId
+  }
+
+  createWolframAlphaURL(query) {
+    const formattedQuery = query.replaceAll(/`/g, '').replaceAll(/\n/g, ' ')
+    const baseURL = 'https://www.wolframalpha.com/api/v1/llm-api'
+    const encodedQuery = encodeURIComponent(formattedQuery)
+    const appId = this.apiKey || this.getAppId()
+    const url = `${baseURL}?input=${encodedQuery}&appid=${appId}`
+    return url
+  }
+
+  async _call(input) {
+    try {
+      const url = this.createWolframAlphaURL(input)
+      const response = await this.fetchRawText(url)
+      return response
+    } catch (error) {
+      if (error.response && error.response.data) {
+        console.log('Error data:', error.response.data)
+        return error.response.data
+      } else {
+        console.log(`Error querying Wolfram Alpha`, error.message)
+        return 'There was an error querying Wolfram Alpha.'
+      }
+    }
+  }
+}
+
+module.exports = WolframAlphaAPI
+```
+
+In dit voorbeeld heeft de `WolframAlphaAPI` klasse hulp-methoden zoals `fetchRawText`, `getAppId` en `createWolframAlphaURL` om specifieke taken af te handelen. De `_call` methode maakt een HTTP-verzoek naar de Wolfram Alpha API en retourneert het antwoord.

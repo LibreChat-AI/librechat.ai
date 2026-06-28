@@ -1,0 +1,131 @@
+---
+title: Tác nhân phụ
+icon: Network
+description: >-
+  Ủy quyền công việc chuyên sâu từ một agent sang các tiến trình chạy của agent
+  con biệt lập.
+---
+
+Subagents cho phép một LibreChat Agent tạo ra một tiến trình con biệt lập để thực hiện các công việc chuyên biệt. Agent con có cửa sổ ngữ cảnh và luồng thực thi công cụ riêng. Agent cha sẽ nhận kết quả từ agent con mà không cần phải nạp mọi lệnh gọi công cụ trung gian, dấu vết hoặc các thao tác tệp tin rườm rà vào ngữ cảnh của chính nó.
+
+Sử dụng subagents cho:
+
+- Các tác vụ phụ nghiên cứu có thể tạo ra đầu ra trung gian dài
+- Xem xét các lượt truyền với một agent chuyên biệt
+- Các tác vụ nặng về công cụ cần được giữ bên ngoài ngữ cảnh cha
+- Phân tách theo kiểu song song, trong đó thành phần cha điều phối và tổng hợp
+
+## Subagents khác với Agent Chain như thế nào [#how-subagents-differ-from-agent-chain]
+
+Agent Chain xây dựng một đồ thị đa tác nhân (multi-agent graph), nơi các tác nhân chuyển kết quả thông qua các bước chuỗi được cấu hình. Các tác nhân phụ (subagents) được tạo ra bởi một tác nhân dưới dạng một lệnh gọi công cụ (tool call) trong quá trình chạy.
+
+- **Agent Chain**: quy trình làm việc đa tác nhân ở cấp độ đồ thị
+- **Subagents**: ủy quyền thời gian chạy từ một agent cha sang các tiến trình con biệt lập
+
+Cả hai đều có thể sử dụng các agent hiện có, nhưng subagent được thiết kế để ủy quyền theo phạm vi từ bên trong vòng lặp suy luận của một agent duy nhất.
+
+## Kích hoạt tính năng [#enable-the-capability]
+
+Tính năng `subagents` được bật theo mặc định. Quản trị viên có thể xóa tính năng này khỏi danh sách capability của endpoint agents để vô hiệu hóa nó.
+
+```yaml filename="librechat.yaml"
+endpoints:
+  agents:
+    capabilities:
+      - 'deferred_tools'
+      - 'execute_code'
+      - 'file_search'
+      - 'web_search'
+      - 'artifacts'
+      - 'subagents'
+      - 'actions'
+      - 'context'
+      - 'skills'
+      - 'tools'
+      - 'chain'
+      - 'ocr'
+```
+
+## Cấu hình một Agent [#configure-an-agent]
+
+Trong Agent Builder, hãy mở **Advanced Settings** và bật **Subagents**.
+
+Các cài đặt khả dụng:
+
+- **Enable subagents**: thêm công cụ tạo subagent vào agent.
+- **Allow self-spawn**: cho phép tác nhân tạo ra một bản sao mới của chính nó trong một ngữ cảnh biệt lập. Tính năng này được bật theo mặc định khi các subagent được kích hoạt.
+- **Additional subagents**: chọn các agent cụ thể mà agent cha có thể khởi tạo.
+
+Hình dạng tác nhân tương đương:
+
+```yaml filename="agent subagents"
+subagents:
+  enabled: true
+  allowSelf: true
+  agent_ids:
+    - 'agent_researcher'
+    - 'agent_reviewer'
+```
+
+## Cấu hình Model Specs [#configure-a-model-spec]
+
+Quản trị viên cũng có thể bật Subagents cho các tác nhân tạm thời được tạo từ một Model Specs. Tính năng này hữu ích khi một Model Specs cần hoạt động như một hồ sơ tác nhân chuyên biệt mà không yêu cầu người dùng phải tạo hoặc chọn một tác nhân gốc đã được lưu trữ.
+
+```yaml filename="modelSpecs / subagents"
+modelSpecs:
+  list:
+    - name: 'research-assistant'
+      label: 'Research Assistant'
+      subagents:
+        enabled: true
+        allowSelf: true
+        agent_ids: []
+      preset:
+        endpoint: 'agents'
+        model: 'gpt-4o'
+```
+
+Chỉ `enabled` và `allowSelf` được gửi đến máy khách trong cấu hình khởi động. Danh sách cho phép `agent_ids` vẫn nằm ở phía máy chủ và được xác thực dựa trên giới hạn `MAX_SUBAGENTS` dùng chung. Các payload yêu cầu từ máy khách không thể cung cấp hoặc ghi đè cấu hình Subagent của Model Specs.
+
+## Hành vi thời gian chạy [#runtime-behavior]
+
+Khi subagents được bật, agent cha sẽ nhận được một công cụ `subagent`. Công cụ này có thể tạo ra:
+
+- `self`, khi `allowSelf` không phải là false
+- Bất kỳ child agent nào được cấu hình trong `agent_ids`
+
+Các child agent chạy với ngữ cảnh biệt lập. Trạng thái tìm kiếm công cụ của parent và ngữ cảnh tích lũy không được sao chép vào quá trình chạy của child. Mức sử dụng model của child-run được tính vào giao dịch của parent và bao gồm trong tổng mức sử dụng của parent. Giao diện người dùng hiển thị child-run dưới dạng một phần hoạt động của agent có thể mở rộng với trạng thái, cập nhật ticker và kết quả cuối cùng.
+
+## Giới hạn [#limits]
+
+LibreChat thực thi các giới hạn này để giữ cho các biểu đồ subagent nằm trong phạm vi cho phép:
+
+<OptionTable
+  options={[
+    ['MAX_SUBAGENTS', 'Number', 'Số lượng subagent tường minh tối đa trên mỗi agent cha.', '10'],
+    ['MAX_SUBAGENT_DEPTH', 'Number', 'Số bước nhảy subagent tường minh tối đa từ một agent gốc.', '5'],
+    [
+      'MAX_SUBAGENT_GRAPH_NODES',
+      'Number',
+      'Số lượng mục tiêu subagent duy nhất tối đa được tải tại thời điểm chạy.',
+      '50',
+    ],
+    [
+      'MAX_SUBAGENT_RUN_CONFIGS',
+      'Number',
+      'Số lượng cấu hình subagent mở rộng tối đa được nhúng vào một yêu cầu chạy.',
+      '100',
+    ],
+  ]}
+/>
+
+## Kiểm soát truy cập [#access-control]
+
+Các child agent đã cấu hình phải hiển thị cho người dùng. Nếu người dùng không có quyền xem đối với một agent được tham chiếu, LibreChat sẽ bỏ qua subagent đó. Đối với các yêu cầu tạo và cập nhật, các mục `subagents.agent_ids` không hợp lệ hoặc không được ủy quyền sẽ bị từ chối.
+
+## Mẹo thiết kế [#design-tips]
+
+- Kích hoạt tính năng tự tạo (self-spawn) khi tác nhân cha đã được xác định phạm vi rõ ràng và chỉ cần một ngữ cảnh mới cho một tác vụ phụ.
+- Thêm các child agents cụ thể khi tác vụ cần một mô hình, tập hợp hướng dẫn, tập hợp công cụ hoặc danh sách cho phép kỹ năng khác.
+- Giữ cho các mô tả con được rõ ràng. Parent sử dụng tên và mô tả của từng child để chọn mục tiêu ủy quyền phù hợp.
+- Sử dụng subagents cho các công việc trung gian cần trả về kết quả cô đọng, không dùng cho việc chuyển giao vĩnh viễn sang một luồng hội thoại khác.

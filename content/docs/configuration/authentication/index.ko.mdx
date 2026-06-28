@@ -1,0 +1,140 @@
+---
+title: 인증 시스템
+icon: BookOpen
+description: >-
+  이 가이드는 안전하고 간편한 이메일 및 소셜 로그인을 제공하는 LibreChat의 사용자 인증 시스템 사용 방법을 설명합니다. 회원가입,
+  로그인, 비밀번호 재설정 등을 설정하는 방법을 배우게 됩니다.
+---
+
+## 일반 [#general]
+
+빠른 개요를 보려면 여기에 제공된 사용자 가이드를 참조하세요: [Authentication](/docs/features/authentication)
+
+다음은 일반적인 구성에 대한 개요입니다.
+
+<OptionTable
+  options={[
+    ['ALLOW_EMAIL_LOGIN', 'boolean', '이메일 로그인만 활성화 또는 비활성화합니다.','ALLOW_EMAIL_LOGIN=true'],
+    ['ALLOW_REGISTRATION', 'boolean', '새 사용자의 이메일 등록을 활성화하거나 비활성화합니다.','ALLOW_REGISTRATION=true'],
+    ['ALLOW_SOCIAL_LOGIN', 'boolean', '사용자가 다양한 소셜 네트워크를 통해 LibreChat에 연결할 수 있도록 허용합니다.','ALLOW_SOCIAL_LOGIN=false'],
+    ['ALLOW_SOCIAL_REGISTRATION', 'boolean', '다양한 소셜 네트워크를 사용하여 새 사용자 등록을 활성화하거나 비활성화합니다.','ALLOW_SOCIAL_REGISTRATION=false'],
+  ]}
+/>
+
+> **참고:** OpenID 및 SAML은 등록만 비활성화하는 기능을 지원하지 않습니다.
+
+빠른 팁:
+
+- 등록이 비활성화된 상태에서도 아래에 자세히 설명된 [create-user 스크립트](#create-user-script)를 사용하여 데이터베이스에 사용자를 직접 추가할 수 있습니다.
+- 사용자를 삭제하려면 아래에 자세히 설명된 [delete-user 스크립트](#delete-user-script)를 사용할 수 있습니다.
+
+
+<ThemeImage
+  light="https://github.com/danny-avila/LibreChat/assets/32828263/4c51dc25-31d3-4c51-8c2a-0cdfb5a25033"
+  dark="https://github.com/danny-avila/LibreChat/assets/32828263/3bc5371d-e51d-4e91-ac68-56db6e85bb2c"
+  alt="사용자 등록 화면"
+/>
+
+
+## 세션 만료 및 리프레시 토큰 [#session-expiry-and-refresh-token]
+
+- 기본값: 세션 만료: 15분, 리프레시 토큰 만료: 7일
+  - 더 자세한 정보는 다음을 참조하세요: **[GitHub PR #927 - Refresh Token](https://github.com/danny-avila/LibreChat/pull/927)**
+
+<OptionTable
+  options={[
+    ['SESSION_EXPIRY', 'integer (milliseconds)', '세션 만료 시간.','SESSION_EXPIRY=1000 * 60 * 15'],
+    ['REFRESH_TOKEN_EXPIRY', 'integer (milliseconds)', '리프레시 토큰 만료 시간.','REFRESH_TOKEN_EXPIRY=(1000 * 60 * 60 * 24) * 7'],
+  ]}
+/>
+
+``` mermaid
+sequenceDiagram
+    Client->>Server: Login request with credentials
+    Server->>Passport: Use authentication strategy (e.g., 'local', 'google', etc.)
+    Passport-->>Server: User object or false/error
+    Note over Server: If valid user...
+    Server->>Server: Generate access and refresh tokens
+    Server->>Database: Store hashed refresh token
+    Server-->>Client: Access token and refresh token
+    Client->>Client: Store access token in HTTP Header and refresh token in HttpOnly cookie
+    Client->>Server: Request with access token from HTTP Header
+    Server-->>Client: Requested data
+    Note over Client,Server: Access token expires
+    Client->>Server: Request with expired access token
+    Server-->>Client: Unauthorized
+    Client->>Server: Request with refresh token from HttpOnly cookie
+    Server->>Database: Retrieve hashed refresh token
+    Server->>Server: Compare hash of provided refresh token with stored hash
+    Note over Server: If hashes match...
+    Server-->>Client: New access token and refresh token
+    Client->>Server: Retry request with new access token
+    Server-->>Client: Requested data
+```
+
+## JWT Secret 및 Refresh Secret [#jwt-secret-and-refresh-secret]
+
+- 새롭고 안전한 값을 사용해야 합니다. 제공된 예시는 32바이트 키(16진수 64자)입니다.
+  - 다음 도구를 사용하여 빠르게 생성하세요: **[JWT Keys](/toolkit/creds_generator)**
+
+<OptionTable
+  options={[
+    ['JWT_SECRET', 'string (hex)', 'JWT 비밀 키.','JWT_SECRET=16f8c0ef4a5d391b26034086c628469d3f9f497f08163ab9b40137092f2909ef'],
+    ['JWT_REFRESH_SECRET', 'string (hex)', 'JWT 리프레시 비밀 키.','JWT_REFRESH_SECRET=eaa5191f2914e30b9387fd84e254e4ba6fc51b4654968a9b0803b456a54b8418'],
+  ]}
+/>
+
+---
+
+## 자동화된 조정 시스템 (선택 사항) [#automated-moderation-system-optional]
+
+자동화된 중재 시스템(Automated Moderation System)은 기본적으로 활성화되어 있습니다. 이 시스템은 점수 매기기 메커니즘을 사용하여 사용자 위반 사항을 추적합니다. 사용자가 과도한 로그인, 등록 또는 메시지 전송과 같은 행동을 하면 위반 점수가 누적됩니다. 설정된 임계값에 도달하면 해당 사용자와 IP는 일시적으로 차단됩니다. 이 시스템은 급격하거나 의심스러운 활동을 모니터링하고 제재함으로써 플랫폼 보안을 보장합니다.
+
+mod system을 설정하려면 [설정 가이드](/docs/configuration/mod_system)를 검토하세요.
+
+> *참고: 개발 모드에서 작동하게 하려면 루트 디렉토리에 `.env.development`라는 파일을 생성하고 `DOMAIN_CLIENT`를 `http://localhost:3090` 또는 `npm run frontend-dev` 실행 시 vite가 제공하는 포트로 설정해야 합니다.*
+
+## 사용자 관리 스크립트 [#user-management-scripts]
+
+### 사용자 스크립트 생성 [#create-user-script]
+
+create-user 스크립트를 사용하면 등록 기능이 비활성화된 경우에도 데이터베이스에 사용자를 직접 추가할 수 있습니다. 사용 방법은 다음과 같습니다:
+
+1. 기본 `docker-compose.yml`의 경우 (앱을 시작하기 위해 `docker compose up`을 사용하는 경우):
+   ```bash
+   docker compose exec api npm run create-user
+   ```
+
+2. `deploy-compose.yml`의 경우 ([Ubuntu Docker 가이드](/docs/remote/docker_linux)를 따랐다면):
+   ```bash
+   docker exec -it LibreChat-API /bin/sh -c "cd .. && npm run create-user"
+   ```
+
+3. 로컬 개발을 위해 (프로젝트 루트에서):
+   ```bash
+   npm run create-user
+   ```
+
+프롬프트에 따라 새 사용자의 이메일과 비밀번호를 입력하세요.
+
+### 사용자 삭제 스크립트 [#delete-user-script]
+
+사용자를 삭제하려면 delete-user 스크립트를 사용할 수 있습니다:
+
+1. 기본 `docker-compose.yml`의 경우 (앱을 시작하기 위해 `docker compose up`을 사용하는 경우):
+   ```bash
+   docker compose exec api npm run delete-user email@domain.com
+   ```
+
+2. `deploy-compose.yml`의 경우 ([Ubuntu Docker 가이드](/docs/remote/docker_linux)를 따랐다면):
+   ```bash
+   docker exec -it LibreChat-API /bin/sh -c "cd .. && npm run delete-user email@domain.com"
+   ```
+
+3. 로컬 개발을 위해 (프로젝트 루트에서):
+   ```bash
+   npm run delete-user email@domain.com
+   ```
+
+`email@domain.com`을 삭제하려는 사용자의 이메일 주소로 바꾸세요.
+

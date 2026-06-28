@@ -1,0 +1,360 @@
+---
+title: Araçlar ve Eklentiler
+icon: Wrench
+description: >-
+  Bu doküman, LangChain `Tool` sınıfını genişleterek LibreChat için nasıl özel
+  eklentiler oluşturacağınızı gösterir. Eklentilerinizle farklı API'leri ve
+  işlevleri nasıl kullanacağınızı ve bunları LangChain çerçevesiyle nasıl
+  entegre edeceğinizi öğreneceksiniz.
+---
+
+**Bu sayfa kullanımdan kaldırılmıştır. Araçların kullanımıyla ilgili en güncel bilgiler için lütfen [Agents Guide](/docs/features/agents) bölümüne başvurun.**
+
+Özel araçları entegre etmek için [Model Context Protocol](/docs/features/agents#model-context-protocol-mcp) veya [OpenAPI Actions](/docs/features/agents#actions) kullanmanız şiddetle tavsiye edilir.
+
+# Kendi Araçlarınızı/Eklentilerinizi Oluşturma [#making-your-own-toolsplugins]
+
+<Callout type="warning" title="Uyarı">
+  Lütfen `api/app/clients/tools/structured/` dizininde asistanlarla kullanılan en güncel araçlara başvurun; çünkü eklentiler yakın gelecekte araçlar lehine kullanımdan kaldırılacaktır.
+</Callout>
+
+Bu proje için özel eklentiler oluşturmak, `langchain/tools` modülündeki `Tool` sınıfını genişletmeyi içerir.
+
+**Not:** "Plugin" (eklenti) kelimesini "tool" (araç) ile birbirinin yerine kullanacağım; zira ikincisi LangChain'e özgüdür ve biz esasen bu kütüphaneye uyum sağlıyoruz.
+
+Esasen LangChain terminolojisiyle DynamicTools oluşturuyorsunuz. Daha fazla bilgi için **[LangChainJS docs](https://js.langchain.com/docs/how_to/custom_tools/)** sayfasına bakın.
+
+Bu kılavuz, `StableDiffusionAPI` ve `WolframAlphaAPI` araçlarını örnek olarak kullanarak kendi özel eklentilerinizi oluşturma sürecinde size yol gösterecektir.
+
+Functions Agent (eklentiler için varsayılan mod) kullanılırken, araçlar **[OpenAI functions](https://openai.com/blog/function-calling-and-other-api-updates)** formatına dönüştürülür; her durumda, eklentiler/araçlar, LLM'in ayrıştırdığımız belirli bir formatı oluşturmasına bağlı olarak koşullu bir şekilde çağrılır.
+
+Bir eklentinin en yaygın uygulaması, yapay zekadan gelen doğal dil girdisine dayalı bir API çağrısı yapmaktır, ancak programatik kullanım durumlarında neredeyse hiçbir sınır yoktur.
+
+---
+
+## Temel Çıkarımlar [#key-takeaways]
+
+Kendi eklentinizi oluşturmanız için temel çıkarımlar şunlardır:
+
+**1.** [**Gerekli Modülleri İçe Aktarın:**](#step-1-import-required-modules) `langchain/tools` içindeki `Tool` sınıfı ve eklentinizin ihtiyaç duyabileceği diğer modüller dahil olmak üzere, eklentiniz için gerekli modülleri içe aktarın.
+
+**2.** [**Eklenti Sınıfınızı Tanımlayın:**](#step-2-define-your-tool-class) `Tool` sınıfını genişleten eklentiniz için bir sınıf tanımlayın. Kurucu (constructor) içerisinde `name` ve `description` özelliklerini ayarlayın. Eklentiniz kimlik bilgileri veya başka değişkenler gerektiriyorsa, bunları fields parametresinden veya işlem ortamınızdan alan bir metot aracılığıyla ayarlayın. Not: Eklentiniz uzun ve ayrıntılı talimatlar gerektiriyorsa, bir `description_for_model` özelliği ekleyebilir ve `description` kısmını daha genel tutabilirsiniz.
+
+**3.** [**Yardımcı Metotları Tanımlayın:**](#step-3-define-helper-methods) Gerekiyorsa belirli görevleri yerine getirmek için sınıfınızın içinde yardımcı metotlar tanımlayın.
+
+**4.** [**`_call` Metodunu Uygulayın:**](#step-4-implement-the-_call-method) Eklentinizin ana işlevselliğinin tanımlandığı `_call` metodunu uygulayın. Bu metot, dil modeli eklentinizi kullanmaya karar verdiğinde çağrılır. Bir `input` parametresi almalı ve bir sonuç döndürmelidir. Bir hata oluşursa, fonksiyon bir hata fırlatmak yerine hatayı temsil eden bir dizge (string) döndürmelidir. Eklentiniz LLM'den birden fazla girdi gerektiriyorsa, [StructuredTools](#StructuredTools) bölümünü okuyun.
+
+**5.** [**Eklentinizi Dışa Aktarın ve handleTools.js İçine İçe Aktarın:**](#step-5-export-your-plugin-and-import-into-handletoolsjs) Eklentinizi dışa aktarın ve `handleTools.js` içine içe aktarın. Eklentinizi `loadTools` fonksiyonundaki `toolConstructors` nesnesine ekleyin. Eklentiniz daha gelişmiş bir başlatma gerektiriyorsa, onu `customConstructors` nesnesine ekleyin.
+
+**6.** [**Eklentinizi index.js İçine Aktarın:**](#step-6-export-your-plugin-into-indexjs) Eklentinizi `tools` altındaki `index.js` dosyasına aktarın. Eklentinizi `index.js` dosyasının `module.exports` kısmına ekleyin; bu nedenle onu bu dosyada `const` olarak da tanımlamanız gerekir.
+
+**7.** [**Eklentinizi manifest.json dosyasına ekleyin:**](#step-7-add-your-plugin-to-manifestjson) Eklentinizi `manifest.json` dosyasına ekleyin. "plugin" nesnesinin her bir alanı için katı formata uyun. Eklentiniz kimlik doğrulaması gerektiriyorsa, bu ayrıntıları `authConfig` altında bir dizi olarak ekleyin. `pluginKey`, oluşturduğunuz Tool sınıfının `name` değeriyle eşleşmeli ve `authField` özelliği process.env değişken adıyla eşleşmelidir.
+
+Unutmayın, özel bir eklenti oluşturmanın anahtarı `Tool` sınıfını genişletmek ve `_call` metodunu uygulamaktır. `_call` metodu, eklentinizin ne yapacağını tanımladığınız yerdir. Ayrıca eklentinizin işlevselliğini desteklemek için sınıfınızda yardımcı metotlar ve özellikler de tanımlayabilirsiniz.
+
+**Not: Bu kılavuzda bahsedilen tüm dosyaları `.\api\app\langchain\tools` klasöründe bulabilirsiniz.**
+
+---
+
+## StructuredTools [#structuredtools]
+
+**Çoklu Girdi Eklentileri**
+
+Eğer inceleyeceğimiz tekil bir girdi dizisi yerine LLM'den gelen çoklu girdilerden faydalanacak bir eklenti yapmak istiyorsanız, bunun yerine bir LangChain **[StructuredTool](https://blog.langchain.dev/structured-tools/)** oluşturmanız gerekir. Bunun için detaylı bir rehber hazırlanmaktadır, ancak şimdilik `api\app\clients\tools\structured\` dizininde StructuredTool'ları nasıl oluşturduğuma bakabilirsiniz. Bu rehber, StructuredTool'ları anlamak için temel niteliğindedir ve önce LangChain araçlarını daha iyi anlamak için okumaya devam etmeniz önerilir. Yukarıda bağlantısı verilen blog yazısı da bu rehberi okuduktan sonra faydalı olacaktır.
+
+---
+
+## Adım 1: Gerekli Modülleri İçe Aktarın [#step-1-import-required-modules]
+
+Gerekli modülleri içe aktararak başlayın. Bu, `langchain/tools` içinden `Tool` sınıfını ve aracınızın ihtiyaç duyabileceği diğer modülleri içerecektir. Örneğin:
+
+```javascript
+const { Tool } = require('langchain/tools')
+// ... whatever else you need
+```
+
+## Adım 2: Araç Sınıfınızı Tanımlayın [#step-2-define-your-tool-class]
+
+Ardından, `Tool` sınıfını genişleten eklentiniz için bir sınıf tanımlayın. Sınıf, `super()` metodunu çağıran ve `name` ile `description` özelliklerini ayarlayan bir kurucuya (constructor) sahip olmalıdır. Bu özellikler, dil modeli tarafından aracınızı ne zaman ve hangi parametrelerle çağıracağına karar vermek için kullanılacaktır.
+
+**Önemli:** credentials/gerekli değişkenleri fields parametresinden veya alternatif olarak bunları process ortamınızdan alan bir yöntemle ayarlamalısınız.
+
+```javascript
+class StableDiffusionAPI extends Tool {
+  constructor(fields) {
+    super();
+    this.name = 'stable-diffusion';
+    this.url = fields.SD_WEBUI_URL || this.getServerURL(); // <--- important!
+    this.description = `You can generate images with 'stable-diffusion'. This tool is exclusively for visual content...`;
+  }
+  ...
+}
+```
+
+**İsteğe bağlı:** v0.5.8 itibarıyla, Functions kullanırken `description_for_model` özelliği ile daha uzun ve ayrıntılı talimatlar ekleyebilirsiniz. Bunu yaparken, token kullanımını optimize etmek için `description` özelliğini daha genel tutmanız önerilir. Bu özellikteki her satır, ChatGPT (chat.openai.com) için istemin nasıl oluşturulduğunu yansıtmak amacıyla `// ` ön eki ile başlar. Bu biçim, resmi ChatGPT eklentilerinin istem mühendisliği ile daha yakından uyumludur.
+
+```js
+// ...
+this.description_for_model = `// Generate images and visuals using text with 'stable-diffusion'.
+// Guidelines:
+// - ALWAYS use {{"prompt": "7+ detailed keywords", "negative_prompt": "7+ detailed keywords"}} structure for queries.
+// - Visually describe the moods, details, structures, styles, and/or proportions of the image. Remember, the focus is on visual attributes.
+// - Craft your input by "showing" and not "telling" the imagery. Think in terms of what you'd want to see in a photograph or a painting.
+// - Here's an example for generating a realistic portrait photo of a man:
+// "prompt":"photo of a man in black clothes, half body, high detailed skin, coastline, overcast weather, wind, waves, 8k uhd, dslr, soft lighting, high quality, film grain, Fujifilm XT3"
+// "negative_prompt":"semi-realistic, cgi, 3d, render, sketch, cartoon, drawing, anime, out of frame, low quality, ugly, mutation, deformed"
+// - Generate images only once per human query unless explicitly requested by the user`
+this.description =
+  "You can generate images using text with 'stable-diffusion'. This tool is exclusively for visual content."
+// ...
+```
+
+Constructor içerisinde, hassas bir değişkeni ya fields nesnesinden ya da bir ortam değişkenine erişmek için tanımladığımız **getServerURL** metodundan aldığımıza dikkat edin.
+
+```js
+this.url = fields.SD_WEBUI_URL || this.getServerURL()
+```
+
+Gerekli tüm kimlik bilgileri, kullanıcı bunları arayüzden sağladığında `fields` aracılığıyla iletilir; aksi takdirde yönetici, ortam değişkenleri aracılığıyla eklentiyi tüm kullanıcılar için "yetkilendirebilir". Arayüzden iletilen tüm kimlik bilgileri şifrelenir.
+
+```js
+// It's recommended you follow this convention when accessing environment variables.
+  getServerURL() {
+    const url = process.env.SD_WEBUI_URL || '';
+    if (!url) {
+      throw new Error('Missing SD_WEBUI_URL environment variable.');
+    }
+    return url;
+  }
+```
+
+## Adım 3: Yardımcı Metotları Tanımlayın [#step-3-define-helper-methods]
+
+Gerektiğinde belirli görevleri yerine getirmek için sınıfınız içinde yardımcı metotlar tanımlayabilirsiniz. Örneğin, `StableDiffusionAPI` sınıfı; çeşitli görevleri yönetmek için `replaceNewLinesWithSpaces`, `getMarkdownImageUrl` ve `getServerURL` gibi metotlar içerir.
+
+```javascript
+class StableDiffusionAPI extends Tool {
+  ...
+  replaceNewLinesWithSpaces(inputString) {
+    return inputString.replace(/\r\n|\r|\n/g, ' ');
+  }
+  ...
+}
+```
+
+## Adım 4: `_call` Metodunu Uygulayın [#step-4-implement-the-_call-method]
+
+`_call` metodu, eklentinizin ana işlevselliğinin uygulandığı yerdir. Bu metot, dil modeli eklentinizi kullanmaya karar verdiğinde çağrılır. Bir `input` parametresi almalı ve bir sonuç döndürmelidir.
+
+> Temel bir Tool içinde, LLM girdi olarak bir string değeri oluşturacaktır. Eğer eklentiniz LLM'den birden fazla girdi gerektiriyorsa, **[StructuredTools](#StructuredTools)** bölümünü okuyun.
+
+```javascript
+class StableDiffusionAPI extends Tool {
+  ...
+  async _call(input) {
+    // Your tool's functionality goes here
+    ...
+    return this.result;
+  }
+}
+```
+
+**Önemli:** \_call işlevi, ajanın gerçekte çağıracağı işlevdir. Bir hata oluştuğunda, işlev mümkün olduğunda bir hata fırlatmak yerine hatayı temsil eden bir dizge (string) döndürmelidir. Bu, hatanın LLM'e iletilmesini ve LLM'in bunu nasıl ele alacağına karar vermesini sağlar. Eğer bir hata fırlatılırsa, ajanın yürütülmesi duracaktır.
+
+## Adım 5: Eklentinizi dışa aktarın ve handleTools.js içine içe aktarın [#step-5-export-your-plugin-and-import-into-handletoolsjs]
+
+**Bu işlem, eklentiniz/aracınız `api\app\langchain\tools` dizininde bulunduğu sürece gelecekte bir nebze otomatikleştirilecektir.**
+
+```javascript
+// Export
+module.exports = StableDiffusionAPI
+```
+
+```js
+/* api\app\langchain\tools\handleTools.js */
+const StableDiffusionAPI = require('./StableDiffusion');
+...
+```
+
+handleTools.js dosyasında, `loadTools` fonksiyonunun başlangıcını bulun ve eklentinizi/aracınızı toolConstructors nesnesine ekleyin.
+
+```js
+const loadTools = async ({ user, model, tools = [], options = {} }) => {
+  const toolConstructors = {
+    calculator: Calculator,
+    google: GoogleSearchAPI,
+    wolfram: WolframAlphaAPI,
+    'dall-e': OpenAICreateImage,
+    'stable-diffusion': StableDiffusionAPI // <----- Newly Added. Note: the key is the 'name' provided in the class.
+    // We will now refer to this name as the `pluginKey`
+  };
+```
+
+Eğer Tool sınıfınız daha gelişmiş bir başlatma (initialization) gerektiriyorsa, bunu customConstructors nesnesine eklemeniz gerekir.
+
+Varsayılan başlatma işlemi `loadToolWithAuth` fonksiyonunda görülebilir ve çoğu özel eklenti bu şekilde başlatılmalıdır.
+
+İşte farklı başlatma yöntemlerine sahip birkaç customConstructors örneği
+
+```javascript
+const customConstructors = {
+  browser: async () => {
+    let openAIApiKey = process.env.OPENAI_API_KEY
+    if (!openAIApiKey) {
+      openAIApiKey = await getUserPluginAuthValue(user, 'OPENAI_API_KEY')
+    }
+    return new WebBrowser({ model, embeddings: new OpenAIEmbeddings({ openAIApiKey }) })
+  },
+  // ...
+  plugins: async () => {
+    return [
+      new HttpRequestTool(),
+      await AIPluginTool.fromPluginUrl(
+        'https://www.klarna.com/.well-known/ai-plugin.json',
+        new ChatOpenAI({ openAIApiKey: options.openAIApiKey, temperature: 0 }),
+      ),
+    ]
+  },
+}
+```
+
+## Adım 6: Eklentinizi index.js dosyasına aktarın [#step-6-export-your-plugin-into-indexjs]
+
+`api/app/clients/tools` altındaki `index.js` dosyasını bulun. Eklentinizi derlenmesini sağlamak için `module.exports` içine eklemeniz ve ayrıca eklentinizi `consts` olarak tanımlamanız gerekecektir:
+
+```js
+const StructuredSD = require('./structured/StableDiffusion');
+const StableDiffusionAPI = require('./StableDiffusion');
+...
+module.exports = {
+  ...
+  StableDiffusionAPI,
+  StructuredSD,
+  ...
+}
+```
+
+## Adım 7: Eklentinizi manifest.json dosyasına ekleyin [#step-7-add-your-plugin-to-manifestjson]
+
+**Bu işlem, eklentiniz/aracınız `api\app\langchain\tools` dizininde bulunduğu ve varsayılan yöntemle başlatılabildiği sürece, 5. adımla birlikte gelecekte bir nebze otomatikleştirilecektir.**
+
+```json
+  {
+    "name": "Calculator",
+    "pluginKey": "calculator",
+    "description": "Perform simple and complex mathematical calculations.",
+    "icon": "https://i.imgur.com/RHsSG5h.png",
+    "isAuthRequired": "false",
+    "authConfig": []
+  },
+  {
+    "name": "Stable Diffusion",
+    "pluginKey": "stable-diffusion",
+    "description": "Generate photo-realistic images given any text input.",
+    "icon": "https://i.imgur.com/Yr466dp.png",
+    "authConfig": [
+      {
+        "authField": "SD_WEBUI_URL",
+        "label": "Your Stable Diffusion WebUI API URL",
+        "description": "You need to provide the URL of your Stable Diffusion WebUI API. For instructions on how to obtain this, see <a href='url'>Our Docs</a>."
+      }
+    ]
+  },
+```
+
+Each of the fields of the "plugin" object are important. Follow this format strictly. If your plugin requires authentication, you will add those details under `authConfig` as an array since there could be multiple authentication variables. See the Calculator plugin for an example of one that doesn't require authentication, where the authConfig is an empty array (an array is always required).
+
+**Not:** daha önce belirtildiği gibi, `pluginKey` oluşturduğunuz Tool sınıfının `name` değeriyle eşleşmelidir.
+**Not:** `authField` özelliği, process.env değişken adı ile eşleşmelidir.
+**Not:** `authConfig` girdileri `sensitive` içerebilir. API anahtarları ve gizli bilgiler için bunu atlayın veya `true` olarak ayarlayın. URL'ler, kullanıcı adları, dağıtım adları veya proje kimlikleri gibi gizli olmayan kurulum değerleri için `sensitive: false` olarak ayarlayın; böylece kullanıcı arayüzü gizli bir giriş alanı yerine düz metin alanı oluşturur.
+
+Birden fazla kimlik bilgisi değişkenine sahip bir eklenti örneği aşağıdadır
+
+```json
+  [
+  {
+    "name": "Google",
+    "pluginKey": "google",
+    "description": "Use Google Search to find information about the weather, news, sports, and more.",
+    "icon": "https://i.imgur.com/SMmVkNB.png",
+    "authConfig": [
+      {
+        "authField": "GOOGLE_CSE_ID",
+        "label": "Google CSE ID",
+        "description": "This is your Google Custom Search Engine ID. For instructions on how to obtain this, see <a href='https://github.com/danny-avila/LibreChat/blob/main/docs/features/plugins/google_search.md'>Our Docs</a>.",
+        "sensitive": false
+      },
+      {
+        "authField": "GOOGLE_SEARCH_API_KEY",
+        "label": "Google API Key",
+        "description": "This is your Google Custom Search API Key. For instructions on how to obtain this, see <a href='https://github.com/danny-avila/LibreChat/blob/main/docs/features/plugins/google_search.md'>Our Docs</a>.",
+        "sensitive": true
+      }
+    ]
+  },
+```
+
+## Örnek: WolframAlphaAPI Aracı [#example-wolframalphaapi-tool]
+
+İşte özel bir aracın, `WolframAlphaAPI` aracının bir başka örneği. Bu araç, Wolfram Alpha API'sine HTTP istekleri yapmak için `axios` modülünü kullanır.
+
+```javascript
+const axios = require('axios')
+const { Tool } = require('langchain/tools')
+
+class WolframAlphaAPI extends Tool {
+  constructor(fields) {
+    super()
+    this.name = 'wolfram'
+    this.apiKey = fields.WOLFRAM_APP_ID || this.getAppId()
+    this.description = `Access computation, math, curated knowledge & real-time data through wolframAlpha...`
+  }
+
+  async fetchRawText(url) {
+    try {
+      const response = await axios.get(url, { responseType: 'text' })
+      return response.data
+    } catch (error) {
+      console.error(`Error fetching raw text: ${error}`)
+      throw error
+    }
+  }
+
+  getAppId() {
+    const appId = process.env.WOLFRAM_APP_ID || ''
+    if (!appId) {
+      throw new Error('Missing WOLFRAM_APP_ID environment variable.')
+    }
+    return appId
+  }
+
+  createWolframAlphaURL(query) {
+    const formattedQuery = query.replaceAll(/`/g, '').replaceAll(/\n/g, ' ')
+    const baseURL = 'https://www.wolframalpha.com/api/v1/llm-api'
+    const encodedQuery = encodeURIComponent(formattedQuery)
+    const appId = this.apiKey || this.getAppId()
+    const url = `${baseURL}?input=${encodedQuery}&appid=${appId}`
+    return url
+  }
+
+  async _call(input) {
+    try {
+      const url = this.createWolframAlphaURL(input)
+      const response = await this.fetchRawText(url)
+      return response
+    } catch (error) {
+      if (error.response && error.response.data) {
+        console.log('Error data:', error.response.data)
+        return error.response.data
+      } else {
+        console.log(`Error querying Wolfram Alpha`, error.message)
+        return 'There was an error querying Wolfram Alpha.'
+      }
+    }
+  }
+}
+
+module.exports = WolframAlphaAPI
+```
+
+Bu örnekte, `WolframAlphaAPI` sınıfı, belirli görevleri yerine getirmek için `fetchRawText`, `getAppId` ve `createWolframAlphaURL` gibi yardımcı metotlara sahiptir. `_call` metodu, Wolfram Alpha API'sine bir HTTP isteği yapar ve yanıtı döndürür.

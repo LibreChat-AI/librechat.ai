@@ -1,0 +1,276 @@
+---
+title: CloudFront met S3
+icon: AWS
+description: >-
+  Configureer Amazon CloudFront als de CDN-laag voor LibreChat-bestanden die
+  zijn opgeslagen in S3, inclusief stabiele medialinks, signed cookies en signed
+  download-URL's.
+---
+
+CloudFront stelt LibreChat in staat om bestanden in S3 te bewaren terwijl afbeeldingen, avatars en downloads via stabiele CDN-URL's worden geserveerd. Dit is de aanbevolen AWS-configuratie wanneer je de duurzaamheid van S3 wilt zonder gebruikers bloot te stellen aan verlopende S3 presigned image URL's.
+
+## Wanneer CloudFront gebruiken [#when-to-use-cloudfront]
+
+Gebruik CloudFront wanneer je:
+
+- Stabiele avatar- en afbeeldings-URL's die blijven renderen in de UI
+- Globale edge-caching voor een S3-bucket
+- Ondertekende cookies voor privé inline afbeeldingen en avatars
+- Backend-geautoriseerde ondertekende URL's voor downloads
+- Optionele cache-invalidering wanneer bestanden worden verwijderd
+
+<Callout type="info" title="S3 is nog steeds vereist">
+  De `cloudfront` bestandsstrategie slaat objecten op in S3 en retourneert CloudFront-URL's. Configureer eerst de S3 omgevingsvariabelen en voeg vervolgens het `cloudfront` blok toe in `librechat.yaml`.
+</Callout>
+
+## Vereisten [#requirements]
+
+- Een private S3-bucket
+- Een CloudFront-distributie met de S3-bucket als origin
+- Een Origin Access Control (OAC) of gelijkwaardig origin-toegangsbeleid zodat CloudFront kan lezen vanuit S3
+- `AWS_REGION` en `AWS_BUCKET_NAME`
+- `AWS_ACCESS_KEY_ID` en `AWS_SECRET_ACCESS_KEY`, tenzij je deployment gebruikmaakt van een AWS identity provider zoals IRSA
+- `CLOUDFRONT_KEY_PAIR_ID` en `CLOUDFRONT_PRIVATE_KEY` bij het gebruik van signed cookies of signed download URLs
+
+## Omgevingsvariabelen [#environment-variables]
+
+```bash filename=".env"
+AWS_ACCESS_KEY_ID=your_access_key_id
+AWS_SECRET_ACCESS_KEY=your_secret_access_key
+AWS_REGION=us-east-1
+AWS_BUCKET_NAME=your_bucket_name
+
+# Required for signed cookies and signed CloudFront download URLs
+CLOUDFRONT_KEY_PAIR_ID=K1234567890ABC
+CLOUDFRONT_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----"
+```
+
+`CLOUDFRONT_PRIVATE_KEY` moet de volledige PEM-privésleutel bevatten. Zet deze in `.env` tussen aanhalingstekens en behoud de regeleinden, of injecteer deze vanuit de secret manager van je platform.
+
+## Basisconfiguratie [#basic-configuration]
+
+Gebruik `fileStrategies` wanneer je CloudFront wilt gebruiken voor afbeeldingen en avatars, terwijl documenten op S3 signed URLs behouden blijven:
+
+```yaml filename="librechat.yaml"
+version: 1.3.11
+
+fileStrategies:
+  avatar: 'cloudfront'
+  image: 'cloudfront'
+  document: 's3'
+
+cloudfront:
+  domain: 'https://cdn.example.com'
+  imageSigning: 'none'
+  urlExpiry: 3600
+```
+
+Gebruik `fileStrategy` als elk bestandstype CloudFront moet gebruiken:
+
+```yaml filename="librechat.yaml"
+fileStrategy: 'cloudfront'
+
+cloudfront:
+  domain: 'https://cdn.example.com'
+```
+
+## Ondertekende cookies [#signed-cookies]
+
+Ondertekende cookies (signed cookies) zijn de veilige modus voor privé inline afbeeldingen en avatars. Hiermee kan LibreChat stabiele CloudFront-URL's in berichten en records behouden, terwijl de toegang wordt geautoriseerd met kortstondige cookies.
+
+```yaml filename="librechat.yaml"
+fileStrategies:
+  avatar: 'cloudfront'
+  image: 'cloudfront'
+  document: 's3'
+
+cloudfront:
+  domain: 'https://cdn.example.com'
+  imageSigning: 'cookies'
+  cookieDomain: '.example.com'
+  cookieExpiry: 1800
+  urlExpiry: 3600
+  requireSignedAccess: true
+```
+
+### Domeinvereisten [#domain-requirements]
+
+Voor ondertekende cookies moeten de LibreChat API en de CloudFront-hostnaam een bovenliggend domein delen:
+
+- API: `https://api.example.com`
+- CloudFront CNAME: `https://cdn.example.com`
+- `cookieDomain: ".example.com"`
+
+`cookieDomain` moet beginnen met een punt. De browser zal CloudFront-cookies niet naar een niet-gerelateerd domein sturen.
+
+### Wat cookies beschermen [#what-cookies-protect]
+
+LibreChat beperkt ondertekende cookies tot inline mediapaden:
+
+- `/i/...` privé geüploade of gegenereerde afbeeldingen, beperkt tot de gebruiker
+- `/a/...` avatar-assets, gescopeerd naar de tenant wanneer `tenantId` aanwezig is
+
+Documenten, algemene uploads en code-outputs blijven buiten die inline mediapaden. Downloads worden geautoriseerd door de backend en geretourneerd als ondertekende CloudFront-URL's.
+
+### Cookie vernieuwen [#cookie-refresh]
+
+Wanneer de signed-cookie modus actief is, adverteert LibreChat een cookie-verversings-endpoint in de startup-configuratie:
+
+```text
+POST /api/auth/cloudfront/refresh
+```
+
+Geverifieerde sessies verversen cookies tijdens auth-flows, token-verversing en CloudFront-paden voor het opnieuw proberen van afbeeldingen. Het verversingsantwoord bevat de levensduur van de cookie en de aanbevolen timing voor het verversen.
+
+## Ondertekende downloads [#signed-downloads]
+
+LibreChat gebruikt ondertekende CloudFront-URL's voor geautoriseerde downloads. De `urlExpiry` instelling bepaalt hun levensduur in seconden:
+
+```yaml filename="librechat.yaml"
+cloudfront:
+  domain: 'https://cdn.example.com'
+  imageSigning: 'cookies'
+  cookieDomain: '.example.com'
+  urlExpiry: 3600
+```
+
+Voor het overschrijven van de bestandsnaam en content-type bij directe downloads, configureer het CloudFront cache/origin request policy om deze query strings door te sturen naar S3:
+
+- `response-content-disposition`
+- `response-content-type`
+
+Voor downloadpaden, voeg een response headers policy toe met:
+
+- `X-Content-Type-Options: nosniff`
+- Een restrictief Content Security Policy, zoals `default-src 'none'`
+
+## Cache-invalidatie [#cache-invalidation]
+
+Standaard verwijdert LibreChat het S3-object en maakt het geen CloudFront-invalidation aan. Schakel invalidation in wanneer verwijderde bestanden onmiddellijk uit de edge-cache moeten verdwijnen:
+
+```yaml filename="librechat.yaml"
+cloudfront:
+  domain: 'https://cdn.example.com'
+  distributionId: 'E1234ABCD'
+  invalidateOnDelete: true
+```
+
+`distributionId` is vereist wanneer `invalidateOnDelete` op `true` is ingesteld. De AWS-identiteit die door LibreChat wordt gebruikt, heeft ook `cloudfront:CreateInvalidation` nodig.
+
+## Multi-Region Object Paths [#multi-region-object-paths]
+
+`includeRegionInPath` voegt de opslagregio toe aan nieuw gegenereerde object-keys:
+
+```yaml filename="librechat.yaml"
+cloudfront:
+  domain: 'https://cdn.example.com'
+  storageRegion: 'us-east-2'
+  includeRegionInPath: true
+```
+
+Wanneer ingeschakeld, bevatten nieuwe sleutels regio-bewuste padsegmenten, bijvoorbeeld:
+
+```text
+/i/r/us-east-2/t/tenantId/images/userId/file.png
+/a/r/us-east-2/t/tenantId/avatars/userId/avatar.png
+/r/us-east-2/t/tenantId/images/userId/file.pdf
+```
+
+Dit heeft alleen invloed op nieuw gegenereerde sleutels. Bestaande bestanden worden niet verplaatst. LibreChat configureert geen CloudFront-origins, Route 53 of regionale routering voor je.
+
+## CloudFront-blokreferentie [#cloudfront-block-reference]
+
+<OptionTable
+  options={[
+    [
+      'domain',
+      'string',
+      'CloudFront distributiedomein of CNAME. Vereist.',
+      'domain: "https://cdn.example.com"',
+    ],
+    [
+      'distributionId',
+      'string',
+      'Distributie-ID gebruikt voor cache-invalidaties.',
+      'distributionId: "E1234ABCD"',
+    ],
+    [
+      'invalidateOnDelete',
+      'boolean',
+      'Maak een CloudFront-invalidation aan wanneer een bestand wordt verwijderd. Standaard: false.',
+      'invalidateOnDelete: false',
+    ],
+    [
+      'imageSigning',
+      'string',
+      'Inline media-toegangsmodus. Gebruik `"none"` voor publieke CloudFront-toegang of `"cookies"` voor ondertekende cookies. `"url"` is gereserveerd en niet geïmplementeerd voor afbeeldingen.',
+      'imageSigning: "cookies"',
+    ],
+    [
+      'cookieDomain',
+      'string',
+      'Gedeeld hoofddomein voor ondertekende cookies. Vereist wanneer `imageSigning` is ingesteld op `"cookies"`.',
+      'cookieDomain: ".example.com"',
+    ],
+    [
+      'cookieExpiry',
+      'number',
+      'Levensduur van ondertekende cookie in seconden. Standaard: 1800. Maximum: 604800.',
+      'cookieExpiry: 1800',
+    ],
+    [
+      'urlExpiry',
+      'number',
+      'Levensduur van de ondertekende download-URL in seconden. Standaard: 3600.',
+      'urlExpiry: 3600',
+    ],
+    [
+      'storageRegion',
+      'string',
+      'Optioneel regio-label voor regio-bewuste objectpaden.',
+      'storageRegion: "us-east-2"',
+    ],
+    [
+      'includeRegionInPath',
+      'boolean',
+      'Voeg `storageRegion` toe aan nieuw gegenereerde object-keys. Standaard: false.',
+      'includeRegionInPath: false',
+    ],
+    [
+      'requireSignedAccess',
+      'boolean',
+      'Start opstarten mislukken als CloudFront-toegang via signed-cookie niet kan worden geïnitialiseerd. Standaard: false.',
+      'requireSignedAccess: true',
+    ],
+  ]}
+/>
+
+## Voorgestelde AWS-machtigingen [#suggested-aws-permissions]
+
+Gebruik IAM-machtigingen met het principe van de minste privileges (least-privilege) voor de S3-bucket. Voeg alleen de machtiging voor CloudFront-invalidation toe als `invalidateOnDelete` is ingeschakeld.
+
+```json filename="iam-policy.json"
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["s3:PutObject", "s3:GetObject", "s3:DeleteObject", "s3:ListBucket"],
+      "Resource": ["arn:aws:s3:::my-librechat-bucket", "arn:aws:s3:::my-librechat-bucket/*"]
+    },
+    {
+      "Effect": "Allow",
+      "Action": "cloudfront:CreateInvalidation",
+      "Resource": "arn:aws:cloudfront::123456789012:distribution/E1234ABCD"
+    }
+  ]
+}
+```
+
+## Probleemoplossing [#troubleshooting]
+
+- Opstartlogs `CloudFront domain is required`: voeg `cloudfront.domain` toe.
+- Opstartlogs `S3 must be initialized`: configureer eerst de S3 omgevingsvariabelen.
+- Ondertekende cookies zijn niet ingesteld: bevestig `imageSigning: "cookies"`, `cookieDomain`, `CLOUDFRONT_KEY_PAIR_ID` en `CLOUDFRONT_PRIVATE_KEY`.
+- Browser kan nog steeds geen afbeeldingen laden: bevestig dat de API- en CDN-hostnamen hetzelfde geconfigureerde hoofddomein delen en dat cookies zijn toegestaan met `Secure` en `SameSite=None`.
+- Downloads negeren bestandsnaam/inhoudstype: update het CloudFront cache/origin request beleid om de query-strings voor het overschrijven van het antwoord door te sturen.

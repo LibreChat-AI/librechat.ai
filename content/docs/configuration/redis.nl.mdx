@@ -1,0 +1,345 @@
+---
+title: Redis
+icon: Redis
+description: >-
+  Redis instellen voor caching, sessieopslag en horizontale schaling in
+  LibreChat
+---
+
+Deze handleiding beschrijft hoe je Redis configureert voor caching en sessieopslag in LibreChat. Redis biedt aanzienlijke prestatieverbeteringen en is **vereist voor horizontale schaling**—als je meerdere LibreChat-instanties achter een load balancer draait, zorgt Redis voor een consistente status over alle instanties heen.
+
+## Inhoudsopgave [#table-of-contents]
+
+- [Basisinstellingen](#basic-setup)
+- [Verbindingstypen](#connection-types)
+- [Beveiligingsconfiguratie](#security-configuration)
+- [Geavanceerde opties](#advanced-options)
+- [Performance Tuning](#performance-tuning)
+- [Configuratievoorbeelden](#configuration-examples)
+- [Resumable Streams](#resumable-streams)
+
+## Basisconfiguratie [#basic-setup]
+
+### Redis inschakelen [#enable-redis]
+
+Om Redis in LibreChat in te schakelen, stelt u de volgende omgevingsvariabele in uw `.env` bestand in:
+
+```bash
+USE_REDIS=true
+```
+
+**Belangrijk**: Wanneer `USE_REDIS=true` is ingesteld, moet je ook een `REDIS_URI` opgeven. De applicatie zal een foutmelding geven als Redis is ingeschakeld zonder een verbindings-URI.
+
+## Verbindingstypen [#connection-types]
+
+### Enkele Redis-instantie [#single-redis-instance]
+
+Voor een standaard opstelling met één enkele Redis-server:
+
+```bash
+# Local Redis instance
+REDIS_URI=redis://127.0.0.1:6379
+
+# Remote Redis instance
+REDIS_URI=redis://your-redis-host:6379
+```
+
+### Redis Cluster [#redis-cluster]
+
+Voor Redis cluster-implementaties met meerdere nodes:
+
+```bash
+# Multiple Redis cluster nodes
+REDIS_URI=redis://127.0.0.1:7001,redis://127.0.0.1:7002,redis://127.0.0.1:7003
+```
+
+De applicatie detecteert automatisch de cluster-modus wanneer er meerdere URI's worden opgegeven.
+
+Als je redis-cluster slechts één URI heeft, kun je de `USE_REDIS_CLUSTER` omgevingsvariabele gebruiken om de clustermodus in te schakelen:
+
+```bash
+# Redis cluster with single URI
+REDIS_URI=redis://127.0.0.1:7001
+USE_REDIS_CLUSTER=true
+```
+
+### Managed Redis-services met één endpoint [#single-endpoint-managed-redis-services]
+
+Sommige beheerde Redis-services, waaronder AWS ElastiCache Serverless en Redis Enterprise Cloud op AWS, stellen één enkel connection endpoint bloot terwijl ze keys intern sharden. Houd LibreChat in die configuratie in single-node connection mode, maar schakel cluster-safe deletes in als het wissen van de cache mislukt met `CROSSSLOT Keys in request don't hash to the same slot`.
+
+```bash
+USE_REDIS=true
+REDIS_URI=rediss://your-managed-redis-endpoint:6379
+USE_REDIS_CLUSTER=false
+REDIS_CLUSTER_SAFE_DELETE=true
+```
+
+`REDIS_CLUSTER_SAFE_DELETE=true` zorgt ervoor dat LibreChat overeenkomende cache-sleutels één voor één verwijdert in plaats van multi-key `DEL` commando's te sturen. Dit voorkomt `CROSSSLOT` fouten zonder de manier waarop LibreChat verbinding maakt met Redis te veranderen.
+
+Gebruik `USE_REDIS_CLUSTER=true` alleen wanneer LibreChat een Redis Cluster-client moet aanmaken. Voor beheerde services met één endpoint is `REDIS_CLUSTER_SAFE_DELETE=true` de veiligere optie.
+
+### Redis met TLS/SSL [#redis-with-tlsssl]
+
+Voor beveiligde Redis-verbindingen:
+
+```bash
+# Redis with TLS encryption
+REDIS_URI=rediss://127.0.0.1:6380
+
+# Path to CA certificate for TLS verification
+REDIS_CA=/path/to/ca-cert.pem
+```
+
+## Beveiligingsconfiguratie [#security-configuration]
+
+### Authenticatie [#authentication]
+
+Configureer Redis-authenticatiegegevens:
+
+```bash
+# Method 1: Include credentials in URI
+# With both username and password
+REDIS_URI=redis://myuser:mypassword@127.0.0.1:6379
+
+
+# Method 2: Separate environment variables
+REDIS_URI=redis://127.0.0.1:6379
+REDIS_USERNAME=your_redis_username
+REDIS_PASSWORD=your_redis_password
+```
+
+**Opmerking**: Afzonderlijke variabelen voor gebruikersnaam/wachtwoord overschrijven de inloggegevens in de URI als beide worden verstrekt.
+
+### TLS-configuratie [#tls-configuration]
+
+Voor versleutelde verbindingen:
+
+```bash
+# Enable TLS with rediss:// protocol
+REDIS_URI=rediss://your-redis-host:6380
+
+# Provide CA certificate for verification
+REDIS_CA=/path/to/your/ca-certificate.pem
+```
+
+### TLS met Elasticache [#tls-with-elasticache]
+
+Elasticache moet mogelijk een alternatieve dnsLookup gebruiken voor TLS-verbindingen. Zie "Special Note: Aws Elasticache Clusters with TLS" op deze webpagina: https://www.npmjs.com/package/ioredis
+
+```bash
+# Enable redis alternate dnsLookup
+REDIS_USE_ALTERNATIVE_DNS_LOOKUP=true
+```
+
+## Geavanceerde opties [#advanced-options]
+
+### Key Prefixing [#key-prefixing]
+
+Redis key prefixing voorkomt contaminatie tussen deployments door cachegegevens te isoleren tussen verschillende omgevingen, versies of instanties die dezelfde Redis-server delen. Dit is essentieel voor:
+
+- **Multi-tenant deployments**: Aparte staging-, productie- en ontwikkelomgevingen
+- **Blue-green deployments**: Isoleer de cache tussen verschillende applicatieversies
+
+```bash
+# Option 1: Dynamic prefix from environment variable (recommended for cloud)
+
+# Google Cloud Platform - Cloud Run
+REDIS_KEY_PREFIX_VAR=K_REVISION
+
+# AWS - ECS/Fargate
+REDIS_KEY_PREFIX_VAR=AWS_EXECUTION_ENV
+
+# Azure Container Instances
+REDIS_KEY_PREFIX_VAR=CONTAINER_NAME
+
+# Kubernetes - Pod name or deployment
+REDIS_KEY_PREFIX_VAR=HOSTNAME
+REDIS_KEY_PREFIX_VAR=POD_NAME
+
+# Kubernetes - Custom deployment identifier
+REDIS_KEY_PREFIX_VAR=DEPLOYMENT_ID
+
+# Heroku
+REDIS_KEY_PREFIX_VAR=DYNO
+
+# Option 2: Static prefix (for manual control)
+REDIS_KEY_PREFIX=librechat-prod-v2
+REDIS_KEY_PREFIX=staging-branch-feature-x
+REDIS_KEY_PREFIX=dev-john-local
+```
+
+**Belangrijk**: Je kunt niet tegelijkertijd `REDIS_KEY_PREFIX_VAR` en `REDIS_KEY_PREFIX` instellen.
+
+**Voorbeelden van contaminatie zonder prefix**:
+
+- Productiecache overschreven door staging-deployment
+- Feature branch tests corrumperen cache van main branch
+- Oude deployment-versies die verouderde gecachte gegevens serveren
+
+**Formaat voor sleutelprefixen**:
+
+- IoRedis-client: `{prefix}::{key}`
+- Keyv client: Wordt afgehandeld door de store-laag
+
+### Verbindingslimieten [#connection-limits]
+
+Configureer Redis-verbindingslimieten:
+
+```bash
+# Maximum number of event listeners (default: 40)
+REDIS_MAX_LISTENERS=40
+```
+
+### Connection Keep-Alive [#connection-keep-alive]
+
+Configureer Redis ping-intervallen om verbindingen te behouden:
+
+```bash
+# Redis ping interval in seconds (default: 0 = disabled)
+# When set to a positive integer (in seconds), Redis clients will ping the server at this interval
+# When unset or 0, no pinging is performed (recommended for most use cases)
+# Example: 300 = ping every 5 minutes
+REDIS_PING_INTERVAL=300
+```
+
+**Belangrijk**:
+
+- Het instellen van `REDIS_PING_INTERVAL=0` of het weglaten ervan schakelt pingen volledig uit.
+- Stel alleen een positieve waarde in (in seconden) als je problemen ervaart met time-outs van de verbinding
+- Het interval wordt gespecificeerd in seconden en is van toepassing op zowel IoRedis- als Keyv Redis-clients.
+- Voorbeeldwaarden: `300` (5 minuten), `600` (10 minuten), `60` (1 minuut)
+
+### Selectieve In-Memory Caching [#selective-in-memory-caching]
+
+Forceer specifieke cache-namespaces om in-memory opslag te gebruiken, zelfs wanneer Redis is ingeschakeld:
+
+```bash
+# Comma-separated list of cache keys
+FORCED_IN_MEMORY_CACHE_NAMESPACES=ROLES,MESSAGES
+```
+
+Geldige cache-keys (uit de `CacheKeys` enum in `librechat-data-provider`):
+
+| Sleutel                   | Beschrijving              |
+| ------------------------- | ------------------------- |
+| `CONFIG_STORE`            | Configuratie-opslag       |
+| `ROLES`                   | Gebruikersrollen          |
+| `PLUGINS`                 | Plugins-gegevens          |
+| `GEN_TITLE`               | Gegenereerde titels       |
+| `TOOLS`                   | Tools-gegevens            |
+| `MODELS_CONFIG`           | Modellenconfiguratie      |
+| `MODEL_QUERIES`           | Model-queries             |
+| `STARTUP_CONFIG`          | Opstartconfiguratie       |
+| `ENDPOINT_CONFIG`         | endpoint-configuratie     |
+| `TOKEN_CONFIG`            | Token-configuratie        |
+| `APP_CONFIG`              | Applicatieconfiguratie    |
+| `ABORT_KEYS`              | Afbreek-sleutels          |
+| `BANS`                    | Ban-gegevens              |
+| `ENCODED_DOMAINS`         | Gecodeerde domeinen       |
+| `AUDIO_RUNS`              | Audioverwerkingsruns      |
+| `MESSAGES`                | Berichten                 |
+| `FLOWS`                   | Flows-gegevens            |
+| `PENDING_REQ`             | Lopende verzoeken         |
+| `S3_EXPIRY_INTERVAL`      | S3-verloopintervallen     |
+| `OPENID_EXCHANGED_TOKENS` | OpenID uitgewisselde tokens |
+| `OPENID_SESSION`          | OpenID-sessies            |
+| `SAML_SESSION`            | SAML-sessies              |
+
+<Callout type="warn" title="Ongeldige sleutels">
+  Het gebruik van een ongeldige sleutel (bijv. de verouderde `STATIC_CONFIG`) zal een opstartfout veroorzaken. Gebruik alleen sleutels uit de bovenstaande tabel.
+</Callout>
+
+## Performance Tuning [#performance-tuning]
+
+### Connection Keep-Alive [#connection-keep-alive-1]
+
+De applicatie implementeert configureerbare connection keep-alive:
+
+- Ping-intervallen worden beheerd door de `REDIS_PING_INTERVAL` omgevingsvariabele
+- Standaardgedrag: Geen pinging (aanbevolen voor de meeste implementaties)
+- Wanneer ingeschakeld, pingt dit zowel de IoRedis- als de Keyv Redis-clients met het opgegeven interval
+- Wist automatisch ping-intervallen bij disconnect/close-events
+
+### Cache-strategie [#cache-strategy]
+
+De applicatie maakt gebruik van een dual-client benadering:
+
+- **IoRedis client**: Primaire Redis-bewerkingen met automatische prefixing
+- **Keyv Redis client**: Store-layer operaties met prefix-afhandeling in `cacheFactory.js`
+
+### Geheugenoptimalisatie [#memory-optimization]
+
+Gebruik `FORCED_IN_MEMORY_CACHE_NAMESPACES` om de prestaties te optimaliseren door veelgebruikte, kleine datasets in het geheugen te houden, terwijl Redis wordt gebruikt voor grotere caches.
+
+## Configuratievoorbeelden [#configuration-examples]
+
+### Ontwikkelingsomgeving instellen [#development-setup]
+
+```bash
+USE_REDIS=true
+REDIS_URI=redis://127.0.0.1:6379
+REDIS_KEY_PREFIX=librechat-dev
+```
+
+### Productie-instellingen [#production-setup]
+
+```bash
+USE_REDIS=true
+REDIS_URI=rediss://prod-redis.company.com:6380
+REDIS_USERNAME=librechat_user
+REDIS_PASSWORD=secure_password_here
+REDIS_CA=/etc/ssl/redis-ca.pem
+REDIS_KEY_PREFIX_VAR=DEPLOYMENT_ID
+REDIS_MAX_LISTENERS=100
+REDIS_PING_INTERVAL=300
+FORCED_IN_MEMORY_CACHE_NAMESPACES=ROLES,MESSAGES
+```
+
+### Cluster-configuratie [#cluster-setup]
+
+```bash
+USE_REDIS=true
+REDIS_URI=redis://cluster-node1:7001,redis://cluster-node2:7002,redis://cluster-node3:7003
+REDIS_USERNAME=cluster_user
+REDIS_PASSWORD=cluster_password
+REDIS_KEY_PREFIX=librechat-cluster
+```
+
+## Hervatbare Streams [#resumable-streams]
+
+Redis maakt [Resumable Streams](/docs/features/resumable_streams) mogelijk voor horizontaal geschaalde implementaties. Wanneer dit is ingeschakeld, kunnen AI-antwoorden naadloos opnieuw verbinding maken en worden hervat over serverinstanties heen.
+
+**Belangrijk:** Wanneer `USE_REDIS=true` is ingesteld, gebruiken hervatbare streams automatisch Redis voor coördinatie tussen instanties. Dit is de aanbevolen configuratie voor horizontaal geschaalde implementaties waarbij gebruikers verbinding kunnen maken met verschillende serverinstanties.
+
+**Opmerking:** Als je een enkel LibreChat-exemplaar draait, is Redis voor hervatbare streams meestal overbodig—de ingebouwde in-memory modus werkt prima. Redis wordt essentieel wanneer je meerdere LibreChat-exemplaren achter een load balancer hebt, waarbij de herverbinding van een gebruiker bij een andere server terecht kan komen dan waar de stream oorspronkelijk is gestart.
+
+### Configuratie [#configuration]
+
+```bash
+# Redis enabled = resumable streams automatically use Redis
+USE_REDIS=true
+REDIS_URI=redis://127.0.0.1:6379
+
+# Optional: explicitly control resumable streams behavior
+# USE_REDIS_STREAMS=true  # Enabled by default when USE_REDIS=true
+```
+
+### Belangrijkste voordelen (voor horizontale schaling) [#key-benefits-for-horizontal-scaling]
+
+- **Continuïteit tussen instanties**: Gebruikers kunnen een generatie op de ene server starten en op een andere hervatten
+- **Rolling deployments**: Actieve streams overleven serverherstarts
+- **Multi-tab sync**: Dezelfde conversatie synchroniseert over meerdere browsertabbladen in een load-balanced omgeving
+- **Verbindingsveerkracht**: Automatische herverbinding, ongeacht welke server het verzoek afhandelt
+
+### Clusterconfiguratie [#cluster-configuration]
+
+Voor Redis Cluster-implementaties gebruikt LibreChat automatisch hash-tagged keys om ervoor te zorgen dat stream-bewerkingen binnen dezelfde cluster-slot blijven:
+
+```bash
+USE_REDIS=true
+USE_REDIS_STREAMS=true
+USE_REDIS_CLUSTER=true
+REDIS_URI=redis://node1:7001,redis://node2:7002,redis://node3:7003
+```
+
+Zie [Resumable Streams](/docs/features/resumable_streams) voor meer details over deze functie.

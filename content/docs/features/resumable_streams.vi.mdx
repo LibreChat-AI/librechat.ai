@@ -1,0 +1,127 @@
+---
+title: Luồng có thể tiếp tục
+icon: Zap
+description: >-
+  Khôi phục các phản hồi AI đang thực hiện sau khi mất kết nối, đồng bộ cùng một
+  cuộc trò chuyện trên các tab và thiết bị, đồng thời duy trì luồng phản hồi
+  trên các phiên bản được mở rộng.
+---
+
+Các luồng có thể tiếp tục (resumable streams) cho phép phản hồi của AI đang thực hiện vẫn tồn tại ngay cả khi kết nối bị gián đoạn. Nếu mạng bị ngắt, trình duyệt tải lại, hoặc bạn chuyển tab hay thiết bị, LibreChat sẽ khôi phục nội dung đã được truyền và tiếp tục từ điểm dừng trước đó. Cơ chế tương tự cũng giúp đồng bộ hóa nhiều người xem cùng một cuộc trò chuyện.
+
+## Bạn nhận được gì [#what-you-get]
+
+- **Không mất phản hồi.** Các sự cố mạng, làm mới trình duyệt và khởi động lại máy chủ sẽ không làm mất nội dung đang được truyền phát.
+- **Các tab luôn đồng bộ.** Mở một cuộc trò chuyện trong hai tab trình duyệt và cả hai đều nhận được cùng một bản cập nhật trong thời gian thực.
+- **Chuyển đổi thiết bị giữa chừng.** Bắt đầu tạo phản hồi trên máy tính để bàn và tiếp tục xem kết quả trên điện thoại của bạn.
+- **Tạo phản hồi trong nền.** Bắt đầu một phản hồi dài, chuyển sang tab hoặc ứng dụng khác, và toàn bộ phản hồi sẽ có sẵn khi bạn quay lại.
+- **Shared conversations.** Mọi người xem cuộc trò chuyện được chia sẻ đều thấy nội dung hiển thị cùng một lúc.
+
+## Cách thức hoạt động [#how-it-works]
+
+Khi bạn gửi một tin nhắn, LibreChat tạo ra một tác vụ tạo nội dung ghi lại mọi delta được truyền phát. Nếu kết nối bị ngắt:
+
+1. Client phát hiện sự ngắt kết nối.
+2. Khi kết nối lại, máy chủ sẽ xây dựng lại nội dung đã truyền phát cho đến thời điểm hiện tại từ các delta đã ghi lại của tác vụ.
+3. Nội dung bị thiếu được gửi trong một sự kiện đồng bộ duy nhất.
+4. Truyền phát tiếp tục từ vị trí hiện tại.
+
+Quá trình này chạy tự động và không yêu cầu người dùng thực hiện bất kỳ thao tác nào.
+
+## Các chế độ triển khai [#deployment-modes]
+
+LibreChat đi kèm với hai backend cho các luồng có thể tiếp tục (resumable streams).
+
+### Chế độ Đơn phiên bản (mặc định) [#single-instance-mode-default]
+
+Lưu trữ trạng thái luồng trong bộ nhớ và sử dụng `EventEmitter` của Node.js cho pub/sub. Đây là cấu hình mặc định và không cần thiết lập gì thêm. Nó phù hợp cho phát triển cục bộ, triển khai trên một máy chủ duy nhất và các thiết lập Docker Compose.
+
+### Chế độ Redis (production) [#redis-mode-production]
+
+Sử dụng Redis Streams và Pub/Sub để trạng thái luồng được chia sẻ giữa các instance. Hãy sử dụng tính năng này cho các triển khai mở rộng theo chiều ngang, cân bằng tải hoặc có tính sẵn sàng cao, bao gồm cả các cụm Kubernetes. Với Redis, một quá trình tạo (generation) bắt đầu trên một instance có thể tiếp tục trên một instance khác, giúp duy trì các luồng đang hoạt động trong quá trình triển khai luân phiên (rolling deployments) và tự động mở rộng (auto-scaling).
+
+<Callout type="info" title="Một instance duy nhất? Bạn có lẽ không cần Redis ở đây">
+Chế độ in-memory xử lý mọi thứ cho một instance LibreChat duy nhất. Redis trở nên cần thiết khi bạn chạy nhiều instance phía sau một bộ cân bằng tải (load balancer). Redis vẫn hữu ích cho việc lưu trữ bộ nhớ đệm (caching) và lưu trữ phiên làm việc (session storage) trong các triển khai đơn instance, chỉ là không dành riêng cho các luồng có thể tiếp tục (resumable streams).
+</Callout>
+
+## Cấu hình [#configuration]
+
+### Bật Redis Streams [#enable-redis-streams]
+
+Việc thiết lập `USE_REDIS=true` sẽ khiến các luồng có thể tiếp tục (resumable streams) tự động sử dụng Redis. Hãy sử dụng `USE_REDIS_STREAMS` để kiểm soát điều này một cách rõ ràng.
+
+```bash filename=".env"
+USE_REDIS=true
+REDIS_URI=redis://localhost:6379
+# Resumable streams use Redis automatically when USE_REDIS=true.
+# Set USE_REDIS_STREAMS to control it explicitly:
+USE_REDIS_STREAMS=true
+```
+
+### Redis Cluster [#redis-cluster]
+
+Đối với Redis Cluster, hãy bật chế độ cluster và liệt kê các node trong `REDIS_URI`.
+
+```bash filename=".env"
+USE_REDIS_STREAMS=true
+USE_REDIS_CLUSTER=true
+REDIS_URI=redis://node1:7001,redis://node2:7002,redis://node3:7003
+```
+
+LibreChat sử dụng các khóa có gắn thẻ băm (hash-tagged keys) để các thao tác đa khóa cùng nằm trên một slot cụm (cluster slot).
+
+## Những gì được tái cấu trúc [#what-gets-reconstructed]
+
+Khi kết nối lại, LibreChat tổng hợp các sự kiện delta đã ghi lại để xây dựng lại:
+
+- Nội dung tin nhắn (văn bản, lệnh gọi công cụ, trích dẫn)
+- Các bước chạy của Agent và suy luận trung gian
+- Metadata và thông tin trạng thái
+
+Cơ chế lưu trữ phụ thuộc vào chế độ triển khai:
+
+| Thành phần | Cơ chế lưu trữ |
+|-----------|-------------------|
+| Chunks | Redis Streams (`XADD`/`XRANGE`) |
+| Job metadata | Cấu trúc Redis Hash |
+| Real-time events | Các kênh Redis Pub/Sub |
+| Expiration | TTL tự động sau khi hoàn tất stream |
+
+LibreChat áp dụng một vài tối ưu hóa để giữ cho chi phí này ở mức thấp:
+
+- **Khôi phục ưu tiên bộ nhớ (Memory-first recovery).** Việc kết nối lại cùng một instance sẽ đọc từ bộ nhớ đệm cục bộ, tránh việc phải thực hiện một vòng lặp (round trip) đến Redis.
+- **Dọn dẹp khi truy cập.** Các mục công việc cũ sẽ bị xóa trong quá trình truy vấn và các luồng đã hoàn tất sẽ tự động hết hạn.
+- **Lưu trữ được thu gom rác (Garbage-collected storage).** Chế độ trong bộ nhớ (in-memory mode) lưu trữ các đồ thị luồng (stream graphs) bằng `WeakRef`, vì vậy chúng sẽ được thu gom ngay khi cuộc trò chuyện kết thúc.
+
+## Kiểm thử [#testing]
+
+Để xác nhận tính năng đang hoạt động, hãy bắt đầu một cuộc trò chuyện trực tuyến (streaming) với bất kỳ model nào, sau đó thử một trong các cách sau:
+
+- **Các tab.** Mở cùng một cuộc trò chuyện trong tab thứ hai; cả hai sẽ đồng bộ hóa với nhau.
+- **Ngắt kết nối.** Ngắt mạng trong giây lát, sau đó kết nối lại.
+- **Điều hướng.** Điều hướng đi nơi khác khi đang truyền phát, sau đó quay lại.
+
+Mỗi trường hợp phải tạo ra phản hồi hoàn chỉnh mà không bị thiếu nội dung.
+
+## Khắc phục sự cố [#troubleshooting]
+
+**Các luồng không tiếp tục.** Hãy xác nhận rằng Redis có thể truy cập được và `USE_REDIS_STREAMS` đã được thiết lập.
+
+```bash
+docker exec -it librechat-redis redis-cli ping
+# Expected: PONG
+
+echo $USE_REDIS_STREAMS
+```
+
+**Nội dung có vẻ bị trùng lặp.** Điều này thường có nghĩa là phiên bản máy khách không khớp. Hãy cập nhật lên phiên bản LibreChat mới nhất.
+
+**Sử dụng bộ nhớ cao ở chế độ đơn phiên bản (single-instance mode).** Các luồng (stream) đã hoàn tất sẽ được thu gom rác (garbage collected). Nếu bộ nhớ vẫn ở mức cao, hãy tìm các luồng chạy rất lâu mà không bao giờ hoàn tất hoặc các luồng bị lỗi mà không được dọn dẹp.
+
+## Tài liệu liên quan [#related-documentation]
+
+- [Redis Configuration](/docs/configuration/redis): thiết lập Redis để lưu trữ bộ nhớ đệm (caching) và mở rộng theo chiều ngang (horizontal scaling)
+- [Agents](/docs/features/agents): Các AI agent với khả năng sử dụng công cụ
+- [Docker Deployment](/docs/local/docker): triển khai dựa trên container
+
+Để biết chi tiết về việc triển khai, hãy xem [PR #10926](https://github.com/danny-avila/LibreChat/pull/10926).

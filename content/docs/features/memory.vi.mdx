@@ -1,0 +1,275 @@
+---
+title: Bộ nhớ người dùng
+icon: Bookmark
+description: >-
+  Kho lưu trữ khóa/giá trị cho bộ nhớ người dùng chạy trên mỗi yêu cầu trò
+  chuyện trong LibreChat
+---
+
+## Tổng quan [#overview]
+
+User Memory trong LibreChat là một **kho lưu trữ khóa/giá trị (key/value store)** giúp duy trì thông tin cụ thể của người dùng xuyên suốt các cuộc trò chuyện. Một memory agent chuyên dụng sẽ chạy ở đầu **mỗi yêu cầu trò chuyện**, thực hiện đọc và ghi vào kho lưu trữ này để cung cấp ngữ cảnh được cá nhân hóa cho phản hồi chính của AI.
+
+<Callout type="info" title="Lưu trữ Key/Value, Không phải Bộ nhớ Hội thoại">
+Đây **không** phải là bộ nhớ ngữ nghĩa trên toàn bộ lịch sử trò chuyện của bạn. Nó không lập chỉ mục, nhúng hoặc tìm kiếm các cuộc trò chuyện cũ. Thay vào đó, nó duy trì một tập hợp các cặp khóa/giá trị có cấu trúc (ví dụ: `user_preferences`, `learned_facts`) được đưa vào mỗi yêu cầu dưới dạng ngữ cảnh. Hãy coi nó như một cuốn sổ tay bền vững mà AI đọc trước mỗi phản hồi.
+
+Để biết thêm ngữ cảnh về các tin nhắn trước đó trong một cuộc trò chuyện đơn lẻ, LibreChat đã sử dụng cửa sổ lịch sử tin nhắn tiêu chuẩn — cửa sổ này tách biệt với tính năng này.
+
+</Callout>
+
+<Callout type="important" title="⚠️ Yêu cầu cấu hình">
+  Chức năng Memory phải được cấu hình rõ ràng trong tệp `librechat.yaml` của bạn để hoạt động. Nó không được bật theo mặc định.
+</Callout>
+
+## Các tính năng chính [#key-features]
+
+- **Chạy mỗi yêu cầu**: Memory agent thực thi ở đầu mỗi yêu cầu trò chuyện, đảm bảo ngữ cảnh đã lưu trữ luôn khả dụng
+- **Lưu trữ Khóa/Giá trị**: Thông tin được lưu trữ dưới dạng các cặp khóa/giá trị có cấu trúc, không phải dưới dạng nhật ký hội thoại thô
+- **Nhập thủ công**: Người dùng có thể thêm, chỉnh sửa hoặc xóa các mục bộ nhớ theo cách thủ công trực tiếp, giúp kiểm soát hoàn toàn những gì AI ghi nhớ.
+- **Kiểm soát người dùng**: Khi được bật, người dùng có thể bật/tắt bộ nhớ cho các cuộc trò chuyện cá nhân của họ
+- **Các khóa có thể tùy chỉnh**: Hạn chế các danh mục thông tin có thể được lưu trữ bằng cách sử dụng `validKeys`
+- **Quản lý Token**: Thiết lập giới hạn sử dụng bộ nhớ để kiểm soát chi phí
+- **Tích hợp Agent**: Sử dụng các AI agent để quản lý thông minh những gì cần ghi nhớ
+
+## Cấu hình [#configuration]
+
+Để kích hoạt các tính năng bộ nhớ, bạn cần thêm cấu hình `memory` vào tệp `librechat.yaml` của mình:
+
+```yaml filename="librechat.yaml"
+version: 1.3.5
+cache: true
+
+memory:
+  disabled: false # Set to true to completely disable memory
+  personalize: true # Gives users the ability to toggle memory on/off, true by default
+  tokenLimit: 2000 # Maximum tokens for memory storage
+  maxInputTokens: 12000 # Maximum recent-chat tokens sent to the memory agent
+  messageWindowSize: 5 # Number of recent messages to consider
+  agent:
+    provider: 'openAI'
+    model: 'gpt-4'
+```
+
+Trường provider phải khớp với các giá trị được chấp nhận như đã xác định trong [Hướng dẫn Model Spec](/docs/configuration/librechat_yaml/object_structure/model_specs#endpoint).
+
+**Lưu ý:** Nếu bạn đang sử dụng một endpoint tùy chỉnh, giá trị endpoint phải khớp chính xác với tên endpoint tùy chỉnh đã được xác định.
+
+Xem [Hướng dẫn Cấu hình Bộ nhớ](/docs/configuration/librechat_yaml/object_structure/memory) để biết các tùy chọn cấu hình chi tiết.
+
+## Cách thức hoạt động [#how-it-works]
+
+<Callout type="note" title="Thực thi Memory Agent">
+Memory agent chạy trên **mọi yêu cầu trò chuyện** khi bộ nhớ được bật. Nó thực thi đồng thời với phản hồi trò chuyện chính — nó bắt đầu trước khi phản hồi chính bắt đầu và bị giới hạn trong thời gian của yêu cầu chính cộng thêm tối đa 3 giây sau khi yêu cầu đó kết thúc.
+
+Điều này có nghĩa là mỗi tin nhắn bạn gửi sẽ kích hoạt memory agent để:
+
+<ol>
+  <li>
+    **Đọc** kho lưu trữ khóa/giá trị hiện tại và chèn các mục nhập liên quan dưới dạng ngữ cảnh
+  </li>
+  <li>
+    <strong>Phân tích</strong> cửa sổ tin nhắn gần đây để tìm thông tin cần lưu trữ hoặc cập nhật
+  </li>
+  <li>
+    <strong>Ghi</strong> bất kỳ mục mới hoặc mục đã sửa đổi nào trở lại kho lưu trữ
+  </li>
+</ol>
+</Callout>
+
+### 1. Lưu trữ Key/Value [#1-keyvalue-storage]
+
+Các mục bộ nhớ được lưu trữ dưới dạng cặp khóa/giá trị. Khi bộ nhớ được bật, hệ thống có thể lưu trữ các mục như:
+
+- Tùy chọn người dùng (phong cách giao tiếp, chủ đề quan tâm)
+- Các thông tin quan trọng được người dùng chia sẻ rõ ràng
+- Các dự án hoặc tác vụ đang thực hiện được đề cập
+- Bất kỳ danh mục nào bạn xác định thông qua `validKeys`
+
+Người dùng cũng có thể **tạo, chỉnh sửa và xóa thủ công** các mục bộ nhớ thông qua giao diện, giúp kiểm soát trực tiếp những gì AI biết về họ.
+
+### 2. Cửa sổ ngữ cảnh [#2-context-window]
+
+Tham số `messageWindowSize` xác định số lượng tin nhắn gần đây được phân tích để cập nhật bộ nhớ. Điều này giúp tác nhân bộ nhớ quyết định thông tin nào đáng để lưu trữ hoặc cập nhật trong kho lưu trữ khóa/giá trị.
+
+Tham số `maxInputTokens` giới hạn văn bản trò chuyện gần đây được gửi đến tác nhân bộ nhớ tự động trước khi trích xuất. Nếu cửa sổ tin nhắn đã chọn vẫn quá lớn, LibreChat sẽ bảo toàn ngữ cảnh mới nhất và lược bỏ nội dung trò chuyện trước đó trước khi gọi tác nhân bộ nhớ.
+
+### 3. Kiểm soát của người dùng [#3-user-control]
+
+Khi `personalize` được đặt thành `true`:
+
+- Người dùng sẽ thấy một nút chuyển đổi bộ nhớ trong giao diện trò chuyện của họ
+- Họ có thể bật/tắt bộ nhớ cho từng cuộc trò chuyện riêng lẻ
+- Các cài đặt Memory được lưu giữ qua các phiên làm việc
+
+### 4. Các khóa hợp lệ [#4-valid-keys]
+
+Bạn có thể hạn chế các loại thông tin được lưu trữ bằng cách chỉ định `validKeys`:
+
+```yaml filename="memory / validKeys"
+memory:
+  validKeys:
+    - 'user_preferences'
+    - 'conversation_context'
+    - 'learned_facts'
+    - 'personal_information'
+```
+
+## Các phương pháp tốt nhất [#best-practices]
+
+### 1. Giới hạn Token [#1-token-limits]
+
+Thiết lập giới hạn token phù hợp để cân bằng giữa chức năng và chi phí:
+
+- Các giới hạn cao hơn cho phép bộ nhớ toàn diện hơn
+- Các giới hạn thấp hơn giúp giảm chi phí xử lý
+- Hãy cân nhắc các kiểu sử dụng và ngân sách của bạn
+
+### 2. Custom Instructions [#2-custom-instructions]
+
+Khi sử dụng `validKeys`, hãy cung cấp các hướng dẫn tùy chỉnh cho memory agent:
+
+```yaml filename="memory / agent with instructions"
+memory:
+  agent:
+    provider: 'openAI'
+    model: 'gpt-4'
+    instructions: |
+      Store information only in the specified validKeys categories.
+      Focus on explicitly stated preferences and important facts.
+      Delete outdated or corrected information promptly.
+```
+
+### 3. Các cân nhắc về quyền riêng tư [#3-privacy-considerations]
+
+- Memory lưu trữ thông tin người dùng xuyên suốt các cuộc trò chuyện
+- Đảm bảo người dùng hiểu rõ thông tin nào đang được lưu trữ
+- Cân nhắc triển khai các chính sách lưu giữ dữ liệu
+- Cung cấp tài liệu rõ ràng về mức sử dụng bộ nhớ
+
+## Các ví dụ [#examples]
+
+### Cấu hình cơ bản [#basic-configuration]
+
+Bật bộ nhớ với các cài đặt mặc định:
+
+```yaml filename="Basic memory config"
+memory:
+  tokenLimit: 2000
+  maxInputTokens: 12000
+  agent:
+    provider: 'openAI'
+    model: 'gpt-4.1-mini'
+```
+
+### Cấu hình nâng cao [#advanced-configuration]
+
+Cấu hình đầy đủ với tất cả các tùy chọn:
+
+```yaml filename="Advanced memory config"
+memory:
+  disabled: false
+  validKeys: ['preferences', 'context', 'facts']
+  tokenLimit: 3000
+  maxInputTokens: 12000
+  personalize: true
+  messageWindowSize: 10
+  agent:
+    provider: 'anthropic'
+    model: 'claude-3-opus-20240229'
+    instructions: 'Remember only explicitly stated preferences and key facts.'
+    model_parameters:
+      temperature: 0.3
+```
+
+Để biết các tham số mô hình hợp lệ cho từng nhà cung cấp, hãy xem [Model Spec Preset Fields](/docs/configuration/librechat_yaml/object_structure/model_specs#preset-fields).
+
+### Sử dụng các Agent được định nghĩa trước [#using-predefined-agents]
+
+Tham chiếu đến một agent hiện có theo ID:
+
+```yaml filename="Memory with agent ID"
+memory:
+  agent:
+    id: 'memory-specialist-001'
+```
+
+### Các endpoint tùy chỉnh với bộ nhớ [#custom-endpoints-with-memory]
+
+Memory hỗ trợ đầy đủ các endpoint tùy chỉnh, bao gồm cả những endpoint có tiêu đề (header) tùy chỉnh và biến môi trường. Khi sử dụng một endpoint tùy chỉnh, các trình giữ chỗ tiêu đề và biến môi trường sẽ được phân giải chính xác trong quá trình xử lý memory.
+
+```yaml filename="librechat.yaml with custom endpoint for memory"
+
+endpoints:
+    custom:
+        - name: 'Custom Memory Endpoint'
+           apiKey: 'dummy'
+           baseURL: 'https://api.gateway.ai/v1'
+           headers:
+             x-gateway-api-key: '${GATEWAY_API_KEY}'
+             x-gateway-virtual-key: '${GATEWAY_OPENAI_VIRTUAL_KEY}'
+             X-User-Identifier: '{{LIBRECHAT_USER_EMAIL}}'
+             X-Application-Identifier: 'LibreChat - Test'
+             api-key: '${TEST_CUSTOM_API_KEY}'
+           models:
+             default:
+               - 'gpt-4o-mini'
+               - 'gpt-4o'
+             fetch: false
+
+memory:
+  disabled: false
+  tokenLimit: 3000
+  maxInputTokens: 12000
+  personalize: true
+  messageWindowSize: 10
+  agent:
+    provider: 'Custom Memory Endpoint'
+    model: 'gpt-4o-mini'
+```
+
+- Tất cả [custom endpoint headers](/docs/configuration/librechat_yaml/object_structure/custom_endpoint#headers) đều được hỗ trợ
+
+## Khắc phục sự cố [#troubleshooting]
+
+### Memory Không Hoạt Động [#memory-not-working]
+
+1. Xác minh bộ nhớ đã được cấu hình trong `librechat.yaml`
+2. Kiểm tra xem `disabled` đã được đặt thành `false` chưa
+3. Đảm bảo rằng agent/model đã cấu hình hiện đang khả dụng
+4. Xác minh người dùng đã bật tính năng bộ nhớ (memory) trong giao diện trò chuyện của họ
+5. Đối với các endpoint tùy chỉnh: hãy đảm bảo tên `provider` khớp chính xác với `name` của endpoint tùy chỉnh đó.
+
+### Mức sử dụng token cao [#high-token-usage]
+
+1. Giảm `tokenLimit` để kiểm soát chi phí
+2. Giảm `maxInputTokens` để giới hạn lượng nội dung trò chuyện gần đây được gửi đến memory agent
+3. Giảm `messageWindowSize` để phân tích ít tin nhắn hơn
+4. Sử dụng `validKeys` để giới hạn những gì được lưu trữ
+5. Xem xét và tối ưu hóa hướng dẫn cho tác nhân (agent)
+
+### Bộ nhớ không nhất quán [#inconsistent-memory]
+
+1. Kiểm tra xem người dùng có đang bật/tắt memory hay không
+2. Xác minh rằng các giới hạn token không bị vượt quá
+3. Đảm bảo cấu hình tác nhân nhất quán
+4. Xem lại bộ nhớ đã lưu để tìm xung đột
+
+### Các vấn đề về xác thực Custom Endpoint [#custom-endpoint-authentication-issues]
+
+1. Xác minh các biến môi trường đã được thiết lập chính xác trong tệp `.env` của bạn
+2. Đảm bảo các tiêu đề tùy chỉnh sử dụng đúng cú pháp (`${ENV_VAR}` cho các biến môi trường, `{{LIBRECHAT_USER_*}}` cho các trình giữ chỗ người dùng)
+3. Kiểm tra xem endpoint tùy chỉnh có hoạt động với các tác vụ hoàn thành trò chuyện thông thường hay không trước khi thử nghiệm với bộ nhớ (memory)
+4. Xem lại nhật ký máy chủ để tìm các lỗi xác thực từ API endpoint tùy chỉnh
+
+## Các cải tiến trong tương lai [#future-improvements]
+
+Triển khai hiện tại chạy memory agent trên mọi yêu cầu trò chuyện mà không có điều kiện. Các cải tiến theo kế hoạch bao gồm:
+
+- **Semantic Trigger for Writes**: Phát hiện khi người dùng yêu cầu mô hình ghi nhớ một điều gì đó một cách rõ ràng (ví dụ: "Hãy nhớ rằng tôi thích Python") và chỉ chạy tác nhân ghi bộ nhớ trong những trường hợp đó, giúp giảm bớt việc xử lý không cần thiết đối với các tin nhắn thông thường.
+- **Vector Similarity Recall**: Thay vì chèn tất cả các mục bộ nhớ đã lưu vào mọi yêu cầu, hãy sử dụng vector embeddings để chỉ truy xuất những mục liên quan nhất đến ngữ cảnh cuộc trò chuyện hiện tại, giúp cải thiện cả hiệu suất lẫn độ chính xác.
+
+## Các tính năng liên quan [#related-features]
+
+- [Agents](/docs/features/agents) - Xây dựng các trợ lý AI tùy chỉnh
+- [Presets](/docs/user_guides/presets) - Lưu cài đặt cuộc trò chuyện
+- [Fork Messages](/docs/features/fork) - Phân nhánh các cuộc hội thoại trong khi vẫn duy trì ngữ cảnh

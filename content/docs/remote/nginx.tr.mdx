@@ -1,0 +1,180 @@
+---
+title: NGINX
+icon: Nginx
+description: >-
+  Nginx'i ters vekil sunucu ve HTTPS ile kullanarak LibreChat dağıtımınızı
+  güvenli hale getirmeye yönelik adım adım kılavuz
+---
+
+Bu kılavuz, LibreChat dağıtımınızı HTTPS için bir SSL/TLS sertifikası ile güvence altına alma, Nginx'i ters vekil sunucu (reverse proxy) olarak ayarlama ve alan adınızı yapılandırma ile ilgili temel adımları kapsamaktadır.
+
+## Ön Koşullar [#prerequisites]
+
+1. Bir bulut sunucusu (örneğin, AWS, Google Cloud, Azure, Digital Ocean).
+2. Kayıtlı bir alan adı.
+3. Bulut sunucunuza terminal erişimi.
+4. LibreChat'i doğrudan ana makinede çalıştırıyorsanız Node.js `v24.16.0` ve npm `v11.16.0`.
+
+## İlk Kurulum [#initial-setup]
+
+### Alan Adınızı Sunucunuza Yönlendirme [#pointing-your-domain-to-your-server]
+
+Sertifika alımına geçmeden önce, alan adınızı bulut sunucunuzun IP adresine yönlendirin. Bu adım temel bir gerekliliktir ve DNS kayıtlarının dünya genelinde yayılmasının zaman alabileceği göz önüne alındığında, SSL sertifikası kurulumundan önce gerçekleştirilmelidir.
+
+1. Alan adı kayıt kuruluşunuzun kontrol paneline giriş yapın.
+2. DNS ayarlarına gidin.
+3. Alan adınızı bulut sunucunuzun IP adresine yönlendiren bir `A record` oluşturun.
+4. DNS değişikliklerinin küresel olarak yayılmasını bekleyin (alan adınıza ping atarak kontrol edebilirsiniz: `ping your_domain.com`).
+
+## Bir SSL/TLS Sertifikası Edinin [#obtain-an-ssltls-certificate]
+
+LibreChat uygulamanızı HTTPS ile güvence altına almak için bir SSL/TLS sertifikasına ihtiyacınız olacaktır. Let's Encrypt ücretsiz sertifikalar sunmaktadır:
+
+1. Certbot'u yükleyin:
+    - Ubuntu için: `sudo apt-get install certbot python3-certbot-nginx`
+    - CentOS için: `sudo yum install certbot python2-certbot-nginx`
+
+2. Sertifikayı Edinin:
+    - Nginx için sertifikayı otomatik olarak almak ve yüklemek için `sudo certbot --nginx` komutunu çalıştırın.
+    - Ekranda çıkan talimatları izleyin. Certbot sizden bilgi isteyecek ve doğrulama işlemini tamamlayacaktır.
+    - Başarılı olduğunda, Certbot sertifika dosyalarınızı saklayacaktır.
+
+## Nginx'i Ters Vekil Sunucu (Reverse Proxy) Olarak Ayarlama [#set-up-nginx-as-a-reverse-proxy]
+
+Nginx, bir ters vekil sunucu (reverse proxy) görevi görerek istemci isteklerini LibreChat uygulamanıza iletir. İki dağıtım seçeneği mevcuttur:
+
+### Seçenek A: `deploy-compose.yml` Docker Compose Kullanımı (Önerilen) [#option-a-using-the-deploy-composeyml-docker-compose-recommended]
+
+`deploy-compose.yml` dosyası bir Nginx kapsayıcısı içerir ve Nginx yapılandırması için `client/nginx.conf` dosyasını kullanır. Ancak, `sudo certbot --nginx` komutu sertifikayı ana makine yapılandırmasına çıkardığından, sertifikayı Docker kapsayıcılarına kopyalamanız gerekir.
+
+1. `client/nginx.conf` dosyasını alan adınız ve sertifika yollarınızla güncelleyin.
+2. `client` bölümündeki `deploy-compose.yml` dosyasını, sertifika dosyalarını ana bilgisayardan bağlayacak şekilde güncelleyin:
+
+```yaml
+client:
+  # ...
+  volumes:
+    - ./client/nginx.conf:/etc/nginx/conf.d/default.conf
+    - /etc/letsencrypt/live/<your-domain>:/etc/letsencrypt/live/<your-domain>
+    - /etc/letsencrypt/archive/<your-domain>:/etc/letsencrypt/archive/<your-domain>
+    - /etc/letsencrypt/options-ssl-nginx.conf:/etc/letsencrypt/options-ssl-nginx.conf
+    - /etc/letsencrypt/ssl-dhparams.pem:/etc/letsencrypt/ssl-dhparams.pem
+```
+
+3. Çalışan herhangi bir örneği durdurun: `npm run stop:deployed`
+4. Değişiklikleri yeni bir Git dalına (branch) işleyin (commit).
+5. Dağıtılmış örneği yeniden temelleyin (rebase): `npm run rebase:deployed`
+
+### Seçenek B: Docker Olmadan Ana Bilgisayar Tabanlı Dağıtım [#option-b-host-based-deployment-without-docker]
+
+Docker kullanmıyorsanız, Nginx'i doğrudan ana makineye yükleyip yapılandırabilirsiniz:
+
+1. Nginx'i yükleyin:
+    - Ubuntu: `sudo apt-get install nginx`
+    - CentOS: `sudo yum install nginx`
+
+2. Nginx'i başlatın: `sudo systemctl start nginx`
+
+3. Nginx yapılandırma dosyasını açın: `sudo nano /etc/nginx/sites-available/default`
+
+4. Dosya içeriğini aşağıdakilerle değiştirin; `your_domain.com` kısmını kendi alan adınızla ve `app_port` kısmını uygulamanızın portuyla değiştirdiğinizden emin olun:
+
+```nginx filename="/etc/nginx/sites-available/default"
+server {
+    listen 80;
+    server_name your_domain.com;
+
+    location / {
+        proxy_pass http://localhost:app_port;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+    }
+}
+```
+
+5. Nginx yapılandırmasını kontrol edin: `sudo nginx -t`
+6. Nginx'i yeniden yükleyin: `sudo systemctl reload nginx`
+
+## Uygulamayı Çalıştırma [#run-the-application]
+
+1. Uygulamanızın dizinine gidin:
+
+```bash filename="Replace 'LibreChat' with your actual application directory.
+cd LibreChat
+```
+
+2. Uygulamanızı Docker Compose kullanarak başlatın:
+
+```bash filename="Start your application"
+sudo docker compose -f ./deploy-compose.yml up -d
+```
+
+## nginx kullanırken sertifikaları yenileme [#renewing-certificates-when-using-nginx]
+
+Yukarıdaki önerilen A Seçeneğini kullanarak nginx kurulumu yaptıysanız, sertifikaları yenilemek için şu adımları izleyin:
+
+1. Uygulamanızın dizinine gidin
+```bash filename="Replace 'LibreChat' with your actual application directory.
+cd LibreChat
+```
+
+2. Çalışan Docker konteynerlerinizi durdurun
+
+```bash filename="Stop your application"
+sudo docker compose -f ./deploy-compose.yml down -d
+```
+
+3. sertifikaları yenile
+
+```bash
+sudo certbot renew
+```
+
+4. Uygulamanızı yeniden başlatın
+
+```bash filename="Start your application"
+sudo docker compose -f ./deploy-compose.yml up -d
+```
+
+Not: certbot, ana bilgisayarın nginx'ini yeniden başlatabilir. `sudo pkill nginx` komutuyla onu sonlandırabilirsiniz.
+
+## Web Uygulaması Güvenlik Duvarı (WAF) [#web-application-firewall]
+
+Nginx, yaygın web uygulaması güvenlik açıklarına ve saldırılarına karşı koruma sağlayan güçlü bir kural seti sunan OWASP Core Rule Set (CRS) kullanılarak bir web uygulaması güvenlik duvarı (WAF) görevi görecek şekilde yapılandırılabilir. OWASP CRS'i Nginx ile kullanmak, LibreChat dağıtımınıza ek bir koruma katmanı ekleyerek güvenliği artırabilir.
+
+1. OWASP CRS'i yükleyin:
+
+    - Ubuntu: `sudo apt-get install nginx-modsecurity-crs`
+
+2. Nginx'te ModSecurity'yi etkinleştirin:
+    - Nginx yapılandırma dosyanızı açın (örneğin, `/etc/nginx/nginx.conf`).
+    - `http` bloğunun içine aşağıdaki satırları ekleyin:
+
+      ```yaml filename="nginx.conf"
+      modsecurity on;
+      modsecurity_rules_file /usr/share/nginx/modsecurity-crs/nginx-modsecurity.conf;
+      ```
+
+3. OWASP CRS yapılandırması:
+    - OWASP CRS paketi genellikle, gereksinimlerinize göre çeşitli ayarları ve kural kümelerini düzenleyebileceğiniz bir yapılandırma dosyası (örneğin, `/etc/nginx/modsecurity.d/nginx-modsecurity.conf`) içerir.
+
+4. Nginx'i yeniden yükleyin:
+    - `sudo systemctl reload nginx`
+
+Nginx yapılandırmanızda OWASP CRS'i etkinleştirerek, SQL enjeksiyonu, siteler arası betik çalıştırma (XSS), uzaktan dosya dahil etme ve daha fazlası gibi çeşitli web uygulaması güvenlik açıklarını ve saldırılarını tespit etmek ve azaltmak için proje tarafından sağlanan kapsamlı kural setinden yararlanabilirsiniz.
+
+## Statik Dosya Önbelleğe Alma ve Sıkıştırma [#static-file-caching-and-compression]
+
+LibreChat artık statik dosya önbelleğe almayı ve sıkıştırmayı yerel olarak desteklemektedir. Sıkıştırma işlemini yönetmek için NGINX kullanıyorsanız, gereksiz işlem yükünden kaçınmak için LibreChat'te sıkıştırmayı devre dışı bırakmalısınız. Bunu, LibreChat yapılandırmanızda `DISABLE_COMPRESSION` ortam değişkenini `true` olarak ayarlayarak yapabilirsiniz.
+
+```.env
+# .env file
+DISABLE_COMPRESSION=true
+```
+
+Bu, LibreChat'in statik dosyaları sıkıştırmasını engelleyerek NGINX'in sıkıştırma işlemini daha verimli bir şekilde yönetmesini sağlayacaktır.
+
+LibreChat'te statik dosya işleme ve önbelleğe alma seçenekleri hakkında daha fazla bilgi için [Static File Handling](/docs/configuration/dotenv#static-file-handling) belgelerine başvurun.

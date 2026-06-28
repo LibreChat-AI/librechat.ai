@@ -1,0 +1,127 @@
+---
+title: Hervatbare streams
+icon: Zap
+description: >-
+  Herstel AI-antwoorden die bezig zijn na een verbroken verbinding,
+  synchroniseer dezelfde chat tussen tabbladen en apparaten, en houd streams
+  actief tussen opgeschaalde instanties.
+---
+
+Hervatbare streams zorgen ervoor dat een AI-antwoord dat nog bezig is, een verbroken verbinding overleeft. Als het netwerk wegvalt, de browser ververst, of als je van tabblad of apparaat wisselt, reconstrueert LibreChat de inhoud die al gestreamd was en gaat verder waar het gebleven was. Hetzelfde mechanisme houdt meerdere kijkers van één gesprek synchroon.
+
+## Wat je krijgt [#what-you-get]
+
+- **Geen verloren antwoorden.** Netwerkonderbrekingen, browserverversingen en serverherstarts zorgen er niet voor dat gestreamde inhoud verloren gaat.
+- **Tabs blijven gesynchroniseerd.** Open één gesprek in twee browsertabbladen en beide ontvangen dezelfde updates in realtime.
+- **Wissel halverwege van apparaat.** Start een generatie op je desktop en bekijk het resultaat op je telefoon.
+- **Achtergrondgeneraties.** Start een lang antwoord, ga naar een ander tabblad of app, en het volledige antwoord staat voor je klaar wanneer je terugkeert.
+- **Gedeelde gesprekken.** Elke kijker van een gedeeld gesprek ziet de inhoud tegelijkertijd binnenstromen.
+
+## Hoe het werkt [#how-it-works]
+
+Wanneer je een bericht verstuurt, maakt LibreChat een generatietaak aan die elke gestreamde delta vastlegt. Als de verbinding wordt verbroken:
+
+1. De client detecteert de verbreking van de verbinding.
+2. Bij het opnieuw verbinden herbouwt de server de tot dusver gestreamde inhoud op basis van de opgenomen delta's van de taak.
+3. De ontbrekende inhoud wordt geleverd in een enkele sync-gebeurtenis.
+4. Streaming gaat verder vanaf de huidige positie.
+
+Dit wordt automatisch uitgevoerd en vereist geen actie van de gebruiker.
+
+## Deployment Modes [#deployment-modes]
+
+LibreChat wordt geleverd met twee backends voor hervatbare streams.
+
+### Single-Instance Mode (standaard) [#single-instance-mode-default]
+
+Slaat de stream-status op in het geheugen en gebruikt een Node.js `EventEmitter` voor pub/sub. Dit is de standaardinstelling en vereist geen configuratie. Het is geschikt voor lokale ontwikkeling, implementaties op één server en Docker Compose-opstellingen.
+
+### Redis-modus (productie) [#redis-mode-production]
+
+Gebruikt Redis Streams en Pub/Sub zodat de stream-status wordt gedeeld tussen instanties. Gebruik dit voor horizontaal geschaalde, load-balanced of high-availability implementaties, inclusief Kubernetes-clusters. Met Redis kan een generatie die op de ene instantie is gestart, worden hervat op een andere, waardoor actieve streams in leven blijven tijdens rolling deployments en auto-scaling.
+
+<Callout type="info" title="Enkele instantie? Je hebt hier waarschijnlijk geen Redis nodig">
+In-memory mode verwerkt alles voor een enkele LibreChat-instantie. Redis wordt relevant zodra je meerdere instanties achter een load balancer draait. Redis is nog steeds nuttig voor caching en sessieopslag bij implementaties met één instantie, alleen niet specifiek voor hervatbare streams.
+</Callout>
+
+## Configuratie [#configuration]
+
+### Redis Streams inschakelen [#enable-redis-streams]
+
+Door `USE_REDIS=true` in te stellen, gebruiken hervatbare streams automatisch Redis. Gebruik `USE_REDIS_STREAMS` om dit expliciet te beheren.
+
+```bash filename=".env"
+USE_REDIS=true
+REDIS_URI=redis://localhost:6379
+# Resumable streams use Redis automatically when USE_REDIS=true.
+# Set USE_REDIS_STREAMS to control it explicitly:
+USE_REDIS_STREAMS=true
+```
+
+### Redis Cluster [#redis-cluster]
+
+Voor een Redis Cluster, schakel de cluster-modus in en vermeld de nodes in `REDIS_URI`.
+
+```bash filename=".env"
+USE_REDIS_STREAMS=true
+USE_REDIS_CLUSTER=true
+REDIS_URI=redis://node1:7001,redis://node2:7002,redis://node3:7003
+```
+
+LibreChat gebruikt hash-tagged keys zodat operaties met meerdere keys op dezelfde cluster slot terechtkomen.
+
+## Wat wordt er gereconstrueerd [#what-gets-reconstructed]
+
+Bij het opnieuw verbinden aggregeert LibreChat de opgenomen delta-events om het volgende opnieuw op te bouwen:
+
+- Berichtinhoud (tekst, tool-aanroepen, citaten)
+- Agent run-stappen en tussenliggende redenering
+- Metadata en statusinformatie
+
+Het opslagmechanisme hangt af van de implementatiemodus:
+
+| Component | Storage Mechanism |
+|-----------|-------------------|
+| Chunks | Redis Streams (`XADD`/`XRANGE`) |
+| Job metadata | Redis Hash structures |
+| Real-time events | Redis Pub/Sub channels |
+| Expiration | Automatische TTL na voltooiing van de stream |
+
+LibreChat past een paar optimalisaties toe om dit goedkoop te houden:
+
+- **Memory-first herstel.** Het opnieuw verbinden met hetzelfde exemplaar leest vanuit de lokale cache, waardoor een Redis-roundtrip wordt vermeden.
+- **Opschonen bij toegang.** Verouderde taakinvoer wordt verwijderd tijdens zoekopdrachten en voltooide streams verlopen automatisch.
+- **Garbage-collected opslag.** De in-memory modus slaat stream-grafieken op met `WeakRef`, zodat ze worden opgeruimd zodra een gesprek is beëindigd.
+
+## Testen [#testing]
+
+Om te bevestigen dat de functie werkt, start je een streaminggesprek met een willekeurig model en probeer je vervolgens een van de volgende opties:
+
+- **Tabbladen.** Open dezelfde chat in een tweede tabblad; beide zouden moeten synchroniseren.
+- **Verbinding verbreken.** Verbreek de netwerkverbinding kortstondig en maak daarna opnieuw verbinding.
+- **Navigatie.** Navigeer weg tijdens het streamen en keer daarna terug.
+
+Elk geval moet het volledige antwoord opleveren zonder ontbrekende inhoud.
+
+## Probleemoplossing [#troubleshooting]
+
+**Streams worden niet hervat.** Controleer of Redis bereikbaar is en of `USE_REDIS_STREAMS` is ingesteld.
+
+```bash
+docker exec -it librechat-redis redis-cli ping
+# Expected: PONG
+
+echo $USE_REDIS_STREAMS
+```
+
+**Inhoud lijkt gedupliceerd.** Dit betekent meestal een mismatch in de clientversie. Update naar de nieuwste versie van LibreChat.
+
+**Hoog geheugengebruik in single-instance modus.** Voltooide streams worden door de garbage collector opgeruimd. Als het geheugengebruik hoog blijft, zoek dan naar zeer langlopende streams die nooit worden voltooid of streams die zijn vastgelopen zonder op te schonen.
+
+## Gerelateerde documentatie [#related-documentation]
+
+- [Redis-configuratie](/docs/configuration/redis): Redis instellen voor caching en horizontale schaling
+- [Agents](/docs/features/agents): AI-agents met toolgebruik
+- [Docker Deployment](/docs/local/docker): container-gebaseerde implementatie
+
+Voor implementatiedetails, zie [PR #10926](https://github.com/danny-avila/LibreChat/pull/10926).

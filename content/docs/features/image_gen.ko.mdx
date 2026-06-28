@@ -1,0 +1,398 @@
+---
+title: 이미지 생성 및 편집
+icon: Image
+description: LibreChat의 내장 이미지 생성 및 편집 도구에 대한 종합 가이드
+---
+
+LibreChat은 [Agent](/docs/features/agents)에 추가할 수 있는 내장 이미지 도구와 함께 제공됩니다. 각 도구는 고유한 모델, 가격대 및 설정을 가지고 있으며, 일반적으로 API 키나 URL만 있으면 됩니다. 별도의 이미지 페이지는 없으며, 이미지 도구가 활성화된 Agent와 대화하여 이미지를 생성하거나 편집할 수 있습니다.
+
+<Callout type="info" title="이미지 생성 작동 방식">
+편집을 원할 때는 이미지를 업로드하고, 새로운 이미지를 원할 때는 일반 텍스트 프롬프트를 보내세요. 생성된 이미지는 구성된 [`fileStrategy`](/docs/configuration/librechat_yaml/object_structure/config#filestrategy)를 따르며, 도구 출력은 생성 직후 채팅 컨텍스트의 일부로 LLM에 전송됩니다.
+</Callout>
+
+## 빠른 시작 [#quick-start]
+
+OpenAI Image Tools를 사용하여 몇 분 안에 이미지 생성 기능을 설정하세요.
+
+<Steps>
+<Step>
+
+**에이전트 생성.** 엔드포인트 메뉴에서 **Agents**를 선택하고, 사이드 패널에서 Agent Builder를 연 다음, 새 에이전트를 생성하세요. "Image Creator"와 같은 이름을 지정하세요.
+
+</Step>
+<Step>
+
+**OpenAI Image Tools 추가.** 에이전트의 **Tools** 목록을 열고 **OpenAI Image Tools**를 선택한 다음 에이전트를 저장하세요. 이렇게 하면 이미지 생성 및 이미지 편집 기능이 모두 추가됩니다.
+
+</Step>
+<Step>
+
+**API 키를 설정하세요.** `.env` 파일에 다음을 추가하세요:
+
+```bash filename=".env"
+IMAGE_GEN_OAI_API_KEY=sk-your-openai-api-key
+# Optional; defaults to gpt-image-1
+IMAGE_GEN_OAI_MODEL=gpt-image-1
+```
+
+</Step>
+<Step>
+
+**재시작 및 테스트.** LibreChat을 재시작한 다음, 에이전트에게 "산 너머로 지는 일몰 이미지를 생성해 줘"와 같은 메시지를 보내보세요.
+
+| 배포 | 명령어 |
+| ---------- | --------------------------------------------- |
+| Docker     | `docker compose down && docker compose up -d` |
+| Local      | 중단 (Ctrl+C) 후 `npm run backend`          |
+
+</Step>
+</Steps>
+
+<Callout type="info" title="알아두면 좋은 점">
+- 사용자가 UI에서 직접 자신의 키를 입력할 수 있도록 API 키를 생략할 수 있습니다.
+- 이미지 출력은 생성 직후에만 LLM으로 전송되며, 모든 메시지마다 전송되지는 않습니다. 그 외의 경우 LLM은 사용자 메시지에 첨부된 이미지로부터만 시각적 컨텍스트를 얻습니다. [Image Storage and Handling](#image-storage-and-handling)을 참조하세요.
+- MCP 서버 도구는 이미지를 출력할 수도 있지만, 항상 올바른 형식을 사용하지는 않을 수 있습니다. [MCP 섹션](#model-context-protocol-mcp)을 참조하세요.
+</Callout>
+
+## OpenAI 이미지 도구 [#openai-image-tools]
+
+"OpenAI Image Tools"는 두 개의 개별 도구로 구성된 에이전트 툴킷입니다:
+
+- **Image Generation**은 텍스트 프롬프트로부터 완전히 새로운 이미지를 생성합니다(업로드 불필요).
+- **Image Editing**은 업로드한 이미지를 편집하거나 리믹스합니다: 색상 변경, 개체 추가, 캔버스 확장 등을 수행할 수 있습니다.
+
+둘 다 지시 이행, 텍스트 렌더링, 상세 편집 및 실세계 지식에 대해 기본적으로 **GPT-Image-1**을 사용합니다. 배포 환경에서 지원하는 경우 `IMAGE_GEN_OAI_MODEL`을 사용하여 다른 OpenAI 이미지 모델을 선택할 수 있습니다. 자세한 내용은 OpenAI의 [Image Generation documentation](https://platform.openai.com/docs/guides/image-generation?image-generation-model=gpt-image-1)을 참조하세요.
+
+### 생성 vs. 편집 [#generation-vs-editing]
+
+| 사용 사례 | 호출 |
+| ----------------------- | -------------------- |
+| "Start from scratch" | **Image Generation** |
+| "Use existing image(s)" | **Image Editing** |
+
+두 도구 모두 항상 사용할 수 있으며, 에이전트가 요청에 따라 적절한 도구를 선택합니다:
+
+- **Image Generation**은 텍스트 설명만으로 새로운 이미지를 생성합니다.
+- **Image Editing**은 이미지 ID를 사용하여 기존 이미지를 수정하거나 리믹스합니다. 이는 현재 메시지에 포함된 이미지이거나 이전에 생성되어 참조된 이미지일 수 있습니다. LLM은 이미지가 컨텍스트 창에 남아 있는 동안 이미지 ID를 추적하며, 이를 도구 출력에 포함합니다.
+
+<Callout type="warning" title="이미지 편집은 이미지 ID에 의존합니다">
+- 이미지 ID는 대화 기록에 유지됩니다. 현재 요청에 파일이 업로드되면, 토큰이 생성되기 전에 해당 ID가 LLM의 컨텍스트에 추가됩니다.
+- 이전에 참조되었거나 생성된 이미지 ID는 컨텍스트 윈도우 내에 유지되는 한 편집에 사용할 수 있습니다. LLM은 편집 도구를 호출할 때 관련 ID를 `image_ids` 배열에 포함합니다.
+- 이전에 업로드한 이미지를 다시 업로드할 필요 없이 사이드 패널에서 바로 첨부할 수 있습니다. 또한 이를 통해 비전 모델에 이미지 컨텍스트를 제공할 수 있으며, 이는 편집 도구의 `prompt`를 구성하는 데 도움이 될 수 있습니다.
+</Callout>
+
+### 매개변수 [#parameters]
+
+**이미지 생성**
+
+- **prompt**: 텍스트 설명 (필수)
+- **size**: `auto` (기본값), `1024x1024` (정사각형), `1536x1024` (가로형), 또는 `1024x1536` (세로형)
+- **quality**: `auto` (기본값), `high`, `medium` 또는 `low`
+- **background**: `auto` (기본값), `transparent`, 또는 `opaque` (transparent를 사용하려면 PNG 또는 WebP 형식이 필요함)
+
+**이미지 편집**
+
+- **image_ids**: 편집을 위한 참조로 사용할 이미지 ID 배열 (필수)
+- **prompt**: 변경 사항에 대한 텍스트 설명 (필수)
+- **size**: `auto` (기본값), `1024x1024`, `1536x1024`, `1024x1536`, `256x256` 또는 `512x512`
+- **quality**: `auto` (기본값), `high`, `medium` 또는 `low`
+
+### 설정 [#setup]
+
+OpenAI 키를 생성하거나 재사용하여 `.env`에 추가한 다음, 에이전트의 **Tools** 목록에 "OpenAI Image Tools"를 추가하세요:
+
+```bash filename=".env"
+IMAGE_GEN_OAI_API_KEY=sk-...
+# optional extras
+IMAGE_GEN_OAI_MODEL=gpt-image-1
+IMAGE_GEN_OAI_BASEURL=https://...
+```
+
+Azure OpenAI 배포의 경우, 먼저 https://aka.ms/oai/gptimage1access 에서 액세스 권한을 요청한 다음, `.env`에 자격 증명을 추가하세요:
+
+```bash filename=".env"
+IMAGE_GEN_OAI_API_KEY=your-api-key
+# optional extras
+IMAGE_GEN_OAI_MODEL=gpt-image-1
+IMAGE_GEN_OAI_BASEURL=https://deploymentname.openai.azure.com/openai/deployments/gpt-image-1/
+IMAGE_GEN_OAI_AZURE_API_VERSION=2025-04-01-preview
+```
+
+### 고급 구성 [#advanced-configuration]
+
+다음 환경 변수를 사용하여 도구 설명과 프롬프트 가이드를 사용자 지정하세요:
+
+```bash filename=".env"
+# Image Model
+IMAGE_GEN_OAI_MODEL=gpt-image-1
+
+# Image Generation Tool Descriptions
+IMAGE_GEN_OAI_DESCRIPTION=...
+IMAGE_GEN_OAI_PROMPT_DESCRIPTION=...
+
+# Image Editing Tool Descriptions
+IMAGE_EDIT_OAI_DESCRIPTION=...
+IMAGE_EDIT_OAI_PROMPT_DESCRIPTION=...
+```
+
+### 가격 책정 [#pricing]
+
+이미지 생성 비용에 대해서는 [GPT-Image-1 pricing page](https://platform.openai.com/docs/models/gpt-image-1) 및 [Image Generation documentation](https://platform.openai.com/docs/guides/image-generation?image-generation-model=gpt-image-1#cost-and-latency)을 참조하세요.
+
+## Gemini 이미지 도구 [#gemini-image-tools]
+
+Gemini Image Tools는 Google의 최신 이미지 생성 모델을 통합하여 텍스트 기반 이미지 생성과 이미지 문맥 인식 편집을 모두 지원합니다.
+
+- **텍스트 기반 이미지 생성**: 상세한 텍스트 설명으로부터 고품질 이미지를 생성합니다.
+- **이미지 컨텍스트 지원**: 기존 이미지를 새로운 생성의 컨텍스트나 영감으로 사용하세요.
+- **이미지 편집**: 기존 이미지를 수정한 내용을 바탕으로 새로운 이미지를 생성합니다(원본 이미지 ID 포함).
+- **다중 모델**: `gemini-2.5-flash-image`(기본값) 또는 `gemini-3-pro-image-preview`를 선택하세요.
+- **이중 API 지원**: 간단한 Gemini API 키와 Google Cloud Vertex AI 모두에서 작동합니다.
+
+### 매개변수 [#parameters-1]
+
+- **prompt**: 원하는 이미지에 대한 상세한 텍스트 설명 (필수, 최대 32,000자)
+- **image_ids**: 생성 시 시각적 컨텍스트로 사용할 이미지 ID의 선택적 배열
+
+### 설정 [#setup-1]
+
+Gemini API의 경우, [Google AI Studio](https://aistudio.google.com/app/apikey)에서 키를 발급받으세요:
+
+```bash filename=".env"
+GEMINI_API_KEY=your_api_key_here
+```
+
+Vertex AI의 경우 (Vertex AI 액세스 권한이 있는 Google Cloud 사용자):
+
+```bash filename=".env"
+GOOGLE_SERVICE_KEY_FILE=/path/to/service-account.json
+GOOGLE_CLOUD_LOCATION=us-central1  # optional, default: global
+```
+
+### 모델 선택 [#model-selection]
+
+```bash filename=".env"
+# Default model (fast and efficient)
+GEMINI_IMAGE_MODEL=gemini-2.5-flash-image
+
+# Higher quality model
+GEMINI_IMAGE_MODEL=gemini-3-pro-image-preview
+```
+
+### 고급 구성 [#advanced-configuration-1]
+
+환경 변수를 통해 도구 설명을 사용자 지정하세요:
+
+```bash filename=".env"
+GEMINI_IMAGE_GEN_DESCRIPTION=...
+GEMINI_IMAGE_GEN_PROMPT_DESCRIPTION=...
+GEMINI_IMAGE_IDS_DESCRIPTION=...
+```
+
+더 자세한 내용은 전용 [Gemini Image Gen 가이드](/docs/configuration/tools/gemini_image_gen)에서 확인할 수 있습니다.
+
+## DALL·E (legacy) [#dalle-legacy]
+
+DALL·E는 OpenAI의 `dall-e-3` 이미지 모델을 사용하는 레거시 이미지 생성을 제공합니다.
+
+### 매개변수 [#parameters-2]
+
+- **prompt**: 원하는 이미지에 대한 텍스트 설명 (필수, 최대 4000자)
+- **style**: `vivid` (초현실적, 극적, 기본값) 또는 `natural` (덜 초현실적)
+- **quality**: `standard` (기본값) 또는 `hd`
+- **size**: `1024x1024` (기본값, 정사각형), `1792x1024` (가로형), 또는 `1024x1792` (세로형)
+
+### 설정 [#setup-2]
+
+```bash filename=".env"
+# Required
+DALLE_API_KEY=sk-...  # or DALLE3_API_KEY=sk-...
+
+# Optional
+DALLE_REVERSE_PROXY=https://...  # Alternative endpoint
+DALLE3_BASEURL=https://...  # For Azure or custom endpoints
+DALLE3_AZURE_API_VERSION=2023-12-01-preview  # For Azure deployments
+DALLE3_SYSTEM_PROMPT=...  # Custom system prompt for DALL·E
+```
+
+에이전트에 **DALL·E** 도구를 활성화하고 프롬프트를 시작하세요.
+
+### 고급 구성 [#advanced-configuration-2]
+
+Azure OpenAI 배포의 경우, 베이스 URL과 API 버전을 구성하세요:
+
+```bash filename=".env"
+DALLE3_BASEURL=https://your-resource-name.openai.azure.com/openai/deployments/your-deployment-name
+DALLE3_AZURE_API_VERSION=2023-12-01-preview
+DALLE3_API_KEY=your-azure-api-key
+```
+
+### 가격 책정 [#pricing-1]
+
+이미지 생성 비용에 대해서는 [DALL-E pricing page](https://platform.openai.com/docs/models/dall-e-3) 및 [Image Generation documentation](https://platform.openai.com/docs/guides/image-generation?image-generation-model=dall-e-3)를 참조하세요.
+
+## Stable Diffusion (로컬) [#stable-diffusion-local]
+
+이미지를 완전히 본인의 머신이나 서버에서 실행하세요. LibreChat을 모든 Automatic1111(또는 호환 가능한) endpoint로 지정하기만 하면 준비가 완료됩니다.
+
+### 매개변수 [#parameters-3]
+
+- **prompt**: 이미지에서 원하는 요소를 설명하는 상세 키워드 (필수)
+- **negative_prompt**: 이미지에서 제외할 요소를 설명하는 키워드 (필수)
+
+Stable Diffusion 구현은 대부분의 사용 사례에서 좋은 결과를 생성하는 다음과 같은 고정된 기본 매개변수를 사용합니다:
+
+- cfg_scale: 4.5
+- 단계: 22
+- width: 1024
+- height: 1024
+
+### 설정 [#setup-3]
+
+API 키는 필요하지 않으며, Automatic1111 WebUI에 접근 가능한 URL만 있으면 됩니다:
+
+```bash filename=".env"
+SD_WEBUI_URL=http://127.0.0.1:7860  # URL to your Automatic1111 WebUI
+```
+
+Automatic1111 설정에 대한 자세한 내용은 전용 [Stable Diffusion 가이드](/docs/configuration/tools/stable_diffusion)에서 확인할 수 있습니다.
+
+## Flux [#flux]
+
+속도와 선택적인 미세 조정 모델에 중점을 둔 클라우드 생성기입니다.
+
+- 빠른 클라우드 기반 이미지 생성
+- 미세 조정된 모델 지원
+- 다양한 품질 수준 및 화면 비율
+- 더 적게 처리되고 더 자연스러운 이미지를 위한 Raw 모드
+
+### 매개변수 [#parameters-4]
+
+Flux 도구는 세 가지 주요 작업을 지원합니다:
+
+1. **generate**: 텍스트 프롬프트로부터 새로운 이미지를 생성합니다
+2. **generate_finetuned**: fine-tuned 모델을 사용하여 이미지 생성
+3. **list_finetunes**: 사용자가 사용할 수 있는 커스텀 모델을 나열합니다.
+
+자세한 내용은 전용 [Flux 가이드](/docs/configuration/tools/flux#parameters)에서 확인할 수 있습니다.
+
+### 설정 [#setup-4]
+
+에이전트 내에서 **Flux** 도구를 선택하세요. 프롬프트는 일반 텍스트이며, 한 번의 호출로 하나의 이미지가 생성됩니다.
+
+```bash filename=".env"
+FLUX_API_KEY=flux_live_...
+FLUX_API_BASE_URL=https://api.us1.bfl.ai   # default is fine for most users
+```
+
+### 가격 책정 [#pricing-2]
+
+이미지 생성 비용은 [Flux pricing page](https://docs.bfl.ml/pricing/)를 참조하세요.
+
+## Model Context Protocol (MCP) [#model-context-protocol-mcp]
+
+MCP 서버에서 이미지 출력이 지원됩니다. 예를 들어, [Puppeteer MCP Server](https://github.com/modelcontextprotocol/servers-archived/tree/main/src/puppeteer)는 웹 페이지의 스크린샷을 생성할 수 있으며, 이는 예상된 형식으로 이미지를 출력하고 LibreChat의 내장 이미지 도구와 동일하게 처리됩니다.
+
+<Callout type="warning" title="MCP 이미지 지원은 아직 초기 단계입니다">
+- 아래 예제들은 LibreChat이 Docker 외부에서 Node.js를 직접 사용하여 실행된다고 가정합니다. Model Context Protocol은 비교적 새로운 프레임워크이며, 많은 개발자들이 확장 가능한 배포를 위해 uv/node로 시스템을 서비스하는 방법을 여전히 배우고 있는 단계입니다.
+- 이미지를 생성하는 서버는 많지 않으며, 많은 서버가 아직 이미지에 대한 올바른 응답 형식을 채택하지 않았습니다.
+- 많은 MCP 서버가 Docker 내에서 잘 작동하지만, 다음 예시들은 그렇지 않거나 더 고급 구성 없이는 작동하지 않으며, 이는 현재 MCP 서버 간의 일관성 부족을 보여줍니다.
+</Callout>
+
+```yaml filename="librechat.yaml"
+mcpServers:
+  puppeteer:
+    command: npx
+    args:
+      - -y
+      - '@modelcontextprotocol/server-puppeteer'
+```
+
+The following is an example of an [Image Generation server](https://github.com/GongRzhe/Image-Generation-MCP-Server) that outputs images using the [Replicate API](https://replicate.com/account/api-tokens), but returns URLs of the images, which doesn't conform to MCP's image response standard.
+
+<Callout type="info" title="전역 설치 필요">
+이 특정 서버의 경우, `npm install -g @gongrzhe/image-gen-server` 명령어를 사용하여 `@gongrzhe/image-gen-server` 패키지를 전역으로 설치한 다음, 아래와 같이 해당 패키지의 컴파일된 파일을 지정하십시오.
+</Callout>
+
+```yaml filename="librechat.yaml"
+mcpServers:
+  image-gen:
+    command: 'node'
+    # First, install the package globally using npm:
+    # `npm install -g @gongrzhe/image-gen-server`
+    # Then, point to the location of the installed package,
+    # which you can find by running `npm root -g`
+    args:
+      - '{REPLACE_WITH_NODE_MODULES_LOCATION}/@gongrzhe/image-gen-server/build/index.js'
+      # Example with output from `npm root -g`:
+      # - "/home/danny/.nvm/versions/node/v24.16.0/lib/node_modules/@gongrzhe/image-gen-server/build/index.js"
+    env:
+      # Do not hardcode the API token here, use the environment variable instead
+      # The following will pick up the token from your .env file or environment
+      REPLICATE_API_TOKEN: '${REPLICATE_API_TOKEN}'
+      MODEL: 'google/imagen-3'
+```
+
+## 이미지 저장 및 처리 [#image-storage-and-handling]
+
+생성된 모든 이미지는 다음과 같습니다:
+
+1. 설정된 [`fileStrategy`](/docs/configuration/librechat_yaml/object_structure/config#filestrategy)에 따라 저장됨
+2. 채팅 인터페이스에 직접 표시됨
+3. 생성 직후 즉각적인 채팅 컨텍스트의 일부로 LLM에 전송됩니다.
+
+마지막 항목에는 몇 가지 주의 사항이 있습니다:
+
+- 이는 이미지 입력을 지원하지 않는 LLM에서 문제를 일으킬 수 있습니다. 에이전트별로 해당 동작을 비활성화하는 옵션이 계획되어 있습니다.
+- 출력은 모든 메시지가 아닌, 생성 시에만 LLM으로 전송됩니다.
+- 이후 대화에서 이미지를 포함하려면, 사이드 패널에서 메시지에 이미지를 첨부하세요.
+- 간단히 말해, LLM은 사용자 메시지에 첨부된 이미지와 생성 또는 편집 직후에 발생하는 이미지로부터만 시각적 컨텍스트를 얻습니다.
+
+## 프록시 지원 [#proxy-support]
+
+모든 이미지 생성 도구는 `PROXY` 환경 변수를 통한 프록시 구성을 지원합니다:
+
+```bash filename=".env"
+PROXY=http://proxy-url:port
+```
+
+`PROXY`가 설정되지 않은 경우, 지원되는 서버 측 클라이언트는 `HTTP_PROXY`, `HTTPS_PROXY` 및 `NO_PROXY`/`no_proxy`를 따릅니다.
+
+## 오류 처리 [#error-handling]
+
+도구가 오류를 발생시키면, 무엇이 잘못되었는지 설명하는 메시지를 반환합니다. 일반적인 문제는 다음과 같습니다:
+
+- 유효하지 않은 API 키
+- API 사용 불가
+- 콘텐츠 정책 위반
+- 프록시/네트워크 문제
+- 유효하지 않은 매개변수
+- 지원되지 않는 이미지 페이로드 ([Image Storage and Handling](#image-storage-and-handling) 참조)
+
+## 프롬프트 작성 (Prompting) [#prompting]
+
+[OpenAI Image Tools](#advanced-configuration) 및 [DALL·E](#advanced-configuration-2)에 대한 프롬프트를 사용자 지정할 수 있지만, 다음 팁은 도구가 제공하는 기본 프롬프트에 대한 정보를 담고 있으며, 직접 프롬프트를 작성할 때 유용하게 활용할 수 있습니다:
+
+1. **주제**와 **스타일**(사진, 유화 등)로 시작하세요.
+2. **구도(composition)** 및 **카메라/매체(camera/medium)**("…의 광각 촬영", "수채화…" 등)를 추가하세요.
+3. **조명 및 분위기**("골든 아워", "극적인 그림자")를 언급하세요.
+4. **세부 키워드**(질감, 색상, 표정)로 마무리하세요.
+5. 부정적인 표현을 긍정적으로 유지하세요: 무엇을 피해야 할지가 아니라 무엇을 포함해야 할지를 설명하세요.
+
+예시:
+
+> 따뜻한 오후의 햇살이 내리쬐는 고풍스러운 도서관의 영화 같은 사진. 높은 나무 선반에는 가죽으로 제본된 책들이 가득 꽂혀 있고, 먼지 입자들이 빛 속에서 반짝입니다. 전경에 있는 윤이 나는 마호가니 책상 위에는 녹색 갓이 씌워진 뱅커 램프 하나가 펼쳐진 지도책을 비추고 있습니다. 85mm 렌즈, 얕은 피사계 심도, 풍부한 호박색 톤, 초고해상도 디테일.
+
+## 관련 페이지 [#related-pages]
+
+<Cards num={3}>
+  <Cards.Card title="에이전트" href="/docs/features/agents" arrow>
+    사용자 지정 도구를 사용하여 AI 에이전트를 생성하고 구성하세요
+  </Cards.Card>
+  <Cards.Card title="MCP 서버" href="/docs/features/mcp" arrow>
+    Model Context Protocol을 통해 나만의 도구 가져오기
+  </Cards.Card>
+  <Cards.Card title="Gemini 이미지 도구" href="/docs/configuration/tools/gemini_image_gen" arrow>
+    Google Gemini 이미지 생성을 위한 상세 설정 가이드
+  </Cards.Card>
+</Cards>

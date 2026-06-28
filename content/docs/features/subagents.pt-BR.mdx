@@ -1,0 +1,131 @@
+---
+title: Subagentes
+icon: Network
+description: >-
+  Delegue tarefas focadas de um agente para execuções isoladas de agentes
+  secundários.
+---
+
+Subagents permitem que um Agente do LibreChat inicie uma execução filha isolada para tarefas focadas. O agente filho obtém sua própria janela de contexto e fluxo de execução de ferramentas. O pai recebe o resultado do filho sem absorver cada chamada de ferramenta intermediária, rastreamento ou operação de arquivo detalhada em seu próprio contexto.
+
+Use subagentes para:
+
+- Subtarefas de pesquisa que podem gerar saídas intermediárias longas
+- Revisar passagens com um agente especializado
+- Trabalho intensivo de ferramentas que deve permanecer fora do contexto pai
+- Decomposição em estilo paralelo onde o pai coordena e resume
+
+## Como os Subagents diferem do Agent Chain [#how-subagents-differ-from-agent-chain]
+
+O Agent Chain constrói um grafo multi-agente onde os agentes passam resultados através de etapas de cadeia configuradas. Subagentes são gerados por um agente como uma chamada de ferramenta durante uma execução.
+
+- **Agent Chain**: fluxo de trabalho multi-agente em nível de grafo
+- **Subagents**: delegação de tempo de execução de um agente pai para execuções filhas isoladas
+
+Ambos podem usar agentes existentes, mas subagentes são projetados para delegação com escopo definido a partir de dentro do loop de raciocínio de um único agente.
+
+## Habilitar a Capacidade [#enable-the-capability]
+
+A funcionalidade `subagents` está habilitada por padrão. Administradores podem removê-la da lista de capacidades do endpoint agents para desativar o recurso.
+
+```yaml filename="librechat.yaml"
+endpoints:
+  agents:
+    capabilities:
+      - 'deferred_tools'
+      - 'execute_code'
+      - 'file_search'
+      - 'web_search'
+      - 'artifacts'
+      - 'subagents'
+      - 'actions'
+      - 'context'
+      - 'skills'
+      - 'tools'
+      - 'chain'
+      - 'ocr'
+```
+
+## Configurar um Agent [#configure-an-agent]
+
+No Agent Builder, abra **Advanced Settings** e ative **Subagents**.
+
+Configurações disponíveis:
+
+- **Habilitar subagentes**: adiciona a ferramenta de criação de subagentes ao agente.
+- **Allow self-spawn**: permite que o agente crie uma nova cópia de si mesmo em um contexto isolado. Isso é habilitado por padrão quando subagentes estão ativados.
+- **Subagentes adicionais**: seleciona agentes específicos que o pai pode gerar.
+
+Formato de agente equivalente:
+
+```yaml filename="agent subagents"
+subagents:
+  enabled: true
+  allowSelf: true
+  agent_ids:
+    - 'agent_researcher'
+    - 'agent_reviewer'
+```
+
+## Configure a Model Spec [#configure-a-model-spec]
+
+Os administradores também podem habilitar Subagents para agentes efêmeros criados a partir de um Model Specs. Isso é útil quando um Model Specs deve se comportar como um perfil de agente focado, sem exigir que os usuários criem ou selecionem um agente pai persistente.
+
+```yaml filename="modelSpecs / subagents"
+modelSpecs:
+  list:
+    - name: 'research-assistant'
+      label: 'Research Assistant'
+      subagents:
+        enabled: true
+        allowSelf: true
+        agent_ids: []
+      preset:
+        endpoint: 'agents'
+        model: 'gpt-4o'
+```
+
+Apenas `enabled` e `allowSelf` são enviados aos clientes na configuração de inicialização. A lista de permissões `agent_ids` permanece no lado do servidor e é validada em relação ao limite compartilhado `MAX_SUBAGENTS`. Os payloads de solicitação do cliente não podem fornecer ou substituir a configuração de Subagent do Model Specs.
+
+## Comportamento em Tempo de Execução [#runtime-behavior]
+
+Quando subagents estão habilitados, o agente pai recebe uma ferramenta `subagent`. A ferramenta pode gerar:
+
+- `self`, quando `allowSelf` não for false
+- Qualquer agente filho configurado em `agent_ids`
+
+Agentes filhos são executados com contexto isolado. O estado de busca de ferramentas do pai e o contexto acumulado não são copiados para a execução do filho. O uso do modelo na execução do filho é faturado na transação do pai e incluído nos totais de uso do pai. A interface do usuário exibe a execução do filho como uma parte de atividade do agente expansível com status, atualizações de ticker e o resultado final.
+
+## Limites [#limits]
+
+O LibreChat impõe estes limites para manter os grafos de subagentes delimitados:
+
+<OptionTable
+  options={[
+    ['MAX_SUBAGENTS', 'Number', 'Máximo de subagentes explícitos por agente pai.', '10'],
+    ['MAX_SUBAGENT_DEPTH', 'Number', 'Máximo de saltos explícitos de subagente a partir de um agente raiz.', '5'],
+    [
+      'MAX_SUBAGENT_GRAPH_NODES',
+      'Number',
+      'Máximo de alvos de subagentes explícitos únicos carregados em tempo de execução.',
+      '50',
+    ],
+    [
+      'MAX_SUBAGENT_RUN_CONFIGS',
+      'Number',
+      'Configurações máximas de subagentes expandidos incorporadas em uma única solicitação de execução.',
+      '100',
+    ],
+  ]}
+/>
+
+## Controle de Acesso [#access-control]
+
+Agentes filhos configurados devem estar visíveis para o usuário. Se o usuário não tiver acesso de visualização a um agente referenciado, o LibreChat ignora esse subagente. Para solicitações de criação e atualização, entradas `subagents.agent_ids` inválidas ou não autorizadas são rejeitadas.
+
+## Dicas de Design [#design-tips]
+
+- Habilite o self-spawn quando o agente pai já estiver bem delimitado e precisar apenas de um contexto novo para uma subtarefa.
+- Adicione agentes filhos específicos quando a tarefa precisar de um modelo, conjunto de instruções, conjunto de ferramentas ou lista de permissões de habilidades diferente.
+- Mantenha as descrições dos filhos claras. O pai usa o nome e a descrição de cada filho para escolher o destino de delegação correto.
+- Use subagentes para trabalhos intermediários que devam retornar um resultado compacto, não para transferências permanentes para outro caminho de conversa.

@@ -1,0 +1,305 @@
+---
+title: Token Kullanımı
+icon: Coins
+description: >-
+  Bu bölüm, LibreChat içinde token kullanımını nasıl takip edeceğinizi ve
+  kontrol edeceğinizi kapsar. Bağlam ve maliyeti nasıl görüntüleyeceğinizi,
+  işlemleri nasıl yapılandıracağınızı, kullanıcı bakiyelerini nasıl
+  etkinleştireceğinizi ve bir hesaba nasıl kredi ekleyeceğinizi öğreneceksiniz.
+---
+
+## Giriş [#intro]
+
+`v0.6.0` itibarıyla LibreChat, desteklenen endpoint'ler için token kullanımını doğru bir şekilde takip eder. Tüm token işlemleri veritabanınızdaki "Transactions" koleksiyonunda saklanır. Mevcut sürümler ayrıca etkinleştirildiğinde sohbet arayüzünde gerçek zamanlı bağlam kullanımını ve maliyeti gösterir.
+
+Şu anda, kullanıcı bakiyelerini etkinleştirerek kullanıcı token kullanımını sınırlandırabilirsiniz. Token kredi limitlerini ortam değişkenleri aracılığıyla yapılandırmak yerine, artık bu seçenekleri `librechat.yaml` dosyanızdaki **balance** bölümü altında ayarlayabilirsiniz. Maliyet değerleri varsayılan olarak gizlidir ve `interface.contextCost` ile etkinleştirilmelidir.
+
+## Bağlam Kullanımını ve Maliyeti Görüntüleme [#viewing-context-usage-and-cost]
+
+LibreChat, bir konuşma devam ederken bir bağlam göstergesi (context gauge) görüntüler. Gösterge, akış sırasında kullanım olaylarından güncellenir ve şunları gösterebilir:
+
+- Modelin bağlam penceresine karşı mevcut istem/bağlam kullanımı
+- Hızlı token ve maliyet detayları için bir üzerine gelme özeti
+- İstem, tamamlama, önbelleğe alınmış token kullanımı, dal toplamları ve konuşma toplamları için tıklanabilir bir döküm
+
+Kullanım dökümleri, mesajlar ve sohbetlerle birlikte kalıcı hale getirilir. Yeniden açılan sohbetler, yalnızca aktif akış oturumuna güvenmek yerine dal ve toplam kullanım/maliyet ayrıntılarını korur.
+
+Özetleme özelliği uzun bir konuşmayı sıkıştırdığında, LibreChat sıkıştırılmış özet temelini kaydeder ve bağlam göstergesi için bunun üzerine yalnızca özet sonrası dönüşleri sayar. Kullanım ve maliyet toplamları, tüm dal harcamalarını içermeye devam eder.
+
+Yöneticiler bu görünümleri `librechat.yaml` dosyasından kontrol edebilirler:
+
+```yaml filename="librechat.yaml"
+interface:
+  contextUsage: true
+  contextCost: true
+  currency:
+    code: EUR
+    rate: 0.92
+```
+
+- `contextUsage`, kullanıcıların bağlam penceresini ve token kullanım göstergesini görüp görmeyeceğini kontrol eder.
+- `contextCost`, kullanıcıların kullanım detaylarında maliyet değerlerini görüp görmeyeceğini kontrol eder. Varsayılan değeri `false`'tur; maliyetleri göstermek için `true` olarak ayarlayın.
+- `currency`, maliyet gösterimi etkinleştirildiğinde görüntülenen USD maliyetlerini statik bir çarpan kullanarak dönüştürür. İşlemler yine de LibreChat'in token kredi muhasebesi kullanılarak kaydedilir.
+
+## Özel Endpoint Token Yapılandırması [#custom-endpoint-token-config]
+
+Özel endpoint'ler için, `endpoints.custom[].tokenConfig` ile modele özgü bağlam pencerelerini ve milyon token başına ücretleri tanımlayın:
+
+```yaml filename="librechat.yaml"
+endpoints:
+  custom:
+    - name: 'Mistral'
+      apiKey: '${MISTRAL_API_KEY}'
+      baseURL: 'https://api.mistral.ai/v1'
+      models:
+        default: ['mistral-large-latest']
+      tokenConfig:
+        mistral-large-latest:
+          prompt: 2
+          completion: 6
+          context: 128000
+```
+
+Her model girişi için `prompt`, `completion` ve `context` gereklidir. Önbelleğe alınmış girdi kullanımını raporlayan sağlayıcılar için `cacheRead` ve `cacheWrite` eklenebilir. Birden fazla endpoint kullanan Ajanlar için LibreChat, kullanım ve maliyeti kaydederken eşleşen endpoint/model token yapılandırmasını kullanır.
+
+Getirilen token yapılandırması, endpoint modelleri, anahtarlar, URL'ler veya başlıklar istek bağlamına göre değişebildiğinde kullanıcı kapsamıyla önbelleğe alınır; böylece izole edilmiş özel endpoint fiyatlandırması ve bağlam pencereleri ayrı tutulur.
+
+## İşlem Yapılandırması [#transaction-configuration]
+
+İşlem sistemi, token kullanım kayıtlarının veritabanına kaydedilip kaydedilmeyeceğini kontrol eder. Bu, bakiye sisteminden ayrı olarak yapılandırılabilir.
+
+### İşlem Ayarları [#transaction-settings]
+
+```yaml filename="librechat.yaml"
+version: 1.2.9
+
+# Transaction settings
+# Controls whether to save transaction records to the database
+# Default is true (enabled)
+transactions:
+  enabled: false
+```
+
+**Önemli:** `balance.enabled` değeri `true` olarak ayarlandığında, `transactions.enabled` ayarına bakılmaksızın işlem kaydı otomatik olarak etkinleştirilir. Bu, tüm token kullanımının eksiksiz bir kaydını tutarak bakiye takibinin doğru bir şekilde çalışmasını sağlar.
+
+    Daha fazla ayrıntı için [Transactions Configuration](/docs/configuration/librechat_yaml/object_structure/transactions) sayfasına göz atın.
+
+## Bakiye Yapılandırması [#balance-configuration]
+
+LibreChat'teki bakiye sistemi, yöneticilerin kullanıcılar için token kredi bakiyelerinin nasıl yönetileceğini yapılandırmasına olanak tanır. Tüm bakiye ayarları artık YAML yapılandırmanızda `balance` nesnesi altında yönetilmektedir.
+
+**Not:** Bu, önceki ortam değişkenlerinin (`CHECK_BALANCE` ve `START_BALANCE`) yerini alır ve kullanıcı bakiyelerini yönetmek için daha yapılandırılmış bir yol sağlar.
+
+### Bakiye Ayarlarını Tamamla [#complete-balance-settings]
+
+```yaml filename="librechat.yaml"
+version: 1.3.5
+
+# Balance settings
+balance:
+  enabled: true # Enable token credit balances for users
+  startBalance: 20000 # Initial tokens credited upon registration
+  autoRefillEnabled: false # Enable automatic token refills
+  refillIntervalValue: 30 # Numerical value for refill interval
+  refillIntervalUnit: 'days' # Time unit for refill interval (days, hours, etc.)
+  refillAmount: 10000 # Tokens added during each refill
+```
+
+### Bakiye Ayarları Açıklandı [#balance-settings-explained]
+
+- **enabled**: Kullanıcılar için token kredi takibini ve bakiye yönetimini etkinleştirir. `true` olarak ayarlandığında, sistem token kullanımını takip edecek ve bakiye limitlerini uygulayacaktır.
+
+- **startBalance**: Bir kullanıcıya kayıt sırasında tanımlanan başlangıç jeton (token) sayısını belirtir. Bu, tüm yeni kullanıcılar için başlangıç bakiyesidir.
+
+- **autoRefillEnabled**: Token kredilerinin otomatik olarak yenilenmesinin etkin olup olmadığını belirler. `true` olarak ayarlandığında, sistem yenileme aralığına bağlı olarak kullanıcı bakiyelerine otomatik olarak kredi ekleyecektir.
+
+- **refillIntervalValue**: Token kredilerinin otomatik olarak yenilenme aralığı için sayısal değeri belirtir. `refillIntervalUnit` ile birlikte çalışır.
+
+- **refillIntervalUnit**: Yenileme aralığı için zaman birimini belirtir. Desteklenen değerler arasında "seconds", "minutes", "hours", "days", "weeks" ve "months" bulunur.
+
+- **refillAmount**: Her otomatik yenileme sırasında kullanıcının bakiyesine eklenecek token sayısını belirtir.
+
+Daha fazla ayrıntı için [Balance Configuration](/docs/configuration/librechat_yaml/object_structure/balance) sayfasına göz atın.
+
+## Otomatik Yenileme (Auto-Refill) Nasıl Çalışır [#how-auto-refill-works]
+
+Bir kullanıcının bakiyesi takip edildiğinde ve **autoRefill** etkinleştirildiğinde, sistem bakiyeye yalnızca son yüklemeden bu yana belirtilen zaman aralığı geçtiğinde otomatik olarak kredi ekler. Bu, mevcut tarihin `lastRefill` tarihi ile belirtilen aralığın toplamı ile karşılaştırılmasıyla gerçekleştirilir.
+
+### Otomatik Yenileme Süreci [#auto-refill-process]
+
+1. Bir kullanıcı token harcamaya çalıştığında, sistem mevcut bakiyenin yeterli olup olmadığını kontrol eder.
+2. İşlemden sonra bakiye sıfıra veya altına düşecekse, sistem otomatik yüklemenin etkin olup olmadığını kontrol eder
+3. Otomatik doldurma (auto-refill) etkinleştirilmişse, sistem son doldurmadan bu yana geçen zaman aralığının dolup dolmadığını kontrol eder:
+   - Sistem, güncel tarihi `lastRefill + refillInterval` ile karşılaştırır.
+   - Eğer süre dolduysa, kullanıcı bakiyesine tokenlar eklenir
+   - `lastRefill` tarihi güncel tarih ile güncellenir
+4. Bakiye yeterliyse (başlangıçta veya yeniden yüklemeden sonra) işlem devam eder
+
+### Desteklenen Zaman Birimleri [#supported-time-units]
+
+`refillIntervalUnit` değeri aşağıdaki değerlerden herhangi birine ayarlanabilir:
+
+- saniye
+- dakika
+- saat
+- gün
+- hafta
+- aylar
+
+Örneğin, `refillIntervalValue` değeri 30 ve `refillIntervalUnit` değeri `days` olarak ayarlanmışsa, sistem kullanıcı bakiyesine yalnızca son yüklemeden bu yana 30 gün geçmişse `refillAmount` kadar token ekleyecektir.
+
+### Bakiye Senkronizasyonu [#balance-synchronization]
+
+Bir kullanıcı giriş yaptığında, sistem bakiye ayarlarını mevcut küresel bakiye yapılandırmasıyla otomatik olarak senkronize eder. Bu, bakiye yapılandırmasında yapılan herhangi bir değişikliğin tüm kullanıcılara uygulanmasını sağlar.
+
+Senkronizasyon süreci:
+
+1. Kullanıcının bir bakiye kaydı olup olmadığını kontrol eder
+2. Eğer bir kayıt mevcut değilse, mevcut `startBalance` ile bir tane oluşturur
+3. Kullanıcının otomatik yükleme ayarlarını genel yapılandırmayla eşleşecek şekilde günceller
+4. Kullanıcının yenileme aralığının ve miktarının genel ayarlarla eşleşmesini sağlar
+
+## Token Bakiyelerini Yönetme [#managing-token-balances]
+
+Kullanıcı bakiyelerini manuel olarak ekleyebilir veya ayarlayabilirsiniz. Bu, özellikle geliştirme aşamasında veya gelecekte tam kapsamlı bir bakiye biriktirme sistemi (örneğin, bir yönetici paneli aracılığıyla) oluşturmayı planlıyorsanız oldukça kullanışlıdır.
+
+### Bakiyeler Ekleme [#adding-balances]
+
+```bash filename="To manually add balances, run the following command:"
+# Local Development
+npm run add-balance
+
+# Docker (default setup)
+docker compose exec api npm run add-balance
+
+# Docker (deployment setup)
+docker exec -it LibreChat-API /bin/sh -c "cd .. && npm run add-balance"
+```
+
+```bash filename="You can also specify the email and token credit amount to add, e.g.:"
+# Local Development
+npm run add-balance danny@librechat.ai 1000
+
+# Docker (default setup)
+docker compose exec api npm run add-balance danny@librechat.ai 1000
+
+# Docker (deployment setup)
+docker exec -it LibreChat-API /bin/sh -c "cd .. && npm run add-balance danny@librechat.ai 1000"
+```
+
+### Bakiyeleri Ayarlama [#setting-balances]
+
+Ayrıca, bir kullanıcı için bakiye belirleyebilirsiniz. Mevcut bir bakiye, yeni bakiye ile değiştirilecektir.
+
+```bash filename="To manually set balances, run the following command:"
+# Local Development
+npm run set-balance
+
+# Docker (default setup)
+docker compose exec api npm run set-balance
+
+# Docker (deployment setup)
+docker exec -it LibreChat-API /bin/sh -c "cd .. && npm run set-balance"
+```
+
+```bash filename="You can also specify the email and token credit amount to set, e.g.:"
+# Local Development
+npm run set-balance danny@librechat.ai 1000
+
+# Docker (default setup)
+docker compose exec api npm run set-balance danny@librechat.ai 1000
+
+# Docker (deployment setup)
+docker exec -it LibreChat-API /bin/sh -c "cd .. && npm run set-balance danny@librechat.ai 1000"
+```
+
+### Bakiye listesi [#listing-of-balances]
+
+```bash filename="To see the balances of your users, you can run:"
+# Local Development
+npm run list-balances
+
+# Docker (default setup)
+docker compose exec api npm run list-balances
+
+# Docker (deployment setup)
+docker exec -it LibreChat-API /bin/sh -c "cd .. && npm run list-balances"
+```
+
+Bu, kişisel kullanımınız için kendi kullanımınızı takip etmek adına iyi çalışır; 1000 kredi = $0.001 (1 mil ABD Doları)
+
+## Token Kullanımı ve Bakiye Hakkında Notlar [#notes-on-token-usage-and-balance]
+
+- Özetleme etkinleştirildiğinde, özetlemeniz gereken içeriğin maliyeti + mesaj yükünüzün toplamı mevcut bakiyenizi aşarsa API isteği yapmanız engellenecektir.
+- Alt temsilci (subagent) alt çalıştırma modeli kullanımı, üst işlem üzerinden kaydedilir; böylece üst temsilci çalıştırmaları, devredilen kullanımı toplamlarına dahil eder.
+- İstem belirteçlerini (Prompt tokens) saymak OpenAI çağrıları için oldukça doğrudur, ancak eklentiler (plugins) için %100 kesin değildir (işlev çağırma nedeniyle). Oldukça yakın ve ihtiyatlıdır, yani sayımı 2-5 belirteç kadar daha yüksek olabilir.
+- Sistem, tamamlama belirteçleri (completion tokens) tarafından oluşturulan açıklara izin verir. Yalnızca istem (prompt) belirteçleri için yeterli bakiyenizin olup olmadığını kontrol eder ve tamamlama konusunda oldukça esnektir. Aşağıdaki grafik mantığı detaylandırmaktadır.
+- Bununla birlikte, süreç birden fazla API çağrısıyla çalıştığından, eklentiler her üretim adımında kontrol edilir. LLM'in ilk kullanıcı isteminden bu yana ürettiği her şey, aşağıda görüldüğü gibi hata mesajında kullanıcıyla paylaşılır.
+- Bu 2 adımlı bir süreç olduğundan, başlıklandırma için 150 token'lık bir tampon bellek bulunur ve bu toplamda ortalama 200 token'a denk gelir. Yetersiz bakiye durumunda, başlıklandırma herhangi bir harcama gerçekleşmeden iptal edilir ve hiçbir hata döndürülmez.
+
+![image](https://github.com/danny-avila/LibreChat/assets/110412045/78175053-9c38-44c8-9b56-4b81df61049e)
+
+## Daha fazla detay [#more-details]
+
+kaynak: [LibreChat/discussions/1640](https://github.com/danny-avila/LibreChat/discussions/1640#discussioncomment-8251970)
+
+> "rawAmount": -000, // bu nedir?
+
+Tokenizer algoritmasına göre sayıldığı şekliyle ham token miktarı.
+
+> "tokenValue": -00000, // bu nedir?
+
+Token kredisi değeri. 1000 kredi = $0.001 (1 mil USD)
+
+> "rate": 00, // bu nedir?
+
+Tokenların kredi olarak ücretlendirilme oranı.
+
+Örneğin, gpt-3.5-turbo-1106, kullanıcı istemi (girdi) için 1 ve tamamlama (çıktı) için 2 oranına sahiptir.
+
+| Model              | Giriş               | Çıkış               |
+| ------------------ | ------------------- | ------------------- |
+| gpt-3.5-turbo-1106 | $0.0010 / 1K token  | $0.0020 / 1K token  |
+
+Sağlanan örneğe göre:
+
+```sh
+    "rawAmount": -137
+    "tokenValue": -205.5
+    "rate": 1.5
+```
+
+```math
+\text{Token Value} = (\text{Raw Amount of Tokens}) \times (\text{Rate})
+```
+
+```math
+137 \times 1.5 = 205.5
+```
+
+Ve **Token Value** (Token Değeri) temelinde gerçek USD harcama miktarını elde etmek için:
+
+```math
+\frac{\text{Token Value}}{1,000,000} = \left(\frac{\text{Raw Amount of Tokens} \times \text{Rate}}{1,000,000}\right)
+```
+
+```math
+\frac{205.5}{1,000,000} = \$0.0002055 \text{ USD}
+```
+
+Özel endpoint'ler için, model bazlı hız sınırları ve bağlam pencereleri (context windows) adına `librechat.yaml` dosyasındaki `endpoints.custom[].tokenConfig` ayarını tercih edin.
+
+## Önizleme [#preview]
+
+![image](https://github.com/danny-avila/LibreChat/assets/110412045/39a1aa5d-f8fc-43bf-81f2-299e57d944bb)
+
+![image](https://github.com/danny-avila/LibreChat/assets/110412045/e1b1cc3f-8981-4c7c-a5f8-e7badbc6f675)
+
+## Ek Notlar [#additional-notes]
+
+- Özetleme etkinleştirildiğinde, içerik ve mesaj yükünün maliyeti mevcut bakiyeyi aşarsa API istekleri engellenir.
+- Sistem, denge kontrolleri için öncelikli olarak istem (prompt) belirteçlerine odaklanarak, tamamlama (completion) belirteçleri konusunda esnek davranır.
+- İki aşamalı süreci hesaba katmak için başlıklandırma için bir arabellek (yaklaşık 150 token) eklenmiştir.
+- Token kredileri parasal değere dönüşür (örneğin, 1000 kredi = 0,001 $ USD).
+
+Daha fazla detay ve özelleştirme için lütfen [LibreChat Documentation](https://www.librechat.ai/docs/configuration/librechat_yaml) sayfasına başvurun.

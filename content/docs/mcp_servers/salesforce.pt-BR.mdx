@@ -1,0 +1,297 @@
+---
+title: MCP do Salesforce
+icon: Salesforce
+description: >-
+  Configure servidores MCP hospedados no Salesforce no LibreChat com um External
+  Client App e OAuth por usuário.
+---
+
+Servidores MCP hospedados no Salesforce permitem que usuários do LibreChat se conectem ao Salesforce por meio de OAuth por usuário.
+Cada chamada de ferramenta é executada com as permissões do usuário autenticado no Salesforce, incluindo segurança em nível de campo, permissões de objeto e regras de compartilhamento.
+
+<Callout type="warning" title="Usar um aplicativo cliente externo">
+  Servidores MCP hospedados no Salesforce exigem um External Client App. Connected Apps clássicos do Salesforce não são suportados para autenticação de MCP hospedado.
+</Callout>
+
+## O que você irá configurar [#what-you-will-configure]
+
+Este guia começa com o servidor SObject somente leitura, pois é a primeira conexão mais segura. Depois que isso funcionar, você pode mudar para um servidor Salesforce mais abrangente.
+
+| Servidor | Nível de acesso | URL de produção | URL de sandbox ou scratch |
+| ----------------- | ---------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| SObject Reads | Leitura, consulta, busca, relacionamentos | `https://api.salesforce.com/platform/mcp/v1/platform/sobject-reads` | `https://api.salesforce.com/platform/mcp/v1/sandbox/platform/sobject-reads` |
+| SObject Mutations | Leitura, criação, atualização, sem exclusão | `https://api.salesforce.com/platform/mcp/v1/platform/sobject-mutations` | `https://api.salesforce.com/platform/mcp/v1/sandbox/platform/sobject-mutations` |
+| SObject Deletes | Fluxos de trabalho focados em exclusão | `https://api.salesforce.com/platform/mcp/v1/platform/sobject-deletes` | `https://api.salesforce.com/platform/mcp/v1/sandbox/platform/sobject-deletes` |
+| SObject All | Criação, leitura, atualização e exclusão completas | `https://api.salesforce.com/platform/mcp/v1/platform/sobject-all` | `https://api.salesforce.com/platform/mcp/v1/sandbox/platform/sobject-all` |
+
+<Callout type="info" title="Caminho de retorno do OAuth">
+  O caminho de retorno de chamada OAuth do MCP do LibreChat é `BASE_URL/api/mcp/SERVER_NAME/oauth/callback`.
+  `SERVER_NAME` é a chave em `mcpServers` no `librechat.yaml`. Os exemplos abaixo usam
+  `salesforce`, portanto, o retorno de chamada local é `http://localhost:3080/api/mcp/salesforce/oauth/callback`.
+</Callout>
+
+## Pré-requisitos [#prerequisites]
+
+- Uma organização Salesforce que suporta servidores MCP hospedados e acesso à API.
+- Permissões de Administrador do Sistema, ou permissões equivalentes para criar External Client Apps e habilitar servidores MCP.
+- Uma instância do LibreChat em execução com o `librechat.yaml` montado ou carregado de outra forma.
+- A URL base pública que os usuários utilizam para abrir o LibreChat, por exemplo `http://localhost:3080` para desenvolvimento local ou `https://chat.example.com` para produção.
+
+Se você ainda não possui uma organização Salesforce, crie uma organização Developer Edition gratuita em [developer.salesforce.com/signup](https://developer.salesforce.com/signup), verifique a conta por e-mail e, em seguida, faça login em [login.salesforce.com](https://login.salesforce.com). Se os menus de Configuração do Salesforce neste guia não estiverem visíveis na organização, use uma organização de produção, sandbox ou de avaliação compatível com servidores MCP hospedados habilitados.
+
+## Configuração [#setup]
+
+<Steps>
+  <Step>
+
+### Ativar o servidor MCP do Salesforce [#activate-the-salesforce-mcp-server]
+
+No Salesforce, abra **Setup**.
+
+1. No **Quick Find**, pesquise por `MCP Servers`.
+2. Abra **MCP Servers** em **API Catalog**.
+3. Habilite o servidor que você deseja usar. Para a configuração inicial, habilite `platform/sobject-reads`.
+4. Aguarde até 2 minutos para que o servidor fique ativo.
+
+Se você planeja usar o exemplo de acesso total, habilite `platform/sobject-all` em vez disso.
+
+  </Step>
+  <Step>
+
+### Criar um Aplicativo Cliente Externo [#create-an-external-client-app]
+
+No Salesforce Setup:
+
+1. Em **Quick Find**, pesquise por `External Client App Manager`.
+2. Clique em **New External Client App**.
+3. Preencha as informações básicas do aplicativo. Use um nome claro, como `LibreChat Salesforce MCP`.
+4. Expanda **API (Enable OAuth Settings)** e ative o OAuth.
+5. Adicione a URL de callback do LibreChat.
+
+Para desenvolvimento local:
+
+```text
+http://localhost:3080/api/mcp/salesforce/oauth/callback
+```
+
+Para produção, substitua a base URL pela sua URL pública do LibreChat:
+
+```text
+https://chat.example.com/api/mcp/salesforce/oauth/callback
+```
+
+  </Step>
+  <Step>
+
+### Configurar escopos de OAuth e segurança [#configure-oauth-scopes-and-security]
+
+Nas configurações de OAuth do External Client App, adicione estes escopos:
+
+```text
+mcp_api
+refresh_token
+```
+
+Não utilize o escopo `api` padrão do Salesforce para servidores MCP hospedados. O servidor MCP espera o escopo `mcp_api`.
+
+Nas configurações de segurança do External Client App:
+
+- Selecione **Issue JSON Web Token (JWT)-based access tokens for named users**.
+- Selecione **Require Proof Key for Code Exchange (PKCE) extension for Supported Authorization Flows**.
+- Deixe **Require Secret for Web Server Flow** desativado para a configuração básica neste guia.
+- Deixe **Require Secret for Refresh Token Flow** desativado para a configuração básica neste guia.
+
+Clique em **Create**, depois abra as configurações do aplicativo e copie a **Consumer Key**. A Salesforce informa que um novo External Client App pode levar até 30 minutos para ficar disponível.
+
+<Callout type="info" title="Client secret opcional">
+  O LibreChat pode armazenar um client secret no lado do servidor. Se o seu administrador do Salesforce habilitar a opção **Require Secret for Web Server Flow**, gere também um client secret e inclua os campos opcionais `client_secret` mostrados mais adiante neste guia.
+</Callout>
+
+  </Step>
+  <Step>
+
+### Adicione o client ID do Salesforce ao `.env` [#add-the-salesforce-client-id-to-env]
+
+Adicione a consumer key do External Client App ao seu arquivo `.env` do LibreChat:
+
+```bash filename=".env"
+SALESFORCE_MCP_CLIENT_ID=your-salesforce-consumer-key
+```
+
+Se você habilitou **Require Secret for Web Server Flow**, adicione também:
+
+```bash filename=".env"
+SALESFORCE_MCP_CLIENT_SECRET=your-salesforce-client-secret
+```
+
+  </Step>
+  <Step>
+
+### Adicionar o MCP do Salesforce ao `librechat.yaml` [#add-salesforce-mcp-to-librechatyaml]
+
+Este exemplo configura o servidor SObject somente leitura para uma organização de produção ou Developer Edition:
+
+```yaml filename="librechat.yaml"
+mcpServers:
+  salesforce:
+    type: streamable-http
+    url: 'https://api.salesforce.com/platform/mcp/v1/platform/sobject-reads'
+    timeout: 90000
+    initTimeout: 150000
+    requiresOAuth: true
+    startup: false
+    oauth:
+      authorization_url: 'https://login.salesforce.com/services/oauth2/authorize'
+      token_url: 'https://login.salesforce.com/services/oauth2/token'
+      client_id: '${SALESFORCE_MCP_CLIENT_ID}'
+      scope: 'mcp_api refresh_token'
+      redirect_uri: 'http://localhost:3080/api/mcp/salesforce/oauth/callback'
+```
+
+Para um sandbox ou scratch org, use a URL de MCP de sandbox e os endpoints de OAuth de sandbox do Salesforce:
+
+```yaml filename="librechat.yaml"
+mcpServers:
+  salesforce:
+    type: streamable-http
+    url: 'https://api.salesforce.com/platform/mcp/v1/sandbox/platform/sobject-reads'
+    timeout: 90000
+    initTimeout: 150000
+    requiresOAuth: true
+    startup: false
+    oauth:
+      authorization_url: 'https://test.salesforce.com/services/oauth2/authorize'
+      token_url: 'https://test.salesforce.com/services/oauth2/token'
+      client_id: '${SALESFORCE_MCP_CLIENT_ID}'
+      scope: 'mcp_api refresh_token'
+      redirect_uri: 'http://localhost:3080/api/mcp/salesforce/oauth/callback'
+```
+
+Se o seu External Client App exigir um client secret, adicione estes campos dentro de `oauth`:
+
+```yaml filename="librechat.yaml"
+oauth:
+  client_secret: '${SALESFORCE_MCP_CLIENT_SECRET}'
+  token_exchange_method: default_post
+  token_endpoint_auth_methods_supported: ['client_secret_post']
+```
+
+Se o LibreChat estiver implantado em uma URL pública, atualize o `redirect_uri` para corresponder exatamente à URL de retorno de chamada registrada no Salesforce.
+
+<Callout type="info" title="Listas de permissão de domínio MCP estritas">
+  Se o seu `librechat.yaml` também configurar `mcpSettings.allowedDomains`, adicione `api.salesforce.com`.
+  Se você usa endpoints OAuth de sandbox do Salesforce e sua política também se aplica a hosts OAuth, permita também `test.salesforce.com` ou o host do seu My Domain de sandbox.
+</Callout>
+
+  </Step>
+  <Step>
+
+### Mude para o acesso completo ao Salesforce, se necessário [#switch-to-full-salesforce-access-if-needed]
+
+Após o servidor somente leitura funcionar, você pode alternar para outro servidor Salesforce ativado alterando a `url`.
+
+Para acesso total a SObject em uma organização de produção ou Developer Edition:
+
+```yaml filename="librechat.yaml"
+url: 'https://api.salesforce.com/platform/mcp/v1/platform/sobject-all'
+```
+
+Para acesso total a SObject em um sandbox ou scratch org:
+
+```yaml filename="librechat.yaml"
+url: 'https://api.salesforce.com/platform/mcp/v1/sandbox/platform/sobject-all'
+```
+
+Exponha servidores com capacidade de mutação ou exclusão apenas para usuários que devem ter permissão para criar, atualizar ou excluir registros do Salesforce por meio de um assistente.
+
+  </Step>
+  <Step>
+
+### Reiniciar o LibreChat [#restart-librechat]
+
+Reinicie o LibreChat para que ele recarregue o `.env` e o `librechat.yaml`.
+
+| Deployment | Command                              |
+| ---------- | ------------------------------------ |
+| Docker     | `docker compose up -d`               |
+| Local      | Pare o servidor e inicie-o novamente |
+
+Para confirmar que o servidor foi carregado no Docker, verifique os logs da API:
+
+```bash
+docker logs LibreChat --tail 200 | grep MCP
+```
+
+  </Step>
+  <Step>
+
+### Conectar o Salesforce no LibreChat [#connect-salesforce-in-librechat]
+
+Abra o LibreChat, depois abra as **MCP Settings** ou o menu suspenso **MCP Servers** na entrada de chat.
+
+1. Clique em **Connect** para o servidor Salesforce.
+2. Conclua o fluxo OAuth do Salesforce.
+3. Revise os escopos `mcp_api` e `refresh_token` solicitados.
+4. Retorne ao LibreChat após a página de sucesso do OAuth fechar.
+
+Após o sucesso do OAuth e a inicialização da conexão MCP, as ferramentas do Salesforce tornam-se disponíveis no chat e no Agent Builder.
+
+  </Step>
+</Steps>
+
+## Testando [#testing]
+
+Experimente prompts que correspondam ao servidor que você habilitou:
+
+| Servidor | Prompt |
+| ------------------ | -------------------------------------------------------------------------------- |
+| Any SObject server | "Who am I in Salesforce?" |
+| SObject Reads | "Show me my five most recently viewed accounts." |
+| SObject Reads | "Find open cases related to Acme Corp and summarize them." |
+| SObject Mutations | "Create a follow-up task for this account. Ask me before saving anything." |
+| SObject All | "Update this opportunity stage to Closed Won after confirming the exact record." |
+
+Para uma verificação de integridade de nível mais baixo, teste o mesmo servidor Salesforce com o Postman ou o MCP Inspector. Se isso funcionar, mas o LibreChat não, compare a URL de callback, os escopos OAuth e a URL do servidor do LibreChat com o cliente que está funcionando.
+
+## Solução de problemas [#troubleshooting]
+
+| Sintoma | O que verificar |
+| ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Salesforce diz `redirect_uri_mismatch` | A URL de retorno (callback) do External Client App deve corresponder exatamente ao `redirect_uri` no `librechat.yaml`, incluindo protocolo, nome do host, porta, nome do servidor e caminho. |
+| O Histórico de Login do Salesforce diz `Invalid Code Verifier` | O estado PKCE não correspondeu ao callback. Evite iniciar múltiplos fluxos OAuth ao mesmo tempo. Em implantações com múltiplas réplicas, certifique-se de que o LibreChat use armazenamento de fluxo OAuth compartilhado, como o Redis, para que as solicitações de autorização e callback possam ser direcionadas a diferentes réplicas com segurança. |
+| Salesforce retorna `JWT Token is required` | O servidor está sendo chamado sem um token de acesso MCP do Salesforce. Conclua o OAuth a partir do LibreChat, confirme `requiresOAuth: true` e confirme que o usuário autorizou o External Client App. |
+| Salesforce retorna `Invalid token` | Confirme se o External Client App usa `mcp_api`, emite tokens de acesso baseados em JWT e tem o PKCE habilitado. Confirme também se a URL do MCP e os endpoints OAuth apontam para o mesmo tipo de organização, produção versus sandbox. |
+| Salesforce retorna `Server definition not found for: sobject-all` | O servidor não está ativado, ainda está se propagando ou a URL usa o caminho incorreto de produção versus sandbox. Habilite o servidor na Configuração do Salesforce e aguarde até 2 minutos. |
+| A atualização do token falha com um erro relacionado ao escopo | Use `mcp_api refresh_token` como o escopo configurado. Não substitua o escopo `api` padrão do Salesforce pelo Hosted MCP. |
+| LibreChat mostra o Salesforce, mas sem ferramentas | Conecte o servidor a partir da interface do LibreChat. Servidores remotos com OAuth habilitado expõem ferramentas após o usuário ter se autenticado e o servidor ter sido inicializado. |
+| Solicitações MCP são bloqueadas pela política de domínio do LibreChat | Se `mcpSettings.allowedDomains` estiver configurado, permita `api.salesforce.com` e qualquer host OAuth do Salesforce que sua implantação utilize. |
+
+## Notas de Segurança [#security-notes]
+
+- Comece com `platform/sobject-reads` a menos que os usuários realmente precisem de acesso de escrita ou exclusão.
+- O Salesforce impõe as permissões do usuário autenticado, mas o assistente ainda pode propor ações abrangentes. Revise as operações de escrita e exclusão com cuidado.
+- Use conjuntos de permissões do Salesforce e políticas de External Client App para restringir quem pode autorizar o cliente MCP.
+- Trate os registros do Salesforce como entrada não confiável. Os registros podem conter tentativas de injeção de prompt indireta que tentam influenciar o assistente.
+- Para implantações em produção com múltiplas réplicas da API do LibreChat, utilize armazenamento compartilhado para o estado do fluxo OAuth, de modo que os callbacks PKCE sejam persistentes entre as réplicas.
+
+## Páginas Relacionadas [#related-pages]
+
+<Cards num={3}>
+  <Cards.Card title="MCP" href="/docs/features/mcp" arrow>
+    Saiba como os servidores MCP funcionam no LibreChat.
+  </Cards.Card>
+  <Cards.Card
+    title="Estrutura do Objeto de Servidores MCP"
+    href="/docs/configuration/librechat_yaml/object_structure/mcp_servers"
+    arrow
+  >
+    Revise cada campo de configuração `mcpServers` disponível.
+  </Cards.Card>
+  <Cards.Card
+    title="Servidores MCP hospedados no Salesforce"
+    href="https://developer.salesforce.com/docs/platform/hosted-mcp-servers/guide/hosted-mcp-servers-overview.html"
+    arrow
+  >
+    Leia a documentação oficial de configuração do Hosted MCP da Salesforce.
+  </Cards.Card>
+</Cards>

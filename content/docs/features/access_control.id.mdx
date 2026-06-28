@@ -1,0 +1,232 @@
+---
+title: Kontrol Akses
+icon: ShieldCheck
+description: >-
+  Sistem otorisasi granular LibreChat - kendalikan siapa yang dapat menggunakan,
+  membagikan, mengedit, dan mengelola agen, prompt, server MCP, serta sumber
+  daya lainnya di tingkat pengguna, grup, peran, dan instans.
+---
+
+# Kontrol Akses Granular [#granular-access-control]
+
+LibreChat hadir dengan sistem otorisasi lengkap di atas autentikasi. Akses tidak bersifat "semua atau tidak sama sekali": setiap entitas yang dapat dibagikan di dalam aplikasi (agen, prompt, server MCP, agen jarak jauh, file, percakapan) memiliki Access Control List (ACL) sendiri, dan setiap fitur dapat diaktifkan atau dibatasi secara independen per **pengguna**, **grup**, **peran**, atau **publik**.
+
+Halaman ini menjelaskan bagaimana bagian-bagian tersebut disatukan sehingga Anda dapat memodelkan izin agar sesuai dengan organisasi Anda, mulai dari tim kecil di mana setiap orang berbagi secara bebas, hingga penyebaran perusahaan dengan grup Entra ID yang disinkronkan, peran kustom, dan admin yang didelegasikan.
+
+<Callout type="info" title="Panel Admin">
+  [**Panel Admin LibreChat**](/docs/features/admin_panel) khusus adalah UI yang akan datang untuk mengelola pengguna, grup, peran, profil izin kustom, dan pemberian akses seluruh sistem yang diperkenalkan pada [v0.8.5](/changelog/v0.8.5). Halaman ini mendokumentasikan model dasar, yang tersedia saat ini di LibreChat itu sendiri.
+</Callout>
+
+## Sekilas tentang Model Akses [#the-access-model-at-a-glance]
+
+Otorisasi LibreChat memiliki tiga lapisan independen yang tersusun bersama:
+
+| Lapisan | Cakupan | Apa yang dikontrol |
+| ----------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Izin Fitur** | Per peran (USER, ADMIN, kustom) | Apakah prinsipal dapat _menggunakan_, _membuat_, _membagikan_, atau _membagikan secara publik_ suatu kelas fitur (agen, prompt, server MCP, memori, pencarian web, dll.). Dikonfigurasi di `librechat.yaml` atau panel admin. |
+| **ACL Sumber Daya** | Per sumber daya individu | Siapa yang dapat melihat, mengedit, menghapus, atau membagikan ulang agen, prompt, server MCP, dll. tertentu. Dikelola oleh pemilik sumber daya melalui dialog berbagi dalam aplikasi. |
+| **Hibah Sistem** | Seluruh platform | Kemampuan admin (misalnya `manage:users`, `manage:roles`, `read:usage`). Digunakan oleh panel admin. |
+
+Ketiganya dievaluasi untuk empat tipe utama yang sama:
+
+- **User**: akun LibreChat individu
+- **Grup**: kumpulan pengguna (lokal atau disinkronkan dari Entra ID)
+- **Role**: profil izin bernama (contoh: `USER`, `ADMIN`, atau peran kustom apa pun)
+- **Public**: setiap pengguna yang terautentikasi pada instance tersebut
+
+## Layer 1: Izin Fitur (Berbasis Peran) [#layer-1-feature-permissions-role-based]
+
+Izin tingkat fitur membatasi seluruh kapabilitas aplikasi untuk peran tertentu. Izin ini menjawab pertanyaan seperti _"Apakah pengguna dalam peran ini dapat membuat agen?"_, _"Apakah mereka diizinkan untuk membagikan prompt secara publik?"_, _"Apakah mereka dapat menjalankan interpreter kode?"_.
+
+### Peran Sistem Bawaan [#built-in-system-roles]
+
+LibreChat hadir dengan dua peran sistem yang selalu ada dan tidak dapat dihapus:
+
+- **`ADMIN`**: ditetapkan ke akun pertama yang terdaftar di instans tersebut. Admin dapat melihat setiap sumber daya, mengubah pengaturan apa pun, mengakses panel admin, dan mengonfigurasi perilaku di seluruh platform.
+- **`USER`**: peran default yang ditetapkan untuk setiap akun baru.
+
+Admin dapat dipromosikan secara manual dengan memperbarui dokumen pengguna di MongoDB, lihat [Administrator Controls](/docs/features/agents#administrator-controls).
+
+### Tipe Izin [#permission-types]
+
+Setiap peran memiliki matriks **tipe izin × tindakan**:
+
+| Tipe Izin | Tindakan yang tersedia |
+| ---------------- | --------------------------------------------------------- |
+| `AGENTS`         | `USE`, `CREATE`, `SHARE`, `SHARE_PUBLIC`                  |
+| `PROMPTS`        | `USE`, `CREATE`, `SHARE`, `SHARE_PUBLIC`                  |
+| `MCP_SERVERS`    | `USE`, `CREATE`, `SHARE`, `SHARE_PUBLIC`, `CONFIGURE_OBO` |
+| `REMOTE_AGENTS`  | `USE`, `CREATE`, `SHARE`, `SHARE_PUBLIC`                  |
+| `SKILLS`         | `USE`, `CREATE`, `SHARE`, `SHARE_PUBLIC`                  |
+| `SHARED_LINKS`   | `CREATE`, `SHARE`, `SHARE_PUBLIC`                         |
+| `MEMORIES`       | `USE`, `CREATE`, `UPDATE`, `READ`, `OPT_OUT`              |
+| `BOOKMARKS`      | `USE`                                                     |
+| `MULTI_CONVO`    | `USE`                                                     |
+| `TEMPORARY_CHAT` | `USE`                                                     |
+| `RUN_CODE`       | `USE`                                                     |
+| `WEB_SEARCH`     | `USE`                                                     |
+| `FILE_SEARCH`    | `USE`                                                     |
+| `FILE_CITATIONS` | `USE`                                                     |
+| `MARKETPLACE`    | `USE`                                                     |
+| `PEOPLE_PICKER`  | `VIEW_USERS`, `VIEW_GROUPS`, `VIEW_ROLES`                 |
+
+Perbedaan antara `SHARE` dan `SHARE_PUBLIC` sangat penting: Anda dapat mengizinkan suatu peran untuk membagikan agen kepada pengguna atau grup _tertentu_ (`SHARE`) tanpa membiarkan mereka membuat agen tersebut terlihat oleh _semua orang_ di instans tersebut (`SHARE_PUBLIC`).
+
+### Mengonfigurasi Izin Fitur [#configuring-feature-permissions]
+
+Cara yang direkomendasikan untuk mengelola izin fitur adalah [**LibreChat Admin Panel**](/docs/features/admin_panel), yang mengedit matriks izin secara langsung pada setiap peran (termasuk peran kustom apa pun yang Anda buat). Perubahan akan langsung berlaku tanpa perlu melakukan redeploy LibreChat dan dicakup pada peran spesifik yang ingin Anda modifikasi, alih-alih menggunakan default `USER` global.
+
+<Callout type="warning" title="Warisan: blok antarmuka `librechat.yaml`">
+  Blok [`interface`](/docs/configuration/librechat_yaml/object_structure/interface) di dalam `librechat.yaml` masih dapat memberikan izin awal untuk peran `USER` default saat startup, dan tetap berguna untuk melakukan bootstrapping pada instance baru atau untuk deployment yang sepenuhnya berbasis file. Namun, blok ini hanya menargetkan peran `USER` dan tidak dapat mengekspresikan perbedaan di antara peran kustom. Untuk pengelolaan izin yang berkelanjutan, gunakan panel admin.
+</Callout>
+
+### Peran Kustom [#custom-roles]
+
+Selain `USER` dan `ADMIN`, administrator dapat membuat **peran kustom** dengan matriks fitur-izin mereka sendiri (diperkenalkan pada v0.8.5; lihat [#12528](https://github.com/danny-avila/LibreChat/pull/12528)). Seorang pengguna dapat memiliki beberapa peran, dan izin efektif mereka adalah gabungan dari semua peran yang dimiliki. Peran kustom dikelola dari panel admin.
+
+### Penggantian Konfigurasi Berbasis Peran dan Grup [#role--and-group-scoped-configuration-overrides]
+
+Selain fitur *flags*, v0.8.5 memperkenalkan sistem **penggantian konfigurasi berbasis DB** ([#12354](https://github.com/danny-avila/LibreChat/pull/12354)). Sistem ini memungkinkan Anda menetapkan _konfigurasi bergaya `librechat.yaml` yang berbeda_ ke grup atau peran tertentu. Sebagai contoh, grup "Research" mungkin memiliki akses ke endpoint tambahan, batas rekursi yang lebih tinggi, dan kemampuan agen yang berbeda dibandingkan dengan konfigurasi default. Penggantian diselesaikan saat login dan disusun di atas konfigurasi dasar.
+
+## Layer 2: Resource ACLs (Per-Entity Sharing) [#layer-2-resource-acls-per-entity-sharing]
+
+Setiap sumber daya yang dapat dibagikan di LibreChat memiliki Access Control List (Daftar Kontrol Akses) sendiri, yang terpisah dari izin berbasis peran. Inilah cara pengguna individu dengan izin `SHARE` memilih _siapa_ yang mendapatkan akses ke agen, prompt, atau server MCP _milik mereka_.
+
+### Tipe Sumber Daya [#resource-types]
+
+ACL Sumber Daya saat ini berlaku untuk:
+
+- **Agen** (`agent`)
+- **Prompt / Grup Prompt** (`promptGroup`)
+- **Server MCP** (`mcpServer`)
+- **Remote Agents** (`remoteAgent`), untuk [Agents API](/docs/features/agents_api)
+- **Files** (`file`), biasanya diwarisi dari sumber daya yang menggunakannya
+- **Projects** (`project`), mendukung pewarisan sehingga sumber daya yang dibagikan ke sebuah project secara otomatis mewarisi ACL
+
+### Peran Akses (Preset Izin) [#access-roles-permission-presets]
+
+Daripada mengekspos bit izin mentah kepada pengguna akhir, berbagi menggunakan tiga peran bernama per jenis sumber daya:
+
+| Peran | Bit izin | Apa yang dapat dilakukan penerima |
+| ---------- | ----------------------------------------------- | ------------------------------------------------------------------- |
+| **Viewer** | `VIEW` (`0b0001`) | Menggunakan / berinteraksi dengan sumber daya |
+| **Editor** | `VIEW` + `EDIT` (`0b0011`) | Melihat dan mengubah pengaturan, instruksi, alat, dan file sumber daya |
+| **Owner** | `VIEW` + `EDIT` + `DELETE` + `SHARE` (`0b1111`) | Kontrol penuh: mengedit, menghapus, dan membagikan ulang kepada orang lain |
+
+Di balik layar, izin disimpan sebagai bitmask (`permBits`) untuk setiap pasangan (resource, principal); superset ditangani secara otomatis, sehingga memberikan akses Editor secara implisit juga memberikan akses Viewer.
+
+### Memberikan Akses dari UI [#granting-access-from-the-ui]
+
+1. Buka sumber daya (pembuat agen, formulir prompt, pengaturan server MCP, dll.)
+2. Klik tombol **Share** (terlihat saat Anda adalah pemilik, admin, atau telah diberikan akses `SHARE`)
+3. Di dalam dialog bagikan:
+   - Gunakan pemilih orang untuk mencari **users**, **groups**, atau **roles** untuk ditambahkan
+   - Pilih peran akses (Viewer / Editor / Owner) per prinsipal
+   - Secara opsional, aktifkan **Public access** untuk membuat sumber daya tersebut terlihat oleh semua orang di instance (memerlukan izin fitur `SHARE_PUBLIC`)
+4. Simpan. Penerima hibah akan melihat sumber daya tersebut saat mereka menyegarkan halaman di lain waktu.
+
+<Callout type="warning" title="Melindungi dari Kebocoran Data">
+  Penerima akses Editor dan Owner dapat melihat semua yang dikonfigurasi pada sumber daya tersebut, termasuk instruksi sistem, file yang dilampirkan, dan alat (tools). Agen mana pun juga dapat membocorkan data yang dilampirkan melalui output percakapan, jadi pastikan instruksi Anda tangguh terhadap injeksi prompt sebelum memberikan akses edit atau membuat agen menjadi publik.
+</Callout>
+
+### Apa yang Dilihat Penerima Hibah [#what-grantees-see]
+
+- **Viewers** melihat sumber daya tersebut sebagai item yang siap digunakan di pemilih yang relevan (misalnya, menu tarik-turun agen). Mereka tidak dapat membuka pembuat, melihat instruksi mentah, atau mengubah pengaturan.
+- **Editors** dapat membuka konfigurasi sumber daya dan mengubahnya, tetapi tidak dapat menghapusnya atau membagikannya kembali.
+- **Pemilik (Owners)** memiliki UI yang sama dengan penulis asli, serta dapat menghapus dan membagikan ulang secara bebas.
+- **Penulis asli** selalu memegang kendali penuh terlepas dari status ACL, dan admin dapat mengelola sumber daya apa pun pada instance tersebut.
+
+### Pewarisan Proyek [#project-inheritance]
+
+Izin dapat diwariskan dari **project** induk. Saat entri ACL diwariskan, tautan `inheritedFrom` akan mengarah kembali ke sumbernya. Inilah yang menggerakkan project "Global" di LibreChat, di mana sumber daya yang ditambahkan ke project global menjadi tersedia bagi semua pengguna tanpa memerlukan entri per prinsipal.
+
+## Layer 3: System Grants (Kemampuan Admin) [#layer-3-system-grants-admin-capabilities]
+
+System grants adalah tabel hibah terpisah yang digunakan untuk **kapabilitas tingkat admin**, yang menjawab pertanyaan seperti _"Bisakah pengguna ini mengakses panel admin?"_ atau _"Bisakah grup ini mengelola server MCP secara global?"_. Hibah ini selalu dicakupkan ke principal (pengguna, grup, atau peran) dan string kapabilitas.
+
+Kemampuan kanonik meliputi:
+
+| Kemampuan                            | Tujuan                                        |
+| ------------------------------------ | --------------------------------------------- |
+| `access:admin`                       | Mengakses panel admin                         |
+| `read:users` / `manage:users`        | Melihat / mengubah akun pengguna              |
+| `read:groups` / `manage:groups`      | Melihat / mengubah grup                       |
+| `read:roles` / `manage:roles`        | Melihat / mengubah peran kustom               |
+| `read:configs` / `manage:configs`    | Melihat / mengubah konfigurasi sistem         |
+| `assign:configs:{user\|group\|role}` | Menetapkan profil penggantian konfigurasi ke prinsipal |
+| `read:usage`                         | Melihat penggunaan platform dan telemetri     |
+| `read:agents` / `manage:agents`      | Melihat / memoderasi setiap agen pada instans |
+| `read:prompts` / `manage:prompts`    | Melihat / memoderasi setiap prompt            |
+| `manage:mcpservers`                  | Mengelola MCP servers secara global           |
+
+Kemampuan kelola (manage) menyiratkan kemampuan baca (read) yang sesuai (misalnya, memiliki `manage:users` secara otomatis memberikan `read:users`). Pengguna dengan `SystemRoles.ADMIN` secara implisit memegang semua kemampuan; pemberian hak akses memungkinkan Anda untuk **mendelegasikan** sebagian kekuatan admin kepada prinsipal non-admin tanpa menjadikan mereka admin penuh.
+
+Hak akses sistem diberikan dan dicabut melalui panel admin.
+
+## Prinsip-prinsip secara Mendalam [#principals-in-depth]
+
+### Pengguna [#users]
+
+Akun LibreChat standar. Pengguna bisa berupa **lokal** (email/kata sandi) atau **terfederasi** (OAuth2, OIDC, SAML, LDAP). Pengguna terfederasi dapat dicocokkan dengan identitas eksternal (`idOnTheSource`); untuk Entra ID, ini adalah OID, yang merupakan hal yang memungkinkan sinkronisasi grup.
+
+### Grup [#groups]
+
+Grup adalah kumpulan pengguna yang diberi nama. LibreChat mendukung dua sumber:
+
+- **Grup lokal**: dibuat dan dikelola dari panel admin atau langsung di dalam basis data. Anggotanya adalah ID pengguna LibreChat.
+- **Grup Entra ID (Azure AD)**: disinkronkan dari Microsoft Graph saat pengguna masuk melalui Azure OIDC dengan [token reuse](/docs/configuration/authentication/OAuth2-OIDC/token-reuse) diaktifkan. Setiap grup yang disinkronkan menyimpan Entra Object ID-nya sebagai `idOnTheSource`, yang menjaga LibreChat tetap selaras dengan keanggotaan penyewa (tenant).
+
+Grup dapat muncul di ACL mana pun, dalam pencarian `peoplePicker`, dan sebagai target utama untuk penggantian konfigurasi atau pemberian akses sistem. Satu sumber daya yang dibagikan kepada grup berisi 500 orang dihitung sebagai satu entri ACL (bukan 500), dan perubahan keanggotaan di Entra akan disebarkan secara otomatis pada login berikutnya.
+
+### Peran [#roles]
+
+Sistem atau peran kustom apa pun dapat digunakan sebagai prinsipal. Berbagi agen dengan peran (misalnya `SupportEngineers`) memberikan akses kepada setiap pengguna yang saat ini memegang peran tersebut, tanpa perlu menyebutkan individu satu per satu. Peran dapat disembunyikan dari pemilih orang (people picker) melalui [`interface.peoplePicker.roles`](/docs/configuration/librechat_yaml/object_structure/interface#peoplepicker) untuk lingkungan di mana berbagi berbasis peran hanya menjadi urusan admin.
+
+### Publik [#public]
+
+Prinsipal khusus yang mencocokkan setiap pengguna yang terautentikasi. Pemberian akses publik hanya diizinkan jika pengguna yang memberikan akses memiliki izin fitur `SHARE_PUBLIC` untuk jenis sumber daya tersebut.
+
+## Visibilitas Pemilih Orang [#people-picker-visibility]
+
+Pemilih orang (kotak pencarian dalam dialog berbagi) dapat dibatasi di tingkat instans untuk menyembunyikan jenis prinsipal yang tidak relevan bagi penyebaran Anda:
+
+```yaml filename="librechat.yaml"
+interface:
+  peoplePicker:
+    users: true
+    groups: true
+    roles: false
+```
+
+Ini hanya memengaruhi _search UI_; entri ACL yang ada untuk tipe principal yang disembunyikan akan terus berfungsi dan ditegakkan secara normal.
+
+## Migrasi dari Versi Pra-ACL [#migrations-from-pre-acl-versions]
+
+Versi sebelum v0.8.0-rc3 menggunakan model kepemilikan yang lebih sederhana. Peningkatan versi mengharuskan Anda menjalankan migrasi ACL agar agen dan prompt yang sudah ada tetap dapat diakses:
+
+**Dry run (pratinjau perubahan):**
+
+```bash
+npm run migrate:agent-permissions:dry-run
+npm run migrate:prompt-permissions:dry-run
+```
+
+**Eksekusi:**
+
+```bash
+npm run migrate:agent-permissions
+npm run migrate:prompt-permissions
+```
+
+Lihat [panduan migrasi agents](/docs/features/agents#migration-required-v080-rc3) untuk varian Docker dan opsi batch-size.
+
+## Dokumentasi Terkait [#related-documentation]
+
+- [Agen: Berbagi dan Izin](/docs/features/agents#sharing-and-permissions)
+- [Konfigurasi Antarmuka (izin fitur)](/docs/configuration/librechat_yaml/object_structure/interface)
+- [Autentikasi](/docs/features/authentication)
+- [Penggunaan Kembali Token OpenID Connect (diperlukan untuk sinkronisasi grup Entra ID)](/docs/configuration/authentication/OAuth2-OIDC/token-reuse)
+- [Azure / Entra ID OAuth2](/docs/configuration/authentication/OAuth2-OIDC/azure)
+- [Integrasi SharePoint](/docs/configuration/sharepoint)
+- [Agents API (Remote Agents)](/docs/features/agents_api)
+- [Panel Admin LibreChat](/docs/features/admin_panel)

@@ -1,0 +1,135 @@
+---
+title: Estrutura do Objeto Actions
+icon: Webhook
+---
+
+As Actions podem ser usadas para criar ferramentas dinamicamente a partir de especificações OpenAPI. A estrutura do objeto `actions` permite que você especifique domínios permitidos para ações de agentes/assistentes.
+
+Mais informações: [Agents - Actions](/docs/features/agents#actions)
+
+## Exemplo [#example]
+
+```yaml filename="Actions Object Structure"
+# Example Actions Object Structure
+actions:
+  # Strict whitelist mode:
+  # allowedDomains:
+  #   - "swapi.dev"
+  #   - "librechat.ai"
+  #   - "google.com"
+  #   - "https://api.example.com:8443"  # With protocol and port
+
+  # Default SSRF mode with private service exemptions:
+  allowedAddresses:
+    - "host.docker.internal:11434"    # Permit one private host on one port
+    - "10.0.0.5:8080"                 # Permit one private IP on one port
+```
+
+## allowedDomains
+
+**Chave:**
+<OptionTable
+  options={[
+    ['allowedDomains', 'Array of Strings', 'Uma lista que especifica domínios permitidos para ações de agentes/assistentes.', 'When configured, only listed domains are allowed. When not configured, SSRF targets are blocked but all other domains are allowed.'],
+  ]}
+/>
+
+**Opcional**
+
+### Contexto de Segurança (Proteção SSRF) [#security-context-ssrf-protection]
+
+O LibreChat inclui proteção contra SSRF (Server-Side Request Forgery) com o seguinte comportamento:
+
+**Quando `allowedDomains` NÃO estiver configurado:**
+- Alvos suscetíveis a SSRF são **bloqueados por padrão**
+- Todos os outros domínios externos são **permitidos**
+
+**Quando `allowedDomains` ESTÁ configurado:**
+- **Apenas** domínios na lista são permitidos
+- Alvos internos/SSRF podem ser permitidos adicionando-os explicitamente à lista
+
+**Os alvos de SSRF bloqueados incluem:**
+- Endereços **Localhost** (`localhost`, `127.0.0.1`, `::1`)
+- **Intervalos de IP privados** (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`)
+- **Endereços link-local** (`169.254.0.0/16`, inclui IPs de metadados de nuvem)
+- **TLDs Internos** (`.internal`, `.local`, `.localhost`)
+- **Nomes comuns de serviços internos** (`redis`, `mongodb`, `postgres`, `api`, etc.)
+
+Se suas ações precisarem acessar serviços internos, adicione-os à lista de permissões estrita `allowedDomains` ou deixe `allowedDomains` sem definição e adicione o serviço privado exato a `allowedAddresses`.
+
+### Formatos de Padrão [#pattern-formats]
+
+O array `allowedDomains` suporta vários formatos:
+
+1. **Apenas domínio** - Permite todos os protocolos e portas:
+   ```yaml
+   allowedDomains:
+     - "api.example.com"
+   ```
+
+2. **Com protocolo** - Restringe a um protocolo específico:
+   ```yaml
+   allowedDomains:
+     - "https://api.example.com"
+   ```
+
+3. **Com protocolo e porta** - Restringe a um protocolo e porta específicos:
+   ```yaml
+   allowedDomains:
+     - "https://api.example.com:8443"
+   ```
+
+4. **Endereços internos** (devem ser explicitamente permitidos):
+   ```yaml
+   allowedDomains:
+     - "192.168.1.100"
+     - "internal-api.local"
+   ```
+
+**Exemplo:**
+```yaml filename="actions / allowedDomains"
+allowedDomains:
+  - "swapi.dev"
+  - "librechat.ai"
+  - "google.com"
+  - "https://secure-api.example.com:443"
+  - "192.168.1.50"  # Internal service (explicitly allowed)
+```
+
+## allowedAddresses
+
+`allowedAddresses` é uma **lista de exceções** para o bloqueio de IP privado SSRF — não uma lista de permissões de domínio. É a ferramenta certa quando você deseja permitir um ou dois serviços privados/internos específicos sem restringir o que suas Actions podem alcançar na internet pública.
+
+### Quando usar em vez de `allowedDomains` [#when-to-use-it-instead-of-alloweddomains]
+
+`allowedDomains` é uma lista de permissões estrita: quando definida, **apenas** as entradas listadas podem ser acessadas. Adicionar um IP privado nela para permitir, por exemplo, uma API interna auto-hospedada, também bloqueia todos os endpoints de ação públicos que você não tenha listado.
+
+`allowedAddresses` é usado apenas quando `allowedDomains` não está configurado. Ele permite alvos privados específicos `host:port` enquanto mantém o restante da internet pública acessível através da política SSRF padrão.
+
+```yaml filename="default SSRF + permitted private host"
+actions:
+  allowedAddresses:
+    - "host.docker.internal:11434"
+    - "10.0.0.5:8080"
+  # allowedDomains is intentionally not set — public destinations
+  # remain reachable, only listed private host:port services are exempted.
+```
+
+Se `allowedDomains` estiver configurado, ele é autoritativo: serviços privados devem ser listados lá em vez de depender de `allowedAddresses`.
+
+### Entradas aceitáveis [#acceptable-entries]
+
+- **Nomes de host com porta**: `host.docker.internal:11434`, `ollama.internal:8080`, `localhost:11434`
+- **Literais IPv4 privados com porta**: `10.0.0.5:8080`, `127.0.0.1:11434`, `192.168.1.10:443`, `169.254.169.254:80`
+- **Literais IPv6 privados entre colchetes com porta**: `[::1]:11434`, `[fc00::1]:8080`, `[fe80::1]:8080`
+
+### Entradas rejeitadas (validadas no carregamento da configuração) [#rejected-entries-validated-at-config-load]
+
+- **URLs / caminhos / intervalos CIDR**: `http://10.0.0.5`, `10.0.0.0/24`, `/path`
+- **Nomes de host ou IPs simples**: `localhost`, `10.0.0.5`, `::1`, `[::1]` — cada entrada deve incluir uma porta
+- **Portas inválidas**: `localhost:0`, `localhost:65536`, `localhost:http`
+- **Literais de IP público**: `8.8.8.8:53`, `1.1.1.1:53`, `[2001:4860::8888]:443` — o campo é limitado ao espaço de IP privado; IPs públicos não são alvos de SSRF e uma exceção de IP público não tem propósito defensivo
+
+### Confiança de hostname [#hostname-trust]
+
+Uma entrada de hostname confia em qualquer IP para o qual esse hostname seja resolvido em tempo de execução na porta listada. Se o DNS de um hostname listado for rotacionado ou sequestrado para apontar para um IP privado diferente, a isenção seguirá o mesmo caminho. Liste apenas hostnames cujo DNS você controla. **Prefira IPs literais sempre que puder.**

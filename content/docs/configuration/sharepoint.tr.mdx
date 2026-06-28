@@ -1,0 +1,329 @@
+---
+title: SharePoint Entegrasyonu
+icon: SharePoint
+description: >-
+  LibreChat ile SharePoint Online ve OneDrive for Business entegrasyonunu
+  yapılandırın
+---
+
+LibreChat, SharePoint Online ve OneDrive for Business ile kurumsal düzeyde entegrasyon sağlayarak kullanıcıların Microsoft 365 ortamlarındaki dosyaları doğrudan sohbetler içinde sorunsuz bir şekilde görüntülemesine, seçmesine ve eklemesine olanak tanır.
+
+## Genel Bakış [#overview]
+
+SharePoint entegrasyonu kullanıcıların şunları yapmasını sağlar:
+- SharePoint belge kitaplıklarına ve OneDrive dosyalarına göz atın
+- Aynı anda birden fazla dosya seçin (varsayılan olarak 10'a kadar)
+- Gerçek zamanlı indirme ilerlemesini görüntüle
+- SharePoint'ten konuşmalara dosya ekleyin
+- Uygun erişim kontrolleriyle kurumsal güvenliği sağlayın
+
+<Callout type="info" title="Kurumsal Özellik">
+Bu özellik Microsoft 365/SharePoint Online gerektirir ve Azure Entra ID (eski adıyla Azure AD) kimlik doğrulamasını kullanan kurumsal dağıtımlar için tasarlanmıştır.
+</Callout>
+
+## Ön Koşullar [#prerequisites]
+
+SharePoint entegrasyonunu yapılandırmadan önce şunlara sahip olduğunuzdan emin olun:
+
+1. **Azure Entra ID Authentication** yapılandırılmış ve çalışır durumda
+2. **Token Reuse** etkin (`OPENID_REUSE_TOKENS=true`)
+3. LibreChat için **açık bir API kapsamı**, örneğin `api://<client-id>/access_as_user`
+4. Uygulama izinleri için Azure kiracınıza **Admin access**
+5. **HTTPS** etkin (üretim ortamları için gereklidir)
+
+<Callout type="error" title="Kritik Gereksinim">
+SharePoint entegrasyonu, Microsoft Graph API'lerine erişmek için on-behalf-of token akışına dayandığından `OPENID_REUSE_TOKENS=true` olmadan çalışmayacaktır.
+</Callout>
+
+## Azure Uygulama Kaydı Kurulumu [#azure-app-registration-setup]
+
+### Adım 1: API İzinlerini Yapılandırın [#step-1-configure-api-permissions]
+
+1. [Azure Portal](https://portal.azure.com) üzerindeki uygulama kaydınıza gidin
+2. Sol menüdeki **API permissions** kısmına gidin
+3. **İzin ekle**'ye tıklayın
+
+### Adım 2: Bir LibreChat API Kapsamı (Scope) Açın ve Yetkilendirin [#step-2-expose-and-grant-a-librechat-api-scope]
+
+Adına hareket etme (on-behalf-of) akışı, Microsoft Graph'i değil, LibreChat uygulama API'nizi hedeflemek için ilk OpenID erişim belirtecine (access token) ihtiyaç duyar. Azure'un hedef kitle (audience) olarak LibreChat ile bir belirteç verebilmesi için bir API kapsamı (scope) açığa çıkarın.
+
+1. Sol menüdeki **Expose an API** kısmına gidin
+2. **Application ID URI** değerini, henüz yapılandırılmamışsa `api://<client-id>` olarak ayarlayın
+3. **Add a scope** öğesine tıklayın
+4. Kapsamı `access_as_user` olarak adlandırın
+5. Kapsamı kaydedin, ardından tam kapsam değerini kopyalayın:
+
+```text
+api://<client-id>/access_as_user
+```
+
+Ardından bu kapsamı uygulama kaydına tanımlayın:
+
+1. **API izinlerine** geri dön
+2. **İzin ekle**'ye tıklayın
+3. **Kuruluşumun kullandığı API'leri** seçin
+4. LibreChat uygulama kaydınızı arayın ve seçin
+5. **Temsil edilen izinleri** (Delegated permissions) seçin
+6. `access_as_user` öğesini seçin
+7. **İzin ekle**'ye tıklayın
+
+Bu kılavuzun ilerleyen kısımlarında `OPENID_SCOPE` içinde tam `api://<client-id>/access_as_user` kapsam değerini kullanın.
+
+### Adım 3: SharePoint İzinlerini Ekleme [#step-3-add-sharepoint-permissions]
+
+Dosya seçici arayüzü için:
+
+1. API listesinden **SharePoint** öğesini seçin
+2. **Temsil edilen izinleri** (Delegated permissions) seçin
+3. Arayın ve seçin:
+   - `AllSites.Read` - Tüm site koleksiyonlarındaki öğeleri oku
+4. **İzin ekle**'ye tıklayın
+
+### Adım 4: Microsoft Graph İzinlerini Ekleme [#step-4-add-microsoft-graph-permissions]
+
+Dosya indirmeleri için:
+
+1. Tekrar **Add a permission** düğmesine tıklayın
+2. **Microsoft Graph** öğesini seçin
+3. **Temsil edilen izinleri** (Delegated permissions) seçin
+4. Arayın ve seçin:
+   - `Files.Read.All` - Kullanıcının erişebildiği tüm dosyaları oku
+5. **İzin ekle**'ye tıklayın
+
+### Adım 5: Yönetici Onayı Verin [#step-5-grant-admin-consent]
+
+1. İzinleri ekledikten sonra, bunların listelendiğini göreceksiniz
+2. **[Kuruluşunuz] için yönetici onayı ver** seçeneğine tıklayın
+3. Açılır penceredeki onayı doğrulayın
+
+İzinleriniz şu şekilde görünmelidir:
+
+| API / İzin adı | Tür | Açıklama | Durum |
+|------------------------|------|-------------|---------|
+| Microsoft Graph - Files.Read.All | Delegated | Kullanıcının erişebildiği tüm dosyaları oku | ✅ Granted |
+| SharePoint - AllSites.Read | Delegated | Tüm site koleksiyonlarındaki öğeleri oku | ✅ Granted |
+| LibreChat - access_as_user | Delegated | LibreChat'in OBO uyumlu bir belirteç almasına izin ver | ✅ Granted |
+
+## Ortam Yapılandırması [#environment-configuration]
+
+`.env` dosyanıza aşağıdaki ortam değişkenlerini ekleyin:
+
+```bash filename=".env"
+# OpenID token reuse and OBO-compatible audience
+OPENID_REUSE_TOKENS=true
+OPENID_SCOPE=openid profile email offline_access api://<client-id>/access_as_user
+OPENID_ON_BEHALF_FLOW_FOR_USERINFO_REQUIRED=true
+
+# Enable SharePoint file picker
+ENABLE_SHAREPOINT_FILEPICKER=true
+
+# Your SharePoint tenant base URL
+# Format: https://[your-tenant-name].sharepoint.com
+SHAREPOINT_BASE_URL=https://contoso.sharepoint.com
+
+# SharePoint scope for the file picker
+# Replace 'contoso' with your actual tenant name
+SHAREPOINT_PICKER_SHAREPOINT_SCOPE=https://contoso.sharepoint.com/AllSites.Read
+
+# Microsoft Graph scope for file downloads
+SHAREPOINT_PICKER_GRAPH_SCOPE=Files.Read.All
+```
+
+<Callout type="warning" title="Kiracı Adı">
+Yukarıdaki örneklerde yer alan `contoso` ifadesini gerçek SharePoint kiracı adınızla değiştirdiğinizden emin olun. Bu, SharePoint URL'nizle tam olarak eşleşmelidir.
+</Callout>
+
+<Callout type="warning" title="OpenID Kapsam Hedef Kitlesi">
+`<client-id>` kısmını Azure uygulama kaydınızın Uygulama (istemci) Kimliği ile değiştirin. `api://<client-id>/access_as_user` kapsamı, Azure'a OBO onayı için uygulamaya özel bir hedef kitle sağlar. Eğer `OPENID_SCOPE` yalnızca standart OpenID kapsamlarını içeriyorsa, Azure SharePoint veya Graph erişimi için tekrar değiştirilemeyecek bir Graph hedef kitleli erişim belirteci verebilir.
+</Callout>
+
+<Callout type="info" title="Userinfo Token Değişimi">
+`OPENID_ON_BEHALF_FLOW_FOR_USERINFO_REQUIRED=true`, LibreChat'in OpenID userinfo uç noktasını çağırmadan önce uygulama hedef kitlesi (app-audience) erişim belirtecini, userinfo ile uyumlu bir belirteçle değiştirmesine olanak tanır. Bu, `OPENID_SCOPE` değerinin yukarıdaki LibreChat API kapsamını içerdiği Azure Entra ID kurulumları için gereklidir.
+</Callout>
+
+## Nasıl Çalışır [#how-it-works]
+
+### Kimlik Doğrulama Akışı [#authentication-flow]
+
+1. Kullanıcı, Azure Entra ID aracılığıyla kimlik doğrulaması yapar
+2. SharePoint seçicisine erişirken, LibreChat kullanıcının token'ını SharePoint erişimi için takas eder
+3. Token'lar optimum performans için önbelleğe alınır (genellikle 50 dakika).
+4. Ayrı kapsamlar, en az yetki ilkesini sağlar
+
+### Dosya Seçim Süreci [#file-selection-process]
+
+1. Kullanıcı, ek menüsünde "From SharePoint" seçeneğine tıklar
+2. SharePoint Online dosya seçici, gömülü bir iframe içinde açılır
+3. Kullanıcı, tanıdık SharePoint arayüzünü kullanarak dosyalara göz atar ve seçim yapar
+4. Seçilen dosyalar indirilmek üzere sıraya alındı
+
+### İndirme İşlemi [#download-process]
+
+1. Dosyalar toplu halde indirilir (3 eşzamanlı indirmeye kadar)
+2. İlerleme göstergesi, mevcut dosyayı ve tamamlanma yüzdesini gösterir
+3. İndirilen dosyalar konuşmaya eklenmiştir
+4. Başarısız indirmeler otomatik olarak yeniden denenir
+
+## Kullanıcı Deneyimi [#user-experience]
+
+### SharePoint Dosyalarına Erişim [#accessing-sharepoint-files]
+
+Düzgün bir şekilde yapılandırıldığında, kullanıcılar dosya ekleme menüsünde yeni bir seçenek göreceklerdir:
+
+1. Mesaj girişindeki ek simgesine tıklayın
+2. Menüden "From SharePoint" seçeneğini belirleyin
+3. SharePoint dosya seçici açılacaktır
+4. Dosyaları gerektiği gibi göz atın ve seçin
+5. İndirmeye başlamak için "Select" düğmesine tıklayın
+
+### Kullanılabilir Özellikler [#features-available]
+
+- **Çoklu dosya seçimi**: Aynı anda 10 dosyaya kadar seçim yapın
+- **Tanıdık arayüz**: Yerel SharePoint dosya seçicisini kullanır
+- **İlerleme takibi**: Gerçek zamanlı indirme ilerlemesini görün
+- **Hata yönetimi**: Herhangi bir sorun için net mesajlar
+- **Yerelleştirme**: Birden fazla dili destekler
+
+## Güvenlik Hususları [#security-considerations]
+
+### Erişim Kontrolü [#access-control]
+
+- Yalnızca kullanıcının SharePoint'te erişim iznine sahip olduğu dosyalar kullanılabilir
+- Tüm SharePoint izinlerine ve politikalarına uyar
+- Yükseltilmiş erişim veya güvenlik kontrollerinin atlatılması söz konusu değildir
+
+### Token Güvenliği [#token-security]
+
+- Token değişimi için güvenli on-behalf-of akışını kullanır
+- Token'lar kısa ömürlüdür ve otomatik olarak yenilenir
+- SharePoint kimlik bilgilerinin uzun süreli depolanmaması
+
+### Kapsam İzolasyonu [#scope-isolation]
+
+- SharePoint kapsamı yalnızca okuma işlemleriyle sınırlandırılmıştır
+- Graph API kapsamı dosya okuma erişimi ile sınırlandırıldı
+- LibreChat üzerinden dosyalar değiştirilemiyor veya silinemiyor
+
+## Sorun Giderme [#troubleshooting]
+
+### Yaygın Sorunlar [#common-issues]
+
+#### "From SharePoint" seçeneği görünmüyor [#from-sharepoint-option-not-appearing]
+
+**Neden**: Özellik düzgün etkinleştirilmemiş veya kimlik doğrulama sorunları var
+
+**Çözümler**:
+1. `.env` dosyasında `ENABLE_SHAREPOINT_FILEPICKER=true` olduğunu doğrulayın
+2. `OPENID_REUSE_TOKENS=true` değerinin ayarlandığını doğrulayın
+3. Kullanıcının Azure Entra ID aracılığıyla kimliğinin doğrulandığını kontrol edin
+4. Yapılandırma değişikliklerinden sonra LibreChat'i yeniden başlatın
+
+#### Dosya seçici açılmıyor [#file-picker-fails-to-open]
+
+**Neden**: Eksik veya hatalı izinler
+
+**Çözümler**:
+1. Azure'da SharePoint izinlerinin verildiğini doğrulayın
+2. Yönetici onayının sağlandığından emin olun
+3. `SHAREPOINT_BASE_URL` değerinin kiracınızla tam olarak eşleştiğini kontrol edin
+4. `SHAREPOINT_PICKER_SHAREPOINT_SCOPE` değişkeninin, `https://contoso.sharepoint.com/AllSites.Read` gibi tam kiracı (tenant) URL'sini kullandığını doğrulayın.
+5. Üretim ortamında HTTPS'in etkinleştirildiğini doğrulayın
+
+#### Dosya seçici boş beyaz bir sayfada açılıyor [#file-picker-opens-to-a-blank-white-page]
+
+**Neden**: Azure, OpenID erişim belirtecinin yanlış hedef kitleye (audience) sahip olması veya userinfo belirteç değişiminin etkinleştirilmemiş olması nedeniyle on-behalf-of değişimini reddediyor olabilir.
+
+**Çözümler**:
+1. Azure uygulama kaydınızın `api://<client-id>/access_as_user` gibi açık bir API kapsamına sahip olduğunu doğrulayın.
+2. Bu tam kapsamı `OPENID_SCOPE` içine ekleyin
+3. `OPENID_ON_BEHALF_FLOW_FOR_USERINFO_REQUIRED=true` değerini ayarlayın
+4. Azure'un yeni OpenID belirteçleri oluşturması için LibreChat'i yeniden başlatın ve tekrar giriş yapın
+
+#### İndirmeler başarısız oluyor veya zaman aşımına uğruyor [#downloads-fail-or-timeout]
+
+**Neden**: Graph API izinleri veya ağ sorunları
+
+**Çözümler**:
+1. `Files.Read.All` izninin verildiğini doğrulayın
+2. SharePoint ağ bağlantısını kontrol edin
+3. Token'ların süresinin dolmadığından emin olun (gerekirse yeniden kimlik doğrulaması yapın)
+4. Belirli hata mesajları için tarayıcı konsolunu kontrol edin
+
+### Hata Ayıklama Modu [#debug-mode]
+
+Sorun giderme için hata ayıklama (debug) günlüğünü etkinleştirin:
+
+```bash filename=".env"
+DEBUG_LOGGING=true
+DEBUG_CONSOLE=true
+```
+
+Bu, aşağıdakiler hakkında ayrıntılı günlükler sağlayacaktır:
+- Token değişim süreçleri
+- SharePoint ve Graph'e yapılan API çağrıları
+- İndirme ilerlemesi ve hatalar
+- Kimlik doğrulama akışları
+
+## Performans Optimizasyonu [#performance-optimization]
+
+### Token Caching [#token-caching]
+
+- Kimlik doğrulama yükünü azaltmak için token'lar önbelleğe alınır.
+- Önbellek süresi, belirteç (token) ömrüyle eşleşir (genellikle 50 dakika)
+- Süresi dolmadan önce otomatik yenileme
+
+### Eşzamanlı İndirmeler [#concurrent-downloads]
+
+- Aynı anda en fazla 3 dosya indirilebilir
+- Tarayıcının veya sunucunun aşırı yüklenmesini önler
+- Hem hız hem de kararlılık için optimize eder
+
+### Dosya Boyutu Hususları [#file-size-considerations]
+
+- Büyük dosyaların indirilmesi zaman alabilir
+- İlerleme göstergesi, kullanıcı beklentilerini yönetmeye yardımcı olur
+- LibreChat yapılandırmanızdaki dosya yükleme limitlerinizi göz önünde bulundurun
+
+## En İyi Uygulamalar [#best-practices]
+
+### Yöneticiler İçin [#for-administrators]
+
+1. **Düzenli İzin Denetimleri**: Uygulama izinlerini periyodik olarak gözden geçirin
+2. **Kullanımı İzle**: SharePoint entegrasyon kullanımını günlüklerde takip et
+3. **Dokümantasyonu Güncelleyin**: Dahili dokümanları kiracı (tenant) özelliklerinizle güncel tutun
+4. **Kapsamlı Test Edin**: Herhangi bir Azure AD değişikliğinden sonra işlevselliği doğrulayın
+
+### Son Kullanıcılar İçin [#for-end-users]
+
+1. **Dosya Organizasyonu**: İyi organize edilmiş SharePoint kütüphaneleri kullanıcı deneyimini iyileştirir
+2. **Dosya Boyutları**: Sohbetleri yavaşlatabilecek büyük dosyalara karşı dikkatli olun
+3. **İzinler**: Paylaşmadan önce dosyalara erişiminiz olduğundan emin olun
+4. **Hasta İndirmeleri**: Çok sayıda veya büyük dosyalar için zaman tanıyın
+
+## Gelişmiş Yapılandırma [#advanced-configuration]
+
+### Özel Kapsamlar (Custom Scopes) [#custom-scopes]
+
+Belirli gereksinimleri olan kuruluşlar için kapsamları özelleştirebilirsiniz:
+
+```bash filename=".env"
+# Example: Limiting to specific site collections
+SHAREPOINT_PICKER_SHAREPOINT_SCOPE=https://contoso.sharepoint.com/sites/Engineering/AllSites.Read
+
+# Example: Using more restrictive Graph permissions
+SHAREPOINT_PICKER_GRAPH_SCOPE=Files.Read
+```
+
+### Bilgi Engelleri (Information Barriers) ile Entegrasyon [#integration-with-information-barriers]
+
+Kuruluşunuz Information Barriers kullanıyorsa:
+- SharePoint entegrasyonu tüm engel politikalarına uyar
+- Kullanıcılar yalnızca erişim izni olan içerikleri görürler
+- Ek yapılandırma gerekmez
+
+## İlgili Dokümantasyon [#related-documentation]
+
+- [Azure Entra Kimlik Doğrulaması](/docs/configuration/authentication/OAuth2-OIDC/azure)
+- [OpenID Token Reuse](/docs/configuration/authentication/OAuth2-OIDC/token-reuse)
+- [Microsoft Graph API Entegrasyonu](/docs/configuration/authentication/OAuth2-OIDC/azure#advanced-microsoft-graph-api-integration)
+- [Dosya Yükleme Yapılandırması](/docs/configuration/librechat_yaml/object_structure/file_config)

@@ -1,0 +1,379 @@
+---
+title: Konfigurasi Ringkasan
+icon: ScrollText
+---
+
+## Ikhtisar [#overview]
+
+Konfigurasi `summarization` menyediakan kontrol terpusat atas peringkasan percakapan dan pemangkasan konteks. Ini menggantikan kolom `summarize` dan `summaryModel` per-endpoint yang sebelumnya tersedia pada endpoint kustom dan Azure OpenAI.
+
+Ketika percakapan melebihi jendela konteks model, sistem peringkasan secara otomatis mengompresi pesan-pesan lama menjadi ringkasan titik pemeriksaan (checkpoint) yang padat. Hal ini memungkinkan percakapan berlanjut tanpa batas waktu tanpa kehilangan konteks penting. Sistem ini juga menyertakan **context pruning**, yang secara progresif mengurangi hasil alat (tool) yang besar dalam pesan-pesan lama untuk mendapatkan kembali ruang token sebelum peringkasan diperlukan.
+
+Setelah giliran peringkasan, pengukur penggunaan konteks menggunakan garis dasar ringkasan yang dipertahankan ditambah giliran pasca-ringkasan alih-alih menghitung ulang riwayat pra-ringkasan yang telah dibuang. Total penggunaan dan biaya kumulatif tetap mencakup pengeluaran cabang secara penuh.
+
+## Contoh [#example]
+
+```yaml filename="summarization"
+summarization:
+  provider: 'openAI'
+  model: 'gpt-4o-mini'
+  maxSummaryTokens: 4096
+  reserveRatio: 0.05
+  trigger:
+    type: 'token_ratio'
+    value: 0.8
+  contextPruning:
+    enabled: true
+    keepLastAssistants: 3
+    softTrimRatio: 0.3
+    hardClearRatio: 0.5
+    minPrunableToolChars: 50000
+    softTrim:
+      maxChars: 4000
+      headChars: 1500
+      tailChars: 1500
+    hardClear:
+      enabled: true
+      placeholder: '[Old tool result content cleared]'
+```
+
+## provider
+
+<OptionTable
+  options={[
+    [
+      'provider',
+      'String',
+      "Penyedia LLM yang digunakan untuk panggilan peringkasan. Jika diabaikan, akan menggunakan penyedia milik agen itu sendiri.",
+      'provider: "openAI"',
+    ],
+  ]}
+/>
+
+**Default:** Penyedia milik Agen
+
+## model
+
+<OptionTable
+  options={[
+    [
+      'model',
+      'String',
+      "Model yang digunakan untuk panggilan peringkasan. Jika dikosongkan, akan menggunakan model milik agen itu sendiri.",
+      'model: "gpt-4o-mini"',
+    ],
+  ]}
+/>
+
+**Default:** Model milik Agen sendiri
+
+## parameters
+
+<OptionTable
+  options={[
+    [
+      'parameters',
+      'Object',
+      'Parameter LLM tambahan untuk permintaan peringkasan (misalnya, temperature, top_p).',
+      'parameters: { temperature: 0.3 }',
+    ],
+  ]}
+/>
+
+## prompt
+
+<OptionTable
+  options={[
+    [
+      'prompt',
+      'String',
+      'Prompt kustom untuk peringkasan awal. Menggantikan prompt checkpoint bawaan.',
+      '',
+    ],
+  ]}
+/>
+
+**Default:** Prompt checkpoint terstruktur yang menghasilkan bagian untuk Goal, Constraints & Preferences, Progress, Key Decisions, Next Steps, dan Critical Context.
+
+## updatePrompt
+
+<OptionTable
+  options={[
+    [
+      'updatePrompt',
+      'String',
+      'Prompt kustom untuk pemadatan ulang saat ringkasan sebelumnya sudah ada. Digunakan ketika ringkasan perlu diperbarui dengan konten percakapan baru.',
+      '',
+    ],
+  ]}
+/>
+
+**Default:** Prompt bawaan yang menggabungkan pesan baru ke dalam checkpoint yang ada, memadatkan detail lama, dan memberikan detail lebih pada tindakan terkini.
+
+## maxSummaryTokens
+
+<OptionTable
+  options={[
+    [
+      'maxSummaryTokens',
+      'Number',
+      'Jumlah maksimum token output untuk respons model peringkasan.',
+      'maxSummaryTokens: 4096',
+    ],
+  ]}
+/>
+
+## reserveRatio
+
+<OptionTable
+  options={[
+    [
+      'reserveRatio',
+      'Number',
+      'Fraksi anggaran token yang dicadangkan sebagai ruang kepala (0–1). Mencegah konteks terisi hingga kapasitas absolut.',
+      'reserveRatio: 0.05',
+    ],
+  ]}
+/>
+
+**Default:** `0.05` (5% headroom)
+
+## trigger
+
+<OptionTable
+  options={[
+    [
+      'trigger',
+      'Object',
+      'Menentukan kapan peringkasan diaktifkan. Jika dihilangkan, peringkasan akan berjalan setiap kali pemangkasan pesan menghapus pesan apa pun.',
+      '',
+    ],
+  ]}
+/>
+
+### Sub-key trigger [#trigger-sub-keys]
+
+<OptionTable
+  options={[
+    [
+      'type',
+      'String',
+      'Strategi pemicu. Opsi: `"token_ratio"`, `"remaining_tokens"`, `"messages_to_refine"`.',
+      'type: "token_ratio"',
+    ],
+    [
+      'value',
+      'Number',
+      'Nilai ambang batas untuk tipe pemicu yang dipilih. Untuk `token_ratio`: 0–1 (inklusif). Untuk `remaining_tokens` dan `messages_to_refine`: bilangan bulat positif.',
+      'value: 0.8',
+    ],
+  ]}
+/>
+
+### Tipe Pemicu [#trigger-types]
+
+| Tipe                 | Nilai            | Terpicu Saat                                                                  |
+| -------------------- | ---------------- | ----------------------------------------------------------------------------- |
+| `token_ratio`        | `0.0–1.0`        | Pecahan token konteks yang digunakan mencapai atau melebihi nilai tersebut    |
+| `remaining_tokens`   | Bilangan bulat positif | Sisa token konteks turun hingga atau di bawah nilai tersebut                  |
+| `messages_to_refine` | Bilangan bulat positif | Jumlah pesan yang memenuhi syarat untuk diringkas mencapai atau melebihi nilai tersebut |
+| _(tidak diatur)_     | —                | Kapan pun pemangkasan (pruning) menghapus pesan apa pun (perilaku default)    |
+
+**Contoh:**
+
+```yaml filename="summarization / trigger"
+summarization:
+  trigger:
+    type: 'remaining_tokens'
+    value: 8000
+```
+
+## contextPruning
+
+<OptionTable
+  options={[
+    [
+      'contextPruning',
+      'Object',
+      'Mengonfigurasi degradasi hasil tool berbasis posisi. Hasil tool yang besar pada pesan lama akan dipotong atau dihapus secara progresif untuk mengklaim kembali ruang token.',
+      '',
+    ],
+  ]}
+/>
+
+Context pruning adalah fitur opsional yang beroperasi secara independen dari peringkasan. Fitur ini menargetkan hasil pemanggilan tool yang besar dalam pesan lama, dengan menerapkan dua tahap progresif:
+
+1. **Soft trim** — Memotong hasil alat untuk hanya menyisakan bagian awal dan akhir, dengan elipsis di antaranya
+2. **Hard clear** — Mengganti seluruh hasil alat dengan placeholder singkat
+
+Kedua tahap tersebut berbasis posisi: pesan yang lebih dekat ke awal percakapan (lebih lama) akan dipangkas terlebih dahulu.
+
+### Sub-key contextPruning [#contextpruning-sub-keys]
+
+<OptionTable
+  options={[
+    ['enabled', 'Boolean', 'Mengaktifkan degradasi hasil alat berbasis posisi.', 'enabled: true'],
+    [
+      'keepLastAssistants',
+      'Number',
+      'Jumlah giliran asisten terbaru yang dilindungi dari pemangkasan apa pun.',
+      'keepLastAssistants: 3',
+    ],
+    [
+      'softTrimRatio',
+      'Number',
+      'Rasio usia (0–1) saat soft-trim diaktifkan. Pesan yang lebih lama dari rasio percakapan ini adalah kandidat untuk soft-trimming.',
+      'softTrimRatio: 0.3',
+    ],
+    [
+      'hardClearRatio',
+      'Number',
+      'Rasio usia (0–1) saat hard-clear aktif. Pesan yang lebih lama dari rasio ini adalah kandidat untuk penggantian penuh.',
+      'hardClearRatio: 0.5',
+    ],
+    [
+      'minPrunableToolChars',
+      'Number',
+      'Jumlah karakter minimum hasil alat sebelum pemangkasan diterapkan. Hasil yang lebih kecil dibiarkan tidak berubah.',
+      'minPrunableToolChars: 50000',
+    ],
+    ['softTrim', 'Object', 'Konfigurasi untuk tahap soft-trim.', ''],
+    ['hardClear', 'Object', 'Konfigurasi untuk tahap hard-clear.', ''],
+  ]}
+/>
+
+**Default:**
+
+| Bidang                 | Default |
+| ---------------------- | ------- |
+| `enabled`              | `false` |
+| `keepLastAssistants`   | `3`     |
+| `softTrimRatio`        | `0.3`   |
+| `hardClearRatio`       | `0.5`   |
+| `minPrunableToolChars` | `50000` |
+
+### Sub-key softTrim [#softtrim-sub-keys]
+
+<OptionTable
+  options={[
+    [
+      'maxChars',
+      'Number',
+      'Jumlah karakter total maksimum setelah soft-trimming hasil alat.',
+      'maxChars: 4000',
+    ],
+    [
+      'headChars',
+      'Number',
+      'Jumlah karakter yang dipertahankan dari awal hasil alat.',
+      'headChars: 1500',
+    ],
+    [
+      'tailChars',
+      'Number',
+      'Jumlah karakter yang dipertahankan dari akhir hasil alat.',
+      'tailChars: 1500',
+    ],
+  ]}
+/>
+
+**Default:** `maxChars: 4000`, `headChars: 1500`, `tailChars: 1500`
+
+### Sub-key hardClear [#hardclear-sub-keys]
+
+<OptionTable
+  options={[
+    [
+      'enabled',
+      'Boolean',
+      'Apakah tahap hard-clear aktif. Jika dinonaktifkan, hanya soft-trim yang diterapkan.',
+      'enabled: true',
+    ],
+    [
+      'placeholder',
+      'String',
+      'Teks placeholder yang menggantikan konten hasil alat lengkap saat dibersihkan secara paksa.',
+      'placeholder: "[Old tool result content cleared]"',
+    ],
+  ]}
+/>
+
+**Default:** `enabled: true`, `placeholder: "[Old tool result content cleared]"`
+
+**Contoh:**
+
+```yaml filename="summarization / contextPruning"
+summarization:
+  contextPruning:
+    enabled: true
+    keepLastAssistants: 5
+    softTrimRatio: 0.25
+    hardClearRatio: 0.6
+    minPrunableToolChars: 30000
+    softTrim:
+      maxChars: 6000
+      headChars: 2500
+      tailChars: 2500
+    hardClear:
+      enabled: true
+      placeholder: '[Content removed for context management]'
+```
+
+## Contoh Konfigurasi Lengkap [#complete-configuration-example]
+
+```yaml filename="librechat.yaml"
+version: 1.3.10
+cache: true
+
+summarization:
+  provider: 'openAI'
+  model: 'gpt-4o-mini'
+  maxSummaryTokens: 4096
+  reserveRatio: 0.05
+  trigger:
+    type: 'token_ratio'
+    value: 0.8
+  contextPruning:
+    enabled: true
+    keepLastAssistants: 3
+    softTrimRatio: 0.3
+    hardClearRatio: 0.5
+    minPrunableToolChars: 50000
+    softTrim:
+      maxChars: 4000
+      headChars: 1500
+      tailChars: 1500
+    hardClear:
+      enabled: true
+      placeholder: '[Old tool result content cleared]'
+```
+
+## Migrasi dari Pengaturan Per-endpoint [#migration-from-per-endpoint-settings]
+
+Jika Anda sebelumnya menggunakan `summarize` dan `summaryModel` pada endpoint kustom atau Azure OpenAI:
+
+```yaml filename="Before (removed)"
+endpoints:
+  custom:
+    - name: 'My Endpoint'
+      summarize: true
+      summaryModel: 'gpt-3.5-turbo'
+```
+
+Bidang-bidang ini telah dihapus. Gunakan konfigurasi `summarization` tingkat atas sebagai gantinya:
+
+```yaml filename="After"
+summarization:
+  model: 'gpt-4o-mini'
+```
+
+## Catatan [#notes]
+
+- Ringkasan dikonfigurasi secara global, bukan per-endpoint
+- Field `summarize` dan `summaryModel` pada endpoint kustom dan endpoint Azure OpenAI tidak lagi didukung
+- Ketika `provider` dan `model` dihilangkan, provider dan model milik agen tersebut akan digunakan untuk peringkasan.
+- Pemangkasan konteks (context pruning) dinonaktifkan secara default dan harus diaktifkan secara eksplisit dengan `contextPruning.enabled: true`
+- Pemangkasan konteks hanya memengaruhi hasil panggilan alat yang melebihi `minPrunableToolChars` — hasil yang lebih kecil tidak akan pernah dipangkas
+- Pengaturan `keepLastAssistants` melindungi giliran percakapan terbaru dari pemangkasan terlepas dari rasio trim/clear.
+- Nilai `prompt` dan `updatePrompt` kustom akan menggantikan prompt bawaan sepenuhnya — gunakan dengan hati-hati
+- Atur `AGENT_DEBUG_LOGGING=true` di dalam file `.env` Anda untuk mengaktifkan pencatatan verbose terkait jumlah token dan diagnostik pemangkasan konteks.

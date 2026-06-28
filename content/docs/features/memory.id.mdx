@@ -1,0 +1,275 @@
+---
+title: Memori Pengguna
+icon: Bookmark
+description: >-
+  Penyimpanan key/value untuk memori pengguna yang berjalan pada setiap
+  permintaan chat di LibreChat
+---
+
+## Ikhtisar [#overview]
+
+User Memory di LibreChat adalah **key/value store** yang menyimpan informasi spesifik pengguna secara persisten di seluruh percakapan. Agen memori khusus berjalan di awal **setiap permintaan obrolan**, membaca dari dan menulis ke penyimpanan ini untuk memberikan konteks yang dipersonalisasi ke respons AI utama.
+
+<Callout type="info" title="Penyimpanan Key/Value, Bukan Memori Percakapan">
+Ini **bukan** memori semantik atas seluruh riwayat percakapan Anda. Fitur ini tidak mengindeks, menyematkan (embed), atau mencari percakapan sebelumnya. Sebaliknya, fitur ini memelihara sekumpulan pasangan kunci/nilai terstruktur (contohnya, `user_preferences`, `learned_facts`) yang disuntikkan ke dalam setiap permintaan sebagai konteks. Anggaplah ini sebagai buku catatan persisten yang dibaca AI sebelum memberikan setiap respons.
+
+Untuk konteks mengenai pesan sebelumnya dalam satu percakapan, LibreChat sudah menggunakan jendela riwayat pesan standar — yang terpisah dari fitur ini.
+
+</Callout>
+
+<Callout type="important" title="⚠️ Konfigurasi Diperlukan">
+  Fungsionalitas Memory harus dikonfigurasi secara eksplisit di dalam file `librechat.yaml` Anda agar dapat berfungsi. Fitur ini tidak diaktifkan secara default.
+</Callout>
+
+## Fitur Utama [#key-features]
+
+- **Menjalankan Setiap Permintaan**: Agen memori dijalankan pada awal setiap permintaan obrolan, memastikan konteks yang tersimpan selalu tersedia
+- **Penyimpanan Key/Value**: Informasi disimpan sebagai pasangan key/value terstruktur, bukan sebagai log percakapan mentah
+- **Entri Manual**: Pengguna dapat menambah, mengedit, atau menghapus entri memori secara manual secara langsung, memberikan kendali penuh atas apa yang diingat oleh AI.
+- **Kontrol Pengguna**: Saat diaktifkan, pengguna dapat menyalakan/mematikan memori untuk obrolan individu mereka
+- **Customizable Keys**: Batasi kategori informasi apa saja yang dapat disimpan menggunakan `validKeys`
+- **Manajemen Token**: Tetapkan batas penggunaan memori untuk mengontrol biaya
+- **Integrasi Agen**: Gunakan agen AI untuk mengelola apa yang diingat secara cerdas
+
+## Konfigurasi [#configuration]
+
+Untuk mengaktifkan fitur memori, Anda perlu menambahkan konfigurasi `memory` ke dalam file `librechat.yaml` Anda:
+
+```yaml filename="librechat.yaml"
+version: 1.3.5
+cache: true
+
+memory:
+  disabled: false # Set to true to completely disable memory
+  personalize: true # Gives users the ability to toggle memory on/off, true by default
+  tokenLimit: 2000 # Maximum tokens for memory storage
+  maxInputTokens: 12000 # Maximum recent-chat tokens sent to the memory agent
+  messageWindowSize: 5 # Number of recent messages to consider
+  agent:
+    provider: 'openAI'
+    model: 'gpt-4'
+```
+
+Kolom provider harus sesuai dengan nilai yang diterima sebagaimana didefinisikan dalam [Panduan Model Spec](/docs/configuration/librechat_yaml/object_structure/model_specs#endpoint).
+
+**Catatan:** Jika Anda menggunakan custom endpoint, nilai endpoint harus sama persis dengan nama custom endpoint yang telah ditentukan.
+
+Lihat [Panduan Konfigurasi Memory](/docs/configuration/librechat_yaml/object_structure/memory) untuk opsi konfigurasi yang mendetail.
+
+## Cara Kerja [#how-it-works]
+
+<Callout type="note" title="Eksekusi Agen Memori">
+Agen memori berjalan pada **setiap permintaan obrolan** saat memori diaktifkan. Agen ini dieksekusi secara bersamaan dengan respons obrolan utama — prosesnya dimulai sebelum respons utama dimulai dan dibatasi hingga durasi permintaan utama ditambah hingga 3 detik setelah proses tersebut selesai.
+
+Ini berarti setiap pesan yang Anda kirim memicu agen memori untuk:
+
+<ol>
+  <li>
+    <strong>Baca</strong> penyimpanan kunci/nilai saat ini dan masukkan entri yang relevan sebagai konteks
+  </li>
+  <li>
+    <strong>Analisis</strong> jendela pesan terbaru untuk informasi yang layak disimpan atau diperbarui
+  </li>
+  <li>
+    <strong>Tulis</strong> entri baru atau yang telah dimodifikasi kembali ke penyimpanan
+  </li>
+</ol>
+</Callout>
+
+### 1. Penyimpanan Key/Value [#1-keyvalue-storage]
+
+Entri memori disimpan sebagai pasangan kunci/nilai. Saat memori diaktifkan, sistem dapat menyimpan entri seperti:
+
+- Preferensi pengguna (gaya komunikasi, topik yang diminati)
+- Fakta penting yang dibagikan secara eksplisit oleh pengguna
+- Proyek atau tugas yang sedang berlangsung yang disebutkan
+- Kategori apa pun yang Anda tentukan melalui `validKeys`
+
+Pengguna juga dapat **membuat, mengedit, dan menghapus** entri memori secara manual melalui antarmuka, memberikan kontrol langsung atas apa yang diketahui AI tentang mereka.
+
+### 2. Context Window [#2-context-window]
+
+Parameter `messageWindowSize` menentukan berapa banyak pesan terbaru yang dianalisis untuk pembaruan memori. Hal ini membantu agen memori memutuskan informasi apa yang layak disimpan atau diperbarui di dalam penyimpanan kunci/nilai (key/value store).
+
+Parameter `maxInputTokens` membatasi teks obrolan terkini yang dikirim ke agen memori otomatis sebelum ekstraksi. Jika jendela pesan yang dipilih masih terlalu besar, LibreChat akan mempertahankan konteks terbaru dan menghilangkan konten obrolan sebelumnya sebelum memanggil agen memori.
+
+### 3. Kontrol Pengguna [#3-user-control]
+
+Ketika `personalize` diatur ke `true`:
+
+- Pengguna melihat tombol memori di antarmuka obrolan mereka
+- Mereka dapat mengaktifkan/menonaktifkan memori untuk percakapan individu
+- Pengaturan Memory tetap ada di seluruh sesi
+
+### 4. Valid Keys [#4-valid-keys]
+
+Anda dapat membatasi kategori informasi apa yang disimpan dengan menentukan `validKeys`:
+
+```yaml filename="memory / validKeys"
+memory:
+  validKeys:
+    - 'user_preferences'
+    - 'conversation_context'
+    - 'learned_facts'
+    - 'personal_information'
+```
+
+## Praktik Terbaik [#best-practices]
+
+### 1. Batas Token [#1-token-limits]
+
+Tetapkan batas token yang sesuai untuk menyeimbangkan fungsionalitas dengan biaya:
+
+- Batas yang lebih tinggi memungkinkan memori yang lebih komprehensif
+- Batas bawah mengurangi biaya pemrosesan
+- Pertimbangkan pola penggunaan dan anggaran Anda
+
+### 2. Custom Instructions [#2-custom-instructions]
+
+Saat menggunakan `validKeys`, berikan instruksi khusus kepada agen memori:
+
+```yaml filename="memory / agent with instructions"
+memory:
+  agent:
+    provider: 'openAI'
+    model: 'gpt-4'
+    instructions: |
+      Store information only in the specified validKeys categories.
+      Focus on explicitly stated preferences and important facts.
+      Delete outdated or corrected information promptly.
+```
+
+### 3. Pertimbangan Privasi [#3-privacy-considerations]
+
+- Memory menyimpan informasi pengguna di seluruh percakapan
+- Pastikan pengguna memahami informasi apa yang sedang disimpan
+- Pertimbangkan untuk menerapkan kebijakan retensi data
+- Sediakan dokumentasi yang jelas mengenai penggunaan memori
+
+## Contoh [#examples]
+
+### Konfigurasi Dasar [#basic-configuration]
+
+Aktifkan memory dengan pengaturan default:
+
+```yaml filename="Basic memory config"
+memory:
+  tokenLimit: 2000
+  maxInputTokens: 12000
+  agent:
+    provider: 'openAI'
+    model: 'gpt-4.1-mini'
+```
+
+### Konfigurasi Lanjutan [#advanced-configuration]
+
+Konfigurasi lengkap dengan semua opsi:
+
+```yaml filename="Advanced memory config"
+memory:
+  disabled: false
+  validKeys: ['preferences', 'context', 'facts']
+  tokenLimit: 3000
+  maxInputTokens: 12000
+  personalize: true
+  messageWindowSize: 10
+  agent:
+    provider: 'anthropic'
+    model: 'claude-3-opus-20240229'
+    instructions: 'Remember only explicitly stated preferences and key facts.'
+    model_parameters:
+      temperature: 0.3
+```
+
+Untuk parameter model yang valid per penyedia, lihat [Model Spec Preset Fields](/docs/configuration/librechat_yaml/object_structure/model_specs#preset-fields).
+
+### Menggunakan Agen yang Telah Ditentukan (Predefined Agents) [#using-predefined-agents]
+
+Referensi agen yang sudah ada berdasarkan ID:
+
+```yaml filename="Memory with agent ID"
+memory:
+  agent:
+    id: 'memory-specialist-001'
+```
+
+### Custom Endpoints dengan Memory [#custom-endpoints-with-memory]
+
+Memory sepenuhnya mendukung endpoint kustom, termasuk yang menggunakan header kustom dan variabel lingkungan. Saat menggunakan endpoint kustom, placeholder header dan variabel lingkungan akan diselesaikan dengan benar selama pemrosesan memory.
+
+```yaml filename="librechat.yaml with custom endpoint for memory"
+
+endpoints:
+    custom:
+        - name: 'Custom Memory Endpoint'
+           apiKey: 'dummy'
+           baseURL: 'https://api.gateway.ai/v1'
+           headers:
+             x-gateway-api-key: '${GATEWAY_API_KEY}'
+             x-gateway-virtual-key: '${GATEWAY_OPENAI_VIRTUAL_KEY}'
+             X-User-Identifier: '{{LIBRECHAT_USER_EMAIL}}'
+             X-Application-Identifier: 'LibreChat - Test'
+             api-key: '${TEST_CUSTOM_API_KEY}'
+           models:
+             default:
+               - 'gpt-4o-mini'
+               - 'gpt-4o'
+             fetch: false
+
+memory:
+  disabled: false
+  tokenLimit: 3000
+  maxInputTokens: 12000
+  personalize: true
+  messageWindowSize: 10
+  agent:
+    provider: 'Custom Memory Endpoint'
+    model: 'gpt-4o-mini'
+```
+
+- Semua [custom endpoint headers](/docs/configuration/librechat_yaml/object_structure/custom_endpoint#headers) didukung
+
+## Pemecahan Masalah [#troubleshooting]
+
+### Memori Tidak Berfungsi [#memory-not-working]
+
+1. Verifikasi bahwa memory telah dikonfigurasi di `librechat.yaml`
+2. Pastikan `disabled` diatur ke `false`
+3. Pastikan agen/model yang dikonfigurasi tersedia
+4. Pastikan pengguna telah mengaktifkan memory di antarmuka obrolan mereka
+5. Untuk endpoint kustom: pastikan nama `provider` sama persis dengan `name` endpoint kustom tersebut
+
+### Penggunaan Token Tinggi [#high-token-usage]
+
+1. Kurangi `tokenLimit` untuk mengontrol biaya
+2. Kurangi `maxInputTokens` untuk membatasi seberapa banyak chat terbaru yang dikirim ke agen memori
+3. Kurangi `messageWindowSize` untuk menganalisis lebih sedikit pesan
+4. Gunakan `validKeys` untuk membatasi apa yang disimpan
+5. Tinjau dan optimalkan instruksi agen
+
+### Memori Tidak Konsisten [#inconsistent-memory]
+
+1. Periksa apakah pengguna mengaktifkan/menonaktifkan memory
+2. Pastikan batas token tidak terlampaui
+3. Pastikan konfigurasi agen konsisten
+4. Tinjau memori yang tersimpan untuk melihat adanya konflik
+
+### Masalah Autentikasi Custom Endpoint [#custom-endpoint-authentication-issues]
+
+1. Pastikan variabel lingkungan telah diatur dengan benar di dalam file `.env` Anda
+2. Pastikan header kustom menggunakan sintaks yang benar (`${ENV_VAR}` untuk variabel lingkungan, `{{LIBRECHAT_USER_*}}` untuk placeholder pengguna)
+3. Pastikan endpoint kustom berfungsi untuk penyelesaian chat reguler sebelum melakukan pengujian dengan memory
+4. Tinjau log server untuk kesalahan autentikasi dari API endpoint kustom
+
+## Peningkatan di Masa Mendatang [#future-improvements]
+
+Implementasi saat ini menjalankan memory agent pada setiap permintaan obrolan tanpa syarat. Peningkatan yang direncanakan meliputi:
+
+- **Pemicu Semantik untuk Penulisan**: Mendeteksi kapan pengguna secara eksplisit meminta model untuk mengingat sesuatu (contoh: "Ingat bahwa saya lebih suka Python") dan hanya menjalankan agen penulisan memori dalam kasus tersebut, sehingga mengurangi pemrosesan yang tidak perlu pada pesan rutin.
+- **Vector Similarity Recall**: Alih-alih menyisipkan semua entri memori yang tersimpan ke dalam setiap permintaan, gunakan penyematan vektor (vector embeddings) untuk mengambil hanya entri yang paling relevan dengan konteks percakapan saat ini, sehingga meningkatkan efisiensi dan relevansi.
+
+## Fitur Terkait [#related-features]
+
+- [Agents](/docs/features/agents) - Membangun asisten AI kustom
+- [Presets](/docs/user_guides/presets) - Simpan pengaturan percakapan
+- [Fork Messages](/docs/features/fork) - Cabangkan percakapan sambil tetap mempertahankan konteks

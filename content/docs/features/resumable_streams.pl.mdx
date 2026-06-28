@@ -1,0 +1,127 @@
+---
+title: Wznawialne strumienie
+icon: Zap
+description: >-
+  Odzyskuj trwające odpowiedzi AI po zerwaniu połączenia, synchronizuj ten sam
+  czat między kartami i urządzeniami oraz utrzymuj strumienie aktywne w
+  skalowanych instancjach.
+---
+
+Wznawialne strumienie pozwalają na przetrwanie trwającej odpowiedzi AI w przypadku zerwania połączenia. Jeśli sieć zostanie przerwana, przeglądarka odświeży się lub przełączysz karty bądź urządzenia, LibreChat odtworzy treść, która została już przesłana, i kontynuuje od miejsca, w którym przerwał. Ten sam mechanizm utrzymuje synchronizację wielu osób przeglądających jedną konwersację.
+
+## Co otrzymujesz [#what-you-get]
+
+- **Brak utraconych odpowiedzi.** Przerwy w sieci, odświeżenia przeglądarki oraz restarty serwera nie powodują utraty przesyłanych strumieniowo treści.
+- **Karty pozostają zsynchronizowane.** Otwórz jedną konwersację w dwóch kartach przeglądarki, a obie będą otrzymywać te same aktualizacje w czasie rzeczywistym.
+- **Przełączaj urządzenia w trakcie pracy.** Rozpocznij generowanie na komputerze i odbierz wynik na telefonie.
+- **Generowanie w tle.** Rozpocznij długą odpowiedź, przejdź do innej karty lub aplikacji, a pełna odpowiedź będzie gotowa, gdy wrócisz.
+- **Udostępnione konwersacje.** Każdy użytkownik przeglądający udostępniony czat widzi treść przesyłaną strumieniowo w tym samym czasie.
+
+## Jak to działa [#how-it-works]
+
+Kiedy wysyłasz wiadomość, LibreChat tworzy zadanie generowania, które rejestruje każdy przesłany strumieniowo przyrost (delta). Jeśli połączenie zostanie przerwane:
+
+1. Klient wykrywa rozłączenie.
+2. Po ponownym połączeniu serwer odtwarza zawartość przesłaną do tej pory strumieniowo na podstawie zarejestrowanych delt zadania.
+3. Brakująca zawartość jest dostarczana w pojedynczym zdarzeniu synchronizacji.
+4. Strumieniowanie jest kontynuowane od bieżącej pozycji.
+
+Działa to automatycznie i nie wymaga żadnych działań ze strony użytkownika.
+
+## Tryby wdrażania [#deployment-modes]
+
+LibreChat jest dostarczany z dwoma backendami dla wznawialnych strumieni.
+
+### Tryb jednowątkowy (domyślny) [#single-instance-mode-default]
+
+Przechowuje stan strumienia w pamięci i wykorzystuje `EventEmitter` środowiska Node.js do obsługi pub/sub. Jest to ustawienie domyślne, które nie wymaga konfiguracji. Sprawdza się w lokalnym środowisku programistycznym, wdrożeniach na pojedynczym serwerze oraz w konfiguracjach Docker Compose.
+
+### Tryb Redis (produkcja) [#redis-mode-production]
+
+Wykorzystuje Redis Streams oraz Pub/Sub, dzięki czemu stan strumienia jest współdzielony między instancjami. Używaj go w przypadku wdrożeń skalowanych horyzontalnie, z równoważeniem obciążenia lub o wysokiej dostępności, w tym w klastrach Kubernetes. Dzięki Redis generowanie rozpoczęte na jednej instancji może być kontynuowane na innej, co pozwala utrzymać aktywne strumienie podczas wdrażania kroczącego (rolling deployments) oraz automatycznego skalowania.
+
+<Callout type="info" title="Pojedyncza instancja? Prawdopodobnie nie potrzebujesz tutaj Redis">
+Tryb in-memory obsługuje wszystko dla pojedynczej instancji LibreChat. Redis staje się istotny, gdy uruchamiasz wiele instancji za load balancerem. Redis jest nadal przydatny do buforowania i przechowywania sesji w wdrożeniach jednowęzłowych, po prostu nie jest wymagany konkretnie do wznawialnych strumieni (resumable streams).
+</Callout>
+
+## Konfiguracja [#configuration]
+
+### Włącz Redis Streams [#enable-redis-streams]
+
+Ustawienie `USE_REDIS=true` sprawia, że wznawialne strumienie automatycznie korzystają z Redis. Użyj `USE_REDIS_STREAMS`, aby kontrolować to jawnie.
+
+```bash filename=".env"
+USE_REDIS=true
+REDIS_URI=redis://localhost:6379
+# Resumable streams use Redis automatically when USE_REDIS=true.
+# Set USE_REDIS_STREAMS to control it explicitly:
+USE_REDIS_STREAMS=true
+```
+
+### Klaster Redis [#redis-cluster]
+
+W przypadku klastra Redis, włącz tryb klastra i wymień węzły w `REDIS_URI`.
+
+```bash filename=".env"
+USE_REDIS_STREAMS=true
+USE_REDIS_CLUSTER=true
+REDIS_URI=redis://node1:7001,redis://node2:7002,redis://node3:7003
+```
+
+LibreChat używa kluczy z hasztagami, aby operacje na wielu kluczach trafiały do tego samego slotu klastra.
+
+## Co jest rekonstruowane [#what-gets-reconstructed]
+
+Po ponownym połączeniu, LibreChat agreguje zarejestrowane zdarzenia delta w celu odbudowania:
+
+- Zawartość wiadomości (tekst, wywołania narzędzi, cytaty)
+- Kroki uruchomienia agenta i rozumowanie pośrednie
+- Metadane i informacje o stanie
+
+Mechanizm przechowywania zależy od trybu wdrożenia:
+
+| Komponent | Mechanizm przechowywania |
+|-----------|-------------------|
+| Chunks | Redis Streams (`XADD`/`XRANGE`) |
+| Metadane zadań | Struktury Redis Hash |
+| Zdarzenia w czasie rzeczywistym | Kanały Redis Pub/Sub |
+| Wygasanie | Automatyczne TTL po zakończeniu strumienia |
+
+LibreChat stosuje kilka optymalizacji, aby utrzymać niskie koszty:
+
+- **Odzyskiwanie oparte na pamięci (Memory-first recovery).** Ponowne połączenie z tą samą instancją odczytuje dane z lokalnej pamięci podręcznej, co pozwala uniknąć komunikacji z Redis.
+- **Czyszczenie przy dostępie.** Nieaktualne wpisy zadań są usuwane podczas zapytań, a zakończone strumienie wygasają automatycznie.
+- **Pamięć z odśmiecanie (garbage-collected).** Tryb w pamięci (in-memory) przechowuje grafy strumieniowe za pomocą `WeakRef`, dzięki czemu są one usuwane po zakończeniu konwersacji.
+
+## Testowanie [#testing]
+
+Aby potwierdzić, że funkcja działa, rozpocznij rozmowę strumieniową z dowolnym modelem, a następnie wypróbuj jedną z poniższych opcji:
+
+- **Karty.** Otwórz ten sam czat w drugiej karcie; oba powinny się zsynchronizować.
+- **Rozłącz.** Na chwilę przerwij połączenie sieciowe, a następnie połącz się ponownie.
+- **Nawigacja.** Opuść stronę w trakcie generowania odpowiedzi, a następnie wróć.
+
+Każdy przypadek powinien wygenerować pełną odpowiedź bez brakującej treści.
+
+## Rozwiązywanie problemów [#troubleshooting]
+
+**Strumienie nie wznawiają działania.** Upewnij się, że Redis jest osiągalny oraz że ustawiono `USE_REDIS_STREAMS`.
+
+```bash
+docker exec -it librechat-redis redis-cli ping
+# Expected: PONG
+
+echo $USE_REDIS_STREAMS
+```
+
+**Treść wydaje się zduplikowana.** Zazwyczaj oznacza to niezgodność wersji klienta. Zaktualizuj LibreChat do najnowszej wersji.
+
+**Wysokie zużycie pamięci w trybie pojedynczej instancji.** Zakończone strumienie są usuwane przez mechanizm garbage collection. Jeśli zużycie pamięci pozostaje wysokie, należy poszukać bardzo długo działających strumieni, które nigdy się nie kończą, lub strumieni, które wystąpiły z błędem bez poprawnego wyczyszczenia zasobów.
+
+## Powiązana dokumentacja [#related-documentation]
+
+- [Konfiguracja Redis](/docs/configuration/redis): konfiguracja Redis do buforowania i skalowania poziomego
+- [Agents](/docs/features/agents): Agenci AI z obsługą narzędzi
+- [Wdrożenie Docker](/docs/local/docker): wdrożenie oparte na kontenerach
+
+Szczegóły implementacji znajdują się w [PR #10926](https://github.com/danny-avila/LibreChat/pull/10926).

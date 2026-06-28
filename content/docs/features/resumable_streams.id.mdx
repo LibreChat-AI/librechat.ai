@@ -1,0 +1,127 @@
+---
+title: Aliran yang Dapat Dilanjutkan
+icon: Zap
+description: >-
+  Pulihkan respons AI yang sedang berlangsung setelah koneksi terputus,
+  sinkronkan obrolan yang sama di berbagai tab dan perangkat, serta jaga agar
+  stream tetap aktif di seluruh instance yang diskalakan.
+---
+
+Resumable streams memungkinkan respons AI yang sedang berlangsung tetap bertahan meskipun koneksi terputus. Jika jaringan terputus, peramban melakukan penyegaran, atau Anda berpindah tab atau perangkat, LibreChat akan menyusun kembali konten yang telah dialirkan dan melanjutkannya dari titik terakhir. Mekanisme yang sama menjaga agar beberapa penampil dalam satu percakapan tetap sinkron.
+
+## Apa yang Anda Dapatkan [#what-you-get]
+
+- **Tidak ada respons yang hilang.** Gangguan jaringan, penyegaran peramban, dan mulai ulang server tidak akan membuang konten yang sedang di-stream.
+- **Tab tetap sinkron.** Buka satu percakapan di dua tab peramban dan keduanya akan menerima pembaruan yang sama secara waktu nyata.
+- **Beralih perangkat di tengah proses.** Mulai pembuatan di desktop Anda dan lanjutkan hasilnya di ponsel Anda.
+- **Pembuatan di latar belakang.** Mulai respons yang panjang, pindah ke tab atau aplikasi lain, dan respons lengkap akan tersedia saat Anda kembali.
+- **Percakapan yang dibagikan.** Setiap penampil obrolan yang dibagikan melihat konten mengalir pada saat yang bersamaan.
+
+## Cara Kerja [#how-it-works]
+
+Saat Anda mengirim pesan, LibreChat membuat tugas pembuatan yang mencatat setiap delta yang dialirkan. Jika koneksi terputus:
+
+1. Klien mendeteksi pemutusan koneksi.
+2. Saat penyambungan kembali, server membangun ulang konten yang telah dialirkan sejauh ini dari delta yang tercatat dalam pekerjaan tersebut.
+3. Konten yang hilang dikirimkan dalam satu peristiwa sinkronisasi.
+4. Streaming berlanjut dari posisi saat ini.
+
+Ini berjalan secara otomatis dan tidak memerlukan tindakan pengguna.
+
+## Mode Deployment [#deployment-modes]
+
+LibreChat hadir dengan dua backend untuk stream yang dapat dilanjutkan.
+
+### Mode Instans Tunggal (default) [#single-instance-mode-default]
+
+Menyimpan status stream di dalam memori dan menggunakan `EventEmitter` Node.js untuk pub/sub. Ini adalah pengaturan default dan tidak memerlukan konfigurasi apa pun. Pengaturan ini mencakup pengembangan lokal, penyebaran server tunggal, dan pengaturan Docker Compose.
+
+### Mode Redis (produksi) [#redis-mode-production]
+
+Menggunakan Redis Streams dan Pub/Sub sehingga status stream dibagikan di seluruh instance. Gunakan ini untuk deployment yang diskalakan secara horizontal, diseimbangkan bebannya (load-balanced), atau ketersediaan tinggi (high-availability), termasuk klaster Kubernetes. Dengan Redis, generasi yang dimulai pada satu instance dapat dilanjutkan di instance lain, yang menjaga stream aktif tetap hidup selama rolling deployment dan auto-scaling.
+
+<Callout type="info" title="Instans tunggal? Anda kemungkinan tidak memerlukan Redis di sini">
+Mode in-memory menangani segalanya untuk satu instance LibreChat. Redis menjadi relevan setelah Anda menjalankan beberapa instance di belakang load balancer. Redis tetap berguna untuk caching dan penyimpanan sesi pada deployment instance tunggal, hanya saja tidak secara khusus untuk stream yang dapat dilanjutkan (resumable streams).
+</Callout>
+
+## Konfigurasi [#configuration]
+
+### Mengaktifkan Redis Streams [#enable-redis-streams]
+
+Mengatur `USE_REDIS=true` membuat aliran yang dapat dilanjutkan (resumable streams) menggunakan Redis secara otomatis. Gunakan `USE_REDIS_STREAMS` untuk mengontrolnya secara eksplisit.
+
+```bash filename=".env"
+USE_REDIS=true
+REDIS_URI=redis://localhost:6379
+# Resumable streams use Redis automatically when USE_REDIS=true.
+# Set USE_REDIS_STREAMS to control it explicitly:
+USE_REDIS_STREAMS=true
+```
+
+### Redis Cluster [#redis-cluster]
+
+Untuk Redis Cluster, aktifkan mode cluster dan cantumkan node-node tersebut di dalam `REDIS_URI`.
+
+```bash filename=".env"
+USE_REDIS_STREAMS=true
+USE_REDIS_CLUSTER=true
+REDIS_URI=redis://node1:7001,redis://node2:7002,redis://node3:7003
+```
+
+LibreChat menggunakan kunci dengan tag hash agar operasi multi-kunci mendarat di slot klaster yang sama.
+
+## Apa yang Direkonstruksi [#what-gets-reconstructed]
+
+Saat menyambung kembali, LibreChat mengagregasi peristiwa delta yang direkam untuk membangun kembali:
+
+- Konten pesan (teks, panggilan alat, sitasi)
+- Langkah eksekusi agen dan penalaran perantara
+- Metadata dan informasi status
+
+Mekanisme penyimpanan bergantung pada mode penyebaran:
+
+| Komponen | Mekanisme Penyimpanan |
+|-----------|-------------------|
+| Chunks | Redis Streams (`XADD`/`XRANGE`) |
+| Job metadata | Struktur Redis Hash |
+| Real-time events | Saluran Redis Pub/Sub |
+| Expiration | TTL otomatis setelah penyelesaian stream |
+
+LibreChat menerapkan beberapa optimasi untuk menjaga agar ini tetap murah:
+
+- **Pemulihan berbasis memori.** Menyambungkan kembali ke instans yang sama akan membaca dari cache lokal, sehingga menghindari perjalanan pulang-pergi (round trip) ke Redis.
+- **Pembersihan saat akses.** Entri pekerjaan yang kedaluwarsa akan dihapus selama kueri, dan aliran yang telah selesai akan kedaluwarsa secara otomatis.
+- **Penyimpanan yang dikumpulkan oleh garbage collector.** Mode in-memory menyimpan grafik stream dengan `WeakRef`, sehingga data tersebut dikumpulkan setelah percakapan berakhir.
+
+## Pengujian [#testing]
+
+Untuk memastikan fitur tersebut berfungsi, mulailah percakapan streaming dengan model apa pun, lalu coba salah satu dari berikut ini:
+
+- **Tab.** Buka obrolan yang sama di tab kedua; keduanya harus tersinkronisasi.
+- **Putuskan koneksi.** Putuskan jaringan sebentar, lalu sambungkan kembali.
+- **Navigasi.** Navigasi keluar saat proses berlangsung, lalu kembali lagi.
+
+Setiap kasus harus menghasilkan respons lengkap tanpa ada konten yang hilang.
+
+## Pemecahan Masalah [#troubleshooting]
+
+**Streams tidak berlanjut.** Pastikan Redis dapat dijangkau dan `USE_REDIS_STREAMS` telah diatur.
+
+```bash
+docker exec -it librechat-redis redis-cli ping
+# Expected: PONG
+
+echo $USE_REDIS_STREAMS
+```
+
+**Konten tampak terduplikasi.** Ini biasanya berarti adanya ketidakcocokan versi klien. Perbarui ke versi terbaru LibreChat.
+
+**Penggunaan memori tinggi dalam mode instans tunggal.** Stream yang telah selesai akan dibersihkan oleh garbage collector. Jika penggunaan memori tetap tinggi, periksa stream yang berjalan sangat lama dan tidak pernah selesai atau stream yang mengalami error tanpa dibersihkan.
+
+## Dokumentasi Terkait [#related-documentation]
+
+- [Konfigurasi Redis](/docs/configuration/redis): menyiapkan Redis untuk caching dan penskalaan horizontal
+- [Agents](/docs/features/agents): Agen AI dengan penggunaan alat
+- [Docker Deployment](/docs/local/docker): penyebaran berbasis kontainer
+
+Untuk detail implementasi, lihat [PR #10926](https://github.com/danny-avila/LibreChat/pull/10926).

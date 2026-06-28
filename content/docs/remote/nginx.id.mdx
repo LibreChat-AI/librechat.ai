@@ -1,0 +1,180 @@
+---
+title: NGINX
+icon: Nginx
+description: >-
+  Panduan langkah demi langkah untuk mengamankan deployment LibreChat Anda
+  dengan Nginx sebagai reverse proxy dan HTTPS
+---
+
+Panduan ini mencakup langkah-langkah penting untuk mengamankan deployment LibreChat Anda dengan sertifikat SSL/TLS untuk HTTPS, menyiapkan Nginx sebagai reverse proxy, dan mengonfigurasi domain Anda.
+
+## Prasyarat [#prerequisites]
+
+1. Sebuah server cloud (contohnya AWS, Google Cloud, Azure, Digital Ocean).
+2. Nama domain yang terdaftar.
+3. Akses terminal ke server cloud Anda.
+4. Node.js `v24.16.0` dan npm `v11.16.0` jika Anda menjalankan LibreChat secara langsung pada host.
+
+## Pengaturan Awal [#initial-setup]
+
+### Mengarahkan Domain Anda ke Server Anda [#pointing-your-domain-to-your-server]
+
+Sebelum melanjutkan perolehan sertifikat, arahkan domain Anda ke alamat IP server cloud Anda. Langkah ini bersifat mendasar dan harus dilakukan sebelum pengaturan sertifikat SSL karena waktu yang mungkin dibutuhkan oleh catatan DNS untuk menyebar secara global.
+
+1. Masuk ke panel kontrol registrar domain Anda.
+2. Buka pengaturan DNS.
+3. Buat `A record` yang mengarahkan domain Anda ke alamat IP server cloud Anda.
+4. Tunggu hingga perubahan DNS tersebar secara global (Anda dapat memeriksanya dengan melakukan ping pada domain Anda: `ping your_domain.com`).
+
+## Mendapatkan Sertifikat SSL/TLS [#obtain-an-ssltls-certificate]
+
+Untuk mengamankan aplikasi LibreChat Anda dengan HTTPS, Anda memerlukan sertifikat SSL/TLS. Let's Encrypt menawarkan sertifikat gratis:
+
+1. Instal Certbot:
+    - Untuk Ubuntu: `sudo apt-get install certbot python3-certbot-nginx`
+    - Untuk CentOS: `sudo yum install certbot python2-certbot-nginx`
+
+2. Dapatkan Sertifikat:
+    - Jalankan `sudo certbot --nginx` untuk mendapatkan dan menginstal sertifikat secara otomatis untuk Nginx.
+    - Ikuti petunjuk di layar. Certbot akan meminta informasi dan menyelesaikan proses validasi.
+    - Setelah berhasil, Certbot akan menyimpan file sertifikat Anda.
+
+## Mengatur Nginx sebagai Reverse Proxy [#set-up-nginx-as-a-reverse-proxy]
+
+Nginx bertindak sebagai reverse proxy, meneruskan permintaan klien ke aplikasi LibreChat Anda. Terdapat dua opsi penerapan:
+
+### Opsi A: Menggunakan `deploy-compose.yml` Docker Compose (Direkomendasikan) [#option-a-using-the-deploy-composeyml-docker-compose-recommended]
+
+File `deploy-compose.yml` menyertakan kontainer Nginx dan menggunakan file `client/nginx.conf` untuk konfigurasi Nginx. Namun, karena `sudo certbot --nginx` mengekstrak sertifikat ke konfigurasi host, Anda perlu menduplikasi sertifikat tersebut ke kontainer Docker.
+
+1. Perbarui `client/nginx.conf` dengan domain dan jalur sertifikat Anda.
+2. Perbarui `deploy-compose.yml` di bagian `client` untuk memasang (mount) file sertifikat dari host:
+
+```yaml
+client:
+  # ...
+  volumes:
+    - ./client/nginx.conf:/etc/nginx/conf.d/default.conf
+    - /etc/letsencrypt/live/<your-domain>:/etc/letsencrypt/live/<your-domain>
+    - /etc/letsencrypt/archive/<your-domain>:/etc/letsencrypt/archive/<your-domain>
+    - /etc/letsencrypt/options-ssl-nginx.conf:/etc/letsencrypt/options-ssl-nginx.conf
+    - /etc/letsencrypt/ssl-dhparams.pem:/etc/letsencrypt/ssl-dhparams.pem
+```
+
+3. Hentikan instans yang sedang berjalan: `npm run stop:deployed`
+4. Lakukan commit perubahan tersebut ke branch Git yang baru.
+5. Lakukan rebase pada instance yang telah di-deploy: `npm run rebase:deployed`
+
+### Opsi B: Deployment berbasis Host tanpa Docker [#option-b-host-based-deployment-without-docker]
+
+Jika Anda tidak menggunakan Docker, Anda dapat menginstal dan mengonfigurasi Nginx secara langsung pada host:
+
+1. Instal Nginx:
+    - Ubuntu: `sudo apt-get install nginx`
+    - CentOS: `sudo yum install nginx`
+
+2. Mulai Nginx: `sudo systemctl start nginx`
+
+3. Buka file konfigurasi Nginx: `sudo nano /etc/nginx/sites-available/default`
+
+4. Ganti konten file dengan yang berikut ini, pastikan untuk mengganti `your_domain.com` dengan domain Anda dan `app_port` dengan port aplikasi Anda:
+
+```nginx filename="/etc/nginx/sites-available/default"
+server {
+    listen 80;
+    server_name your_domain.com;
+
+    location / {
+        proxy_pass http://localhost:app_port;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+    }
+}
+```
+
+5. Periksa konfigurasi Nginx: `sudo nginx -t`
+6. Muat ulang Nginx: `sudo systemctl reload nginx`
+
+## Menjalankan Aplikasi [#run-the-application]
+
+1. Arahkan ke direktori aplikasi Anda:
+
+```bash filename="Replace 'LibreChat' with your actual application directory.
+cd LibreChat
+```
+
+2. Mulai aplikasi Anda menggunakan Docker Compose:
+
+```bash filename="Start your application"
+sudo docker compose -f ./deploy-compose.yml up -d
+```
+
+## Memperbarui sertifikat saat menggunakan nginx [#renewing-certificates-when-using-nginx]
+
+Jika Anda mengatur nginx menggunakan Opsi A yang direkomendasikan di atas, gunakan langkah-langkah berikut untuk memperbarui sertifikat:
+
+1. Arahkan ke direktori aplikasi Anda
+```bash filename="Replace 'LibreChat' with your actual application directory.
+cd LibreChat
+```
+
+2. Hentikan container Docker Anda yang sedang berjalan
+
+```bash filename="Stop your application"
+sudo docker compose -f ./deploy-compose.yml down -d
+```
+
+3. perbarui sertifikat
+
+```bash
+sudo certbot renew
+```
+
+4. Mulai ulang aplikasi Anda
+
+```bash filename="Start your application"
+sudo docker compose -f ./deploy-compose.yml up -d
+```
+
+Catatan: certbot mungkin akan memulai ulang nginx pada host. Anda dapat menghentikannya dengan `sudo pkill nginx`
+
+## Web Application Firewall [#web-application-firewall]
+
+Nginx dapat dikonfigurasi untuk bertindak sebagai web application firewall (WAF) dengan memanfaatkan OWASP Core Rule Set (CRS), yang menyediakan sekumpulan aturan tangguh untuk melindungi dari kerentanan dan serangan aplikasi web yang umum. Menggunakan OWASP CRS dengan Nginx dapat meningkatkan keamanan deployment LibreChat Anda dengan menambahkan lapisan perlindungan tambahan.
+
+1. Instal OWASP CRS:
+
+    - Ubuntu: `sudo apt-get install nginx-modsecurity-crs`
+
+2. Aktifkan ModSecurity di Nginx:
+    - Buka file konfigurasi Nginx Anda (contohnya, `/etc/nginx/nginx.conf`).
+    - Tambahkan baris berikut di dalam blok `http`:
+
+      ```yaml filename="nginx.conf"
+      modsecurity on;
+      modsecurity_rules_file /usr/share/nginx/modsecurity-crs/nginx-modsecurity.conf;
+      ```
+
+3. Konfigurasikan OWASP CRS:
+    - Paket OWASP CRS biasanya menyertakan file konfigurasi (contohnya, `/etc/nginx/modsecurity.d/nginx-modsecurity.conf`) di mana Anda dapat menyesuaikan berbagai pengaturan dan kumpulan aturan berdasarkan kebutuhan Anda.
+
+4. Muat ulang Nginx:
+    - `sudo systemctl reload nginx`
+
+Dengan mengaktifkan OWASP CRS dalam konfigurasi Nginx Anda, Anda dapat memanfaatkan serangkaian aturan komprehensif yang disediakan oleh proyek tersebut untuk mendeteksi dan memitigasi berbagai kerentanan serta serangan aplikasi web, seperti SQL injection, cross-site scripting (XSS), remote file inclusion, dan banyak lagi.
+
+## Penyangga (Caching) dan Kompresi File Statis [#static-file-caching-and-compression]
+
+LibreChat kini mendukung caching dan kompresi file statis secara native. Jika Anda menggunakan NGINX untuk menangani kompresi, Anda harus menonaktifkan kompresi di LibreChat untuk menghindari pemrosesan yang berlebihan. Anda dapat melakukannya dengan mengatur variabel lingkungan `DISABLE_COMPRESSION` ke `true` di konfigurasi LibreChat Anda.
+
+```.env
+# .env file
+DISABLE_COMPRESSION=true
+```
+
+Ini akan mencegah LibreChat melakukan kompresi pada file statis, sehingga memungkinkan NGINX untuk menangani kompresi dengan lebih efisien.
+
+Untuk informasi lebih lanjut mengenai penanganan file statis di LibreChat, termasuk opsi caching, lihat dokumentasi [Static File Handling](/docs/configuration/dotenv#static-file-handling).

@@ -1,0 +1,142 @@
+---
+title: Hệ thống xác thực
+icon: BookOpen
+description: >-
+  Hướng dẫn này giải thích cách sử dụng hệ thống xác thực người dùng của
+  LibreChat, cung cấp tính năng đăng nhập qua email và mạng xã hội an toàn, dễ
+  dàng. Bạn sẽ học cách thiết lập đăng ký, đăng nhập, đặt lại mật khẩu và nhiều
+  tính năng khác.
+---
+
+## Tổng quan [#general]
+
+Để có cái nhìn tổng quan nhanh, hãy tham khảo hướng dẫn sử dụng được cung cấp tại đây: [Authentication](/docs/features/authentication)
+
+Dưới đây là tổng quan về cấu hình chung.
+
+<OptionTable
+  options={[
+    ['ALLOW_EMAIL_LOGIN', 'boolean', 'Bật hoặc tắt CHỈ đăng nhập bằng email.','ALLOW_EMAIL_LOGIN=true'],
+    ['ALLOW_REGISTRATION', 'boolean', 'Bật hoặc tắt tính năng đăng ký bằng Email cho người dùng mới.','ALLOW_REGISTRATION=true'],
+    ['ALLOW_SOCIAL_LOGIN', 'boolean', 'Cho phép người dùng kết nối với LibreChat bằng nhiều mạng xã hội khác nhau.','ALLOW_SOCIAL_LOGIN=false'],
+    ['ALLOW_SOCIAL_REGISTRATION', 'boolean', 'Bật hoặc tắt tính năng đăng ký người dùng mới bằng các mạng xã hội khác nhau.','ALLOW_SOCIAL_REGISTRATION=false'],
+  ]}
+/>
+
+> **Lưu ý:** OpenID và SAML không hỗ trợ khả năng chỉ vô hiệu hóa đăng ký.
+
+Mẹo nhanh:
+
+- Ngay cả khi tính năng đăng ký đã bị vô hiệu hóa, bạn vẫn có thể thêm người dùng trực tiếp vào cơ sở dữ liệu bằng cách sử dụng [tập lệnh create-user](#create-user-script) được trình bày chi tiết dưới đây.
+- Để xóa người dùng, bạn có thể sử dụng [tập lệnh delete-user](#delete-user-script) cũng được trình bày chi tiết bên dưới.
+
+
+<ThemeImage
+  light="https://github.com/danny-avila/LibreChat/assets/32828263/4c51dc25-31d3-4c51-8c2a-0cdfb5a25033"
+  dark="https://github.com/danny-avila/LibreChat/assets/32828263/3bc5371d-e51d-4e91-ac68-56db6e85bb2c"
+  alt="Màn hình đăng ký người dùng"
+/>
+
+
+## Hết hạn phiên và Refresh Token [#session-expiry-and-refresh-token]
+
+- Các giá trị mặc định: session expiry: 15 minutes, refresh token expiry: 7 days
+  - Để biết thêm thông tin: **[GitHub PR #927 - Refresh Token](https://github.com/danny-avila/LibreChat/pull/927)**
+
+<OptionTable
+  options={[
+    ['SESSION_EXPIRY', 'integer (milliseconds)', 'Thời gian hết hạn phiên.','SESSION_EXPIRY=1000 * 60 * 15'],
+    ['REFRESH_TOKEN_EXPIRY', 'integer (milliseconds)', 'Thời gian hết hạn của refresh token.','REFRESH_TOKEN_EXPIRY=(1000 * 60 * 60 * 24) * 7'],
+  ]}
+/>
+
+``` mermaid
+sequenceDiagram
+    Client->>Server: Login request with credentials
+    Server->>Passport: Use authentication strategy (e.g., 'local', 'google', etc.)
+    Passport-->>Server: User object or false/error
+    Note over Server: If valid user...
+    Server->>Server: Generate access and refresh tokens
+    Server->>Database: Store hashed refresh token
+    Server-->>Client: Access token and refresh token
+    Client->>Client: Store access token in HTTP Header and refresh token in HttpOnly cookie
+    Client->>Server: Request with access token from HTTP Header
+    Server-->>Client: Requested data
+    Note over Client,Server: Access token expires
+    Client->>Server: Request with expired access token
+    Server-->>Client: Unauthorized
+    Client->>Server: Request with refresh token from HttpOnly cookie
+    Server->>Database: Retrieve hashed refresh token
+    Server->>Server: Compare hash of provided refresh token with stored hash
+    Note over Server: If hashes match...
+    Server-->>Client: New access token and refresh token
+    Client->>Server: Retry request with new access token
+    Server-->>Client: Requested data
+```
+
+## JWT Secret và Refresh Secret [#jwt-secret-and-refresh-secret]
+
+- Bạn nên sử dụng các giá trị bảo mật mới. Các ví dụ được đưa ra là các khóa 32-byte (64 ký tự ở dạng hex).
+  - Sử dụng công cụ này để tạo nhanh một số khóa: **[JWT Keys](/toolkit/creds_generator)**
+
+<OptionTable
+  options={[
+    ['JWT_SECRET', 'string (hex)', 'Khóa bí mật JWT.','JWT_SECRET=16f8c0ef4a5d391b26034086c628469d3f9f497f08163ab9b40137092f2909ef'],
+    ['JWT_REFRESH_SECRET', 'string (hex)', 'Khóa bí mật làm mới JWT.','JWT_REFRESH_SECRET=eaa5191f2914e30b9387fd84e254e4ba6fc51b4654968a9b0803b456a54b8418'],
+  ]}
+/>
+
+---
+
+## Hệ thống kiểm duyệt tự động (tùy chọn) [#automated-moderation-system-optional]
+
+Hệ thống Kiểm duyệt Tự động được bật theo mặc định. Nó sử dụng cơ chế chấm điểm để theo dõi các vi phạm của người dùng. Khi người dùng thực hiện các hành động như đăng nhập, đăng ký hoặc gửi tin nhắn quá mức, họ sẽ tích lũy điểm vi phạm. Khi đạt đến ngưỡng đã thiết lập, người dùng và địa chỉ IP của họ sẽ bị cấm tạm thời. Hệ thống này đảm bảo tính bảo mật của nền tảng bằng cách giám sát và xử phạt các hoạt động nhanh hoặc đáng ngờ.
+
+Để thiết lập hệ thống mod, hãy xem qua [hướng dẫn thiết lập](/docs/configuration/mod_system).
+
+> *Lưu ý: Nếu bạn muốn tính năng này hoạt động ở chế độ phát triển (development mode), bạn sẽ cần tạo một tệp có tên là `.env.development` trong thư mục gốc và đặt `DOMAIN_CLIENT` thành `http://localhost:3090` hoặc bất kỳ cổng nào được vite cung cấp khi chạy `npm run frontend-dev`*
+
+## Các tập lệnh quản lý người dùng [#user-management-scripts]
+
+### Tạo User Script [#create-user-script]
+
+Script create-user cho phép bạn thêm người dùng trực tiếp vào cơ sở dữ liệu, ngay cả khi tính năng đăng ký đã bị vô hiệu hóa. Dưới đây là cách sử dụng:
+
+1. Đối với `docker-compose.yml` mặc định (nếu bạn sử dụng `docker compose up` để khởi chạy ứng dụng):
+   ```bash
+   docker compose exec api npm run create-user
+   ```
+
+2. Đối với `deploy-compose.yml` (nếu bạn đã làm theo [Hướng dẫn Docker trên Ubuntu](/docs/remote/docker_linux)):
+   ```bash
+   docker exec -it LibreChat-API /bin/sh -c "cd .. && npm run create-user"
+   ```
+
+3. Đối với phát triển cục bộ (từ thư mục gốc của dự án):
+   ```bash
+   npm run create-user
+   ```
+
+Làm theo các gợi ý để nhập email và mật khẩu của người dùng mới.
+
+### Tập lệnh xóa người dùng [#delete-user-script]
+
+Để xóa một người dùng, bạn có thể sử dụng tập lệnh delete-user:
+
+1. Đối với `docker-compose.yml` mặc định (nếu bạn sử dụng `docker compose up` để khởi chạy ứng dụng):
+   ```bash
+   docker compose exec api npm run delete-user email@domain.com
+   ```
+
+2. Đối với `deploy-compose.yml` (nếu bạn đã làm theo [Hướng dẫn Docker trên Ubuntu](/docs/remote/docker_linux)):
+   ```bash
+   docker exec -it LibreChat-API /bin/sh -c "cd .. && npm run delete-user email@domain.com"
+   ```
+
+3. Đối với phát triển cục bộ (từ thư mục gốc của dự án):
+   ```bash
+   npm run delete-user email@domain.com
+   ```
+
+Thay thế `email@domain.com` bằng email của người dùng mà bạn muốn xóa.
+

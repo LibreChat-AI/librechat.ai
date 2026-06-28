@@ -1,0 +1,359 @@
+---
+title: Narzędzia i wtyczki
+icon: Wrench
+description: >-
+  Ten dokument pokazuje, jak tworzyć własne wtyczki dla LibreChat poprzez
+  rozszerzenie klasy `Tool` z LangChain. Dowiesz się, jak używać różnych API i
+  funkcji w swoich wtyczkach oraz jak zintegrować je z frameworkiem LangChain.
+---
+
+**Ta strona jest przestarzała. Najbardziej aktualne informacje na temat korzystania z narzędzi znajdują się w [Przewodniku po Agentach](/docs/features/agents).**
+
+**Wysoce zaleca się korzystanie z [Model Context Protocol](/docs/features/agents#model-context-protocol-mcp) lub [OpenAPI Actions](/docs/features/agents#actions) w celu integracji własnych narzędzi**
+
+# Tworzenie własnych narzędzi/wtyczek [#making-your-own-toolsplugins]
+
+<Callout type="warning" title="Ostrzeżenie">
+  Zapoznaj się z najnowszymi narzędziami używanymi przez asystentów w `api/app/clients/tools/structured/`, ponieważ w niedalekiej przyszłości wtyczki zostaną wycofane na rzecz narzędzi.
+</Callout>
+
+Tworzenie niestandardowych wtyczek dla tego projektu wiąże się z rozszerzeniem klasy `Tool` z modułu `langchain/tools`.
+
+**Uwaga:** Będę używać słowa plugin zamiennie ze słowem tool, ponieważ to drugie jest specyficzne dla LangChain, a my w głównej mierze dostosowujemy się do tej biblioteki.
+
+W zasadzie tworzysz DynamicTools w nomenklaturze LangChain. Zobacz **[dokumentację LangChainJS](https://js.langchain.com/docs/how_to/custom_tools/)**, aby uzyskać więcej informacji.
+
+Ten przewodnik przeprowadzi Cię przez proces tworzenia własnych niestandardowych wtyczek, wykorzystując narzędzia `StableDiffusionAPI` oraz `WolframAlphaAPI` jako przykłady.
+
+Podczas korzystania z Functions Agent (domyślny tryb dla wtyczek), narzędzia są konwertowane na **[funkcje OpenAI](https://openai.com/blog/function-calling-and-other-api-updates)**; w każdym przypadku wtyczki/narzędzia są wywoływane warunkowo w oparciu o generowanie przez LLM określonego formatu, który następnie analizujemy.
+
+Najczęstszą implementacją wtyczki jest wykonanie wywołania API na podstawie danych wejściowych w języku naturalnym od AI, ale w praktyce nie ma żadnych ograniczeń co do programistycznych przypadków użycia.
+
+---
+
+## Kluczowe wnioski [#key-takeaways]
+
+Oto najważniejsze informacje dotyczące tworzenia własnej wtyczki:
+
+**1.** [**Importuj wymagane moduły:**](#step-1-import-required-modules) Importuj niezbędne moduły dla swojej wtyczki, w tym klasę `Tool` z `langchain/tools` oraz wszelkie inne moduły, których może potrzebować Twoja wtyczka.
+
+**2.** [**Zdefiniuj swoją klasę wtyczki:**](#step-2-define-your-tool-class) Zdefiniuj klasę dla swojej wtyczki, która rozszerza klasę `Tool`. Ustaw właściwości `name` oraz `description` w konstruktorze. Jeśli Twoja wtyczka wymaga poświadczeń lub innych zmiennych, ustaw je z parametru fields lub z metody, która pobiera je ze środowiska procesu. Pamiętaj: jeśli Twoja wtyczka wymaga długich, szczegółowych instrukcji, możesz dodać właściwość `description_for_model`, a `description` uczynić bardziej ogólnym.
+
+**3.** [**Zdefiniuj metody pomocnicze:**](#step-3-define-helper-methods) Zdefiniuj metody pomocnicze wewnątrz swojej klasy, aby w razie potrzeby obsługiwać określone zadania.
+
+**4.** [**Zaimplementuj metodę `_call`:**](#step-4-implement-the-_call-method) Zaimplementuj metodę `_call`, w której zdefiniowana jest główna funkcjonalność Twojej wtyczki. Metoda ta jest wywoływana, gdy model językowy zdecyduje się użyć Twojej wtyczki. Powinna ona przyjmować parametr `input` i zwracać wynik. Jeśli wystąpi błąd, funkcja powinna zwrócić ciąg znaków reprezentujący błąd, zamiast zgłaszać wyjątek. Jeśli Twoja wtyczka wymaga wielu danych wejściowych od LLM, zapoznaj się z sekcją [StructuredTools](#StructuredTools).
+
+**5.** [**Wyeksportuj swoją wtyczkę i zaimportuj ją do handleTools.js:**](#step-5-export-your-plugin-and-import-into-handletoolsjs) Wyeksportuj swoją wtyczkę i zaimportuj ją do `handleTools.js`. Dodaj swoją wtyczkę do obiektu `toolConstructors` w funkcji `loadTools`. Jeśli Twoja wtyczka wymaga bardziej zaawansowanej inicjalizacji, dodaj ją do obiektu `customConstructors`.
+
+**6.** [**Wyeksportuj swoją wtyczkę do index.js:**](#step-6-export-your-plugin-into-indexjs) Wyeksportuj swoją wtyczkę do `index.js` w sekcji `tools`. Dodaj swoją wtyczkę do `module.exports` w pliku `index.js`, więc musisz ją również zadeklarować jako `const` w tym pliku.
+
+**7.** [**Dodaj swoją wtyczkę do manifest.json:**](#step-7-add-your-plugin-to-manifestjson) Dodaj swoją wtyczkę do `manifest.json`. Przestrzegaj ścisłego formatu dla każdego z pól obiektu "plugin". Jeśli Twoja wtyczka wymaga uwierzytelnienia, dodaj te szczegóły w sekcji `authConfig` jako tablicę. Wartość `pluginKey` powinna odpowiadać nazwie klasy (`name`) utworzonej przez Ciebie klasy Tool, a właściwość `authField` musi odpowiadać nazwie zmiennej process.env.
+
+Pamiętaj, że kluczem do stworzenia własnej wtyczki jest rozszerzenie klasy `Tool` i zaimplementowanie metody `_call`. Metoda `_call` jest miejscem, w którym definiujesz działanie swojej wtyczki. Możesz również zdefiniować w swojej klasie metody pomocnicze oraz właściwości, aby wspierać funkcjonalność wtyczki.
+
+**Uwaga: Wszystkie pliki wymienione w tym przewodniku można znaleźć w folderze `.\api\app\langchain\tools`.**
+
+---
+
+## StructuredTools [#structuredtools]
+
+**Wtyczki z wieloma wejściami**
+
+Jeśli chcesz stworzyć wtyczkę, która skorzystałaby z wielu danych wejściowych od LLM, zamiast pojedynczego ciągu znaków wejściowych, który omówimy, musisz zamiast tego stworzyć **[StructuredTool](https://blog.langchain.dev/structured-tools/)** w LangChain. Szczegółowy przewodnik na ten temat jest w przygotowaniu, ale na razie możesz sprawdzić, jak stworzyłem StructuredTools w tym katalogu: `api\app\clients\tools\structured\`. Ten przewodnik stanowi podstawę do zrozumienia StructuredTools i zaleca się, abyś najpierw kontynuował czytanie, aby lepiej zrozumieć narzędzia LangChain. Powyższy blog jest również pomocny po przeczytaniu tego przewodnika.
+
+---
+
+## Krok 1: Import wymaganych modułów [#step-1-import-required-modules]
+
+Zacznij od zaimportowania niezbędnych modułów. Będzie to obejmować klasę `Tool` z `langchain/tools` oraz wszelkie inne moduły, których może potrzebować Twoje narzędzie. Na przykład:
+
+```javascript
+const { Tool } = require('langchain/tools')
+// ... whatever else you need
+```
+
+## Krok 2: Zdefiniuj swoją klasę narzędzia (Tool Class) [#step-2-define-your-tool-class]
+
+Następnie zdefiniuj klasę dla swojej wtyczki, która rozszerza klasę `Tool`. Klasa powinna posiadać konstruktor wywołujący metodę `super()` oraz ustawiający właściwości `name` i `description`. Właściwości te będą używane przez model językowy do określenia, kiedy wywołać Twoje narzędzie i z jakimi parametrami.
+
+**Ważne:** należy ustawić poświadczenia/niezbędne zmienne z parametru fields lub alternatywnie za pomocą metody, która pobiera je ze środowiska procesu (process environment).
+
+```javascript
+class StableDiffusionAPI extends Tool {
+  constructor(fields) {
+    super();
+    this.name = 'stable-diffusion';
+    this.url = fields.SD_WEBUI_URL || this.getServerURL(); // <--- important!
+    this.description = `You can generate images with 'stable-diffusion'. This tool is exclusively for visual content...`;
+  }
+  ...
+}
+```
+
+**Opcjonalnie:** Od wersji v0.5.8, podczas korzystania z Functions, możesz dodać dłuższe, bardziej szczegółowe instrukcje za pomocą właściwości `description_for_model`. W takim przypadku zaleca się, aby właściwość `description` była bardziej ogólna w celu optymalizacji tokenów. Każda linia w tej właściwości jest poprzedzona prefiksem `// `, aby odzwierciedlić sposób generowania promptu dla ChatGPT (chat.openai.com). Ten format jest bardziej zbliżony do inżynierii promptów oficjalnych wtyczek ChatGPT.
+
+```js
+// ...
+this.description_for_model = `// Generate images and visuals using text with 'stable-diffusion'.
+// Guidelines:
+// - ALWAYS use {{"prompt": "7+ detailed keywords", "negative_prompt": "7+ detailed keywords"}} structure for queries.
+// - Visually describe the moods, details, structures, styles, and/or proportions of the image. Remember, the focus is on visual attributes.
+// - Craft your input by "showing" and not "telling" the imagery. Think in terms of what you'd want to see in a photograph or a painting.
+// - Here's an example for generating a realistic portrait photo of a man:
+// "prompt":"photo of a man in black clothes, half body, high detailed skin, coastline, overcast weather, wind, waves, 8k uhd, dslr, soft lighting, high quality, film grain, Fujifilm XT3"
+// "negative_prompt":"semi-realistic, cgi, 3d, render, sketch, cartoon, drawing, anime, out of frame, low quality, ugly, mutation, deformed"
+// - Generate images only once per human query unless explicitly requested by the user`
+this.description =
+  "You can generate images using text with 'stable-diffusion'. This tool is exclusively for visual content."
+// ...
+```
+
+Wewnątrz konstruktora należy zwrócić uwagę, że pobieramy wrażliwą zmienną albo z obiektu fields, albo z metody **getServerURL**, którą definiujemy w celu uzyskania dostępu do zmiennej środowiskowej.
+
+```js
+this.url = fields.SD_WEBUI_URL || this.getServerURL()
+```
+
+Wszelkie niezbędne dane uwierzytelniające są przekazywane przez `fields`, gdy użytkownik poda je z poziomu interfejsu użytkownika; w przeciwnym razie administrator może „autoryzować” wtyczkę dla wszystkich użytkowników za pomocą zmiennych środowiskowych. Wszystkie dane uwierzytelniające przekazywane z interfejsu użytkownika są szyfrowane.
+
+```js
+// It's recommended you follow this convention when accessing environment variables.
+  getServerURL() {
+    const url = process.env.SD_WEBUI_URL || '';
+    if (!url) {
+      throw new Error('Missing SD_WEBUI_URL environment variable.');
+    }
+    return url;
+  }
+```
+
+## Krok 3: Zdefiniuj metody pomocnicze [#step-3-define-helper-methods]
+
+W razie potrzeby możesz zdefiniować metody pomocnicze wewnątrz swojej klasy, aby obsługiwały określone zadania. Na przykład klasa `StableDiffusionAPI` zawiera metody takie jak `replaceNewLinesWithSpaces`, `getMarkdownImageUrl` oraz `getServerURL`, które służą do obsługi różnych zadań.
+
+```javascript
+class StableDiffusionAPI extends Tool {
+  ...
+  replaceNewLinesWithSpaces(inputString) {
+    return inputString.replace(/\r\n|\r|\n/g, ' ');
+  }
+  ...
+}
+```
+
+## Krok 4: Implementacja metody `_call` [#step-4-implement-the-_call-method]
+
+Metoda `_call` to miejsce, w którym zaimplementowana jest główna funkcjonalność Twojej wtyczki. Metoda ta jest wywoływana, gdy model językowy zdecyduje się użyć Twojej wtyczki. Powinna ona przyjmować parametr `input` i zwracać wynik.
+
+> W podstawowym narzędziu (Tool) LLM wygeneruje jedną wartość typu string jako dane wejściowe. Jeśli Twoja wtyczka wymaga wielu danych wejściowych od LLM, przeczytaj sekcję **[StructuredTools](#StructuredTools)**.
+
+```javascript
+class StableDiffusionAPI extends Tool {
+  ...
+  async _call(input) {
+    // Your tool's functionality goes here
+    ...
+    return this.result;
+  }
+}
+```
+
+**Ważne:** Funkcja \_call jest tym, co agent faktycznie wywoła. Gdy wystąpi błąd, funkcja powinna, jeśli to możliwe, zwrócić ciąg znaków reprezentujący błąd, zamiast zgłaszać wyjątek. Pozwala to na przekazanie błędu do LLM, który może zdecydować, jak go obsłużyć. Jeśli błąd zostanie zgłoszony, wykonywanie agenta zostanie przerwane.
+
+## Krok 5: Eksportuj swoją wtyczkę i zaimportuj ją do handleTools.js [#step-5-export-your-plugin-and-import-into-handletoolsjs]
+
+**Ten proces będzie w przyszłości częściowo zautomatyzowany, o ile Twoja wtyczka/narzędzie znajduje się w `api\app\langchain\tools`**
+
+```javascript
+// Export
+module.exports = StableDiffusionAPI
+```
+
+```js
+/* api\app\langchain\tools\handleTools.js */
+const StableDiffusionAPI = require('./StableDiffusion');
+...
+```
+
+W pliku handleTools.js znajdź początek funkcji `loadTools` i dodaj swoją wtyczkę/narzędzie do obiektu toolConstructors.
+
+```js
+const loadTools = async ({ user, model, tools = [], options = {} }) => {
+  const toolConstructors = {
+    calculator: Calculator,
+    google: GoogleSearchAPI,
+    wolfram: WolframAlphaAPI,
+    'dall-e': OpenAICreateImage,
+    'stable-diffusion': StableDiffusionAPI // <----- Newly Added. Note: the key is the 'name' provided in the class.
+    // We will now refer to this name as the `pluginKey`
+  };
+```
+
+Jeśli Twoja klasa Tool wymaga bardziej zaawansowanej inicjalizacji, należy dodać ją do obiektu customConstructors.
+
+Domyślną inicjalizację można zobaczyć w funkcji `loadToolWithAuth`, a większość niestandardowych wtyczek powinna być inicjowana w ten sposób.
+
+Oto kilka customConstructors, które mają różne inicjalizacje
+
+```javascript
+const customConstructors = {
+  browser: async () => {
+    let openAIApiKey = process.env.OPENAI_API_KEY
+    if (!openAIApiKey) {
+      openAIApiKey = await getUserPluginAuthValue(user, 'OPENAI_API_KEY')
+    }
+    return new WebBrowser({ model, embeddings: new OpenAIEmbeddings({ openAIApiKey }) })
+  },
+  // ...
+  plugins: async () => {
+    return [
+      new HttpRequestTool(),
+      await AIPluginTool.fromPluginUrl(
+        'https://www.klarna.com/.well-known/ai-plugin.json',
+        new ChatOpenAI({ openAIApiKey: options.openAIApiKey, temperature: 0 }),
+      ),
+    ]
+  },
+}
+```
+
+## Krok 6: Eksportuj swoją wtyczkę do index.js [#step-6-export-your-plugin-into-indexjs]
+
+Znajdź `index.js` w `api/app/clients/tools`. Musisz umieścić swoją wtyczkę w `module.exports`, aby ją skompilować; będziesz musiał również zadeklarować swoją wtyczkę jako `consts`:
+
+```js
+const StructuredSD = require('./structured/StableDiffusion');
+const StableDiffusionAPI = require('./StableDiffusion');
+...
+module.exports = {
+  ...
+  StableDiffusionAPI,
+  StructuredSD,
+  ...
+}
+```
+
+## Krok 7: Dodaj swoją wtyczkę do manifest.json [#step-7-add-your-plugin-to-manifestjson]
+
+**Ten proces będzie w przyszłości częściowo zautomatyzowany wraz z krokiem 5, pod warunkiem, że posiadasz swoją wtyczkę/narzędzie w `api\app\langchain\tools` i można ją zainicjować za pomocą domyślnej metody.**
+
+```json
+  {
+    "name": "Calculator",
+    "pluginKey": "calculator",
+    "description": "Perform simple and complex mathematical calculations.",
+    "icon": "https://i.imgur.com/RHsSG5h.png",
+    "isAuthRequired": "false",
+    "authConfig": []
+  },
+  {
+    "name": "Stable Diffusion",
+    "pluginKey": "stable-diffusion",
+    "description": "Generate photo-realistic images given any text input.",
+    "icon": "https://i.imgur.com/Yr466dp.png",
+    "authConfig": [
+      {
+        "authField": "SD_WEBUI_URL",
+        "label": "Your Stable Diffusion WebUI API URL",
+        "description": "You need to provide the URL of your Stable Diffusion WebUI API. For instructions on how to obtain this, see <a href='url'>Our Docs</a>."
+      }
+    ]
+  },
+```
+
+Each of the fields of the "plugin" object are important. Follow this format strictly. If your plugin requires authentication, you will add those details under `authConfig` as an array since there could be multiple authentication variables. See the Calculator plugin for an example of one that doesn't require authentication, where the authConfig is an empty array (an array is always required).
+
+**Uwaga:** jak wspomniano wcześniej, `pluginKey` odpowiada nazwie klasy (`name`) utworzonej przez Ciebie klasy Tool.
+**Uwaga:** właściwość `authField` musi odpowiadać nazwie zmiennej w process.env.
+**Uwaga:** wpisy `authConfig` mogą zawierać pole `sensitive`. Pomiń je lub ustaw na `true` dla kluczy API i sekretów. Ustaw `sensitive: false` dla wartości konfiguracyjnych, które nie są sekretami, takich jak adresy URL, nazwy użytkowników, nazwy wdrożeń lub identyfikatory projektów, aby interfejs użytkownika renderował pole tekstowe zamiast pola typu secret.
+
+Oto przykład wtyczki z więcej niż jedną zmienną uwierzytelniającą
+
+```json
+  [
+  {
+    "name": "Google",
+    "pluginKey": "google",
+    "description": "Use Google Search to find information about the weather, news, sports, and more.",
+    "icon": "https://i.imgur.com/SMmVkNB.png",
+    "authConfig": [
+      {
+        "authField": "GOOGLE_CSE_ID",
+        "label": "Google CSE ID",
+        "description": "This is your Google Custom Search Engine ID. For instructions on how to obtain this, see <a href='https://github.com/danny-avila/LibreChat/blob/main/docs/features/plugins/google_search.md'>Our Docs</a>.",
+        "sensitive": false
+      },
+      {
+        "authField": "GOOGLE_SEARCH_API_KEY",
+        "label": "Google API Key",
+        "description": "This is your Google Custom Search API Key. For instructions on how to obtain this, see <a href='https://github.com/danny-avila/LibreChat/blob/main/docs/features/plugins/google_search.md'>Our Docs</a>.",
+        "sensitive": true
+      }
+    ]
+  },
+```
+
+## Przykład: Narzędzie WolframAlphaAPI [#example-wolframalphaapi-tool]
+
+Oto kolejny przykład niestandardowego narzędzia, narzędzie `WolframAlphaAPI`. Narzędzie to wykorzystuje moduł `axios` do wykonywania żądań HTTP do API Wolfram Alpha.
+
+```javascript
+const axios = require('axios')
+const { Tool } = require('langchain/tools')
+
+class WolframAlphaAPI extends Tool {
+  constructor(fields) {
+    super()
+    this.name = 'wolfram'
+    this.apiKey = fields.WOLFRAM_APP_ID || this.getAppId()
+    this.description = `Access computation, math, curated knowledge & real-time data through wolframAlpha...`
+  }
+
+  async fetchRawText(url) {
+    try {
+      const response = await axios.get(url, { responseType: 'text' })
+      return response.data
+    } catch (error) {
+      console.error(`Error fetching raw text: ${error}`)
+      throw error
+    }
+  }
+
+  getAppId() {
+    const appId = process.env.WOLFRAM_APP_ID || ''
+    if (!appId) {
+      throw new Error('Missing WOLFRAM_APP_ID environment variable.')
+    }
+    return appId
+  }
+
+  createWolframAlphaURL(query) {
+    const formattedQuery = query.replaceAll(/`/g, '').replaceAll(/\n/g, ' ')
+    const baseURL = 'https://www.wolframalpha.com/api/v1/llm-api'
+    const encodedQuery = encodeURIComponent(formattedQuery)
+    const appId = this.apiKey || this.getAppId()
+    const url = `${baseURL}?input=${encodedQuery}&appid=${appId}`
+    return url
+  }
+
+  async _call(input) {
+    try {
+      const url = this.createWolframAlphaURL(input)
+      const response = await this.fetchRawText(url)
+      return response
+    } catch (error) {
+      if (error.response && error.response.data) {
+        console.log('Error data:', error.response.data)
+        return error.response.data
+      } else {
+        console.log(`Error querying Wolfram Alpha`, error.message)
+        return 'There was an error querying Wolfram Alpha.'
+      }
+    }
+  }
+}
+
+module.exports = WolframAlphaAPI
+```
+
+W tym przykładzie klasa `WolframAlphaAPI` posiada metody pomocnicze, takie jak `fetchRawText`, `getAppId` oraz `createWolframAlphaURL`, służące do obsługi określonych zadań. Metoda `_call` wykonuje żądanie HTTP do API Wolfram Alpha i zwraca odpowiedź.

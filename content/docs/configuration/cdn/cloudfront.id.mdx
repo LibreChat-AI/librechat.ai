@@ -1,0 +1,276 @@
+---
+title: CloudFront dengan S3
+icon: AWS
+description: >-
+  Konfigurasikan Amazon CloudFront sebagai lapisan CDN untuk file LibreChat yang
+  disimpan di S3, termasuk tautan media yang stabil, cookie yang ditandatangani,
+  dan URL unduhan yang ditandatangani.
+---
+
+CloudFront memungkinkan LibreChat menyimpan file di S3 sekaligus menyajikan gambar, avatar, dan unduhan melalui URL CDN yang stabil. Ini adalah pengaturan AWS yang direkomendasikan jika Anda menginginkan ketahanan S3 tanpa mengekspos pengguna pada URL gambar presigned S3 yang kedaluwarsa.
+
+## Kapan Menggunakan CloudFront [#when-to-use-cloudfront]
+
+Gunakan CloudFront jika Anda ingin:
+
+- URL avatar dan gambar yang stabil yang terus dirender di seluruh UI
+- Global edge caching di depan bucket S3
+- Cookie yang ditandatangani untuk gambar inline pribadi dan avatar
+- URL yang ditandatangani dan diotorisasi oleh backend untuk unduhan
+- Invalidasi cache opsional saat file dihapus
+
+<Callout type="info" title="S3 masih diperlukan">
+  Strategi file `cloudfront` menyimpan objek di S3 dan mengembalikan URL CloudFront. Konfigurasikan variabel lingkungan S3 terlebih dahulu, kemudian tambahkan blok `cloudfront` di dalam `librechat.yaml`.
+</Callout>
+
+## Persyaratan [#requirements]
+
+- Bucket S3 pribadi
+- Distribusi CloudFront dengan bucket S3 sebagai origin
+- Origin Access Control (OAC) atau kebijakan akses origin yang setara agar CloudFront dapat membaca dari S3
+- `AWS_REGION` dan `AWS_BUCKET_NAME`
+- `AWS_ACCESS_KEY_ID` dan `AWS_SECRET_ACCESS_KEY`, kecuali jika deployment Anda menggunakan penyedia identitas AWS seperti IRSA
+- `CLOUDFRONT_KEY_PAIR_ID` dan `CLOUDFRONT_PRIVATE_KEY` saat menggunakan signed cookies atau signed download URLs
+
+## Environment Variables [#environment-variables]
+
+```bash filename=".env"
+AWS_ACCESS_KEY_ID=your_access_key_id
+AWS_SECRET_ACCESS_KEY=your_secret_access_key
+AWS_REGION=us-east-1
+AWS_BUCKET_NAME=your_bucket_name
+
+# Required for signed cookies and signed CloudFront download URLs
+CLOUDFRONT_KEY_PAIR_ID=K1234567890ABC
+CLOUDFRONT_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----"
+```
+
+`CLOUDFRONT_PRIVATE_KEY` harus berisi kunci privat PEM lengkap. Di dalam `.env`, beri tanda kutip dan pertahankan baris baru, atau masukkan dari pengelola rahasia platform Anda.
+
+## Konfigurasi Dasar [#basic-configuration]
+
+Gunakan `fileStrategies` jika Anda menginginkan CloudFront untuk gambar dan avatar namun tetap menyimpan dokumen pada URL yang ditandatangani (signed URLs) S3:
+
+```yaml filename="librechat.yaml"
+version: 1.3.11
+
+fileStrategies:
+  avatar: 'cloudfront'
+  image: 'cloudfront'
+  document: 's3'
+
+cloudfront:
+  domain: 'https://cdn.example.com'
+  imageSigning: 'none'
+  urlExpiry: 3600
+```
+
+Gunakan `fileStrategy` jika setiap tipe file harus menggunakan CloudFront:
+
+```yaml filename="librechat.yaml"
+fileStrategy: 'cloudfront'
+
+cloudfront:
+  domain: 'https://cdn.example.com'
+```
+
+## Signed Cookies [#signed-cookies]
+
+Signed cookies adalah mode aman untuk gambar inline pribadi dan avatar. Fitur ini memungkinkan LibreChat untuk menjaga URL CloudFront yang stabil dalam pesan dan catatan sekaligus memberikan otorisasi akses dengan cookie yang berumur pendek.
+
+```yaml filename="librechat.yaml"
+fileStrategies:
+  avatar: 'cloudfront'
+  image: 'cloudfront'
+  document: 's3'
+
+cloudfront:
+  domain: 'https://cdn.example.com'
+  imageSigning: 'cookies'
+  cookieDomain: '.example.com'
+  cookieExpiry: 1800
+  urlExpiry: 3600
+  requireSignedAccess: true
+```
+
+### Persyaratan Domain [#domain-requirements]
+
+Untuk cookie yang ditandatangani (signed cookies), API LibreChat dan nama host CloudFront harus berbagi domain induk yang sama:
+
+- API: `https://api.example.com`
+- CNAME CloudFront: `https://cdn.example.com`
+- `cookieDomain: ".example.com"`
+
+`cookieDomain` harus diawali dengan titik. Browser tidak akan mengirim cookie CloudFront ke domain yang tidak terkait.
+
+### Apa yang Dilindungi oleh Cookies [#what-cookies-protect]
+
+LibreChat membatasi cookie yang ditandatangani (signed cookies) ke jalur media inline:
+
+- `/i/...` gambar pribadi yang diunggah atau dibuat, dicakup untuk pengguna
+- `/a/...` aset avatar, dicakup ke penyewa (tenant) saat `tenantId` ada
+
+Dokumen, unggahan umum, dan output kode tetap berada di luar jalur media inline tersebut. Unduhan diotorisasi oleh backend dan dikembalikan sebagai URL CloudFront yang telah ditandatangani.
+
+### Penyegaran Cookie [#cookie-refresh]
+
+Saat mode signed-cookie aktif, LibreChat mengiklankan endpoint penyegaran cookie dalam konfigurasi startup:
+
+```text
+POST /api/auth/cloudfront/refresh
+```
+
+Sesi terautentikasi menyegarkan cookie selama alur autentikasi, penyegaran token, dan jalur percobaan ulang gambar CloudFront. Respons penyegaran mencakup masa berlaku cookie dan waktu penyegaran yang disarankan.
+
+## Unduhan Bertanda Tangan [#signed-downloads]
+
+LibreChat menggunakan URL CloudFront yang ditandatangani untuk unduhan yang diotorisasi. Pengaturan `urlExpiry` mengontrol masa berlakunya dalam hitungan detik:
+
+```yaml filename="librechat.yaml"
+cloudfront:
+  domain: 'https://cdn.example.com'
+  imageSigning: 'cookies'
+  cookieDomain: '.example.com'
+  urlExpiry: 3600
+```
+
+Untuk penggantian nama file dan content-type unduhan langsung, konfigurasikan kebijakan cache/origin request CloudFront untuk meneruskan string kueri ini ke S3:
+
+- `response-content-disposition`
+- `response-content-type`
+
+Untuk jalur unduhan, lampirkan kebijakan header respons dengan:
+
+- `X-Content-Type-Options: nosniff`
+- Content Security Policy yang restriktif, seperti `default-src 'none'`
+
+## Invalidasi Cache [#cache-invalidation]
+
+Secara default, LibreChat menghapus objek S3 dan tidak membuat invalidasi CloudFront. Aktifkan invalidasi jika file yang dihapus harus segera hilang dari cache edge:
+
+```yaml filename="librechat.yaml"
+cloudfront:
+  domain: 'https://cdn.example.com'
+  distributionId: 'E1234ABCD'
+  invalidateOnDelete: true
+```
+
+`distributionId` diperlukan saat `invalidateOnDelete` bernilai `true`. Identitas AWS yang digunakan oleh LibreChat juga memerlukan `cloudfront:CreateInvalidation`.
+
+## Jalur Objek Multi-Wilayah [#multi-region-object-paths]
+
+`includeRegionInPath` menambahkan wilayah penyimpanan ke kunci objek yang baru dibuat:
+
+```yaml filename="librechat.yaml"
+cloudfront:
+  domain: 'https://cdn.example.com'
+  storageRegion: 'us-east-2'
+  includeRegionInPath: true
+```
+
+Saat diaktifkan, kunci baru menyertakan segmen jalur yang peka terhadap wilayah (region-aware), contohnya:
+
+```text
+/i/r/us-east-2/t/tenantId/images/userId/file.png
+/a/r/us-east-2/t/tenantId/avatars/userId/avatar.png
+/r/us-east-2/t/tenantId/images/userId/file.pdf
+```
+
+Ini hanya memengaruhi kunci yang baru dibuat. File yang sudah ada tidak dipindahkan. LibreChat tidak mengonfigurasi origin CloudFront, Route 53, atau perutean regional untuk Anda.
+
+## Referensi Blok CloudFront [#cloudfront-block-reference]
+
+<OptionTable
+  options={[
+    [
+      'domain',
+      'string',
+      'Domain distribusi CloudFront atau CNAME. Wajib diisi.',
+      'domain: "https://cdn.example.com"',
+    ],
+    [
+      'distributionId',
+      'string',
+      'ID Distribusi yang digunakan untuk invalidasi cache.',
+      'distributionId: "E1234ABCD"',
+    ],
+    [
+      'invalidateOnDelete',
+      'boolean',
+      'Buat invalidasi CloudFront saat file dihapus. Default: false.',
+      'invalidateOnDelete: false',
+    ],
+    [
+      'imageSigning',
+      'string',
+      'Mode akses media inline. Gunakan `"none"` untuk akses CloudFront publik atau `"cookies"` untuk cookie yang ditandatangani. `"url"` dicadangkan dan belum diimplementasikan untuk gambar.',
+      'imageSigning: "cookies"',
+    ],
+    [
+      'cookieDomain',
+      'string',
+      'Domain induk bersama untuk cookie yang ditandatangani. Diperlukan saat `imageSigning` bernilai `"cookies"`.',
+      'cookieDomain: ".example.com"',
+    ],
+    [
+      'cookieExpiry',
+      'number',
+      'Masa berlaku cookie yang ditandatangani dalam detik. Default: 1800. Maksimum: 604800.',
+      'cookieExpiry: 1800',
+    ],
+    [
+      'urlExpiry',
+      'number',
+      'Masa berlaku URL unduhan yang ditandatangani dalam detik. Default: 3600.',
+      'urlExpiry: 3600',
+    ],
+    [
+      'storageRegion',
+      'string',
+      'Label wilayah opsional untuk jalur objek yang peka terhadap wilayah.',
+      'storageRegion: "us-east-2"',
+    ],
+    [
+      'includeRegionInPath',
+      'boolean',
+      'Sertakan `storageRegion` dalam kunci objek yang baru dibuat. Default: false.',
+      'includeRegionInPath: false',
+    ],
+    [
+      'requireSignedAccess',
+      'boolean',
+      'Gagal memulai jika akses CloudFront signed-cookie tidak dapat diinisialisasi. Default: false.',
+      'requireSignedAccess: true',
+    ],
+  ]}
+/>
+
+## Izin AWS yang Disarankan [#suggested-aws-permissions]
+
+Gunakan izin IAM *least-privilege* untuk bucket S3. Tambahkan izin invalidasi CloudFront hanya jika `invalidateOnDelete` diaktifkan.
+
+```json filename="iam-policy.json"
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["s3:PutObject", "s3:GetObject", "s3:DeleteObject", "s3:ListBucket"],
+      "Resource": ["arn:aws:s3:::my-librechat-bucket", "arn:aws:s3:::my-librechat-bucket/*"]
+    },
+    {
+      "Effect": "Allow",
+      "Action": "cloudfront:CreateInvalidation",
+      "Resource": "arn:aws:cloudfront::123456789012:distribution/E1234ABCD"
+    }
+  ]
+}
+```
+
+## Pemecahan Masalah [#troubleshooting]
+
+- Log startup `CloudFront domain is required`: tambahkan `cloudfront.domain`.
+- Log startup `S3 must be initialized`: konfigurasikan variabel lingkungan S3 terlebih dahulu.
+- Signed cookies tidak disetel: konfirmasi `imageSigning: "cookies"`, `cookieDomain`, `CLOUDFRONT_KEY_PAIR_ID`, dan `CLOUDFRONT_PRIVATE_KEY`.
+- Browser masih tidak dapat memuat gambar: pastikan hostname API dan CDN berbagi domain induk yang dikonfigurasi dan bahwa cookie diizinkan dengan `Secure` dan `SameSite=None`.
+- Pengabaian nama file/tipe konten unduhan: perbarui kebijakan cache/permintaan origin CloudFront untuk meneruskan string kueri penggantian respons.

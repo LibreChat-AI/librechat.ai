@@ -1,0 +1,120 @@
+---
+title: Otomatik Denetleme
+icon: Shield
+description: >-
+  Otomatik Denetleme Sistemi, kullanıcı ihlallerini takip etmek için bir
+  puanlama mekanizması kullanır. Kullanıcılar aşırı giriş denemeleri, kayıtlar
+  veya mesajlaşma gibi eylemlerde bulundukça ihlal puanları biriktirirler.
+  Belirlenen bir eşiğe ulaşıldığında, kullanıcı ve IP adresi geçici olarak
+  yasaklanır. Bu sistem, hızlı veya şüpheli etkinlikleri izleyip cezalandırarak
+  platform güvenliğini sağlar.
+---
+
+## Otomatik Denetleme Sistemi (isteğe bağlı) [#automated-moderation-system-optional]
+Otomatik Denetleme Sistemi, kullanıcı ihlallerini takip etmek için bir puanlama mekanizması kullanır. Kullanıcılar aşırı giriş denemeleri, kayıtlar veya mesajlaşma gibi eylemlerde bulundukça ihlal puanları biriktirirler. Belirlenen bir eşiğe ulaşıldığında, kullanıcı ve IP adresi geçici olarak yasaklanır. Bu sistem, hızlı veya şüpheli etkinlikleri izleyip cezalandırarak platform güvenliğini sağlar.
+
+Üretim ortamında, sunucuyu aşırı isteklerden gerçekten korumak için Cloudflare veya başka bir DDoS koruması kullanmalısınız; ancak bu değişiklikler, dağıtılan örneğinizi proxy kullanımı için hedef alan tekil veya birkaç kötü niyetli aktöre karşı sizi büyük ölçüde koruyacaktır.
+
+### Notlar [#notes]
+
+- Temel güvenlik ve ihlal günlüğü (yasaklamalar, eşzamanlı mesajlar, hız sınırlarının aşılması) için Caching kullanır
+    - Yakın gelecekte, mevcut önbellekleme kurulumuna kolayca entegre edilebilecek üretim örnekleri için **Redis** desteği ekleyeceğim.
+- Hız sınırlayıcılardan (giriş/kayıt/mesajlaşma) herhangi birinin aşılması bir ihlal olarak kabul edilir, varsayılan puan 1'dir
+- Tarayıcı dışı kaynak bir ihlaldir
+- Her ihlal için varsayılan puan yapılandırılabilir
+- Sınırlayıcılardan ve/veya yasaklamalardan herhangi birini etkinleştirmek, önbelleğe almayı/günlüğe kaydetmeyi etkinleştirir
+- İhlal günlükleri, günlük kaydı başladığında oluşturulan veri klasöründe bulunabilir: `librechat/data`
+  - **Sadece ihlaller günlüğe kaydedilir**
+  - `violations.json`, kullanıcı başına her ihlalin toplam sayısını takip eder
+  - `logs.json` dosyası, kullanıcı başına her bir ihlali kaydeder
+- Yasaklama günlükleri (ban logs), MongoDB'de `logs` koleksiyonu altında saklanır. Bunlar yalnızca yasaklama süresi boyunca var olduklarından geçicidirler.
+    - Bir yasağı manuel olarak kaldırmak isterseniz, kullanıcıyı veritabanından manuel olarak silmeniz ve sunucuyu yeniden başlatmanız gerekir.
+    - Bunun için **Redis** desteği de planlanmaktadır.
+
+### Hız Sınırlayıcı Türleri [#rate-limiter-types]
+
+#### Giriş ve Kayıt Hız Sınırlaması [#login-and-registration-rate-limiting]
+Belirli bir zaman aralığında tek bir IP adresinden yapılabilecek giriş denemesi veya yeni hesap kaydı sayısını sınırlayarak kaba kuvvet saldırılarını ve spam kayıtlarını önler.
+
+#### Mesaj Hız Sınırlaması [#message-rate-limiting]
+Spam ve kötüye kullanımı önlemek için kullanıcıların ne sıklıkla mesaj gönderebileceğini kontrol eder:
+- **Eşzamanlı Mesaj Sınırlandırma**: Bir kullanıcının aynı anda gönderebileceği mesaj sayısını sınırlar (kullanıcıların sınırları aşmak için birden fazla sekme açmasını engeller)
+- **Mesaj Sıklığı Sınırlandırma**: IP adresi ve bireysel kullanıcı bazında yapılandırılabilir şekilde, mesajların ne sıklıkla gönderilebileceğini kontrol eder
+
+#### Sohbet İçe Aktarma Hız Sınırlaması [#import-conversation-rate-limiting]
+Sohbet içe aktarma özelliğinin kötüye kullanımını, belirli bir zaman aralığında kaç sohbetin içe aktarılabileceğini sınırlayarak önler. Bu, şunları önlemeye yardımcı olur:
+- Sunucuyu aşırı yükleyebilecek toplu veri içe aktarımları
+- Sistemi içe aktarılan verilerle doldurmaya çalışan otomatik betikler
+- Çok sayıda içe aktarma işleminin işlenmesinden kaynaklanan kaynak tükenmesi
+
+Varsayılan limitler:
+- IP tabanlı: dakikada 100 istek
+- Kullanıcı tabanlı: dakikada 50 içe aktarma (varsayılan olarak devre dışıdır)
+
+#### Sohbet Çatallama (Conversation Forking) Hız Sınırlaması [#conversation-forking-rate-limiting]
+Kullanıcıların mevcut konuşmaların çatallarını (kopyalarını) ne sıklıkla oluşturabileceğini kontrol eder. Bu şunları önler:
+- Toplu sohbet kopyalamadan kaynaklanan aşırı veritabanı büyümesi
+- Fork işlemlerinden kaynaklanan kaynak tükenmesi
+- Forking özelliğinin spam veya veri toplama amacıyla kötüye kullanılması
+
+Varsayılan limitler:
+- IP tabanlı: dakikada 30 istek (fork)
+- Kullanıcı tabanlı: Dakikada 7 fork (varsayılan olarak devre dışı)
+
+#### Dosya Yükleme Hız Sınırlaması [#file-upload-rate-limiting]
+librechat.yaml dosyası aracılığıyla yapılandırılan bu ayar, depolama alanının kötüye kullanımını ve bant genişliği tükenmesini önlemek için kullanıcıların ne sıklıkla dosya yükleyebileceğini kontrol eder.
+
+#### Metinden Sese (TTS) Hız Sınırlaması [#text-to-speech-tts-rate-limiting]
+Kullanıcıların metinden sese dönüştürme taleplerini ne sıklıkla yapabileceklerini kontrol eder. Bu şunları önler:
+- Aşırı API kullanım maliyetleri
+- Ses üretimi nedeniyle sunucu kaynaklarının tükenmesi
+- Veri toplama amacıyla TTS özelliğinin kötüye kullanımı
+
+librechat.yaml dosyası aracılığıyla yapılandırılır ve IP başına ve kullanıcı başına özelleştirilebilir limitler sunar.
+
+#### Konuşmadan Metne (STT) Hız Sınırlaması [#speech-to-text-stt-rate-limiting]
+Kullanıcıların transkripsiyon için ne sıklıkla ses dosyası gönderebileceğini kontrol eder. Bu şunları önler:
+- Aşırı API kullanım maliyetleri
+- Ses işleme nedeniyle sunucu kaynaklarının tükenmesi
+- STT özelliğinin yetkisiz transkripsiyon hizmetleri için kötüye kullanımı
+
+librechat.yaml dosyası aracılığıyla yapılandırılır ve IP başına ve kullanıcı başına özelleştirilebilir limitler sunar.
+
+#### Parola Sıfırlama Hız Sınırlaması [#password-reset-rate-limiting]
+Kullanıcıların ne sıklıkla parola sıfırlama e-postası talep edebileceğini kontrol eder. Bu şunları önler:
+- E-posta bombardımanı saldırıları
+- Parola sıfırlama sisteminin kötüye kullanımı
+- Aşırı e-posta hizmeti kullanımı
+
+#### E-posta Doğrulama Hız Sınırlaması [#email-verification-rate-limiting]
+Kullanıcıların ne sıklıkla e-posta doğrulama mesajı isteyebileceğini kontrol eder. Bu şunları önler:
+- Doğrulama sistemi üzerinden spam saldırıları
+- E-posta hizmeti istismarı
+- Doğrulama isteklerinden kaynaklanan kaynak tükenmesi
+
+#### Araç Çağrısı Hız Sınırlaması (Tool Call Rate Limiting) [#tool-call-rate-limiting]
+Kullanıcıların ne sıklıkla araç/eklenti çağrısı yapabileceğini kontrol eder. Bu şunları önler:
+- Entegre araçlardan kaynaklanan aşırı API kullanımı
+- Harici hizmet entegrasyonlarının kötüye kullanımı
+- Araç işleme kaynaklarının tükenmesi
+
+#### Sohbet Erişim Hız Sınırlaması [#conversation-access-rate-limiting]
+Kullanıcıların konuşmalara ne sıklıkla erişebileceğini veya erişmeye çalışabileceğini kontrol eder. Bu şunları önler:
+- Yetkisiz erişim denemeleri
+- Veri kazıma saldırıları
+- Aşırı veritabanı sorguları
+
+### Hız Sınırlayıcılar [#rate-limiters]
+
+Projenin mevcut hız sınırlayıcıları aşağıdaki gibidir (varsayılan değerler için kurulum başlığı altındaki bölüme bakın):
+
+- Giriş ve kayıt hız sınırlaması
+- `Optional:` Eşzamanlı Mesaj sınırlaması (kullanıcı başına aynı anda yalnızca X mesaj)
+- `Optional:` Mesaj sınırlama (bir kullanıcının ne sıklıkla mesaj gönderebileceği, IP ve Kullanıcı bazında yapılandırılabilir)
+- `Optional:` Sohbet içe aktarma sınırlaması (bir kullanıcının ne sıklıkla sohbet içe aktarabileceği, IP ve Kullanıcı bazında yapılandırılabilir)
+- `Optional:` Conversation forking limiting (how often a user can fork conversations, configurable by IP and User)
+- `Optional:` Text-to-Speech (TTS) limiting (configurable through [`librechat.yaml` config file](/docs/configuration/librechat_yaml/object_structure/config#ratelimits))
+- `Optional:` Speech-to-Text (STT) limiting (configurable through [`librechat.yaml` config file](/docs/configuration/librechat_yaml/object_structure/config#ratelimits))
+- `Optional:` File Upload limiting (configurable through [`librechat.yaml` config file](/docs/configuration/librechat_yaml/object_structure/config#ratelimits))
+
+Daha fazla ayrıntı için burada sağlanan yapılandırma kılavuzuna başvurun: [Automated Moderation](/docs/configuration/mod_system)

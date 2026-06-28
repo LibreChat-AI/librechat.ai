@@ -1,0 +1,160 @@
+---
+title: MCP Ayarları Nesne Yapısı
+icon: Blocks
+---
+
+## Genel Bakış [#overview]
+
+`mcpSettings` yapılandırması, MCP (Model Context Protocol) sunucu güvenliği ve davranışı için genel ayarlar sağlar. Bu yapılandırma `mcpServers` kısmından ayrıdır ve MCP sunucularının belirli alan adlarına ve IP adreslerine nasıl bağlanabileceğini kontrol eder.
+
+## Örnek [#example]
+
+```yaml filename="MCP Settings Object Structure"
+# Example MCP Settings Configuration
+mcpSettings:
+  # Strict whitelist mode:
+  # allowedDomains:
+  #   - "example.com"                    # Specific domain
+  #   - "*.example.com"                  # All subdomains using wildcard
+  #   - "https://api.example.com:8443"   # With protocol and port
+  #   - "http://mcp-server:3000"         # Internal service, explicitly whitelisted
+
+  # Default SSRF mode with private service exemptions:
+  allowedAddresses:
+    - "host.docker.internal:8080"        # Permit one private host on one port
+    - "10.0.0.5:8000"                    # Permit one private IP on one port
+```
+
+## Yapılandırma [#configuration]
+
+### Alt anahtarlar [#subkeys]
+
+<OptionTable
+  options={[
+    ['allowedDomains', 'Array of Strings', 'MCP sunucu bağlantıları için izin verilen alan adlarını belirten bir liste.', 'When configured, only listed domains are allowed. When not configured, SSRF targets are blocked but all other domains are allowed.'],
+    ['allowedAddresses', 'Array of Strings', 'Özel IP alanıyla sınırlandırılmış bir SSRF muafiyet listesi. `allowedDomains` yapılandırılmadığında, burada listelenen ana bilgisayar adı/IP + port çiftleri, varsayılan SSRF engellemesini atlar.', 'Use when you want default SSRF protection AND specific internal MCP servers, without flipping `allowedDomains` into strict-whitelist mode.'],
+  ]}
+/>
+
+### Güvenlik Bağlamı (SSRF Koruması) [#security-context-ssrf-protection]
+
+LibreChat, aşağıdaki davranışa sahip SSRF (Server-Side Request Forgery) koruması içerir:
+
+**`allowedDomains` yapılandırılmadığında:**
+- SSRF'ye açık hedefler **varsayılan olarak engellenmiştir**
+- Diğer tüm harici alan adlarına **izin verilmektedir**
+
+**`allowedDomains` yapılandırıldığında:**
+- **Yalnızca** listedeki alan adlarına izin verilir
+- Dahili/SSRF hedeflerine, listeye açıkça eklenerek izin verilebilir
+
+**Engellenen SSRF hedefleri şunları içerir:**
+- **Localhost** adresleri (`localhost`, `127.0.0.1`, `::1`)
+- **Özel IP aralıkları** (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`)
+- **Link-local adresleri** (`169.254.0.0/16`, bulut meta veri IP'lerini içerir)
+- **Dahili TLD'ler** (`.internal`, `.local`, `.localhost`)
+- **Yaygın dahili servis adları** (`redis`, `mongodb`, `postgres`, `api`, `rag_api` vb.)
+
+MCP sunucularınızın dahili hizmetlere veya Docker konteynerlerine bağlanması gerekiyorsa, bunları katı `allowedDomains` beyaz listesine ekleyin ya da `allowedDomains` ayarını boş bırakıp ilgili özel hizmeti tam olarak `allowedAddresses` kısmına ekleyin.
+
+### Desen Formatları [#pattern-formats]
+
+`allowedDomains` dizisi çeşitli desen formatlarını destekler:
+
+1. **Tam Etki Alanı Eşleşmesi**
+   ```yaml
+   allowedDomains:
+     - "example.com"
+   ```
+   Yalnızca tam olarak `example.com` adresine (herhangi bir protokol/port) bağlantılara izin verir
+
+2. **Joker Alt Alan Adı Eşleşmesi**
+   ```yaml
+   allowedDomains:
+     - "*.example.com"
+   ```
+   `example.com` adresinin tüm alt alan adlarına (örneğin `api.example.com`, `mcp.example.com`) bağlantılara izin verir
+
+3. **Belirli IP Adresi**
+   ```yaml
+   allowedDomains:
+     - "192.168.1.100"
+     - "172.24.1.165"
+   ```
+   Belirli IP adreslerine bağlantılara izin verir
+
+4. **Yerel Docker Alan Adları**
+   ```yaml
+   allowedDomains:
+     - "mcp-server"
+     - "host.docker.internal"
+   ```
+   Docker konteyner adlarına veya özel Docker alan adlarına bağlantılara izin verir
+
+5. **Protokol ve Port ile**
+   ```yaml
+   allowedDomains:
+     - "https://api.example.com:8443"
+     - "http://internal-mcp:3000"
+   ```
+   Bağlantıları belirli protokol ve port kombinasyonlarıyla kısıtlar
+
+### Hata İletileri [#error-messages]
+
+Şunun gibi hatalar görürseniz:
+```bash
+  error: [MCPServersRegistry] Failed to inspect server "my-mcp": Domain "http://172.24.1.165:8000" is not allowed
+  error: [MCP][my-mcp] Failed to initialize: Domain "http://172.24.1.165:8000" is not allowed
+```
+
+Bu durum büyük olasılıkla, `allowedDomains` kısmını katı bir beyaz liste olarak kasten kullanmıyorsanız, MCP sunucusunun özel ana bilgisayarının (host) ve bağlantı noktasının (port) `allowedAddresses` kısmına eklenmesi gerektiğini gösterir:
+
+```yaml
+mcpSettings:
+  allowedAddresses:
+    - "172.24.1.165:8000"    # Add the private host/IP and MCP port
+```
+
+## allowedAddresses
+
+`allowedAddresses`, SSRF özel IP engellemesi için bir **muafiyet listesidir** — bir alan adı beyaz listesi değildir. MCP sunucularınızın genel internette erişebileceklerini kısıtlamadan, bir veya iki belirli özel/dahili hizmete izin vermek istediğinizde kullanılması gereken doğru araçtır.
+
+### `allowedDomains` yerine ne zaman kullanılmalı [#when-to-use-it-instead-of-alloweddomains]
+
+`allowedDomains` katı bir beyaz listedir: ayarlandığında, **yalnızca** listelenen girdilere erişilebilir. Örneğin, kendi kendine barındırılan bir MCP sunucusuna izin vermek için oraya özel bir IP eklemek, aynı zamanda listeye eklemediğiniz tüm genel hedefleri (`api.example.com`, `*.googleapis.com` vb.) de engeller.
+
+`allowedAddresses`, yalnızca `allowedDomains` yapılandırılmadığında kullanılır. Belirli özel `host:port` hedeflerine izin verirken, internetin geri kalanının varsayılan SSRF politikası aracılığıyla erişilebilir kalmasını sağlar. Yaygın yapılandırma:
+
+```yaml filename="default SSRF + permitted private host"
+mcpSettings:
+  allowedAddresses:
+    - "host.docker.internal:8080"
+    - "10.0.0.5:8000"
+  # allowedDomains is intentionally not set — public destinations
+  # remain reachable, only listed private host:port services are exempted.
+```
+
+`allowedDomains` yapılandırılmışsa, bu yetkilidir: özel hizmetler `allowedAddresses` yerine burada listelenmelidir.
+
+### Kabul edilebilir girdiler [#acceptable-entries]
+
+- **Bağlantı noktasına sahip ana bilgisayar adları**: `host.docker.internal:8080`, `mcp-server:3000`, `localhost:3001`
+- **Port ile özel IPv4 değişmezleri**: `10.0.0.5:8000`, `127.0.0.1:3001`, `192.168.1.10:443`, `169.254.169.254:80`
+- **Bağlantı noktası ile köşeli parantez içindeki özel IPv6 değişmezleri**: `[::1]:3001`, `[fc00::1]:8080`, `[fe80::1]:8080`
+
+### Reddedilen girdiler (yapılandırma yüklenirken doğrulanır) [#rejected-entries-validated-at-config-load]
+
+- **URL'ler / yollar / CIDR aralıkları**: `http://10.0.0.5`, `10.0.0.0/24`, `/path`
+- **Çıplak ana bilgisayar adları veya IP'ler**: `localhost`, `10.0.0.5`, `::1`, `[::1]` — her girdi bir port içermelidir
+- **Geçersiz bağlantı noktaları**: `localhost:0`, `localhost:65536`, `localhost:http`
+- **Genel IP değişmezleri**: `8.8.8.8:53`, `1.1.1.1:53`, `[2001:4860::8888]:443` — bu alan özel IP alanı ile sınırlandırılmıştır; genel IP'ler SSRF hedefleri değildir ve genel IP muafiyetinin herhangi bir savunma amacı yoktur
+
+### Hostname trust [#hostname-trust]
+
+Bir hostname girdisi, çalışma zamanında belirtilen portta o hostname'in çözümlendiği her IP'ye güvenir. Listelenen bir hostname için DNS döndürülürse veya farklı bir özel IP'ye yönlendirilmek üzere ele geçirilirse, muafiyet de bunu takip eder. Yalnızca DNS'ini kontrol ettiğiniz hostname'leri listeleyin. **Mümkün olduğunda gerçek IP'leri tercih edin.**
+
+## Referanslar [#references]
+
+- [MCP Sunucuları Yapılandırması](/docs/configuration/librechat_yaml/object_structure/mcp_servers)
+- [MCP Özellikleri](/docs/features/mcp)
+- [Actions allowedAddresses](/docs/configuration/librechat_yaml/object_structure/actions#allowedaddresses) (Actions için benzer bir kavram)
