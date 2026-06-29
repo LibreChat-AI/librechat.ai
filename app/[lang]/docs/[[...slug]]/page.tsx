@@ -145,16 +145,19 @@ export default async function Page(props: PageProps) {
   )
 }
 
+// Localized docs render on demand (and edge-cache on first hit) instead of being
+// pre-rendered. Load-bearing for generateStaticParams below, so keep it explicit.
+export const dynamicParams = true
+
 export async function generateStaticParams() {
-  // Fumadocs emits one param set per page for EVERY language even when no
-  // localized file exists (getPage falls back to English). Materializing those
-  // would publish hundreds of duplicate-English pages at /<locale>/docs/* and
-  // list them in the sitemap. Keep the default language plus only locales that
-  // have a real translated file on disk (same discriminator as the hreflang gate).
-  return docsSource.generateParams().filter((p) => {
-    if (p.lang === i18n.defaultLanguage) return true
-    return docsSource.getPage(p.slug, p.lang)?.path.endsWith(`.${p.lang}.mdx`) ?? false
-  })
+  // Pre-render the default language only. Every locale now ships a full set of
+  // translated files, so materializing all of them is locales x pages (~13 x 180 =
+  // ~2,340) and the static-generation phase exhausted the 8 GB Vercel build runner
+  // (OOM / 45-min timeout). Building just the default language keeps the page count
+  // flat no matter how many languages exist; a non-default locale renders on demand
+  // (dynamicParams above) and, when it has no translated file, redirects to English
+  // in Page() exactly as before. The hreflang/canonical gating is unchanged.
+  return docsSource.generateParams().filter((p) => p.lang === i18n.defaultLanguage)
 }
 
 export async function generateMetadata(props: PageProps): Promise<Metadata> {
