@@ -108,9 +108,9 @@ export default async function BlogPostPage(props: PageProps) {
           <Image
             src={post.ogImage}
             alt={post.title}
-            width={1200}
-            height={630}
-            className="mt-6 border rounded-2xl"
+            width={post.ogImageWidth ?? 1200}
+            height={post.ogImageHeight ?? 630}
+            className="mt-6 h-auto w-full rounded-2xl border"
             unoptimized={post.ogImage.endsWith('.gif')}
           />
         )}
