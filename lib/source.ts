@@ -37,6 +37,8 @@ interface BlogEntry {
   author?: string
   ogImage?: string
   ogMetaImage?: string
+  ogImageWidth?: number
+  ogImageHeight?: number
   ogImagePosition?: string
   category?: 'release' | 'feature' | 'guide' | 'announcement'
   featured?: boolean
