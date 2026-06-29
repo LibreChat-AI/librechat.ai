@@ -1,0 +1,92 @@
+---
+title: 'ClickHouse behind the scenes: how we count visitors to librechat.ai'
+date: 2026-06-25
+description: "Our website analytics run on Plausible, but the engine underneath is ClickHouse. Here is why we picked it, what it actually does with a couple of million events, and how we moved the whole thing between clusters with about five minutes of downtime."
+tags:
+  - clickhouse
+  - plausible
+  - analytics
+  - self-hosted
+  - privacy
+  - guide
+author: berry
+ogImage: /images/blog/2026-06-25_clickhouse-analytics.png
+category: guide
+---
+
+I run the infrastructure behind LibreChat, including this website. Like anyone who ships a site, I want to know which pages people read, where they come from, and whether a release landed. What I do not want is to follow readers around the internet to find that out, or to greet them with a cookie banner before they have read a sentence.
+
+So librechat.ai runs on [Plausible](https://plausible.io/). It is open source, it counts visits without cookies, and it never builds a profile of anyone. The dashboard gives me the handful of numbers I actually use and nothing I would be uncomfortable collecting. That part is not very interesting to write about, though. The interesting part is what sits underneath it.
+
+<SiteStats />
+
+Those numbers are not living in Plausible. Plausible is the app you log into. The data is in ClickHouse, and that is the part worth a blog post.
+
+## Why the storage engine matters here
+
+Analytics is a particular shape of problem. You write a lot of small, similar rows, almost never update them, and then ask broad questions across all of them: how many visits last week, top ten pages this month, which referrer sent the most people. A normal row-oriented database is built for the opposite job, reading and writing whole records one at a time, and it shows the strain once the table gets big.
+
+ClickHouse is a column store. Each column lives together on disk, so a query that only needs `timestamp` and `pathname` reads just those two columns and skips everything else. Similar values sitting next to each other also compress extremely well, which is the detail that surprised me most when I looked at our own data: the main events table holds about **1.9 million rows in roughly 28 MiB on disk.** That is the entire pageview history of the site, and it would fit on a floppy disk twice over. Aggregations that touch all of it come back in well under a second.
+
+That combination, cheap to store and fast to scan, is exactly why Plausible uses ClickHouse as its backend rather than the relational database it uses for everything else.
+
+## The path a pageview takes
+
+When you open a page here, a script of about a kilobyte fires a single request. It carries no cookie and no identifier that follows you to the next site. Plausible Community Edition receives that event, does its session bookkeeping, and writes it into ClickHouse.
+
+<AnalyticsArchitecture />
+
+Plausible keeps two kinds of state. The configuration, which sites exist, who can log in, what the settings are, lives in PostgreSQL, because that is a small relational problem and Postgres is the right tool for it. The events and the session rollups, the part that grows forever, live in ClickHouse. Keeping those two stores separate is the whole design, and it is worth holding onto, because it makes the next part possible.
+
+## Moving the whole thing to a new cluster
+
+A few weeks ago I needed to move our analytics off one ClickHouse Cloud cluster and onto another. Same managed service, new cluster, and the goal was the boring one: get every row across with no loss and as little downtime as I could manage.
+
+The tempting approach is to point Plausible at the empty new cluster and let it run its own migrations to build the schema. I did not do that. Plausible's schema is not a handful of plain tables. The events table declares columns that are computed at read time with `dictGet`, looking up things like the human-readable country name from a dictionary:
+
+```sql
+country_name String ALIAS
+  dictGet('plausible_events_db.location_data_dict', 'name', ('country', country_code))
+```
+
+ClickHouse validates those lookups when the table is created, which means the dictionaries, and the tables that feed them, have to exist first. Get the order wrong and the create fails. On top of that, a managed cluster rejects some of the table engines the stock migrations reach for. Re-running migrations on Cloud is a thing you babysit, not a thing you trust.
+
+Both clusters were on the exact same ClickHouse version, so I took the simpler and safer route: copy the schema that already works, byte for byte. I dumped `SHOW CREATE` for every object on the old cluster and replayed it on the new one in dependency order, source tables first, then dictionaries, then everything that refers to them. No translation, no surprises.
+
+Copying the data is a one-liner per table, because ClickHouse can read straight from another cluster:
+
+```sql
+INSERT INTO plausible_events_db.events_v2
+SELECT * FROM remoteSecure('<old-cluster>:9440',
+  'plausible_events_db.events_v2', 'default', '<password>');
+```
+
+The events table has no unique key, so re-inserting a row that is already there would simply duplicate it. The only way to guarantee an exact copy is to make sure the source stops changing first. So the actual cutover was short and dull, which is what you want: stop Plausible, let the old cluster go quiet, truncate and re-copy each table from the now-static source, point Plausible at the new cluster, start it again. Ingestion paused for about five minutes. The website never noticed; the tracker just had nothing to talk to for that window, which costs you a few counts and nothing else.
+
+## Trust the right number
+
+Verifying the copy had one wrinkle worth passing on. Some of Plausible's tables do not store final values. The sessions table is a `VersionedCollapsingMergeTree`: it writes a `+1` row and later a `-1` row to amend a session, and a background process collapses the pairs whenever it gets around to it. So if you compare a raw `count()` between two clusters, the numbers will not match, and that is fine. They are mid-collapse, at different points, on each side.
+
+The number that actually means something is the net:
+
+```sql
+-- raw row counts drift between clusters; the sum of the signs is the truth
+SELECT sum(sign) FROM sessions_v2;   -- matched exactly on both
+```
+
+`sum(sign)` was identical on both clusters: same live session count, down to the row. The lesson generalizes. When a table is built to be summed or collapsed, check it the way it is meant to be read, not with a naive `count()`. I confirmed parity that way across every table before I trusted the cutover, and the live numbers started climbing on the new cluster within a couple of minutes of bringing Plausible back up.
+
+## What I would tell you if you are doing this
+
+A few things I would now treat as defaults:
+
+- If the source and target run the same ClickHouse version, clone the working schema instead of re-running migrations. You inherit a schema you already know boots cleanly, and you skip every create-time validation surprise.
+- Freeze writes before the final copy if your table has no key to dedupe on. A short, planned pause buys you an exact copy. Trying to sync a moving table buys you duplicates.
+- Verify each table the way its engine wants to be read. `sum(sign)` for collapsing tables, `sum(value)` for summing ones, `count()` only where a plain count is honest.
+- Keep the analytics events and the app's own configuration in separate stores. It is why moving the heavy half was a contained job and not a rewrite.
+
+None of this is exotic. It is mostly the discipline of letting the database do what it is good at and not fighting it. The numbers at the top of this post are coming straight out of that setup, counted without a single cookie and stored in a database that treats a couple of million events as a rounding error. Privacy and scale are not the trade-off they are sometimes made out to be.
+
+---
+
+_Plausible Community Edition v3.2.0 · ClickHouse 26.2 · librechat.ai. The connection strings, hostnames, and credentials from the actual migration are, of course, not in this post._
