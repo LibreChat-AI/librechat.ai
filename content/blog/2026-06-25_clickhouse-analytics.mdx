@@ -1,0 +1,103 @@
+---
+title: 'ClickHouse behind the scenes: how we count visitors to librechat.ai'
+date: 2026-06-25
+description: "Our website analytics run on Plausible, with ClickHouse as the engine underneath. Why we built it that way, and what happens when you point a LibreChat agent at a few million pageviews and just ask it questions in plain English."
+tags:
+  - clickhouse
+  - plausible
+  - analytics
+  - agents
+  - self-hosted
+  - privacy
+  - guide
+author: berry
+ogImage: /images/blog/2026-06-25_clickhouse-analytics.png
+category: guide
+---
+
+I run the infrastructure behind LibreChat, including this website. Like anyone who ships a site, I want to know which pages people read, where they come from, and whether a release landed. What I do not want is to follow readers around the internet to find that out, or to greet them with a cookie banner before they have read a sentence.
+
+So librechat.ai runs on [Plausible](https://plausible.io/). It is open source, it counts visits without cookies, and it never builds a profile of anyone. The dashboard gives me the handful of numbers I actually use and nothing I would be uncomfortable collecting. That part is not very interesting to write about, though. The interesting part is what sits underneath it.
+
+<SiteStats />
+
+Those numbers are not living in Plausible. Plausible is the app you log into. The data is in ClickHouse, and that is the part worth a blog post.
+
+## Why the storage engine matters here
+
+Analytics is a particular shape of problem. You write a lot of small, similar rows, almost never update them, and then ask broad questions across all of them: how many visits last week, top ten pages this month, which referrer sent the most people. A normal row-oriented database is built for the opposite job, reading and writing whole records one at a time, and it shows the strain once the table gets big.
+
+ClickHouse is a column store. Each column lives together on disk, so a query that only needs `timestamp` and `pathname` reads just those two columns and skips everything else. Similar values sitting next to each other also compress extremely well, which is the detail that surprised me most when I looked at our own data: the main events table holds about **1.9 million rows in roughly 28 MiB on disk.** That is the entire pageview history of the site, and it would fit on a floppy disk twice over. Aggregations that touch all of it come back in well under a second.
+
+That combination, cheap to store and fast to scan, is exactly why Plausible uses ClickHouse as its backend rather than the relational database it uses for everything else.
+
+## The path a pageview takes
+
+When you open a page here, a script of about a kilobyte fires a single request. It carries no cookie and no identifier that follows you to the next site. Plausible Community Edition receives that event, does its session bookkeeping, and writes it into ClickHouse.
+
+<AnalyticsArchitecture />
+
+Plausible keeps two kinds of state. The configuration, which sites exist, who can log in, what the settings are, lives in PostgreSQL, because that is a small relational problem and Postgres is the right tool for it. The events and the session rollups, the part that grows forever, live in ClickHouse. Keeping those two stores separate is the whole design: the settings barely change, the events pile up by the million. And once a few million events are sitting in a database this fast, you can start asking them questions you would never bother taking to a normal dashboard.
+
+## Asking it questions in plain English
+
+This is the part I did not expect to enjoy. A Plausible dashboard gives you the usual charts: top pages, top sources, visitors over time. They are useful, but you are stuck with the questions someone already built a chart for.
+
+Underneath, though, it is just a fast SQL table. So I gave a LibreChat agent read-only access to it over MCP and started asking it things the way I would ask a coworker who had read every row. Not "draw me a chart," but actual questions:
+
+> When is the best day to ship a release, and when are people actually around to see it?
+
+It answers in plain language, not graphs. A few of the things it turned up, none of which I had a dashboard for:
+
+| What I asked            | What it found                                                              |
+| ----------------------- | ------------------------------------------------------------------------- |
+| Best day to ship        | Monday or Wednesday — the widest reach and the most engaged workday crowd  |
+| Most engaged readers    | Tuesday, longest sessions (~225s), mostly people deep in the docs          |
+| When everyone's online  | A clear peak from 07:00 to 15:00 UTC, every weekday                        |
+| Do weekends matter      | Saturday and Sunday are ~27% of weekly pageviews — not the rounding error I'd assumed |
+| Mobile vs desktop       | Mobile share climbs ~9 points on Fri–Sat versus mid-week                   |
+| Where readers are       | Germany is our #2 country, which is a real argument for German docs        |
+| What people read about  | Agents and MCP sit in the top ten pages literally every day               |
+| How people install      | Docker out-pulls npm by 2–3× every single day                             |
+
+I did not build a single one of those. I asked, it scanned a few million rows, and it answered in about the time it took to read the question. That speed is the whole reason this sits in ClickHouse instead of a spreadsheet, or a database that starts sweating at a million rows. The prompts I used are [at the end](#the-prompts), if you want to point an agent at your own.
+
+## What it doesn't know about you
+
+Now read that list again. Best release day, peak hours, weekend mobile, Germany at #2. Every line is about the audience as a whole, and not one of them needed to know who you are.
+
+That is on purpose. Plausible sets no cookie, hands you no persistent ID, and never trails you to the next site. There is no profile of you in that ClickHouse table, because nobody ever built one. The agent can tell that the Docker page is busy on a Saturday morning without the faintest idea that it was you reading it.
+
+This usually gets framed as a trade-off: real analytics on one side, leaving people alone on the other, pick one. The table above is the whole counter-argument. You can learn a lot about how a site gets used without learning anything about the people using it.
+
+## Where this is going
+
+There is a fitting twist to writing this now. We have leaned on ClickHouse for the site's analytics quietly for a while, and as of recently LibreChat and ClickHouse are joining forces — there is a banner about it at the top of this very page. The database that has been counting these pageviews in the background is becoming part of LibreChat itself.
+
+We even moved the entire analytics store onto a fresh ClickHouse Cloud cluster while this post was being written. It took an afternoon and about five minutes of downtime, and that is the most boring sentence here, which is exactly how a database move should feel.
+
+The numbers at the top of the page come out of all of it: counted without a cookie, kept somewhere that treats a few million events as a rounding error, and now close enough to just ask in plain English.
+
+## The prompts
+
+Want to talk to your own analytics this way? Point a LibreChat agent at your ClickHouse (read-only) and start here.
+
+Agent instructions:
+
+> You have read-only access to our Plausible analytics in ClickHouse (database `plausible_events_db`; `events_v2` holds pageviews and events, `sessions_v2` holds sessions). Only run read queries. Answer with whole-audience aggregates only, never anything that could single out a visitor. Prefer clear takeaways and small tables over raw rows, and always say which date range you used.
+
+The weekly digest, the one that produced the table above:
+
+> From the last 30 days of `events_v2` and `sessions_v2`, give me a "Key Insights" table: best weekday to publish, when readers are most engaged, peak hours in UTC, the weekend share of traffic, the mobile/desktop split by day, top countries, the most-read feature pages, and the most popular install method. One row per insight, with a short "why."
+
+Best time to ship:
+
+> What day and hour (UTC) should I publish a release to reach the most engaged readers? Use the last 8 weeks of sessions, weight by average session duration, and show the top three windows.
+
+A shareable, privacy-safe snapshot:
+
+> Write a short public traffic summary I can post: total visits, pageviews, top 5 pages, and top 5 countries for last month. Whole-audience numbers only.
+
+---
+
+_Plausible Community Edition v3.2.1 · ClickHouse 26.2 · librechat.ai._
