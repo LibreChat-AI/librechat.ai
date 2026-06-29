@@ -1,11 +1,12 @@
 ---
 title: 'ClickHouse behind the scenes: how we count visitors to librechat.ai'
 date: 2026-06-25
-description: "Our website analytics run on Plausible, but the engine underneath is ClickHouse. Here is why we picked it, what it actually does with a couple of million events, and how we moved the whole thing between clusters with about five minutes of downtime."
+description: "Our website analytics run on Plausible, with ClickHouse as the engine underneath. Why we built it that way, and what happens when you point a LibreChat agent at a few million pageviews and just ask it questions in plain English."
 tags:
   - clickhouse
   - plausible
   - analytics
+  - agents
   - self-hosted
   - privacy
   - guide
@@ -36,57 +37,67 @@ When you open a page here, a script of about a kilobyte fires a single request. 
 
 <AnalyticsArchitecture />
 
-Plausible keeps two kinds of state. The configuration, which sites exist, who can log in, what the settings are, lives in PostgreSQL, because that is a small relational problem and Postgres is the right tool for it. The events and the session rollups, the part that grows forever, live in ClickHouse. Keeping those two stores separate is the whole design, and it is worth holding onto, because it makes the next part possible.
+Plausible keeps two kinds of state. The configuration, which sites exist, who can log in, what the settings are, lives in PostgreSQL, because that is a small relational problem and Postgres is the right tool for it. The events and the session rollups, the part that grows forever, live in ClickHouse. Keeping those two stores separate is the whole design: the settings barely change, the events pile up by the million. And once a few million events are sitting in a database this fast, you can start asking them questions you would never bother taking to a normal dashboard.
 
-## Moving the whole thing to a new cluster
+## Asking it questions in plain English
 
-A few weeks ago I needed to move our analytics off one ClickHouse Cloud cluster and onto another. Same managed service, new cluster, and the goal was the boring one: get every row across with no loss and as little downtime as I could manage.
+This is the part I did not expect to enjoy. A Plausible dashboard gives you the usual charts: top pages, top sources, visitors over time. They are useful, but you are stuck with the questions someone already built a chart for.
 
-The tempting approach is to point Plausible at the empty new cluster and let it run its own migrations to build the schema. I did not do that. Plausible's schema is not a handful of plain tables. The events table declares columns that are computed at read time with `dictGet`, looking up things like the human-readable country name from a dictionary:
+Underneath, though, it is just a fast SQL table. So I gave a LibreChat agent read-only access to it over MCP and started asking it things the way I would ask a coworker who had read every row. Not "draw me a chart," but actual questions:
 
-```sql
-country_name String ALIAS
-  dictGet('plausible_events_db.location_data_dict', 'name', ('country', country_code))
-```
+> When is the best day to ship a release, and when are people actually around to see it?
 
-ClickHouse validates those lookups when the table is created, which means the dictionaries, and the tables that feed them, have to exist first. Get the order wrong and the create fails. On top of that, a managed cluster rejects some of the table engines the stock migrations reach for. Re-running migrations on Cloud is a thing you babysit, not a thing you trust.
+It answers in plain language, not graphs. A few of the things it turned up, none of which I had a dashboard for:
 
-Both clusters were on the exact same ClickHouse version, so I took the simpler and safer route: copy the schema that already works, byte for byte. I dumped `SHOW CREATE` for every object on the old cluster and replayed it on the new one in dependency order, source tables first, then dictionaries, then everything that refers to them. No translation, no surprises.
+| What I asked            | What it found                                                              |
+| ----------------------- | ------------------------------------------------------------------------- |
+| Best day to ship        | Monday or Wednesday — the widest reach and the most engaged workday crowd  |
+| Most engaged readers    | Tuesday, longest sessions (~225s), mostly people deep in the docs          |
+| When everyone's online  | A clear peak from 07:00 to 15:00 UTC, every weekday                        |
+| Do weekends matter      | Saturday and Sunday are ~27% of weekly pageviews — not the rounding error I'd assumed |
+| Mobile vs desktop       | Mobile share climbs ~9 points on Fri–Sat versus mid-week                   |
+| Where readers are       | Germany is our #2 country, which is a real argument for German docs        |
+| What people read about  | Agents and MCP sit in the top ten pages literally every day               |
+| How people install      | Docker out-pulls npm by 2–3× every single day                             |
 
-Copying the data is a one-liner per table, because ClickHouse can read straight from another cluster:
+I did not build a single one of those. I asked, it scanned a few million rows, and it answered in about the time it took to read the question. That speed is the whole reason this sits in ClickHouse instead of a spreadsheet, or a database that starts sweating at a million rows. The prompts I used are [at the end](#the-prompts), if you want to point an agent at your own.
 
-```sql
-INSERT INTO plausible_events_db.events_v2
-SELECT * FROM remoteSecure('<old-cluster>:9440',
-  'plausible_events_db.events_v2', 'default', '<password>');
-```
+## What it doesn't know about you
 
-The events table has no unique key, so re-inserting a row that is already there would simply duplicate it. The only way to guarantee an exact copy is to make sure the source stops changing first. So the actual cutover was short and dull, which is what you want: stop Plausible, let the old cluster go quiet, truncate and re-copy each table from the now-static source, point Plausible at the new cluster, start it again. Ingestion paused for about five minutes. The website never noticed; the tracker just had nothing to talk to for that window, which costs you a few counts and nothing else.
+Now read that list again. Best release day, peak hours, weekend mobile, Germany at #2. Every line is about the audience as a whole, and not one of them needed to know who you are.
 
-## Trust the right number
+That is on purpose. Plausible sets no cookie, hands you no persistent ID, and never trails you to the next site. There is no profile of you in that ClickHouse table, because nobody ever built one. The agent can tell that the Docker page is busy on a Saturday morning without the faintest idea that it was you reading it.
 
-Verifying the copy had one wrinkle worth passing on. Some of Plausible's tables do not store final values. The sessions table is a `VersionedCollapsingMergeTree`: it writes a `+1` row and later a `-1` row to amend a session, and a background process collapses the pairs whenever it gets around to it. So if you compare a raw `count()` between two clusters, the numbers will not match, and that is fine. They are mid-collapse, at different points, on each side.
+This usually gets framed as a trade-off: real analytics on one side, leaving people alone on the other, pick one. The table above is the whole counter-argument. You can learn a lot about how a site gets used without learning anything about the people using it.
 
-The number that actually means something is the net:
+## Where this is going
 
-```sql
--- raw row counts drift between clusters; the sum of the signs is the truth
-SELECT sum(sign) FROM sessions_v2;   -- matched exactly on both
-```
+There is a fitting twist to writing this now. We have leaned on ClickHouse for the site's analytics quietly for a while, and as of recently LibreChat and ClickHouse are joining forces — there is a banner about it at the top of this very page. The database that has been counting these pageviews in the background is becoming part of LibreChat itself.
 
-`sum(sign)` was identical on both clusters: same live session count, down to the row. The lesson generalizes. When a table is built to be summed or collapsed, check it the way it is meant to be read, not with a naive `count()`. I confirmed parity that way across every table before I trusted the cutover, and the live numbers started climbing on the new cluster within a couple of minutes of bringing Plausible back up.
+We even moved the entire analytics store onto a fresh ClickHouse Cloud cluster while this post was being written. It took an afternoon and about five minutes of downtime, and that is the most boring sentence here, which is exactly how a database move should feel.
 
-## What I would tell you if you are doing this
+The numbers at the top of the page come out of all of it: counted without a cookie, kept somewhere that treats a few million events as a rounding error, and now close enough to just ask in plain English.
 
-A few things I would now treat as defaults:
+## The prompts
 
-- If the source and target run the same ClickHouse version, clone the working schema instead of re-running migrations. You inherit a schema you already know boots cleanly, and you skip every create-time validation surprise.
-- Freeze writes before the final copy if your table has no key to dedupe on. A short, planned pause buys you an exact copy. Trying to sync a moving table buys you duplicates.
-- Verify each table the way its engine wants to be read. `sum(sign)` for collapsing tables, `sum(value)` for summing ones, `count()` only where a plain count is honest.
-- Keep the analytics events and the app's own configuration in separate stores. It is why moving the heavy half was a contained job and not a rewrite.
+Want to talk to your own analytics this way? Point a LibreChat agent at your ClickHouse (read-only) and start here.
 
-None of this is exotic. It is mostly the discipline of letting the database do what it is good at and not fighting it. The numbers at the top of this post are coming straight out of that setup, counted without a single cookie and stored in a database that treats a couple of million events as a rounding error. Privacy and scale are not the trade-off they are sometimes made out to be.
+Agent instructions:
+
+> You have read-only access to our Plausible analytics in ClickHouse (database `plausible_events_db`; `events_v2` holds pageviews and events, `sessions_v2` holds sessions). Only run read queries. Answer with whole-audience aggregates only, never anything that could single out a visitor. Prefer clear takeaways and small tables over raw rows, and always say which date range you used.
+
+The weekly digest, the one that produced the table above:
+
+> From the last 30 days of `events_v2` and `sessions_v2`, give me a "Key Insights" table: best weekday to publish, when readers are most engaged, peak hours in UTC, the weekend share of traffic, the mobile/desktop split by day, top countries, the most-read feature pages, and the most popular install method. One row per insight, with a short "why."
+
+Best time to ship:
+
+> What day and hour (UTC) should I publish a release to reach the most engaged readers? Use the last 8 weeks of sessions, weight by average session duration, and show the top three windows.
+
+A shareable, privacy-safe snapshot:
+
+> Write a short public traffic summary I can post: total visits, pageviews, top 5 pages, and top 5 countries for last month. Whole-audience numbers only.
 
 ---
 
-_Plausible Community Edition v3.2.0 · ClickHouse 26.2 · librechat.ai. The connection strings, hostnames, and credentials from the actual migration are, of course, not in this post._
+_Plausible Community Edition v3.2.1 · ClickHouse 26.2 · librechat.ai._
