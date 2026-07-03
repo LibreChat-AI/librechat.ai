@@ -55,19 +55,19 @@ This repository powers **[www.librechat.ai](https://www.librechat.ai)**: the doc
 
 ## Tech Stack
 
-| Layer            | Technology                                                     |
-| ---------------- | -------------------------------------------------------------- |
-| Framework        | [Next.js](https://nextjs.org) 16 (App Router), React 19        |
-| Docs engine      | [Fumadocs](https://fumadocs.dev) (core, ui, mdx)               |
-| Content          | MDX                                                            |
-| Styling          | [Tailwind CSS](https://tailwindcss.com) v4                     |
-| Search           | [Orama](https://orama.com) (static, per-locale index)          |
-| Ask AI           | [Vercel AI SDK](https://ai-sdk.dev) + [OpenRouter](https://openrouter.ai) |
-| Rate limiting    | [Upstash](https://upstash.com) Redis                           |
-| Icons            | [Lucide](https://lucide.dev)                                   |
-| Testing          | [Vitest](https://vitest.dev)                                   |
-| Tooling          | ESLint, Prettier, Husky                                        |
-| Package manager  | [pnpm](https://pnpm.io)                                        |
+| Layer           | Technology                                                                |
+| --------------- | ------------------------------------------------------------------------- |
+| Framework       | [Next.js](https://nextjs.org) 16 (App Router), React 19                   |
+| Docs engine     | [Fumadocs](https://fumadocs.dev) (core, ui, mdx)                          |
+| Content         | MDX                                                                       |
+| Styling         | [Tailwind CSS](https://tailwindcss.com) v4                                |
+| Search          | [Orama](https://orama.com) (static, per-locale index)                     |
+| Ask AI          | [Vercel AI SDK](https://ai-sdk.dev) + [OpenRouter](https://openrouter.ai) |
+| Rate limiting   | [Upstash](https://upstash.com) Redis                                      |
+| Icons           | [Lucide](https://lucide.dev)                                              |
+| Testing         | [Vitest](https://vitest.dev)                                              |
+| Tooling         | ESLint, Prettier, Husky                                                   |
+| Package manager | [pnpm](https://pnpm.io)                                                   |
 
 ## Getting Started
 
@@ -133,20 +133,20 @@ Only pages listed in the `pages` array appear in the sidebar, in the order given
 
 ## Available Scripts
 
-| Command                | Description                                        |
-| ---------------------- | -------------------------------------------------- |
-| `pnpm dev`             | Start the dev server on port 3333                  |
-| `pnpm build`           | Production build                                   |
-| `pnpm start`           | Start the production server on port 3333           |
-| `pnpm lint`            | Run ESLint (zero warnings allowed)                 |
-| `pnpm lint:prettier`   | Check formatting with Prettier                     |
-| `pnpm prettier`        | Format the codebase with Prettier                  |
-| `pnpm typecheck`       | Generate MDX types and run `tsc --noEmit`          |
-| `pnpm test`            | Run the Vitest suite                               |
-| `pnpm test:watch`      | Run Vitest in watch mode                           |
-| `pnpm analyze`         | Build and analyze the production bundle size       |
-| `pnpm optimize:images` | Optimize images in `public/`                       |
-| `pnpm translate`       | Generate translations from the English source      |
+| Command                | Description                                   |
+| ---------------------- | --------------------------------------------- |
+| `pnpm dev`             | Start the dev server on port 3333             |
+| `pnpm build`           | Production build                              |
+| `pnpm start`           | Start the production server on port 3333      |
+| `pnpm lint`            | Run ESLint (zero warnings allowed)            |
+| `pnpm lint:prettier`   | Check formatting with Prettier                |
+| `pnpm prettier`        | Format the codebase with Prettier             |
+| `pnpm typecheck`       | Generate MDX types and run `tsc --noEmit`     |
+| `pnpm test`            | Run the Vitest suite                          |
+| `pnpm test:watch`      | Run Vitest in watch mode                      |
+| `pnpm analyze`         | Build and analyze the production bundle size  |
+| `pnpm optimize:images` | Optimize images in `public/`                  |
+| `pnpm translate`       | Generate translations from the English source |
 
 ## Contributing
 
