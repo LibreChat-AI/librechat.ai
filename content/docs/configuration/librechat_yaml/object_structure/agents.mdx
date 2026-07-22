@@ -14,8 +14,8 @@ endpoints:
     maxRecursionLimit: 100
     disableBuilder: false
     # (optional) Agent Capabilities available to all users. Omit the ones you wish to exclude. Defaults to list below.
-    # Add "programmatic_tools" with "execute_code" to enable Programmatic Tool Calling for MCP tools.
-    # capabilities: ["deferred_tools", "execute_code", "file_search", "web_search", "artifacts", "subagents", "actions", "context", "skills", "tools", "chain", "ocr"]
+    # Opt-in capabilities: "programmatic_tools", "stateful_code_sessions", and "run_in_background".
+    # capabilities: ["deferred_tools", "execute_code", "file_search", "web_search", "artifacts", "subagents", "actions", "context", "skills", "memory", "ask_user_question", "tools", "chain", "ocr"]
     # (optional) File citation configuration for file_search capability
     maxCitations: 30 # Maximum total citations in responses (1-50)
     maxCitationsPerFile: 7 # Maximum citations from each file (1-10)
@@ -23,6 +23,14 @@ endpoints:
     titleTiming: immediate
     skills:
       maxCatalogSkills: 20
+    toolApproval:
+      enabled: true
+      mode: default
+      deny: ['mcp:*:delete_*']
+      ask: ['mcp:*:*']
+    checkpointer:
+      type: mongo
+      ttl: 86400
     remoteApi:
       auth:
         oidc:
@@ -162,9 +170,9 @@ allowedProviders:
   ]}
 />
 
-**Default:** `["deferred_tools", "execute_code", "file_search", "web_search", "artifacts", "subagents", "actions", "context", "skills", "tools", "chain", "ocr"]`
+**Default:** `["deferred_tools", "execute_code", "file_search", "web_search", "artifacts", "subagents", "actions", "context", "skills", "memory", "ask_user_question", "tools", "chain", "ocr"]`
 
-Programmatic Tool Calling is opt-in. Add `programmatic_tools` alongside `execute_code` only when your Code Interpreter deployment includes the Tool Call Server component.
+`programmatic_tools`, `stateful_code_sessions`, and `run_in_background` are opt-in and must be added explicitly. Programmatic tools and stateful sessions also require `execute_code` and a compatible Code Interpreter deployment.
 
 **Example:**
 
@@ -182,12 +190,112 @@ capabilities:
   - 'actions'
   - 'context'
   - 'skills'
+  - 'memory'
+  - 'ask_user_question'
   - 'tools'
   - 'chain'
   - 'ocr'
+  # Optional: reuse one Code Interpreter workspace per conversation.
+  # - 'stateful_code_sessions'
+  # Optional: allow selected eligible MCP tools to run as background tasks.
+  # - 'run_in_background'
 ```
 
 **Note:** This field is optional. If omitted, the default behavior is to include all the capabilities listed in the default.
+
+## toolApproval
+
+Controls human review for Agent tool calls. This feature is disabled by default. When enabled, matching calls pause until the user submits an allowed decision, such as approving, rejecting, or editing the arguments.
+
+<OptionTable
+  options={[
+    ['enabled', 'Boolean', 'Enables tool approval for the Agents endpoint.', 'false'],
+    [
+      'mode',
+      'String',
+      'Sets unmatched-call behavior: `default` asks, `dontAsk` denies, and `bypass` approves unless denied.',
+      'default',
+    ],
+    ['allow', 'Array of strings', 'Glob patterns for calls that can run without prompting.', ''],
+    ['deny', 'Array of strings', 'Glob patterns for calls that are always denied. Deny rules win.', ''],
+    ['ask', 'Array of strings', 'Glob patterns for calls that always require review.', ''],
+    [
+      'reason',
+      'String',
+      'Optional explanation shown in the approval prompt. Use `{tool}` to insert the tool name.',
+      '',
+    ],
+    [
+      'hooks',
+      'Array of objects',
+      'Trusted programmatic policy modules for context-aware decisions. Hooks can only tighten the static policy.',
+      '',
+    ],
+  ]}
+/>
+
+Patterns use glob matching. MCP tools can be scoped with `mcp:<server>:<tool>`; for example, `mcp:github:*` matches every tool from the `github` server. Evaluation gives `deny` the highest priority, including in `bypass` mode.
+
+```yaml filename="endpoints / agents / toolApproval"
+toolApproval:
+  enabled: true
+  mode: default
+  allow:
+    - 'mcp:analytics:read_*'
+  deny:
+    - 'mcp:*:delete_*'
+  ask:
+    - 'mcp:*:*'
+  reason: 'Review {tool} before it runs.'
+```
+
+Hooks are loaded once at server startup and execute in the LibreChat process. Each entry accepts a `module`, an optional tool-name `matcher` regex, and an optional `options` object passed to the module's builder. Only load code you trust. Per-role or tenant overrides do not reload hook modules; implement contextual behavior inside the hook.
+
+```yaml filename="endpoints / agents / toolApproval / hooks"
+toolApproval:
+  enabled: true
+  hooks:
+    - module: '@acme/librechat-approval-hook'
+      matcher: '^mcp:production:'
+      options:
+        requireTicket: true
+```
+
+## checkpointer
+
+Configures storage for Agent runs paused by tool approval or Ask User. When either feature needs a checkpointer and this block is omitted, LibreChat uses the primary MongoDB with a 24-hour decision window.
+
+<OptionTable
+  options={[
+    [
+      'type',
+      'String',
+      '`mongo` persists paused runs across restarts and replicas; `memory` is process-local and intended for development.',
+      'mongo',
+    ],
+    ['ttl', 'Number', 'How long a paused run waits for a decision, in seconds.', '86400'],
+    [
+      'checkpointCollectionName',
+      'String',
+      'Optional MongoDB checkpoint collection name override.',
+      'agent_checkpoints',
+    ],
+    [
+      'checkpointWritesCollectionName',
+      'String',
+      'Optional MongoDB checkpoint-write collection name override.',
+      'agent_checkpoint_writes',
+    ],
+  ]}
+/>
+
+```yaml filename="endpoints / agents / checkpointer"
+checkpointer:
+  type: mongo
+  ttl: 86400
+```
+
+Use `type: memory` only for a single-process development deployment. A paused run stored in memory cannot resume after a restart or on another replica.
 
 ## skills
 
@@ -329,6 +437,7 @@ The `capabilities` field allows you to enable or disable specific functionalitie
 - **deferred_tools**: Allows agents to discover deferred MCP tools at runtime instead of loading every tool into context upfront.
 - **programmatic_tools**: Enables Programmatic Tool Calling for MCP tools marked Programmatic in the Agent Builder. Requires `execute_code` and a Code Interpreter deployment with the Tool Call Server component. This capability is opt-in and is not enabled by default.
 - **execute_code**: Allows the agent to execute code.
+- **stateful_code_sessions**: Lets opted-in agents reuse one Code Interpreter workspace per conversation. Requires `execute_code`, a compatible Code Interpreter deployment, and the per-agent Advanced setting. This experimental capability is not enabled by default.
 - **file_search**: Enables the agent to search and interact with files. When enabled, citation behavior is controlled by `maxCitations`, `maxCitationsPerFile`, and `minRelevanceScore` settings.
 - **web_search**: Enables web search functionality for agents, allowing them to search and retrieve information from the internet.
 - **artifacts**: Enables the agent to generate interactive artifacts (React components, HTML, Mermaid diagrams).
@@ -336,9 +445,12 @@ The `capabilities` field allows you to enable or disable specific functionalitie
 - **actions**: Permits the agent to perform predefined actions.
 - **context**: Enables "Upload as Text" functionality in chat, and "File Context" for agents, allowing users to upload files and have their content extracted and included directly in the conversation.
 - **skills**: Enables Skills in the side panel, manual `$` invocation, model-invoked skills, and agent skill allowlists. See [Skills](/docs/features/skills).
+- **memory**: Lets agents use `set_memory` and `delete_memory` when memory is configured and the user has access. Enabled by default; removed at runtime when memory is disabled.
+- **ask_user_question**: Lets agents pause to ask the user questions and resume with the answer. Enabled by default.
 - **tools**: Grants the agent access to various tools.
 - **chain**: Enables Beta feature for agent chaining, also known as Mixture-of-Agents (MoA) workflows.
 - **ocr**: Optionally enhances "Upload as Text" in chat, and "File Context" for agents, allowing files to be uploaded and processed with OCR. **Requires an OCR service to be configured.**
+- **run_in_background**: Lets eligible tools marked Background return immediately while the agent continues and polls for completion. This capability is not enabled by default.
 
 By specifying the capabilities, you can control the features available to users when interacting with agents.
 
