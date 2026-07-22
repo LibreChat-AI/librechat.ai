@@ -90,6 +90,15 @@ const OG_VERSION = computeOgVersion()
  * `private, no-store` so the CDN never caches it and therefore can never serve
  * one as a document. A cached document occasionally returned to an RSC request
  * just makes Next fall back to a full navigation, which is harmless.
+ *
+ * The same collision applies to the markdown content negotiation in proxy.ts
+ * (`isMarkdownPreferred`): a `/docs/*` request with `Accept: text/markdown`
+ * (LLM/agent tooling) gets rewritten to the raw-markdown response, but that
+ * response shares its cache key with the HTML document since Cloudflare
+ * ignores `Vary` here too. Whichever one a given edge PoP sees first for a URL
+ * gets cached for it and served to everyone else hitting that PoP, including
+ * browsers, until the entry expires. Mark those responses `private, no-store`
+ * for the same reason as the RSC flight payload.
  */
 const SHARED_CDN_CACHE = 'public, s-maxage=86400, stale-while-revalidate=604800'
 const cdnCacheHeaders = [
@@ -108,6 +117,11 @@ const cdnCacheHeaders = [
   {
     source,
     has: [{ type: 'header', key: 'RSC' }],
+    headers: [{ key: 'Cache-Control', value: 'private, no-store' }],
+  },
+  {
+    source,
+    has: [{ type: 'header', key: 'accept', value: '.*text/markdown.*' }],
     headers: [{ key: 'Cache-Control', value: 'private, no-store' }],
   },
 ])
