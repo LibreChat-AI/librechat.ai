@@ -398,6 +398,7 @@ Use the standard Langfuse variables for one central observability project. The o
     ['LANGFUSE_BASE_URL', 'string', 'Base URL for central tracing and feedback scores.', '# LANGFUSE_BASE_URL=https://cloud.langfuse.com'],
     ['LANGFUSE_FANOUT_ENABLED', 'boolean', 'Enable routing through the optional fanout gateway.', '# LANGFUSE_FANOUT_ENABLED=false'],
     ['LANGFUSE_FANOUT_COLLECTOR_URL', 'string', 'Gateway URL used by the LibreChat API.', '# LANGFUSE_FANOUT_COLLECTOR_URL=http://langfuse-fanout-collector:4318'],
+    ['LANGFUSE_FANOUT_LISTEN_ADDR', 'string', 'Gateway HTTP listen address. Default: :4318.', '# LANGFUSE_FANOUT_LISTEN_ADDR=:4318'],
     ['LANGFUSE_FANOUT_TENANT_EXPORT_DISABLED', 'boolean', 'Emergency switch that disables tenant trace and score export while retaining central export.', '# LANGFUSE_FANOUT_TENANT_EXPORT_DISABLED=false'],
     ['LANGFUSE_FANOUT_CENTRAL_BASE_URL', 'string', 'Central Langfuse base URL used by the gateway.', '# LANGFUSE_FANOUT_CENTRAL_BASE_URL=https://cloud.langfuse.com'],
     ['LANGFUSE_FANOUT_CENTRAL_AUTH_HEADER', 'string', 'Full Basic authorization header for central trace and media export.', '# LANGFUSE_FANOUT_CENTRAL_AUTH_HEADER=Basic <base64-public-colon-secret>'],
@@ -583,6 +584,8 @@ LibreChat can publish browser Real User Monitoring (RUM) telemetry to HyperDX-co
 />
 
 In `publicToken` mode, the browser sends telemetry directly to `RUM_URL` with `RUM_PUBLIC_TOKEN`. In `proxy` mode, the browser sends telemetry through LibreChat; the backend validates the user session, strips app authentication headers, and forwards telemetry to `RUM_PROXY_TARGET_URL`. Invalid or expired sessions are dropped with a `204` response so browser telemetry failures do not surface normal API authentication errors. Proxy outcomes are counted in `rum_proxy_requests_total` with `endpoint` and `result` labels on the LibreChat API `/metrics` endpoint.
+
+For sampled page loads, LibreChat emits one `page-load-diagnostics` action when First Contentful Paint is observed. It includes navigation timing attribution such as time to first byte, first-byte-to-FCP time, service-worker timing, navigation type, and a normalized route instead of raw conversation IDs. RUM also records early page lifecycle, service-worker, stale-asset recovery, and single-page-app route-change events. Diagnostics are best-effort and never delay startup or trigger recovery behavior; early events are discarded when the page is not sampled.
 
 ### Configuration Path - `librechat.yaml`
 
@@ -1244,6 +1247,10 @@ See detailed instructions here: **[OpenWeather](/docs/configuration/tools/openwe
   ]}
 />
 
+With `FILE_UPLOAD_SSE_ENABLED=true`, clients that request `text/event-stream` receive one-second heartbeat events while upload processing is still running, followed by a `data` or `error` event and a final `close` event. Clients that do not request SSE continue to receive the normal JSON response. This is useful when a reverse proxy would otherwise close an idle connection during long OCR, parsing, or RAG work.
+
+The remote fetch controls apply when LibreChat ingests an HTTP or HTTPS file URL into local, Firebase, Azure, or S3/CloudFront storage. LibreChat checks both a declared `Content-Length` and the bytes actually streamed, so the limit still applies when the remote server omits or misstates its length. These controls are independent of the per-upload limits in [`fileConfig`](/docs/configuration/librechat_yaml/object_structure/file_config).
+
 ## Code Interpreter
 
 The Code Interpreter API provides a secure environment for executing code and managing files. See: [Code Interpreter API](/docs/features/code_interpreter)
@@ -1569,6 +1576,63 @@ Prevents brute force attacks and spam registrations by limiting login attempts a
   ]}
 />
 
+#### Password reset and email verification rate limiting
+
+LibreChat applies separate IP-based limits to requesting an email and submitting the token from that email. This prevents repeated token guesses without forcing deployments to use the same limit for email delivery and token validation.
+
+<OptionTable
+  options={[
+    [
+      'RESET_PASSWORD_MAX',
+      'integer',
+      'Maximum password-reset email requests per IP in RESET_PASSWORD_WINDOW. Default: 2.',
+      '# RESET_PASSWORD_MAX=2',
+    ],
+    [
+      'RESET_PASSWORD_WINDOW',
+      'integer',
+      'Password-reset email request window in minutes. Default: 2.',
+      '# RESET_PASSWORD_WINDOW=2',
+    ],
+    [
+      'RESET_PASSWORD_SUBMISSION_MAX',
+      'integer',
+      'Maximum password-reset token submissions per IP. Defaults to RESET_PASSWORD_MAX, then 2.',
+      '# RESET_PASSWORD_SUBMISSION_MAX=2',
+    ],
+    [
+      'RESET_PASSWORD_SUBMISSION_WINDOW',
+      'integer',
+      'Password-reset token submission window in minutes. Defaults to RESET_PASSWORD_WINDOW, then 2.',
+      '# RESET_PASSWORD_SUBMISSION_WINDOW=2',
+    ],
+    [
+      'VERIFY_EMAIL_MAX',
+      'integer',
+      'Maximum verification-email resend requests per IP in VERIFY_EMAIL_WINDOW. Default: 2.',
+      '# VERIFY_EMAIL_MAX=2',
+    ],
+    [
+      'VERIFY_EMAIL_WINDOW',
+      'integer',
+      'Verification-email resend window in minutes. Default: 2.',
+      '# VERIFY_EMAIL_WINDOW=2',
+    ],
+    [
+      'VERIFY_EMAIL_SUBMISSION_MAX',
+      'integer',
+      'Maximum email-verification token submissions per IP. Defaults to VERIFY_EMAIL_MAX, then 2.',
+      '# VERIFY_EMAIL_SUBMISSION_MAX=2',
+    ],
+    [
+      'VERIFY_EMAIL_SUBMISSION_WINDOW',
+      'integer',
+      'Email-verification token submission window in minutes. Defaults to VERIFY_EMAIL_WINDOW, then 2.',
+      '# VERIFY_EMAIL_SUBMISSION_WINDOW=2',
+    ],
+  ]}
+/>
+
 #### Score for each violation
 
 <OptionTable
@@ -1637,14 +1701,26 @@ Prevents brute force attacks and spam registrations by limiting login attempts a
     [
       'RESET_PASSWORD_VIOLATION_SCORE',
       'integer',
-      'Score for password reset violations.',
-      'RESET_PASSWORD_VIOLATION_SCORE=0',
+      'Score for password-reset email request violations. Default: 1.',
+      '# RESET_PASSWORD_VIOLATION_SCORE=1',
     ],
     [
       'VERIFY_EMAIL_VIOLATION_SCORE',
       'integer',
-      'Score for email verification violations.',
-      'VERIFY_EMAIL_VIOLATION_SCORE=0',
+      'Score for verification-email resend violations. Default: 1.',
+      '# VERIFY_EMAIL_VIOLATION_SCORE=1',
+    ],
+    [
+      'RESET_PASSWORD_SUBMISSION_VIOLATION_SCORE',
+      'integer',
+      'Score for password-reset token submission violations. Default: 1.',
+      '# RESET_PASSWORD_SUBMISSION_VIOLATION_SCORE=1',
+    ],
+    [
+      'VERIFY_EMAIL_SUBMISSION_VIOLATION_SCORE',
+      'integer',
+      'Score for email-verification token submission violations. Default: 1.',
+      '# VERIFY_EMAIL_SUBMISSION_VIOLATION_SCORE=1',
     ],
     [
       'TOOL_CALL_VIOLATION_SCORE',
