@@ -4,6 +4,12 @@ function getSecret(): string | null {
   return process.env.UNSUBSCRIBE_SECRET?.trim() || null
 }
 
+/** Whether UNSUBSCRIBE_SECRET is configured. Lets callers tell a genuine
+ * misconfiguration apart from an invalid/missing token. */
+export function isUnsubscribeConfigured(): boolean {
+  return getSecret() !== null
+}
+
 export function createUnsubscribeToken(email: string): string | null {
   const secret = getSecret()
   if (!secret) return null

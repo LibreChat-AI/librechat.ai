@@ -39,7 +39,11 @@ export function ChatMarkdown({ children }: { children: string }) {
       remarkPlugins={[remarkGfm]}
       components={{
         a: ({ href, children: c }) => {
-          if (href?.startsWith('/') && !href.startsWith('//')) {
+          // Internal only when the path starts with a single forward slash that
+          // is not followed by another slash or a backslash. Browsers normalize
+          // backslashes to slashes, so `/\evil.com` (and `//evil.com`) would
+          // otherwise resolve to a cross-origin authority.
+          if (href && /^\/(?![/\\])/.test(href)) {
             return (
               <Link
                 href={href}

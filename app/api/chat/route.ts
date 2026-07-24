@@ -193,7 +193,9 @@ const navigateTool = tool({
   inputSchema: z.object({
     url: z
       .string()
-      .regex(/^\/docs\/(?!\/)(?!.*(?:\.\.|:)).+$/)
+      // The docs root (/docs) or a same-origin descendant (/docs/...), with no
+      // protocol-relative prefix, path traversal, or scheme.
+      .regex(/^\/docs(?:\/(?!\/)(?!.*(?:\.\.|:)).+)?$/)
       .describe('The relative docs URL to navigate to'),
     title: z.string().describe('The page title to show in the navigation message'),
   }),

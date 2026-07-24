@@ -32,9 +32,18 @@ export async function checkRateLimit(
   const limiter = getRatelimit()
   if (!limiter) return { allowed: true }
 
-  const forwarded = req.headers.get('x-forwarded-for')
-  // The deployment proxy appends its verified client address as the final XFF hop.
-  const ip = forwarded?.split(',').at(-1)?.trim() || 'unknown'
+  // Cloudflare fronts the origin (see next.config.mjs), so `cf-connecting-ip` is
+  // the client address Cloudflare authenticates and a client cannot forge it.
+  // In an X-Forwarded-For chain the right-most hop is the nearest proxy (shared
+  // by every user) and the left-most is client-controlled, so neither end is a
+  // safe key on its own. Fall back to the platform `x-real-ip`, then the
+  // left-most XFF hop for local/non-proxied environments where limiting is
+  // best-effort anyway.
+  const ip =
+    req.headers.get('cf-connecting-ip')?.trim() ||
+    req.headers.get('x-real-ip')?.trim() ||
+    req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
+    'unknown'
 
   const { success, reset } = await limiter.limit(ip)
 

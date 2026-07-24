@@ -48,9 +48,11 @@ function LCIcon({ className }: { className?: string }) {
 }
 
 function isSafeDocsPath(url: unknown): url is string {
+  // The docs root (/docs, backed by content/docs/index.mdx) and any descendant
+  // (/docs/...) are valid; reject protocol-relative, traversal, and scheme URLs.
   return (
     typeof url === 'string' &&
-    url.startsWith('/docs/') &&
+    (url === '/docs' || url.startsWith('/docs/')) &&
     !url.startsWith('//') &&
     !url.includes('..') &&
     !url.includes(':')

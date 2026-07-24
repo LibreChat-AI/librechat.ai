@@ -74,6 +74,23 @@ describe('POST /api/unsubscribe', () => {
     expect(body).toEqual({ message: 'Unsubscription service is not configured' })
   })
 
+  it('returns 503 when the unsubscribe secret is not configured', async () => {
+    delete process.env.UNSUBSCRIBE_SECRET
+    supabaseClient = createSupabaseMock({ existing: { id: '1', status: 'subscribed' } })
+
+    const response = await POST(
+      jsonRequest('https://example.com/api/unsubscribe', {
+        email: 'user@example.com',
+        token: 'any-token',
+      }),
+    )
+    const body = await response.json()
+
+    expect(response.status).toBe(503)
+    expect(body).toEqual({ message: 'Unsubscription service is not configured' })
+    expect(supabaseClient.update).not.toHaveBeenCalled()
+  })
+
   it('returns a generic response when the subscriber does not exist', async () => {
     supabaseClient = createSupabaseMock({ existing: null, fetchError: true })
 

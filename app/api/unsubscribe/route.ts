@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseClient, isValidEmail, normalizeEmail } from '@/lib/supabase'
 import { createRateLimiter, getClientIp } from '@/lib/rate-limit'
-import { verifyUnsubscribeToken } from '@/lib/unsubscribe-token'
+import { isUnsubscribeConfigured, verifyUnsubscribeToken } from '@/lib/unsubscribe-token'
 
 const isRateLimited = createRateLimiter(5, 60_000)
 
@@ -26,6 +26,17 @@ export async function POST(request: Request) {
     const supabase = getSupabaseClient()
 
     if (!supabase) {
+      return NextResponse.json(
+        { message: 'Unsubscription service is not configured' },
+        { status: 503 },
+      )
+    }
+
+    // A missing UNSUBSCRIBE_SECRET is a server misconfiguration, not a bad
+    // request: surface it as 503 so it is visible to operators instead of
+    // silently rejecting every valid token as if it were forged.
+    if (!isUnsubscribeConfigured()) {
+      console.error('UNSUBSCRIBE_SECRET is not configured')
       return NextResponse.json(
         { message: 'Unsubscription service is not configured' },
         { status: 503 },
