@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createSupabaseMock, jsonRequest } from '@/__tests__/helpers'
+import { createUnsubscribeToken } from '@/lib/unsubscribe-token'
 
 const mockIsRateLimited = vi.fn(() => false)
 const mockGetClientIp = vi.fn((_request: Request) => '127.0.0.1')
@@ -25,6 +26,7 @@ describe('POST /api/unsubscribe', () => {
     vi.clearAllMocks()
     mockIsRateLimited.mockReturnValue(false)
     supabaseClient = createSupabaseMock()
+    process.env.UNSUBSCRIBE_SECRET = 'test-unsubscribe-secret'
   })
 
   it('returns 429 when rate limited', async () => {
@@ -39,29 +41,32 @@ describe('POST /api/unsubscribe', () => {
     expect(body).toEqual({ message: 'Too many requests' })
   })
 
-  it('returns 400 when email is missing', async () => {
+  it('returns a generic response when email is missing', async () => {
     const response = await POST(jsonRequest('https://example.com/api/unsubscribe', {}))
     const body = await response.json()
 
-    expect(response.status).toBe(400)
-    expect(body).toEqual({ message: 'Invalid email format' })
+    expect(response.status).toBe(200)
+    expect(body).toEqual({ message: 'Unsubscription request received' })
   })
 
-  it('returns 400 when email is invalid', async () => {
+  it('returns a generic response when email is invalid', async () => {
     const response = await POST(
       jsonRequest('https://example.com/api/unsubscribe', { email: 'not-valid' }),
     )
     const body = await response.json()
 
-    expect(response.status).toBe(400)
-    expect(body).toEqual({ message: 'Invalid email format' })
+    expect(response.status).toBe(200)
+    expect(body).toEqual({ message: 'Unsubscription request received' })
   })
 
   it('returns 503 when Supabase is not configured', async () => {
     supabaseClient = null
 
     const response = await POST(
-      jsonRequest('https://example.com/api/unsubscribe', { email: 'user@example.com' }),
+      jsonRequest('https://example.com/api/unsubscribe', {
+        email: 'user@example.com',
+        token: createUnsubscribeToken('user@example.com'),
+      }),
     )
     const body = await response.json()
 
@@ -69,28 +74,34 @@ describe('POST /api/unsubscribe', () => {
     expect(body).toEqual({ message: 'Unsubscription service is not configured' })
   })
 
-  it('returns 404 when the subscriber does not exist', async () => {
+  it('returns a generic response when the subscriber does not exist', async () => {
     supabaseClient = createSupabaseMock({ existing: null, fetchError: true })
 
     const response = await POST(
-      jsonRequest('https://example.com/api/unsubscribe', { email: 'missing@example.com' }),
+      jsonRequest('https://example.com/api/unsubscribe', {
+        email: 'missing@example.com',
+        token: createUnsubscribeToken('missing@example.com'),
+      }),
     )
     const body = await response.json()
 
-    expect(response.status).toBe(404)
-    expect(body).toEqual({ message: 'Subscriber not found' })
+    expect(response.status).toBe(200)
+    expect(body).toEqual({ message: 'Unsubscription request received' })
   })
 
   it('unsubscribes an existing subscriber', async () => {
     supabaseClient = createSupabaseMock({ existing: { id: '1', status: 'subscribed' } })
 
     const response = await POST(
-      jsonRequest('https://example.com/api/unsubscribe', { email: 'User@Example.com' }),
+      jsonRequest('https://example.com/api/unsubscribe', {
+        email: 'User@Example.com',
+        token: createUnsubscribeToken('user@example.com'),
+      }),
     )
     const body = await response.json()
 
     expect(response.status).toBe(200)
-    expect(body).toEqual({ message: 'Unsubscription successful' })
+    expect(body).toEqual({ message: 'Unsubscription request received' })
     expect(supabaseClient.update).toHaveBeenCalledWith({ status: 'unsubscribed' })
     expect(supabaseClient.eqAfterUpdate).toHaveBeenCalledWith('email', 'user@example.com')
   })
@@ -102,12 +113,28 @@ describe('POST /api/unsubscribe', () => {
     })
 
     const response = await POST(
-      jsonRequest('https://example.com/api/unsubscribe', { email: 'user@example.com' }),
+      jsonRequest('https://example.com/api/unsubscribe', {
+        email: 'user@example.com',
+        token: createUnsubscribeToken('user@example.com'),
+      }),
     )
     const body = await response.json()
 
     expect(response.status).toBe(500)
     expect(body).toEqual({ message: 'Unsubscription failed' })
+  })
+
+  it('does not unsubscribe with an invalid token', async () => {
+    const response = await POST(
+      jsonRequest('https://example.com/api/unsubscribe', {
+        email: 'user@example.com',
+        token: 'invalid',
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ message: 'Unsubscription request received' })
+    expect(supabaseClient?.update).not.toHaveBeenCalled()
   })
 
   it('returns 500 for malformed JSON', async () => {

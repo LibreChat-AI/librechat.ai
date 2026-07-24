@@ -39,7 +39,7 @@ export function ChatMarkdown({ children }: { children: string }) {
       remarkPlugins={[remarkGfm]}
       components={{
         a: ({ href, children: c }) => {
-          if (href?.startsWith('/')) {
+          if (href?.startsWith('/') && !href.startsWith('//')) {
             return (
               <Link
                 href={href}
@@ -49,6 +49,8 @@ export function ChatMarkdown({ children }: { children: string }) {
               </Link>
             )
           }
+          if (!href || !/^https?:\/\//i.test(href)) return <span>{c}</span>
+
           return (
             <a
               href={href}

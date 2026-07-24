@@ -26,7 +26,7 @@ import Link from 'next/link'
 import { useRouter, usePathname } from 'next/navigation'
 import { cn } from '@/lib/utils'
 import { ChatMarkdown } from './markdown'
-import { saveMessages, loadMessages, clearMessages } from './chat-store'
+import { saveMessages, loadMessages, clearMessages, sanitizeMessages } from './chat-store'
 import startersMap from '@/public/starters.json'
 
 /* -------------------------------------------------------------------------- */
@@ -47,13 +47,23 @@ function LCIcon({ className }: { className?: string }) {
   )
 }
 
+function isSafeDocsPath(url: unknown): url is string {
+  return (
+    typeof url === 'string' &&
+    url.startsWith('/docs/') &&
+    !url.startsWith('//') &&
+    !url.includes('..') &&
+    !url.includes(':')
+  )
+}
+
 function extractDocRefs(text: string): { title: string; url: string }[] {
   const refs: { title: string; url: string }[] = []
   const seen = new Set<string>()
   const regex = /\[([^\]]+)\]\((\/docs\/[^)]+)\)/g
   let match
   while ((match = regex.exec(text)) !== null) {
-    if (!seen.has(match[2])) {
+    if (isSafeDocsPath(match[2]) && !seen.has(match[2])) {
       seen.add(match[2])
       refs.push({ title: match[1], url: match[2] })
     }
@@ -88,6 +98,8 @@ function getStartersForPage(pathname: string): string[] {
 /* -------------------------------------------------------------------------- */
 
 function DocRef({ url, title }: { url: string; title: string }) {
+  if (!isSafeDocsPath(url)) return null
+
   return (
     <Link
       href={url}
@@ -131,7 +143,8 @@ function MessageFeedback({ messageId: _messageId }: { messageId: string }) {
 
 function SourcesCollapsible({ sources }: { sources: { title: string; url: string }[] }) {
   const [open, setOpen] = useState(false)
-  if (sources.length === 0) return null
+  const safeSources = sources.filter((source) => isSafeDocsPath(source.url))
+  if (safeSources.length === 0) return null
   return (
     <div className="mt-1.5">
       <button
@@ -139,11 +152,11 @@ function SourcesCollapsible({ sources }: { sources: { title: string; url: string
         className="flex items-center gap-1 text-[10px] text-fd-muted-foreground transition-colors hover:text-fd-foreground"
       >
         <ChevronDown className={cn('size-3 transition-transform', open && 'rotate-180')} />
-        {sources.length} source{sources.length > 1 ? 's' : ''}
+        {safeSources.length} source{safeSources.length > 1 ? 's' : ''}
       </button>
       {open && (
         <div className="mt-1 flex flex-col gap-1">
-          {sources.map((s) => (
+          {safeSources.map((s) => (
             <Link
               key={s.url}
               href={s.url}
@@ -340,11 +353,7 @@ export function AskAI() {
       for (const part of m.parts ?? []) {
         if (part.type === 'tool-navigate' && 'state' in part && part.state === 'output-available') {
           const result = part.output as { action?: string; url?: string } | undefined
-          if (
-            result?.action === 'navigate' &&
-            result.url?.startsWith('/docs/') &&
-            !result.url.includes('..')
-          ) {
+          if (result?.action === 'navigate' && isSafeDocsPath(result.url)) {
             navigatedRef.current.add(m.id)
             router.push(result.url)
           }
@@ -428,20 +437,13 @@ export function AskAI() {
 
       // Validate structure: must be a non-empty array of user/assistant messages
       if (!Array.isArray(shared) || shared.length === 0) return
-      const validated = shared.filter(
-        (m: unknown): m is { role: string; parts: { type: string; text: string }[] } =>
-          typeof m === 'object' &&
-          m !== null &&
-          'role' in m &&
-          (m.role === 'user' || m.role === 'assistant'),
-      )
+      const validated = sanitizeMessages(shared)
       if (validated.length === 0) return
 
       setMessages(
         validated.map((m, i) => ({
+          ...m,
           id: `shared-${i}`,
-          role: m.role as 'user' | 'assistant',
-          parts: m.parts ?? [],
         })) as Parameters<typeof setMessages>[0] extends (infer U)[] ? U[] : never,
       )
       setOpen(true)
@@ -673,7 +675,7 @@ export function AskAI() {
                               ) {
                                 const res = (part as { output?: { url?: string; title?: string } })
                                   .output
-                                if (res?.url) {
+                                if (isSafeDocsPath(res?.url)) {
                                   return (
                                     <Link
                                       key={i}

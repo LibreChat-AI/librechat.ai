@@ -191,7 +191,10 @@ const navigateTool = tool({
   description:
     'Navigate the user directly to a specific documentation page. Use this when the user clearly wants to go to a page, not when they are asking a question about the content. Always search first to find the correct URL.',
   inputSchema: z.object({
-    url: z.string().describe('The docs URL to navigate to'),
+    url: z
+      .string()
+      .regex(/^\/docs\/(?!\/)(?!.*(?:\.\.|:)).+$/)
+      .describe('The relative docs URL to navigate to'),
     title: z.string().describe('The page title to show in the navigation message'),
   }),
   execute: async ({ url, title }: { url: string; title: string }) => {

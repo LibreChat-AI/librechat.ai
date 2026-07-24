@@ -33,7 +33,8 @@ export async function checkRateLimit(
   if (!limiter) return { allowed: true }
 
   const forwarded = req.headers.get('x-forwarded-for')
-  const ip = forwarded?.split(',')[0]?.trim() ?? '127.0.0.1'
+  // The deployment proxy appends its verified client address as the final XFF hop.
+  const ip = forwarded?.split(',').at(-1)?.trim() || 'unknown'
 
   const { success, reset } = await limiter.limit(ip)
 

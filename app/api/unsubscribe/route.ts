@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseClient, isValidEmail, normalizeEmail } from '@/lib/supabase'
 import { createRateLimiter, getClientIp } from '@/lib/rate-limit'
+import { verifyUnsubscribeToken } from '@/lib/unsubscribe-token'
 
 const isRateLimited = createRateLimiter(5, 60_000)
 
@@ -12,14 +13,14 @@ export async function POST(request: Request) {
     }
 
     const body: unknown = await request.json()
-    if (!body || typeof body !== 'object' || !('email' in body)) {
-      return NextResponse.json({ message: 'Invalid email format' }, { status: 400 })
+    if (!body || typeof body !== 'object' || !('email' in body) || !('token' in body)) {
+      return NextResponse.json({ message: 'Unsubscription request received' }, { status: 200 })
     }
 
-    const { email } = body as { email: unknown }
+    const { email, token } = body as { email: unknown; token: unknown }
 
-    if (!email || typeof email !== 'string' || !isValidEmail(email)) {
-      return NextResponse.json({ message: 'Invalid email format' }, { status: 400 })
+    if (!email || typeof email !== 'string' || !isValidEmail(email) || typeof token !== 'string') {
+      return NextResponse.json({ message: 'Unsubscription request received' }, { status: 200 })
     }
 
     const supabase = getSupabaseClient()
@@ -32,15 +33,8 @@ export async function POST(request: Request) {
     }
 
     const normalized = normalizeEmail(email)
-
-    const { data: subscriber, error: fetchError } = await supabase
-      .from('subscribers')
-      .select('id, status')
-      .eq('email', normalized)
-      .single()
-
-    if (fetchError || !subscriber) {
-      return NextResponse.json({ message: 'Subscriber not found' }, { status: 404 })
+    if (!verifyUnsubscribeToken(normalized, token)) {
+      return NextResponse.json({ message: 'Unsubscription request received' }, { status: 200 })
     }
 
     const { error: updateError } = await supabase
@@ -53,7 +47,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ message: 'Unsubscription failed' }, { status: 500 })
     }
 
-    return NextResponse.json({ message: 'Unsubscription successful' }, { status: 200 })
+    return NextResponse.json({ message: 'Unsubscription request received' }, { status: 200 })
   } catch {
     return NextResponse.json({ message: 'Unsubscription failed' }, { status: 500 })
   }
