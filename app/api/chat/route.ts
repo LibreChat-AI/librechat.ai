@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { docsSource } from '@/lib/source'
 import { i18n } from '@/lib/i18n'
 import { checkRateLimit } from '@/lib/ratelimit'
+import { isSafeDocsPath } from '@/lib/safe-docs-path'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
@@ -193,9 +194,9 @@ const navigateTool = tool({
   inputSchema: z.object({
     url: z
       .string()
-      // The docs root (/docs) or a same-origin descendant (/docs/...), with no
-      // protocol-relative prefix, path traversal, or scheme.
-      .regex(/^\/docs(?:\/(?!\/)(?!.*(?:\.\.|:)).+)?$/)
+      // Canonicalized same-origin /docs path only — rejects protocol-relative,
+      // percent-encoded traversal, control-char, and scheme escapes.
+      .refine(isSafeDocsPath, 'must be a relative /docs path')
       .describe('The relative docs URL to navigate to'),
     title: z.string().describe('The page title to show in the navigation message'),
   }),

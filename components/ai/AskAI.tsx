@@ -25,6 +25,7 @@ import {
 import Link from 'next/link'
 import { useRouter, usePathname } from 'next/navigation'
 import { cn } from '@/lib/utils'
+import { isSafeDocsPath } from '@/lib/safe-docs-path'
 import { ChatMarkdown } from './markdown'
 import { saveMessages, loadMessages, clearMessages, sanitizeMessages } from './chat-store'
 import startersMap from '@/public/starters.json'
@@ -44,18 +45,6 @@ function LCIcon({ className }: { className?: string }) {
   return (
     // eslint-disable-next-line @next/next/no-img-element
     <img src="/librechat.svg" alt="" width={16} height={16} className={cn('shrink-0', className)} />
-  )
-}
-
-function isSafeDocsPath(url: unknown): url is string {
-  // The docs root (/docs, backed by content/docs/index.mdx) and any descendant
-  // (/docs/...) are valid; reject protocol-relative, traversal, and scheme URLs.
-  return (
-    typeof url === 'string' &&
-    (url === '/docs' || url.startsWith('/docs/')) &&
-    !url.startsWith('//') &&
-    !url.includes('..') &&
-    !url.includes(':')
   )
 }
 

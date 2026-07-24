@@ -33,17 +33,31 @@ function CopyButton({ text }: { text: string }) {
   )
 }
 
+// A same-origin path renders as an in-app <Link>. Resolve the href against a
+// fixed base and compare origins rather than pattern-matching the leading
+// slashes: the browser normalizes backslashes, strips ASCII control characters,
+// and resolves percent-encoded dot segments, so `//evil.com`, `/\evil.com`, and
+// `/\t/evil.com` all become a cross-origin authority that this rejects.
+const INTERNAL_BASE = 'https://internal.invalid'
+
+function isInternalHref(href: string | undefined): href is string {
+  if (typeof href !== 'string' || !href.startsWith('/') || href.startsWith('//')) {
+    return false
+  }
+  try {
+    return new URL(href, INTERNAL_BASE).origin === INTERNAL_BASE
+  } catch {
+    return false
+  }
+}
+
 export function ChatMarkdown({ children }: { children: string }) {
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
       components={{
         a: ({ href, children: c }) => {
-          // Internal only when the path starts with a single forward slash that
-          // is not followed by another slash or a backslash. Browsers normalize
-          // backslashes to slashes, so `/\evil.com` (and `//evil.com`) would
-          // otherwise resolve to a cross-origin authority.
-          if (href && /^\/(?![/\\])/.test(href)) {
+          if (isInternalHref(href)) {
             return (
               <Link
                 href={href}
