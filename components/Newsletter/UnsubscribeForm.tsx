@@ -40,16 +40,22 @@ const UnsubscribeForm = ({
       if (response.status === 200) {
         if (hasSignedLink) {
           setUseSignedLink(false)
-          await fetch('/api/unsubscribe/request', {
+          const recoveryResponse = await fetch('/api/unsubscribe/request', {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
             },
             body: JSON.stringify({ email }),
           }).catch(() => null)
-          toast.success(
-            'Unsubscription request received. If the link was invalid, a replacement has been sent.',
-          )
+          if (recoveryResponse?.status === 200) {
+            toast.success(
+              'Unsubscription request received. If the link was invalid, a replacement has been sent.',
+            )
+          } else {
+            toast.error(
+              'Request received, but a replacement link could not be sent. Please retry below.',
+            )
+          }
         } else {
           toast.success('If that address is subscribed, an unsubscribe link has been sent')
         }

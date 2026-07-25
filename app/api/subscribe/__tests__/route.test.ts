@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createSupabaseMock, jsonRequest } from '@/__tests__/helpers'
 
 const mockIsRateLimited = vi.fn(() => false)
-const mockGetClientIp = vi.fn((_request: Request) => '127.0.0.1')
+const mockIsFallbackRateLimited = vi.fn(() => false)
+const mockGetClientIp = vi.fn((_request: Request): string | null => '127.0.0.1')
 const mockIsNewsletterEmailConfigured = vi.fn(() => true)
 const mockIsSubscribeRequestConfigured = vi.fn(() => true)
 const mockIsSubscribeRequestRateLimited = vi.fn(async (_ip: string | null) => false)
@@ -10,7 +11,8 @@ const mockSendUnsubscribeLinkEmail = vi.fn(async (_email: string) => true)
 let supabaseClient: ReturnType<typeof createSupabaseMock> | null = createSupabaseMock()
 
 vi.mock('@/lib/rate-limit', () => ({
-  createRateLimiter: () => mockIsRateLimited,
+  createRateLimiter: (maxRequests: number) =>
+    maxRequests === 100 ? mockIsFallbackRateLimited : mockIsRateLimited,
   getClientIp: (request: Request) => mockGetClientIp(request),
 }))
 
@@ -35,6 +37,8 @@ describe('POST /api/subscribe', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockIsRateLimited.mockReturnValue(false)
+    mockIsFallbackRateLimited.mockReturnValue(false)
+    mockGetClientIp.mockReturnValue('127.0.0.1')
     mockIsNewsletterEmailConfigured.mockReturnValue(true)
     mockIsSubscribeRequestConfigured.mockReturnValue(true)
     mockIsSubscribeRequestRateLimited.mockResolvedValue(false)
@@ -52,6 +56,18 @@ describe('POST /api/subscribe', () => {
 
     expect(response.status).toBe(429)
     expect(body).toEqual({ message: 'Too many requests' })
+  })
+
+  it('uses a fallback bucket without a trusted client IP', async () => {
+    mockGetClientIp.mockReturnValue(null)
+    mockIsFallbackRateLimited.mockReturnValue(true)
+
+    const response = await POST(
+      jsonRequest('https://example.com/api/subscribe', { email: 'user@example.com' }),
+    )
+
+    expect(response.status).toBe(429)
+    expect(mockIsFallbackRateLimited).toHaveBeenCalledWith('global')
   })
 
   it('returns 422 when email is missing', async () => {
