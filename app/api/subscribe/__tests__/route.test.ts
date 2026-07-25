@@ -4,7 +4,8 @@ import { createSupabaseMock, jsonRequest } from '@/__tests__/helpers'
 const mockIsRateLimited = vi.fn(() => false)
 const mockIsFallbackRateLimited = vi.fn(() => false)
 const mockGetClientIp = vi.fn((_request: Request): string | null => '127.0.0.1')
-const mockIsNewsletterEmailConfigured = vi.fn(() => true)
+const mockClaimSubscribeRequest = vi.fn(async (_email: string) => true)
+const mockReleaseSubscribeRequest = vi.fn(async (_email: string) => undefined)
 const mockIsSubscribeRequestConfigured = vi.fn(() => true)
 const mockIsSubscribeRequestRateLimited = vi.fn(async (_ip: string | null) => false)
 const mockSendUnsubscribeLinkEmail = vi.fn(async (_email: string) => true)
@@ -17,9 +18,10 @@ vi.mock('@/lib/rate-limit', () => ({
 }))
 
 vi.mock('@/lib/newsletter-email', () => ({
-  isNewsletterEmailConfigured: () => mockIsNewsletterEmailConfigured(),
+  claimSubscribeRequest: (email: string) => mockClaimSubscribeRequest(email),
   isSubscribeRequestConfigured: () => mockIsSubscribeRequestConfigured(),
   isSubscribeRequestRateLimited: (ip: string | null) => mockIsSubscribeRequestRateLimited(ip),
+  releaseSubscribeRequest: (email: string) => mockReleaseSubscribeRequest(email),
   sendUnsubscribeLinkEmail: (email: string) => mockSendUnsubscribeLinkEmail(email),
 }))
 
@@ -39,7 +41,7 @@ describe('POST /api/subscribe', () => {
     mockIsRateLimited.mockReturnValue(false)
     mockIsFallbackRateLimited.mockReturnValue(false)
     mockGetClientIp.mockReturnValue('127.0.0.1')
-    mockIsNewsletterEmailConfigured.mockReturnValue(true)
+    mockClaimSubscribeRequest.mockResolvedValue(true)
     mockIsSubscribeRequestConfigured.mockReturnValue(true)
     mockIsSubscribeRequestRateLimited.mockResolvedValue(false)
     mockSendUnsubscribeLinkEmail.mockResolvedValue(true)
@@ -100,20 +102,7 @@ describe('POST /api/subscribe', () => {
     expect(body).toEqual({ message: 'Subscription service is not configured' })
   })
 
-  it('preserves Supabase-only subscriptions when email delivery is not configured', async () => {
-    mockIsNewsletterEmailConfigured.mockReturnValue(false)
-    mockIsSubscribeRequestConfigured.mockReturnValue(false)
-
-    const response = await POST(
-      jsonRequest('https://example.com/api/subscribe', { email: 'new@example.com' }),
-    )
-
-    expect(response.status).toBe(201)
-    expect(mockIsSubscribeRequestRateLimited).not.toHaveBeenCalled()
-    expect(mockSendUnsubscribeLinkEmail).not.toHaveBeenCalled()
-  })
-
-  it('returns 503 when email is configured without its shared limiter', async () => {
+  it('rejects subscriptions without the signed-link delivery stack', async () => {
     mockIsSubscribeRequestConfigured.mockReturnValue(false)
 
     const response = await POST(
@@ -121,6 +110,18 @@ describe('POST /api/subscribe', () => {
     )
 
     expect(response.status).toBe(503)
+    expect(mockIsSubscribeRequestRateLimited).not.toHaveBeenCalled()
+    expect(mockSendUnsubscribeLinkEmail).not.toHaveBeenCalled()
+  })
+
+  it('serializes concurrent requests for the same recipient', async () => {
+    mockClaimSubscribeRequest.mockResolvedValue(false)
+
+    const response = await POST(
+      jsonRequest('https://example.com/api/subscribe', { email: 'new@example.com' }),
+    )
+
+    expect(response.status).toBe(409)
     expect(mockSendUnsubscribeLinkEmail).not.toHaveBeenCalled()
   })
 
@@ -179,6 +180,8 @@ describe('POST /api/subscribe', () => {
       status: 'subscribed',
     })
     expect(mockSendUnsubscribeLinkEmail).toHaveBeenCalledWith('new@example.com')
+    expect(mockClaimSubscribeRequest).toHaveBeenCalledWith('new@example.com')
+    expect(mockReleaseSubscribeRequest).toHaveBeenCalledWith('new@example.com')
   })
 
   it('returns 500 when insert fails', async () => {

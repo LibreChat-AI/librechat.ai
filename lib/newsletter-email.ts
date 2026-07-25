@@ -30,6 +30,10 @@ function unsubscribeRequestKey(email: string): string {
   return `unsubscribe-request:${hashIdentifier(email)}`
 }
 
+function subscribeRequestKey(email: string): string {
+  return `subscribe-request:${hashIdentifier(email)}`
+}
+
 let unsubscribeRequestIpLimiter: Ratelimit | null = null
 let unsubscribeRequestGlobalLimiter: Ratelimit | null = null
 let subscribeRequestIpLimiter: Ratelimit | null = null
@@ -81,6 +85,18 @@ export async function claimUnsubscribeRequestCooldown(email: string): Promise<bo
     ex: 15 * 60,
   })
   return result === 'OK'
+}
+
+export async function claimSubscribeRequest(email: string): Promise<boolean> {
+  const result = await Redis.fromEnv().set(subscribeRequestKey(email), '1', {
+    nx: true,
+    ex: 60,
+  })
+  return result === 'OK'
+}
+
+export async function releaseSubscribeRequest(email: string): Promise<void> {
+  await Redis.fromEnv().del(subscribeRequestKey(email))
 }
 
 export async function releaseUnsubscribeRequestCooldown(email: string): Promise<void> {

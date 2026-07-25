@@ -2,9 +2,10 @@ import { NextResponse } from 'next/server'
 import { getSupabaseClient, isValidEmail, normalizeEmail } from '@/lib/supabase'
 import { createRateLimiter, getClientIp } from '@/lib/rate-limit'
 import {
-  isNewsletterEmailConfigured,
+  claimSubscribeRequest,
   isSubscribeRequestConfigured,
   isSubscribeRequestRateLimited,
+  releaseSubscribeRequest,
   sendUnsubscribeLinkEmail,
 } from '@/lib/newsletter-email'
 
@@ -31,20 +32,13 @@ export async function POST(request: Request) {
 
     const supabase = getSupabaseClient()
 
-    if (!supabase) {
+    if (!supabase || !isSubscribeRequestConfigured()) {
       return NextResponse.json(
         { message: 'Subscription service is not configured' },
         { status: 503 },
       )
     }
-    const sendSubscriptionEmail = isNewsletterEmailConfigured()
-    if (sendSubscriptionEmail && !isSubscribeRequestConfigured()) {
-      return NextResponse.json(
-        { message: 'Subscription service is not configured' },
-        { status: 503 },
-      )
-    }
-    if (sendSubscriptionEmail && (await isSubscribeRequestRateLimited(ip))) {
+    if (await isSubscribeRequestRateLimited(ip)) {
       return NextResponse.json({ message: 'Too many requests' }, { status: 429 })
     }
 
@@ -63,40 +57,60 @@ export async function POST(request: Request) {
       }
 
       // Re-subscribe if previously unsubscribed
-      if (sendSubscriptionEmail && !(await sendUnsubscribeLinkEmail(normalized))) {
+      if (!(await claimSubscribeRequest(normalized))) {
+        return NextResponse.json(
+          { message: 'Subscription request already in progress' },
+          { status: 409 },
+        )
+      }
+      try {
+        if (!(await sendUnsubscribeLinkEmail(normalized))) {
+          return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })
+        }
+        const { data: transitioned, error: transitionError } = await supabase
+          .from('subscribers')
+          .update({ status: 'subscribed' })
+          .eq('email', normalized)
+          .eq('status', 'unsubscribed')
+          .select('id')
+          .maybeSingle()
+        if (transitionError) {
+          return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })
+        }
+        if (!transitioned) {
+          return NextResponse.json({ message: 'Email already subscribed' }, { status: 409 })
+        }
+        return NextResponse.json({ message: 'Subscription successful' }, { status: 200 })
+      } finally {
+        await releaseSubscribeRequest(normalized).catch(() => undefined)
+      }
+    }
+
+    if (!(await claimSubscribeRequest(normalized))) {
+      return NextResponse.json(
+        { message: 'Subscription request already in progress' },
+        { status: 409 },
+      )
+    }
+    try {
+      if (!(await sendUnsubscribeLinkEmail(normalized))) {
         return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })
       }
-      const { data: transitioned, error: transitionError } = await supabase
+
+      // Insert new subscriber
+      const { error } = await supabase
         .from('subscribers')
-        .update({ status: 'subscribed' })
-        .eq('email', normalized)
-        .eq('status', 'unsubscribed')
-        .select('id')
-        .maybeSingle()
-      if (transitionError) {
+        .insert({ email: normalized, status: 'subscribed' })
+
+      if (error) {
+        console.error('Subscription error:', error.message)
         return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })
       }
-      if (!transitioned) {
-        return NextResponse.json({ message: 'Email already subscribed' }, { status: 409 })
-      }
-      return NextResponse.json({ message: 'Subscription successful' }, { status: 200 })
+
+      return NextResponse.json({ message: 'Subscription successful' }, { status: 201 })
+    } finally {
+      await releaseSubscribeRequest(normalized).catch(() => undefined)
     }
-
-    if (sendSubscriptionEmail && !(await sendUnsubscribeLinkEmail(normalized))) {
-      return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })
-    }
-
-    // Insert new subscriber
-    const { error } = await supabase
-      .from('subscribers')
-      .insert({ email: normalized, status: 'subscribed' })
-
-    if (error) {
-      console.error('Subscription error:', error.message)
-      return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })
-    }
-
-    return NextResponse.json({ message: 'Subscription successful' }, { status: 201 })
   } catch {
     return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })
   }

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  claimSubscribeRequest,
   claimUnsubscribeRequestCooldown,
   isNewsletterEmailConfigured,
   isSubscribeRequestConfigured,
@@ -7,6 +8,7 @@ import {
   isUnsubscribeRequestConfigured,
   isUnsubscribeRequestRateLimited,
   releaseUnsubscribeRequestCooldown,
+  releaseSubscribeRequest,
   sendUnsubscribeLinkEmail,
 } from '@/lib/newsletter-email'
 
@@ -72,6 +74,20 @@ describe('newsletter unsubscribe email', () => {
       expect.stringMatching(/^unsubscribe-request:[a-f0-9]{64}$/),
       '1',
       { nx: true, ex: 900 },
+    )
+  })
+
+  it('claims and releases a hashed subscription request key', async () => {
+    expect(await claimSubscribeRequest('user@example.com')).toBe(true)
+    expect(mockRedisSet).toHaveBeenCalledWith(
+      expect.stringMatching(/^subscribe-request:[a-f0-9]{64}$/),
+      '1',
+      { nx: true, ex: 60 },
+    )
+
+    await releaseSubscribeRequest('user@example.com')
+    expect(mockRedisDel).toHaveBeenCalledWith(
+      expect.stringMatching(/^subscribe-request:[a-f0-9]{64}$/),
     )
   })
 
