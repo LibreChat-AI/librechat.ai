@@ -90,9 +90,9 @@ describe('unsubscribe tokens', () => {
 
     expect(await activateUnsubscribeToken('user@example.com', token)).toBe(true)
     expect(mockRedisEval).toHaveBeenCalledWith(
-      expect.stringContaining("redis.call('set', KEYS[1], ARGV[1], 'EX', ARGV[2])"),
+      expect.stringContaining("redis.call('set', KEYS[1], ARGV[1])"),
       [expect.stringMatching(/^unsubscribe-token-generation:[a-f0-9]{64}$/)],
-      ['2', 604800],
+      ['2'],
     )
   })
 

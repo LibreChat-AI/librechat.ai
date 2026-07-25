@@ -60,9 +60,9 @@ export async function createUnsubscribeUrl(
 ): Promise<string | null> {
   const generationResult = advanceGeneration
     ? await Redis.fromEnv().eval(
-        "local generation = redis.call('incr', KEYS[1]); redis.call('expire', KEYS[1], ARGV[1]); return generation",
+        "return redis.call('incr', KEYS[1])",
         [tokenGenerationCounterKey(email)],
-        [TOKEN_MAX_AGE_SECONDS],
+        [],
       )
     : await Redis.fromEnv().get<number>(tokenGenerationKey(email))
   const generation = Number(generationResult)
@@ -80,9 +80,9 @@ export async function activateUnsubscribeToken(email: string, token: string): Pr
   if (!generationValue || !/^[1-9]\d*$/.test(generationValue)) return false
 
   const result = await Redis.fromEnv().eval(
-    "local current = redis.call('get', KEYS[1]); if not current or tonumber(current) < tonumber(ARGV[1]) then redis.call('set', KEYS[1], ARGV[1], 'EX', ARGV[2]); return 1 end; return 0",
+    "local current = redis.call('get', KEYS[1]); if not current or tonumber(current) < tonumber(ARGV[1]) then redis.call('set', KEYS[1], ARGV[1]); return 1 end; return 0",
     [tokenGenerationKey(email)],
-    [generationValue, TOKEN_MAX_AGE_SECONDS],
+    [generationValue],
   )
   return result === 1
 }
