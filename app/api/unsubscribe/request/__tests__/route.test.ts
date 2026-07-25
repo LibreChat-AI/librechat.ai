@@ -100,4 +100,32 @@ describe('POST /api/unsubscribe/request', () => {
 
     expect(mockReleaseCooldown).toHaveBeenCalledWith('user@example.com')
   })
+
+  it('releases the recipient cooldown when the subscriber lookup fails', async () => {
+    supabaseClient = createSupabaseMock({ fetchError: true })
+
+    const response = await POST(
+      jsonRequest('https://example.com/api/unsubscribe/request', {
+        email: 'user@example.com',
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(mockReleaseCooldown).toHaveBeenCalledWith('user@example.com')
+    expect(mockSendUnsubscribeLinkEmail).not.toHaveBeenCalled()
+  })
+
+  it('releases the recipient cooldown when the subscriber lookup rejects', async () => {
+    supabaseClient!.maybeSingle.mockRejectedValue(new Error('lookup failed'))
+
+    const response = await POST(
+      jsonRequest('https://example.com/api/unsubscribe/request', {
+        email: 'user@example.com',
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(mockReleaseCooldown).toHaveBeenCalledWith('user@example.com')
+    expect(mockSendUnsubscribeLinkEmail).not.toHaveBeenCalled()
+  })
 })

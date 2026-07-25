@@ -41,12 +41,23 @@ export async function POST(request: Request) {
       return NextResponse.json(response)
     }
 
-    const { data: subscriber } = await supabase
-      .from('subscribers')
-      .select('id')
-      .eq('email', normalized)
-      .eq('status', 'subscribed')
-      .maybeSingle()
+    let subscriber: { id: string } | null
+    try {
+      const { data, error } = await supabase
+        .from('subscribers')
+        .select('id')
+        .eq('email', normalized)
+        .eq('status', 'subscribed')
+        .maybeSingle()
+      if (error) {
+        await releaseUnsubscribeRequestCooldown(normalized)
+        return NextResponse.json(response)
+      }
+      subscriber = data
+    } catch {
+      await releaseUnsubscribeRequestCooldown(normalized)
+      return NextResponse.json(response)
+    }
 
     after(async () => {
       if (!subscriber) return

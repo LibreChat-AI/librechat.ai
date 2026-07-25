@@ -47,7 +47,11 @@ export function createSupabaseMock(options: SupabaseMockOptions = {}) {
     )
   const maybeSingle = vi
     .fn()
-    .mockResolvedValue(options.existing ? { data: options.existing, error: null } : { data: null })
+    .mockResolvedValue(
+      options.fetchError
+        ? { data: null, error: { message: 'fetch failed' } }
+        : { data: options.existing ?? null, error: null },
+    )
   const eqByStatus = vi.fn().mockReturnValue({ maybeSingle })
   const eqAfterSelect = vi.fn().mockReturnValue({ single, eq: eqByStatus })
   const select = vi.fn().mockReturnValue({ eq: eqAfterSelect })
