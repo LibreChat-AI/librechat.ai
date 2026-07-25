@@ -3,13 +3,14 @@ import { createSupabaseMock, jsonRequest } from '@/__tests__/helpers'
 import { createUnsubscribeToken } from '@/lib/unsubscribe-token'
 
 const mockIsRateLimited = vi.fn(() => false)
-const mockGetClientIp = vi.fn((_request: Request) => '127.0.0.1')
+const mockGetClientIp = vi.fn((_request: Request): string | null => '127.0.0.1')
 const mockRedisSet = vi.fn(async (): Promise<string | null> => 'OK')
 const mockRedisDel = vi.fn(async () => 1)
 const mockRedisGet = vi.fn(async () => 1)
 const mockClaimSubscribeRequest = vi.fn(async (): Promise<string | null> => 'owner')
 const mockReleaseSubscribeRequest = vi.fn(async () => undefined)
 const mockRenewSubscribeRequest = vi.fn(async () => true)
+const mockIsUnsubscribeTokenRateLimited = vi.fn(async (_ip: string | null) => false)
 let supabaseClient: ReturnType<typeof createSupabaseMock> | null = createSupabaseMock()
 
 vi.mock('@upstash/redis', () => ({
@@ -25,6 +26,7 @@ vi.mock('@/lib/rate-limit', () => ({
 
 vi.mock('@/lib/newsletter-email', () => ({
   claimSubscribeRequest: () => mockClaimSubscribeRequest(),
+  isUnsubscribeTokenRateLimited: (ip: string | null) => mockIsUnsubscribeTokenRateLimited(ip),
   releaseSubscribeRequest: () => mockReleaseSubscribeRequest(),
   renewSubscribeRequest: () => mockRenewSubscribeRequest(),
 }))
@@ -47,6 +49,7 @@ describe('POST /api/unsubscribe', () => {
     mockRedisGet.mockResolvedValue(1)
     mockClaimSubscribeRequest.mockResolvedValue('owner')
     mockRenewSubscribeRequest.mockResolvedValue(true)
+    mockIsUnsubscribeTokenRateLimited.mockResolvedValue(false)
     supabaseClient = createSupabaseMock()
     process.env.UNSUBSCRIBE_SECRET = 'test-unsubscribe-secret'
     process.env.UPSTASH_REDIS_REST_URL = 'https://redis.example.com'
@@ -221,6 +224,22 @@ describe('POST /api/unsubscribe', () => {
 
     expect(response.status).toBe(200)
     expect(supabaseClient?.update).not.toHaveBeenCalled()
+  })
+
+  it('uses the shared global limiter without a trusted client IP', async () => {
+    mockGetClientIp.mockReturnValue(null)
+    mockIsUnsubscribeTokenRateLimited.mockResolvedValue(true)
+
+    const response = await POST(
+      jsonRequest('https://example.com/api/unsubscribe', {
+        email: 'user@example.com',
+        token: createUnsubscribeToken('user@example.com'),
+      }),
+    )
+
+    expect(response.status).toBe(429)
+    expect(mockIsUnsubscribeTokenRateLimited).toHaveBeenCalledWith(null)
+    expect(mockClaimSubscribeRequest).not.toHaveBeenCalled()
   })
 
   it('does not replay a consumed token', async () => {

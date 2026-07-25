@@ -3,6 +3,7 @@ import { getSupabaseClient, isValidEmail, normalizeEmail } from '@/lib/supabase'
 import { createRateLimiter, getClientIp } from '@/lib/rate-limit'
 import {
   claimSubscribeRequest,
+  isUnsubscribeTokenRateLimited,
   releaseSubscribeRequest,
   renewSubscribeRequest,
 } from '@/lib/newsletter-email'
@@ -51,6 +52,9 @@ export async function POST(request: Request) {
         { message: 'Unsubscription service is not configured' },
         { status: 503 },
       )
+    }
+    if (await isUnsubscribeTokenRateLimited(ip)) {
+      return NextResponse.json({ message: 'Too many requests' }, { status: 429 })
     }
 
     const normalized = normalizeEmail(email)

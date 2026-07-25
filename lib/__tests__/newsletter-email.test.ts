@@ -7,6 +7,7 @@ import {
   isSubscribeRequestRateLimited,
   isUnsubscribeRequestConfigured,
   isUnsubscribeRequestRateLimited,
+  isUnsubscribeTokenRateLimited,
   releaseUnsubscribeRequestCooldown,
   releaseSubscribeRequest,
   renewSubscribeRequest,
@@ -130,6 +131,13 @@ describe('newsletter unsubscribe email', () => {
     mockRateLimit.mockResolvedValueOnce({ success: false })
     expect(await isSubscribeRequestRateLimited(null)).toBe(true)
     expect(mockRateLimit).toHaveBeenCalledOnce()
+    expect(mockRateLimit).toHaveBeenCalledWith('global')
+  })
+
+  it('applies a global fallback to unsubscribe token submissions', async () => {
+    mockRateLimit.mockResolvedValueOnce({ success: false })
+
+    expect(await isUnsubscribeTokenRateLimited(null)).toBe(true)
     expect(mockRateLimit).toHaveBeenCalledWith('global')
   })
 
