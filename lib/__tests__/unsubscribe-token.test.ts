@@ -1,15 +1,33 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createUnsubscribeToken, verifyUnsubscribeToken } from '@/lib/unsubscribe-token'
+import {
+  consumeUnsubscribeToken,
+  createUnsubscribeToken,
+  releaseUnsubscribeToken,
+  verifyUnsubscribeToken,
+} from '@/lib/unsubscribe-token'
+
+const mockRedisSet = vi.fn(async () => 'OK')
+const mockRedisDel = vi.fn(async () => 1)
+
+vi.mock('@upstash/redis', () => ({
+  Redis: {
+    fromEnv: () => ({ set: mockRedisSet, del: mockRedisDel }),
+  },
+}))
 
 describe('unsubscribe tokens', () => {
   beforeEach(() => {
     process.env.UNSUBSCRIBE_SECRET = 'unsubscribe-secret'
+    process.env.UPSTASH_REDIS_REST_URL = 'https://redis.example.com'
+    process.env.UPSTASH_REDIS_REST_TOKEN = 'redis-token'
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-07-25T12:00:00Z'))
   })
 
   afterEach(() => {
     delete process.env.UNSUBSCRIBE_SECRET
+    delete process.env.UPSTASH_REDIS_REST_URL
+    delete process.env.UPSTASH_REDIS_REST_TOKEN
     vi.useRealTimers()
   })
 
@@ -32,5 +50,21 @@ describe('unsubscribe tokens', () => {
     vi.setSystemTime(new Date('2026-07-25T11:59:59Z'))
 
     expect(verifyUnsubscribeToken('user@example.com', token!)).toBe(false)
+  })
+
+  it('records and releases consumed tokens by hash', async () => {
+    const token = createUnsubscribeToken('user@example.com')!
+
+    expect(await consumeUnsubscribeToken(token)).toBe(true)
+    expect(mockRedisSet).toHaveBeenCalledWith(
+      expect.stringMatching(/^unsubscribe-token-consumed:[a-f0-9]{64}$/),
+      '1',
+      { nx: true, ex: 604800 },
+    )
+
+    await releaseUnsubscribeToken(token)
+    expect(mockRedisDel).toHaveBeenCalledWith(
+      expect.stringMatching(/^unsubscribe-token-consumed:[a-f0-9]{64}$/),
+    )
   })
 })

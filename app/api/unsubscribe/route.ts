@@ -1,7 +1,12 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseClient, isValidEmail, normalizeEmail } from '@/lib/supabase'
 import { createRateLimiter, getClientIp } from '@/lib/rate-limit'
-import { isUnsubscribeConfigured, verifyUnsubscribeToken } from '@/lib/unsubscribe-token'
+import {
+  consumeUnsubscribeToken,
+  isUnsubscribeConfigured,
+  releaseUnsubscribeToken,
+  verifyUnsubscribeToken,
+} from '@/lib/unsubscribe-token'
 
 const isRateLimited = createRateLimiter(5, 60_000)
 
@@ -47,6 +52,9 @@ export async function POST(request: Request) {
     if (!verifyUnsubscribeToken(normalized, token)) {
       return NextResponse.json({ message: 'Unsubscription request received' }, { status: 200 })
     }
+    if (!(await consumeUnsubscribeToken(token))) {
+      return NextResponse.json({ message: 'Unsubscription request received' }, { status: 200 })
+    }
 
     const { error: updateError } = await supabase
       .from('subscribers')
@@ -54,6 +62,7 @@ export async function POST(request: Request) {
       .eq('email', normalized)
 
     if (updateError) {
+      await releaseUnsubscribeToken(token).catch(() => undefined)
       console.error('Unsubscription error:', updateError.message)
       return NextResponse.json({ message: 'Unsubscription failed' }, { status: 500 })
     }

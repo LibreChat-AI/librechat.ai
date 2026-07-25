@@ -43,7 +43,8 @@ export async function POST(request: Request) {
     }
 
     const normalized = normalizeEmail(email)
-    if (!(await claimSubscribeRequest(normalized))) {
+    const lockOwner = await claimSubscribeRequest(normalized)
+    if (!lockOwner) {
       return NextResponse.json(
         { message: 'Subscription request already in progress' },
         { status: 409 },
@@ -51,11 +52,14 @@ export async function POST(request: Request) {
     }
     try {
       // Read subscriber state only after acquiring the per-recipient lock.
-      const { data: existing } = await supabase
+      const { data: existing, error: lookupError } = await supabase
         .from('subscribers')
         .select('id, status')
         .eq('email', normalized)
-        .single()
+        .maybeSingle()
+      if (lookupError) {
+        return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })
+      }
 
       if (existing) {
         if (existing.status === 'subscribed') {
@@ -98,7 +102,7 @@ export async function POST(request: Request) {
 
       return NextResponse.json({ message: 'Subscription successful' }, { status: 201 })
     } finally {
-      await releaseSubscribeRequest(normalized).catch(() => undefined)
+      await releaseSubscribeRequest(normalized, lockOwner).catch(() => undefined)
     }
   } catch {
     return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })

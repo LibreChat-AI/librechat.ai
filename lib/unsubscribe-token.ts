@@ -1,4 +1,5 @@
-import { createHmac, timingSafeEqual } from 'node:crypto'
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto'
+import { Redis } from '@upstash/redis'
 
 const TOKEN_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 
@@ -9,7 +10,25 @@ function getSecret(): string | null {
 /** Whether UNSUBSCRIBE_SECRET is configured. Lets callers tell a genuine
  * misconfiguration apart from an invalid/missing token. */
 export function isUnsubscribeConfigured(): boolean {
-  return getSecret() !== null
+  return Boolean(
+    getSecret() && process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN,
+  )
+}
+
+function consumedTokenKey(token: string): string {
+  return `unsubscribe-token-consumed:${createHash('sha256').update(token).digest('hex')}`
+}
+
+export async function consumeUnsubscribeToken(token: string): Promise<boolean> {
+  const result = await Redis.fromEnv().set(consumedTokenKey(token), '1', {
+    nx: true,
+    ex: TOKEN_MAX_AGE_SECONDS,
+  })
+  return result === 'OK'
+}
+
+export async function releaseUnsubscribeToken(token: string): Promise<void> {
+  await Redis.fromEnv().del(consumedTokenKey(token))
 }
 
 export function createUnsubscribeToken(email: string): string | null {

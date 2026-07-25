@@ -52,9 +52,7 @@ const UnsubscribeForm = ({
               'Unsubscription request received. If a replacement is needed, it will be sent.',
             )
           } else {
-            toast.error(
-              'Request received, but a replacement link could not be sent. Please retry below.',
-            )
+            toast('Request received. If you continue receiving emails, request a new link below.')
           }
         } else {
           toast.success('If that address is subscribed, an unsubscribe link has been sent')

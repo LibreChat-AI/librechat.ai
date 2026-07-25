@@ -4,8 +4,8 @@ import { createSupabaseMock, jsonRequest } from '@/__tests__/helpers'
 const mockIsRateLimited = vi.fn(() => false)
 const mockIsFallbackRateLimited = vi.fn(() => false)
 const mockGetClientIp = vi.fn((_request: Request): string | null => '127.0.0.1')
-const mockClaimSubscribeRequest = vi.fn(async (_email: string) => true)
-const mockReleaseSubscribeRequest = vi.fn(async (_email: string) => undefined)
+const mockClaimSubscribeRequest = vi.fn(async (_email: string): Promise<string | null> => 'owner')
+const mockReleaseSubscribeRequest = vi.fn(async (_email: string, _owner: string) => undefined)
 const mockIsSubscribeRequestConfigured = vi.fn(() => true)
 const mockIsSubscribeRequestRateLimited = vi.fn(async (_ip: string | null) => false)
 const mockSendUnsubscribeLinkEmail = vi.fn(async (_email: string) => true)
@@ -21,7 +21,8 @@ vi.mock('@/lib/newsletter-email', () => ({
   claimSubscribeRequest: (email: string) => mockClaimSubscribeRequest(email),
   isSubscribeRequestConfigured: () => mockIsSubscribeRequestConfigured(),
   isSubscribeRequestRateLimited: (ip: string | null) => mockIsSubscribeRequestRateLimited(ip),
-  releaseSubscribeRequest: (email: string) => mockReleaseSubscribeRequest(email),
+  releaseSubscribeRequest: (email: string, owner: string) =>
+    mockReleaseSubscribeRequest(email, owner),
   sendUnsubscribeLinkEmail: (email: string) => mockSendUnsubscribeLinkEmail(email),
 }))
 
@@ -41,7 +42,7 @@ describe('POST /api/subscribe', () => {
     mockIsRateLimited.mockReturnValue(false)
     mockIsFallbackRateLimited.mockReturnValue(false)
     mockGetClientIp.mockReturnValue('127.0.0.1')
-    mockClaimSubscribeRequest.mockResolvedValue(true)
+    mockClaimSubscribeRequest.mockResolvedValue('owner')
     mockIsSubscribeRequestConfigured.mockReturnValue(true)
     mockIsSubscribeRequestRateLimited.mockResolvedValue(false)
     mockSendUnsubscribeLinkEmail.mockResolvedValue(true)
@@ -115,7 +116,7 @@ describe('POST /api/subscribe', () => {
   })
 
   it('serializes concurrent requests for the same recipient', async () => {
-    mockClaimSubscribeRequest.mockResolvedValue(false)
+    mockClaimSubscribeRequest.mockResolvedValue(null)
 
     const response = await POST(
       jsonRequest('https://example.com/api/subscribe', { email: 'new@example.com' }),
@@ -181,7 +182,7 @@ describe('POST /api/subscribe', () => {
     })
     expect(mockSendUnsubscribeLinkEmail).toHaveBeenCalledWith('new@example.com')
     expect(mockClaimSubscribeRequest).toHaveBeenCalledWith('new@example.com')
-    expect(mockReleaseSubscribeRequest).toHaveBeenCalledWith('new@example.com')
+    expect(mockReleaseSubscribeRequest).toHaveBeenCalledWith('new@example.com', 'owner')
   })
 
   it('returns 500 when insert fails', async () => {
@@ -194,6 +195,18 @@ describe('POST /api/subscribe', () => {
 
     expect(response.status).toBe(500)
     expect(body).toEqual({ message: 'Subscription failed' })
+  })
+
+  it('stops before email delivery when the subscriber lookup fails', async () => {
+    supabaseClient = createSupabaseMock({ fetchError: true })
+
+    const response = await POST(
+      jsonRequest('https://example.com/api/subscribe', { email: 'new@example.com' }),
+    )
+
+    expect(response.status).toBe(500)
+    expect(mockSendUnsubscribeLinkEmail).not.toHaveBeenCalled()
+    expect(mockReleaseSubscribeRequest).toHaveBeenCalledWith('new@example.com', 'owner')
   })
 
   it('does not create a subscriber when email delivery fails', async () => {

@@ -4,7 +4,15 @@ import { createUnsubscribeToken } from '@/lib/unsubscribe-token'
 
 const mockIsRateLimited = vi.fn(() => false)
 const mockGetClientIp = vi.fn((_request: Request) => '127.0.0.1')
+const mockRedisSet = vi.fn(async (): Promise<string | null> => 'OK')
+const mockRedisDel = vi.fn(async () => 1)
 let supabaseClient: ReturnType<typeof createSupabaseMock> | null = createSupabaseMock()
+
+vi.mock('@upstash/redis', () => ({
+  Redis: {
+    fromEnv: () => ({ set: mockRedisSet, del: mockRedisDel }),
+  },
+}))
 
 vi.mock('@/lib/rate-limit', () => ({
   createRateLimiter: () => mockIsRateLimited,
@@ -25,8 +33,11 @@ describe('POST /api/unsubscribe', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockIsRateLimited.mockReturnValue(false)
+    mockRedisSet.mockResolvedValue('OK')
     supabaseClient = createSupabaseMock()
     process.env.UNSUBSCRIBE_SECRET = 'test-unsubscribe-secret'
+    process.env.UPSTASH_REDIS_REST_URL = 'https://redis.example.com'
+    process.env.UPSTASH_REDIS_REST_TOKEN = 'redis-token'
   })
 
   it('returns 429 when rate limited', async () => {
@@ -151,6 +162,21 @@ describe('POST /api/unsubscribe', () => {
 
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual({ message: 'Unsubscription request received' })
+    expect(supabaseClient?.update).not.toHaveBeenCalled()
+  })
+
+  it('does not replay a consumed token', async () => {
+    mockRedisSet.mockResolvedValue(null)
+    const token = createUnsubscribeToken('user@example.com')!
+
+    const response = await POST(
+      jsonRequest('https://example.com/api/unsubscribe', {
+        email: 'user@example.com',
+        token,
+      }),
+    )
+
+    expect(response.status).toBe(200)
     expect(supabaseClient?.update).not.toHaveBeenCalled()
   })
 

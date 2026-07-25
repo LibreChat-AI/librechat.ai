@@ -62,7 +62,7 @@ export function createSupabaseMock(options: SupabaseMockOptions = {}) {
         : { data: options.existing ?? null, error: null },
     )
   const eqByStatus = vi.fn().mockReturnValue({ maybeSingle })
-  const eqAfterSelect = vi.fn().mockReturnValue({ single, eq: eqByStatus })
+  const eqAfterSelect = vi.fn().mockReturnValue({ single, maybeSingle, eq: eqByStatus })
   const select = vi.fn().mockReturnValue({ eq: eqAfterSelect })
   const from = vi.fn().mockReturnValue({ select, update, insert, delete: deleteRows })
 

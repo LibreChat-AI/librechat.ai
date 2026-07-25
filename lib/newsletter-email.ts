@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { Ratelimit } from '@upstash/ratelimit'
 import { Redis } from '@upstash/redis'
 import { createUnsubscribeUrl } from '@/lib/unsubscribe-token'
@@ -87,16 +87,21 @@ export async function claimUnsubscribeRequestCooldown(email: string): Promise<bo
   return result === 'OK'
 }
 
-export async function claimSubscribeRequest(email: string): Promise<boolean> {
-  const result = await Redis.fromEnv().set(subscribeRequestKey(email), '1', {
+export async function claimSubscribeRequest(email: string): Promise<string | null> {
+  const owner = randomUUID()
+  const result = await Redis.fromEnv().set(subscribeRequestKey(email), owner, {
     nx: true,
     ex: 60,
   })
-  return result === 'OK'
+  return result === 'OK' ? owner : null
 }
 
-export async function releaseSubscribeRequest(email: string): Promise<void> {
-  await Redis.fromEnv().del(subscribeRequestKey(email))
+export async function releaseSubscribeRequest(email: string, owner: string): Promise<void> {
+  await Redis.fromEnv().eval(
+    "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
+    [subscribeRequestKey(email)],
+    [owner],
+  )
 }
 
 export async function releaseUnsubscribeRequestCooldown(email: string): Promise<void> {

@@ -14,6 +14,7 @@ import {
 
 const mockRedisSet = vi.fn(async () => 'OK')
 const mockRedisDel = vi.fn(async () => 1)
+const mockRedisEval = vi.fn(async () => 1)
 const mockRateLimit = vi.fn(async () => ({ success: true }))
 
 vi.mock('@upstash/ratelimit', () => ({
@@ -25,7 +26,7 @@ vi.mock('@upstash/ratelimit', () => ({
 
 vi.mock('@upstash/redis', () => ({
   Redis: {
-    fromEnv: () => ({ set: mockRedisSet, del: mockRedisDel }),
+    fromEnv: () => ({ set: mockRedisSet, del: mockRedisDel, eval: mockRedisEval }),
   },
 }))
 
@@ -78,16 +79,19 @@ describe('newsletter unsubscribe email', () => {
   })
 
   it('claims and releases a hashed subscription request key', async () => {
-    expect(await claimSubscribeRequest('user@example.com')).toBe(true)
+    const owner = await claimSubscribeRequest('user@example.com')
+    expect(owner).toMatch(/^[\w-]+$/)
     expect(mockRedisSet).toHaveBeenCalledWith(
       expect.stringMatching(/^subscribe-request:[a-f0-9]{64}$/),
-      '1',
+      owner,
       { nx: true, ex: 60 },
     )
 
-    await releaseSubscribeRequest('user@example.com')
-    expect(mockRedisDel).toHaveBeenCalledWith(
-      expect.stringMatching(/^subscribe-request:[a-f0-9]{64}$/),
+    await releaseSubscribeRequest('user@example.com', owner!)
+    expect(mockRedisEval).toHaveBeenCalledWith(
+      expect.stringContaining("redis.call('get', KEYS[1])"),
+      [expect.stringMatching(/^subscribe-request:[a-f0-9]{64}$/)],
+      [owner],
     )
   })
 
