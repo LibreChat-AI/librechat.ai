@@ -171,7 +171,7 @@ describe('newsletter unsubscribe email', () => {
     expect(unsubscribeUrl.pathname).toBe('/unsubscribe')
     expect(unsubscribeUrl.search).toBe('')
     expect(credentials.get('email')).toBe('user@example.com')
-    expect(credentials.get('token')).toMatch(/^\d+\.\d+\.[\w-]+$/)
+    expect(credentials.get('token')).toMatch(/^\d+\.\d+\.[\w-]+\.[\w-]+$/)
   })
 
   it('returns false when Loops delivery throws', async () => {

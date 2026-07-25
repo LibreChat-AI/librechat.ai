@@ -139,12 +139,17 @@ export async function releaseUnsubscribeRequestCooldown(email: string): Promise<
   await Redis.fromEnv().del(unsubscribeRequestKey(email))
 }
 
-export async function sendUnsubscribeLinkEmail(email: string): Promise<boolean> {
+export async function sendUnsubscribeLinkEmail(
+  email: string,
+  advanceGeneration = false,
+): Promise<boolean> {
   try {
     const apiKey = process.env.LOOPS_API_KEY?.trim()
     const transactionalId = process.env.LOOPS_UNSUBSCRIBE_TRANSACTIONAL_ID?.trim()
     const publicUrl = process.env.NEWSLETTER_PUBLIC_URL?.trim()
-    const unsubscribeUrl = publicUrl ? await createUnsubscribeUrl(email, publicUrl) : null
+    const unsubscribeUrl = publicUrl
+      ? await createUnsubscribeUrl(email, publicUrl, advanceGeneration)
+      : null
     if (!apiKey || !transactionalId || !unsubscribeUrl) return false
 
     const response = await fetch('https://app.loops.so/api/v1/transactional', {
@@ -167,7 +172,7 @@ export async function sendUnsubscribeLinkEmail(email: string): Promise<boolean> 
     if (!response.ok) return false
 
     const token = new URLSearchParams(new URL(unsubscribeUrl).hash.slice(1)).get('token')
-    return Boolean(token && (await activateUnsubscribeToken(email, token)))
+    return Boolean(token && (!advanceGeneration || (await activateUnsubscribeToken(email, token))))
   } catch {
     return false
   }

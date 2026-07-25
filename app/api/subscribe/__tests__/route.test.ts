@@ -9,7 +9,9 @@ const mockReleaseSubscribeRequest = vi.fn(async (_email: string, _owner: string)
 const mockRenewSubscribeRequest = vi.fn(async (_email: string, _owner: string) => true)
 const mockIsSubscribeRequestConfigured = vi.fn(() => true)
 const mockIsSubscribeRequestRateLimited = vi.fn(async (_ip: string | null) => false)
-const mockSendUnsubscribeLinkEmail = vi.fn(async (_email: string) => true)
+const mockSendUnsubscribeLinkEmail = vi.fn(
+  async (_email: string, _advanceGeneration: boolean) => true,
+)
 let supabaseClient: ReturnType<typeof createSupabaseMock> | null = createSupabaseMock()
 
 vi.mock('@/lib/rate-limit', () => ({
@@ -25,7 +27,8 @@ vi.mock('@/lib/newsletter-email', () => ({
   releaseSubscribeRequest: (email: string, owner: string) =>
     mockReleaseSubscribeRequest(email, owner),
   renewSubscribeRequest: (email: string, owner: string) => mockRenewSubscribeRequest(email, owner),
-  sendUnsubscribeLinkEmail: (email: string) => mockSendUnsubscribeLinkEmail(email),
+  sendUnsubscribeLinkEmail: (email: string, advanceGeneration: boolean) =>
+    mockSendUnsubscribeLinkEmail(email, advanceGeneration),
 }))
 
 vi.mock('@/lib/supabase', async (importOriginal) => {
@@ -184,7 +187,7 @@ describe('POST /api/subscribe', () => {
       email: 'new@example.com',
       status: 'pending',
     })
-    expect(mockSendUnsubscribeLinkEmail).toHaveBeenCalledWith('new@example.com')
+    expect(mockSendUnsubscribeLinkEmail).toHaveBeenCalledWith('new@example.com', true)
     expect(mockClaimSubscribeRequest).toHaveBeenCalledWith('new@example.com')
     expect(mockReleaseSubscribeRequest).toHaveBeenCalledWith('new@example.com', 'owner')
   })
@@ -262,7 +265,7 @@ describe('POST /api/subscribe', () => {
     )
 
     expect(response.status).toBe(200)
-    expect(mockSendUnsubscribeLinkEmail).toHaveBeenCalledWith('user@example.com')
+    expect(mockSendUnsubscribeLinkEmail).toHaveBeenCalledWith('user@example.com', true)
     expect(supabaseClient.update).toHaveBeenCalledOnce()
     expect(supabaseClient.update).toHaveBeenCalledWith({ status: 'subscribed' })
   })

@@ -62,13 +62,19 @@ describe('unsubscribe tokens', () => {
 
   it('rejects non-canonical timestamp representations', async () => {
     const token = createUnsubscribeToken('user@example.com')!
-    const [timestamp, generation, signature] = token.split('.')
+    const [timestamp, generation, tokenId, signature] = token.split('.')
 
     expect(
-      await verifyUnsubscribeToken('user@example.com', `0${timestamp}.${generation}.${signature}`),
+      await verifyUnsubscribeToken(
+        'user@example.com',
+        `0${timestamp}.${generation}.${tokenId}.${signature}`,
+      ),
     ).toBe(false)
     expect(
-      await verifyUnsubscribeToken('user@example.com', `+${timestamp}.${generation}.${signature}`),
+      await verifyUnsubscribeToken(
+        'user@example.com',
+        `+${timestamp}.${generation}.${tokenId}.${signature}`,
+      ),
     ).toBe(false)
   })
 

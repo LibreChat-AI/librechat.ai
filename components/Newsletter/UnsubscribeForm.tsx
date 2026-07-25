@@ -57,6 +57,8 @@ const UnsubscribeForm = ({
         } else {
           toast.success('If that address is subscribed, an unsubscribe link has been sent')
         }
+      } else if (response.status === 409 && hasSignedLink) {
+        toast('Subscription update in progress. Please retry shortly.')
       } else {
         toast.error('Unsubscription failed')
       }

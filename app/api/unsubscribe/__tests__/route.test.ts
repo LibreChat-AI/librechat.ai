@@ -222,7 +222,8 @@ describe('POST /api/unsubscribe', () => {
       }),
     )
 
-    expect(response.status).toBe(200)
+    expect(response.status).toBe(409)
+    expect(response.headers.get('retry-after')).toBe('1')
     expect(supabaseClient?.update).not.toHaveBeenCalled()
   })
 

@@ -58,9 +58,15 @@ export async function POST(request: Request) {
     }
 
     const normalized = normalizeEmail(email)
+    if (!(await verifyUnsubscribeToken(normalized, token))) {
+      return NextResponse.json({ message: 'Unsubscription request received' }, { status: 200 })
+    }
     const lockOwner = await claimSubscribeRequest(normalized)
     if (!lockOwner) {
-      return NextResponse.json({ message: 'Unsubscription request received' }, { status: 200 })
+      return NextResponse.json(
+        { message: 'Subscription update in progress; retry shortly' },
+        { status: 409, headers: { 'Retry-After': '1' } },
+      )
     }
     try {
       if (!(await verifyUnsubscribeToken(normalized, token))) {

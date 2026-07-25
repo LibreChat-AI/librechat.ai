@@ -123,7 +123,7 @@ export async function POST(request: Request) {
       if (!(await renewLease())) {
         return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })
       }
-      const delivered = await sendUnsubscribeLinkEmail(normalized)
+      const delivered = await sendUnsubscribeLinkEmail(normalized, true)
       if (!(await renewLease())) {
         return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })
       }
