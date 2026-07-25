@@ -2,19 +2,20 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createSupabaseMock, jsonRequest } from '@/__tests__/helpers'
 
 const mockIsIpRateLimited = vi.fn(async (_ip: string) => false)
+const mockGetClientIp = vi.fn((): string | null => '127.0.0.1')
 const mockClaimCooldown = vi.fn(async (_email: string) => true)
 const mockReleaseCooldown = vi.fn(async (_email: string) => undefined)
 const mockSendUnsubscribeLinkEmail = vi.fn(async (_email: string) => true)
 let supabaseClient: ReturnType<typeof createSupabaseMock> | null = createSupabaseMock()
 
 vi.mock('@/lib/rate-limit', () => ({
-  getClientIp: () => '127.0.0.1',
+  getClientIp: () => mockGetClientIp(),
 }))
 
 vi.mock('@/lib/newsletter-email', () => ({
   claimUnsubscribeRequestCooldown: (email: string) => mockClaimCooldown(email),
   isUnsubscribeRequestConfigured: () => true,
-  isUnsubscribeRequestIpRateLimited: (ip: string) => mockIsIpRateLimited(ip),
+  isUnsubscribeRequestRateLimited: (ip: string | null) => mockIsIpRateLimited(ip ?? 'global'),
   releaseUnsubscribeRequestCooldown: (email: string) => mockReleaseCooldown(email),
   sendUnsubscribeLinkEmail: (email: string) => mockSendUnsubscribeLinkEmail(email),
 }))
@@ -43,6 +44,7 @@ describe('POST /api/unsubscribe/request', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockIsIpRateLimited.mockResolvedValue(false)
+    mockGetClientIp.mockReturnValue('127.0.0.1')
     mockClaimCooldown.mockResolvedValue(true)
     mockSendUnsubscribeLinkEmail.mockResolvedValue(true)
     supabaseClient = createSupabaseMock()
@@ -100,6 +102,19 @@ describe('POST /api/unsubscribe/request', () => {
     expect(response.status).toBe(429)
     expect(mockIsIpRateLimited).toHaveBeenCalledWith('127.0.0.1')
     expect(mockClaimCooldown).not.toHaveBeenCalled()
+  })
+
+  it('applies the shared global limiter without a trusted IP', async () => {
+    mockGetClientIp.mockReturnValue(null)
+
+    const response = await POST(
+      jsonRequest('https://example.com/api/unsubscribe/request', {
+        email: 'user@example.com',
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(mockIsIpRateLimited).toHaveBeenCalledWith('global')
   })
 
   it('releases the recipient cooldown when delivery fails', async () => {

@@ -4,7 +4,7 @@ import { getClientIp } from '@/lib/rate-limit'
 import {
   claimUnsubscribeRequestCooldown,
   isUnsubscribeRequestConfigured,
-  isUnsubscribeRequestIpRateLimited,
+  isUnsubscribeRequestRateLimited,
   releaseUnsubscribeRequestCooldown,
   sendUnsubscribeLinkEmail,
 } from '@/lib/newsletter-email'
@@ -33,7 +33,7 @@ export async function POST(request: Request) {
         { status: 503 },
       )
     }
-    if (ip && (await isUnsubscribeRequestIpRateLimited(ip))) {
+    if (await isUnsubscribeRequestRateLimited(ip)) {
       return NextResponse.json({ message: 'Too many requests' }, { status: 429 })
     }
     if (!(await claimUnsubscribeRequestCooldown(normalized))) {

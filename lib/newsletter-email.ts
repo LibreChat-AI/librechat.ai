@@ -31,6 +31,7 @@ function unsubscribeRequestKey(email: string): string {
 }
 
 let unsubscribeRequestIpLimiter: Ratelimit | null = null
+let unsubscribeRequestGlobalLimiter: Ratelimit | null = null
 let subscribeRequestIpLimiter: Ratelimit | null = null
 let subscribeRequestGlobalLimiter: Ratelimit | null = null
 
@@ -53,14 +54,23 @@ export async function isSubscribeRequestRateLimited(ip: string | null): Promise<
   return !ipResult.success
 }
 
-export async function isUnsubscribeRequestIpRateLimited(ip: string): Promise<boolean> {
+export async function isUnsubscribeRequestRateLimited(ip: string | null): Promise<boolean> {
+  unsubscribeRequestGlobalLimiter ??= new Ratelimit({
+    redis: Redis.fromEnv(),
+    limiter: Ratelimit.slidingWindow(100, '60 s'),
+    prefix: 'ratelimit:unsubscribe-request-global',
+  })
+  const globalResult = await unsubscribeRequestGlobalLimiter.limit('global')
+  if (!globalResult.success) return true
+  if (!ip) return false
+
   unsubscribeRequestIpLimiter ??= new Ratelimit({
     redis: Redis.fromEnv(),
     limiter: Ratelimit.slidingWindow(5, '60 s'),
     prefix: 'ratelimit:unsubscribe-request',
   })
-  const { success } = await unsubscribeRequestIpLimiter.limit(hashIdentifier(ip))
-  return !success
+  const ipResult = await unsubscribeRequestIpLimiter.limit(hashIdentifier(ip))
+  return !ipResult.success
 }
 
 export async function claimUnsubscribeRequestCooldown(email: string): Promise<boolean> {

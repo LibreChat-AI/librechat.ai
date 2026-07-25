@@ -5,7 +5,7 @@ import {
   isSubscribeRequestConfigured,
   isSubscribeRequestRateLimited,
   isUnsubscribeRequestConfigured,
-  isUnsubscribeRequestIpRateLimited,
+  isUnsubscribeRequestRateLimited,
   releaseUnsubscribeRequestCooldown,
   sendUnsubscribeLinkEmail,
 } from '@/lib/newsletter-email'
@@ -76,10 +76,15 @@ describe('newsletter unsubscribe email', () => {
   })
 
   it('rate limits a hashed IP using shared storage', async () => {
-    mockRateLimit.mockResolvedValueOnce({ success: false })
+    expect(await isUnsubscribeRequestRateLimited('192.0.2.1')).toBe(false)
+    expect(mockRateLimit).toHaveBeenNthCalledWith(1, 'global')
+    expect(mockRateLimit).toHaveBeenNthCalledWith(2, expect.stringMatching(/^[a-f0-9]{64}$/))
 
-    expect(await isUnsubscribeRequestIpRateLimited('192.0.2.1')).toBe(true)
-    expect(mockRateLimit).toHaveBeenCalledWith(expect.stringMatching(/^[a-f0-9]{64}$/))
+    mockRateLimit.mockClear()
+    mockRateLimit.mockResolvedValueOnce({ success: false })
+    expect(await isUnsubscribeRequestRateLimited(null)).toBe(true)
+    expect(mockRateLimit).toHaveBeenCalledOnce()
+    expect(mockRateLimit).toHaveBeenCalledWith('global')
   })
 
   it('applies global and hashed-IP subscription limits', async () => {
