@@ -12,7 +12,8 @@ const UnsubscribeForm = ({
 }) => {
   const [email, setEmail] = useState(initialEmail)
   const [isLoading, setIsLoading] = useState(false)
-  const hasSignedLink = validator.isEmail(email) && token.length > 0
+  const [useSignedLink, setUseSignedLink] = useState(token.length > 0)
+  const hasSignedLink = useSignedLink && validator.isEmail(email) && token.length > 0
 
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault()
@@ -37,6 +38,7 @@ const UnsubscribeForm = ({
       )
 
       if (response.status === 200) {
+        if (hasSignedLink) setUseSignedLink(false)
         toast.success(
           hasSignedLink
             ? 'Unsubscription request received'

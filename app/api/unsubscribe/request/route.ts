@@ -1,10 +1,13 @@
-import { NextResponse } from 'next/server'
+import { after, NextResponse } from 'next/server'
 import { getSupabaseClient, isValidEmail, normalizeEmail } from '@/lib/supabase'
 import { createRateLimiter, getClientIp } from '@/lib/rate-limit'
-import { isNewsletterEmailConfigured, sendUnsubscribeLinkEmail } from '@/lib/newsletter-email'
+import {
+  claimUnsubscribeRequestCooldown,
+  isUnsubscribeRequestConfigured,
+  sendUnsubscribeLinkEmail,
+} from '@/lib/newsletter-email'
 
 const isIpRateLimited = createRateLimiter(5, 60_000)
-const isRecipientRateLimited = createRateLimiter(1, 15 * 60_000)
 const response = { message: 'If that address is subscribed, an unsubscribe link has been sent' }
 
 export async function POST(request: Request) {
@@ -25,14 +28,16 @@ export async function POST(request: Request) {
     }
 
     const normalized = normalizeEmail(email)
-    if (isRecipientRateLimited(normalized)) return NextResponse.json(response)
 
     const supabase = getSupabaseClient()
-    if (!supabase || !isNewsletterEmailConfigured()) {
+    if (!supabase || !isUnsubscribeRequestConfigured()) {
       return NextResponse.json(
         { message: 'Unsubscription service is not configured' },
         { status: 503 },
       )
+    }
+    if (!(await claimUnsubscribeRequestCooldown(normalized))) {
+      return NextResponse.json(response)
     }
 
     const { data: subscriber } = await supabase
@@ -42,7 +47,9 @@ export async function POST(request: Request) {
       .eq('status', 'subscribed')
       .maybeSingle()
 
-    if (subscriber) await sendUnsubscribeLinkEmail(normalized)
+    after(async () => {
+      if (subscriber) await sendUnsubscribeLinkEmail(normalized)
+    })
     return NextResponse.json(response)
   } catch {
     return NextResponse.json(response)

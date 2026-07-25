@@ -1,18 +1,38 @@
+import { createHash } from 'node:crypto'
+import { Redis } from '@upstash/redis'
 import { createUnsubscribeUrl } from '@/lib/unsubscribe-token'
-import { SITE_URL } from '@/lib/structured-data'
 
 export function isNewsletterEmailConfigured(): boolean {
   return Boolean(
     process.env.LOOPS_API_KEY?.trim() &&
     process.env.LOOPS_UNSUBSCRIBE_TRANSACTIONAL_ID?.trim() &&
-    process.env.UNSUBSCRIBE_SECRET?.trim(),
+    process.env.UNSUBSCRIBE_SECRET?.trim() &&
+    process.env.NEWSLETTER_PUBLIC_URL?.trim(),
   )
+}
+
+export function isUnsubscribeRequestConfigured(): boolean {
+  return Boolean(
+    isNewsletterEmailConfigured() &&
+    process.env.UPSTASH_REDIS_REST_URL &&
+    process.env.UPSTASH_REDIS_REST_TOKEN,
+  )
+}
+
+export async function claimUnsubscribeRequestCooldown(email: string): Promise<boolean> {
+  const key = createHash('sha256').update(email).digest('hex')
+  const result = await Redis.fromEnv().set(`unsubscribe-request:${key}`, '1', {
+    nx: true,
+    ex: 15 * 60,
+  })
+  return result === 'OK'
 }
 
 export async function sendUnsubscribeLinkEmail(email: string): Promise<boolean> {
   const apiKey = process.env.LOOPS_API_KEY?.trim()
   const transactionalId = process.env.LOOPS_UNSUBSCRIBE_TRANSACTIONAL_ID?.trim()
-  const unsubscribeUrl = createUnsubscribeUrl(email, SITE_URL)
+  const publicUrl = process.env.NEWSLETTER_PUBLIC_URL?.trim()
+  const unsubscribeUrl = publicUrl ? createUnsubscribeUrl(email, publicUrl) : null
   if (!apiKey || !transactionalId || !unsubscribeUrl) return false
 
   const response = await fetch('https://app.loops.so/api/v1/transactional', {

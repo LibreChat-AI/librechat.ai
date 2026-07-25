@@ -2,22 +2,30 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createSupabaseMock, jsonRequest } from '@/__tests__/helpers'
 
 const mockIsIpRateLimited = vi.fn(() => false)
-const mockIsRecipientRateLimited = vi.fn(() => false)
+const mockClaimCooldown = vi.fn(async (_email: string) => true)
 const mockSendUnsubscribeLinkEmail = vi.fn(async (_email: string) => true)
 let supabaseClient: ReturnType<typeof createSupabaseMock> | null = createSupabaseMock()
 
 vi.mock('@/lib/rate-limit', () => ({
-  createRateLimiter: vi
-    .fn()
-    .mockReturnValueOnce(mockIsIpRateLimited)
-    .mockReturnValueOnce(mockIsRecipientRateLimited),
+  createRateLimiter: () => mockIsIpRateLimited,
   getClientIp: () => '127.0.0.1',
 }))
 
 vi.mock('@/lib/newsletter-email', () => ({
-  isNewsletterEmailConfigured: () => true,
+  claimUnsubscribeRequestCooldown: (email: string) => mockClaimCooldown(email),
+  isUnsubscribeRequestConfigured: () => true,
   sendUnsubscribeLinkEmail: (email: string) => mockSendUnsubscribeLinkEmail(email),
 }))
+
+vi.mock('next/server', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('next/server')>()
+  return {
+    ...actual,
+    after: (callback: () => void | Promise<void>) => {
+      void callback()
+    },
+  }
+})
 
 vi.mock('@/lib/supabase', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/supabase')>()
@@ -33,7 +41,7 @@ describe('POST /api/unsubscribe/request', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockIsIpRateLimited.mockReturnValue(false)
-    mockIsRecipientRateLimited.mockReturnValue(false)
+    mockClaimCooldown.mockResolvedValue(true)
     supabaseClient = createSupabaseMock()
   })
 
@@ -65,7 +73,7 @@ describe('POST /api/unsubscribe/request', () => {
   })
 
   it('silently throttles repeated recipient requests', async () => {
-    mockIsRecipientRateLimited.mockReturnValue(true)
+    mockClaimCooldown.mockResolvedValue(false)
 
     const response = await POST(
       jsonRequest('https://example.com/api/unsubscribe/request', {

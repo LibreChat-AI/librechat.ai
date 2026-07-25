@@ -1,11 +1,27 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { isNewsletterEmailConfigured, sendUnsubscribeLinkEmail } from '@/lib/newsletter-email'
+import {
+  claimUnsubscribeRequestCooldown,
+  isNewsletterEmailConfigured,
+  isUnsubscribeRequestConfigured,
+  sendUnsubscribeLinkEmail,
+} from '@/lib/newsletter-email'
+
+const mockRedisSet = vi.fn(async () => 'OK')
+
+vi.mock('@upstash/redis', () => ({
+  Redis: {
+    fromEnv: () => ({ set: mockRedisSet }),
+  },
+}))
 
 describe('newsletter unsubscribe email', () => {
   beforeEach(() => {
     process.env.LOOPS_API_KEY = 'loops-key'
     process.env.LOOPS_UNSUBSCRIBE_TRANSACTIONAL_ID = 'transactional-id'
     process.env.UNSUBSCRIBE_SECRET = 'unsubscribe-secret'
+    process.env.NEWSLETTER_PUBLIC_URL = 'https://www.librechat.ai'
+    process.env.UPSTASH_REDIS_REST_URL = 'https://redis.example.com'
+    process.env.UPSTASH_REDIS_REST_TOKEN = 'redis-token'
   })
 
   afterEach(() => {
@@ -13,12 +29,30 @@ describe('newsletter unsubscribe email', () => {
     delete process.env.LOOPS_API_KEY
     delete process.env.LOOPS_UNSUBSCRIBE_TRANSACTIONAL_ID
     delete process.env.UNSUBSCRIBE_SECRET
+    delete process.env.NEWSLETTER_PUBLIC_URL
+    delete process.env.UPSTASH_REDIS_REST_URL
+    delete process.env.UPSTASH_REDIS_REST_TOKEN
   })
 
   it('requires all email and signing configuration', () => {
     expect(isNewsletterEmailConfigured()).toBe(true)
     delete process.env.UNSUBSCRIBE_SECRET
     expect(isNewsletterEmailConfigured()).toBe(false)
+  })
+
+  it('requires shared Redis for unsubscribe-link requests', () => {
+    expect(isUnsubscribeRequestConfigured()).toBe(true)
+    delete process.env.UPSTASH_REDIS_REST_TOKEN
+    expect(isUnsubscribeRequestConfigured()).toBe(false)
+  })
+
+  it('claims a hashed shared cooldown key', async () => {
+    expect(await claimUnsubscribeRequestCooldown('user@example.com')).toBe(true)
+    expect(mockRedisSet).toHaveBeenCalledWith(
+      expect.stringMatching(/^unsubscribe-request:[a-f0-9]{64}$/),
+      '1',
+      { nx: true, ex: 900 },
+    )
   })
 
   it('sends a signed unsubscribe URL to the subscriber', async () => {
