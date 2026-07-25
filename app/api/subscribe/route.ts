@@ -43,19 +43,19 @@ export async function POST(request: Request) {
 
     if (existing) {
       if (existing.status === 'subscribed') {
-        if (!(await sendNewsletterWelcomeEmail(normalized))) {
-          return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })
-        }
         return NextResponse.json({ message: 'Email already subscribed' }, { status: 409 })
       }
 
       // Re-subscribe if previously unsubscribed
-      await supabase.from('subscribers').update({ status: 'subscribed' }).eq('email', normalized)
-
       if (!(await sendNewsletterWelcomeEmail(normalized))) {
         return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })
       }
+      await supabase.from('subscribers').update({ status: 'subscribed' }).eq('email', normalized)
       return NextResponse.json({ message: 'Subscription successful' }, { status: 200 })
+    }
+
+    if (!(await sendNewsletterWelcomeEmail(normalized))) {
+      return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })
     }
 
     // Insert new subscriber
@@ -68,9 +68,6 @@ export async function POST(request: Request) {
       return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })
     }
 
-    if (!(await sendNewsletterWelcomeEmail(normalized))) {
-      return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })
-    }
     return NextResponse.json({ message: 'Subscription successful' }, { status: 201 })
   } catch {
     return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })

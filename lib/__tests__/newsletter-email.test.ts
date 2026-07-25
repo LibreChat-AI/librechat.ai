@@ -32,10 +32,12 @@ describe('newsletter unsubscribe email', () => {
     const [, init] = fetchMock.mock.calls[0]
     const payload = JSON.parse(init?.body as string) as {
       email: string
+      addToAudience: boolean
       dataVariables: { unsubscribeUrl: string }
     }
     const unsubscribeUrl = new URL(payload.dataVariables.unsubscribeUrl)
     expect(payload.email).toBe('user@example.com')
+    expect(payload.addToAudience).toBe(false)
     expect(unsubscribeUrl.origin).toBe('https://www.librechat.ai')
     expect(unsubscribeUrl.pathname).toBe('/unsubscribe')
     expect(unsubscribeUrl.searchParams.get('email')).toBe('user@example.com')

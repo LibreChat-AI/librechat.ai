@@ -99,6 +99,7 @@ describe('POST /api/subscribe', () => {
 
     expect(response.status).toBe(409)
     expect(body).toEqual({ message: 'Email already subscribed' })
+    expect(mockSendNewsletterWelcomeEmail).not.toHaveBeenCalled()
   })
 
   it('re-subscribes a previously unsubscribed email', async () => {
@@ -142,6 +143,18 @@ describe('POST /api/subscribe', () => {
 
     expect(response.status).toBe(500)
     expect(body).toEqual({ message: 'Subscription failed' })
+  })
+
+  it('does not create a subscriber when email delivery fails', async () => {
+    mockSendNewsletterWelcomeEmail.mockResolvedValue(false)
+    supabaseClient = createSupabaseMock({ existing: null })
+
+    const response = await POST(
+      jsonRequest('https://example.com/api/subscribe', { email: 'new@example.com' }),
+    )
+
+    expect(response.status).toBe(500)
+    expect(supabaseClient.insert).not.toHaveBeenCalled()
   })
 
   it('returns 500 for malformed JSON', async () => {

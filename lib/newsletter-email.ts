@@ -24,7 +24,7 @@ export async function sendNewsletterWelcomeEmail(email: string): Promise<boolean
     body: JSON.stringify({
       email,
       transactionalId,
-      addToAudience: true,
+      addToAudience: false,
       dataVariables: { unsubscribeUrl },
     }),
   })
