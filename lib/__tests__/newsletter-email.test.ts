@@ -143,6 +143,7 @@ describe('newsletter unsubscribe email', () => {
     expect(await sendUnsubscribeLinkEmail('user@example.com')).toBe(true)
 
     const [, init] = fetchMock.mock.calls[0]
+    expect(init?.signal).toBeInstanceOf(AbortSignal)
     const payload = JSON.parse(init?.body as string) as {
       email: string
       addToAudience: boolean

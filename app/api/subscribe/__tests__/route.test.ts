@@ -164,7 +164,8 @@ describe('POST /api/subscribe', () => {
 
     expect(response.status).toBe(200)
     expect(body).toEqual({ message: 'Subscription successful' })
-    expect(supabaseClient.update).toHaveBeenCalledWith({ status: 'subscribed' })
+    expect(supabaseClient.update).toHaveBeenNthCalledWith(1, { status: 'pending' })
+    expect(supabaseClient.update).toHaveBeenNthCalledWith(2, { status: 'subscribed' })
     expect(supabaseClient.eqAfterUpdate).toHaveBeenCalledWith('email', 'user@example.com')
     expect(supabaseClient.eqAfterConditionalUpdate).toHaveBeenCalledWith('status', 'unsubscribed')
   })
@@ -181,7 +182,7 @@ describe('POST /api/subscribe', () => {
     expect(body).toEqual({ message: 'Subscription successful' })
     expect(supabaseClient.insert).toHaveBeenCalledWith({
       email: 'new@example.com',
-      status: 'subscribed',
+      status: 'pending',
     })
     expect(mockSendUnsubscribeLinkEmail).toHaveBeenCalledWith('new@example.com')
     expect(mockClaimSubscribeRequest).toHaveBeenCalledWith('new@example.com')
@@ -224,7 +225,7 @@ describe('POST /api/subscribe', () => {
     expect(supabaseClient.insert).toHaveBeenCalled()
     expect(supabaseClient.deleteRows).toHaveBeenCalled()
     expect(supabaseClient.eqAfterDelete).toHaveBeenCalledWith('email', 'new@example.com')
-    expect(supabaseClient.eqAfterConditionalDelete).toHaveBeenCalledWith('status', 'subscribed')
+    expect(supabaseClient.eqAfterConditionalDelete).toHaveBeenCalledWith('status', 'pending')
   })
 
   it('does not re-subscribe when email delivery fails', async () => {
@@ -236,7 +237,7 @@ describe('POST /api/subscribe', () => {
     )
 
     expect(response.status).toBe(500)
-    expect(supabaseClient.update).toHaveBeenNthCalledWith(1, { status: 'subscribed' })
+    expect(supabaseClient.update).toHaveBeenNthCalledWith(1, { status: 'pending' })
     expect(supabaseClient.update).toHaveBeenNthCalledWith(2, { status: 'unsubscribed' })
   })
 
@@ -251,6 +252,19 @@ describe('POST /api/subscribe', () => {
     expect(response.status).toBe(409)
     expect(mockSendUnsubscribeLinkEmail).not.toHaveBeenCalled()
     expect(supabaseClient.update).toHaveBeenCalledTimes(1)
+  })
+
+  it('retries delivery for a recoverable pending subscriber', async () => {
+    supabaseClient = createSupabaseMock({ existing: { id: '1', status: 'pending' } })
+
+    const response = await POST(
+      jsonRequest('https://example.com/api/subscribe', { email: 'user@example.com' }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(mockSendUnsubscribeLinkEmail).toHaveBeenCalledWith('user@example.com')
+    expect(supabaseClient.update).toHaveBeenCalledOnce()
+    expect(supabaseClient.update).toHaveBeenCalledWith({ status: 'subscribed' })
   })
 
   it('stops when ownership of the subscription lease is lost', async () => {

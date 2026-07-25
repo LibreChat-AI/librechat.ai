@@ -127,6 +127,7 @@ export async function sendUnsubscribeLinkEmail(email: string): Promise<boolean> 
 
     const response = await fetch('https://app.loops.so/api/v1/transactional', {
       method: 'POST',
+      signal: AbortSignal.timeout(45_000),
       headers: {
         Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',

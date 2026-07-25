@@ -85,58 +85,86 @@ export async function POST(request: Request) {
           return NextResponse.json({ message: 'Email already subscribed' }, { status: 409 })
         }
 
-        // Re-subscribe if previously unsubscribed
+        if (existing.status !== 'pending') {
+          if (existing.status !== 'unsubscribed' || !(await renewLease())) {
+            return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })
+          }
+          const { data: pending, error: transitionError } = await supabase
+            .from('subscribers')
+            .update({ status: 'pending' })
+            .eq('email', normalized)
+            .eq('status', 'unsubscribed')
+            .select('id')
+            .maybeSingle()
+          if (transitionError) {
+            return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })
+          }
+          if (!pending) {
+            return NextResponse.json({ message: 'Email already subscribed' }, { status: 409 })
+          }
+        }
+      } else {
         if (!(await renewLease())) {
           return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })
         }
-        const { data: transitioned, error: transitionError } = await supabase
+
+        // Keep incomplete delivery recoverable instead of recording a
+        // subscription before its signed unsubscribe link is available.
+        const { error } = await supabase
           .from('subscribers')
-          .update({ status: 'subscribed' })
-          .eq('email', normalized)
-          .eq('status', 'unsubscribed')
-          .select('id')
-          .maybeSingle()
-        if (transitionError) {
+          .insert({ email: normalized, status: 'pending' })
+
+        if (error) {
+          console.error('Subscription error:', error.message)
           return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })
         }
-        if (!transitioned) {
-          return NextResponse.json({ message: 'Email already subscribed' }, { status: 409 })
-        }
-        if (!(await renewLease()) || !(await sendUnsubscribeLinkEmail(normalized))) {
-          await supabase
-            .from('subscribers')
-            .update({ status: 'unsubscribed' })
-            .eq('email', normalized)
-            .eq('status', 'subscribed')
-          return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })
-        }
-        return NextResponse.json({ message: 'Subscription successful' }, { status: 200 })
       }
 
       if (!(await renewLease())) {
         return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })
       }
+      const delivered = await sendUnsubscribeLinkEmail(normalized)
+      if (!(await renewLease())) {
+        return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })
+      }
+      if (!delivered) {
+        // A failed compensation can safely leave `pending`: the next request
+        // retries delivery instead of treating the address as subscribed.
+        const { error: rollbackError } = existing
+          ? await supabase
+              .from('subscribers')
+              .update({ status: 'unsubscribed' })
+              .eq('email', normalized)
+              .eq('status', 'pending')
+          : await supabase
+              .from('subscribers')
+              .delete()
+              .eq('email', normalized)
+              .eq('status', 'pending')
+        if (rollbackError) {
+          console.error('Subscription rollback error:', rollbackError.message)
+        }
+        return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })
+      }
 
-      // Insert new subscriber
-      const { error } = await supabase
+      const { data: subscribed, error: finalizeError } = await supabase
         .from('subscribers')
-        .insert({ email: normalized, status: 'subscribed' })
-
-      if (error) {
-        console.error('Subscription error:', error.message)
+        .update({ status: 'subscribed' })
+        .eq('email', normalized)
+        .eq('status', 'pending')
+        .select('id')
+        .maybeSingle()
+      if (finalizeError) {
         return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })
       }
-
-      if (!(await renewLease()) || !(await sendUnsubscribeLinkEmail(normalized))) {
-        await supabase
-          .from('subscribers')
-          .delete()
-          .eq('email', normalized)
-          .eq('status', 'subscribed')
-        return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })
+      if (!subscribed) {
+        return NextResponse.json({ message: 'Email already subscribed' }, { status: 409 })
       }
 
-      return NextResponse.json({ message: 'Subscription successful' }, { status: 201 })
+      return NextResponse.json(
+        { message: 'Subscription successful' },
+        { status: existing ? 200 : 201 },
+      )
     } finally {
       clearInterval(leaseRenewal)
       await releaseSubscribeRequest(normalized, lockOwner).catch(() => undefined)

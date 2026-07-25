@@ -32,7 +32,7 @@ export function createSupabaseMock(options: SupabaseMockOptions = {}) {
     options.updateError
       ? { data: null, error: { message: 'update failed' } }
       : {
-          data: options.existing?.status === 'unsubscribed' ? options.existing : null,
+          data: options.existing ?? { id: '1', status: 'subscribed' },
           error: null,
         },
   )
