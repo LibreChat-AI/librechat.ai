@@ -1,7 +1,7 @@
 'use client'
 
 import dynamic from 'next/dynamic'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 const UnsubscribeForm = dynamic(() => import('@/components/Newsletter/UnsubscribeForm'), {
   ssr: false,
@@ -9,8 +9,11 @@ const UnsubscribeForm = dynamic(() => import('@/components/Newsletter/Unsubscrib
 
 export default function UnsubscribeClient() {
   const [credentials, setCredentials] = useState<{ email?: string; token?: string } | null>(null)
+  const initialized = useRef(false)
 
   useEffect(() => {
+    if (initialized.current) return
+    initialized.current = true
     const params = new URLSearchParams(window.location.hash.slice(1))
     setCredentials({
       email: params.get('email') ?? undefined,
