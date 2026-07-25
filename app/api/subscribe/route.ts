@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseClient, isValidEmail, normalizeEmail } from '@/lib/supabase'
 import { createRateLimiter, getClientIp } from '@/lib/rate-limit'
-import { isNewsletterEmailConfigured, sendNewsletterWelcomeEmail } from '@/lib/newsletter-email'
+import { isNewsletterEmailConfigured, sendUnsubscribeLinkEmail } from '@/lib/newsletter-email'
 
 const isRateLimited = createRateLimiter(5, 60_000)
 
@@ -47,15 +47,15 @@ export async function POST(request: Request) {
       }
 
       // Re-subscribe if previously unsubscribed
-      if (!(await sendNewsletterWelcomeEmail(normalized))) {
+      await supabase.from('subscribers').update({ status: 'subscribed' }).eq('email', normalized)
+      if (!(await sendUnsubscribeLinkEmail(normalized))) {
+        await supabase
+          .from('subscribers')
+          .update({ status: 'unsubscribed' })
+          .eq('email', normalized)
         return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })
       }
-      await supabase.from('subscribers').update({ status: 'subscribed' }).eq('email', normalized)
       return NextResponse.json({ message: 'Subscription successful' }, { status: 200 })
-    }
-
-    if (!(await sendNewsletterWelcomeEmail(normalized))) {
-      return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })
     }
 
     // Insert new subscriber
@@ -65,6 +65,11 @@ export async function POST(request: Request) {
 
     if (error) {
       console.error('Subscription error:', error.message)
+      return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })
+    }
+
+    if (!(await sendUnsubscribeLinkEmail(normalized))) {
+      await supabase.from('subscribers').delete().eq('email', normalized)
       return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })
     }
 

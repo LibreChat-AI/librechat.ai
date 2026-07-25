@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { isNewsletterEmailConfigured, sendNewsletterWelcomeEmail } from '@/lib/newsletter-email'
+import { isNewsletterEmailConfigured, sendUnsubscribeLinkEmail } from '@/lib/newsletter-email'
 
 describe('newsletter unsubscribe email', () => {
   beforeEach(() => {
@@ -27,7 +27,7 @@ describe('newsletter unsubscribe email', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
 
-    expect(await sendNewsletterWelcomeEmail('user@example.com')).toBe(true)
+    expect(await sendUnsubscribeLinkEmail('user@example.com')).toBe(true)
 
     const [, init] = fetchMock.mock.calls[0]
     const payload = JSON.parse(init?.body as string) as {

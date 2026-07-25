@@ -3,31 +3,45 @@ import toast, { Toaster } from 'react-hot-toast'
 import validator from 'validator'
 import style from './newsletterform.module.css'
 
-const UnsubscribeForm = ({ email = '', token = '' }: { email?: string; token?: string }) => {
+const UnsubscribeForm = ({
+  email: initialEmail = '',
+  token = '',
+}: {
+  email?: string
+  token?: string
+}) => {
+  const [email, setEmail] = useState(initialEmail)
   const [isLoading, setIsLoading] = useState(false)
   const hasSignedLink = validator.isEmail(email) && token.length > 0
 
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault()
 
-    if (!hasSignedLink) {
-      toast.error('This unsubscribe link is invalid')
+    if (!validator.isEmail(email)) {
+      toast.error('Invalid email format')
       return
     }
 
     setIsLoading(true)
 
     try {
-      const response = await fetch('/api/unsubscribe', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
+      const response = await fetch(
+        hasSignedLink ? '/api/unsubscribe' : '/api/unsubscribe/request',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ email, token }),
         },
-        body: JSON.stringify({ email, token }),
-      })
+      )
 
       if (response.status === 200) {
-        toast.success('Unsubscription successful')
+        toast.success(
+          hasSignedLink
+            ? 'Unsubscription request received'
+            : 'If that address is subscribed, an unsubscribe link has been sent',
+        )
       } else {
         toast.error('Unsubscription failed')
       }
@@ -49,15 +63,18 @@ const UnsubscribeForm = ({ email = '', token = '' }: { email?: string; token?: s
             type="email"
             placeholder="Email address"
             value={email}
+            onChange={(e) => setEmail(e.target.value)}
             className={style[`email-input`]}
-            readOnly
+            readOnly={hasSignedLink}
           />
-          <button
-            type="submit"
-            className={style[`subscribe-button`]}
-            disabled={isLoading || !hasSignedLink}
-          >
-            {isLoading ? 'Unsubscribing...' : 'Unsubscribe'}
+          <button type="submit" className={style[`subscribe-button`]} disabled={isLoading}>
+            {isLoading
+              ? hasSignedLink
+                ? 'Unsubscribing...'
+                : 'Sending...'
+              : hasSignedLink
+                ? 'Unsubscribe'
+                : 'Send unsubscribe link'}
           </button>
         </form>
       </div>

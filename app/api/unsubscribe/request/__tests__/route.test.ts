@@ -1,0 +1,79 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { createSupabaseMock, jsonRequest } from '@/__tests__/helpers'
+
+const mockIsIpRateLimited = vi.fn(() => false)
+const mockIsRecipientRateLimited = vi.fn(() => false)
+const mockSendUnsubscribeLinkEmail = vi.fn(async (_email: string) => true)
+let supabaseClient: ReturnType<typeof createSupabaseMock> | null = createSupabaseMock()
+
+vi.mock('@/lib/rate-limit', () => ({
+  createRateLimiter: vi
+    .fn()
+    .mockReturnValueOnce(mockIsIpRateLimited)
+    .mockReturnValueOnce(mockIsRecipientRateLimited),
+  getClientIp: () => '127.0.0.1',
+}))
+
+vi.mock('@/lib/newsletter-email', () => ({
+  isNewsletterEmailConfigured: () => true,
+  sendUnsubscribeLinkEmail: (email: string) => mockSendUnsubscribeLinkEmail(email),
+}))
+
+vi.mock('@/lib/supabase', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/supabase')>()
+  return {
+    ...actual,
+    getSupabaseClient: () => supabaseClient,
+  }
+})
+
+const { POST } = await import('../route')
+
+describe('POST /api/unsubscribe/request', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockIsIpRateLimited.mockReturnValue(false)
+    mockIsRecipientRateLimited.mockReturnValue(false)
+    supabaseClient = createSupabaseMock()
+  })
+
+  it('sends a signed link to an existing subscriber', async () => {
+    supabaseClient = createSupabaseMock({ existing: { id: '1', status: 'subscribed' } })
+
+    const response = await POST(
+      jsonRequest('https://example.com/api/unsubscribe/request', {
+        email: 'User@Example.com',
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(mockSendUnsubscribeLinkEmail).toHaveBeenCalledWith('user@example.com')
+  })
+
+  it('returns the same response without emailing a missing subscriber', async () => {
+    const response = await POST(
+      jsonRequest('https://example.com/api/unsubscribe/request', {
+        email: 'missing@example.com',
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({
+      message: 'If that address is subscribed, an unsubscribe link has been sent',
+    })
+    expect(mockSendUnsubscribeLinkEmail).not.toHaveBeenCalled()
+  })
+
+  it('silently throttles repeated recipient requests', async () => {
+    mockIsRecipientRateLimited.mockReturnValue(true)
+
+    const response = await POST(
+      jsonRequest('https://example.com/api/unsubscribe/request', {
+        email: 'user@example.com',
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(mockSendUnsubscribeLinkEmail).not.toHaveBeenCalled()
+  })
+})

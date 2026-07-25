@@ -4,7 +4,7 @@ import { createSupabaseMock, jsonRequest } from '@/__tests__/helpers'
 const mockIsRateLimited = vi.fn(() => false)
 const mockGetClientIp = vi.fn((_request: Request) => '127.0.0.1')
 const mockIsNewsletterEmailConfigured = vi.fn(() => true)
-const mockSendNewsletterWelcomeEmail = vi.fn(async (_email: string) => true)
+const mockSendUnsubscribeLinkEmail = vi.fn(async (_email: string) => true)
 let supabaseClient: ReturnType<typeof createSupabaseMock> | null = createSupabaseMock()
 
 vi.mock('@/lib/rate-limit', () => ({
@@ -14,7 +14,7 @@ vi.mock('@/lib/rate-limit', () => ({
 
 vi.mock('@/lib/newsletter-email', () => ({
   isNewsletterEmailConfigured: () => mockIsNewsletterEmailConfigured(),
-  sendNewsletterWelcomeEmail: (email: string) => mockSendNewsletterWelcomeEmail(email),
+  sendUnsubscribeLinkEmail: (email: string) => mockSendUnsubscribeLinkEmail(email),
 }))
 
 vi.mock('@/lib/supabase', async (importOriginal) => {
@@ -32,7 +32,7 @@ describe('POST /api/subscribe', () => {
     vi.clearAllMocks()
     mockIsRateLimited.mockReturnValue(false)
     mockIsNewsletterEmailConfigured.mockReturnValue(true)
-    mockSendNewsletterWelcomeEmail.mockResolvedValue(true)
+    mockSendUnsubscribeLinkEmail.mockResolvedValue(true)
     supabaseClient = createSupabaseMock()
   })
 
@@ -99,7 +99,7 @@ describe('POST /api/subscribe', () => {
 
     expect(response.status).toBe(409)
     expect(body).toEqual({ message: 'Email already subscribed' })
-    expect(mockSendNewsletterWelcomeEmail).not.toHaveBeenCalled()
+    expect(mockSendUnsubscribeLinkEmail).not.toHaveBeenCalled()
   })
 
   it('re-subscribes a previously unsubscribed email', async () => {
@@ -130,7 +130,7 @@ describe('POST /api/subscribe', () => {
       email: 'new@example.com',
       status: 'subscribed',
     })
-    expect(mockSendNewsletterWelcomeEmail).toHaveBeenCalledWith('new@example.com')
+    expect(mockSendUnsubscribeLinkEmail).toHaveBeenCalledWith('new@example.com')
   })
 
   it('returns 500 when insert fails', async () => {
@@ -146,7 +146,7 @@ describe('POST /api/subscribe', () => {
   })
 
   it('does not create a subscriber when email delivery fails', async () => {
-    mockSendNewsletterWelcomeEmail.mockResolvedValue(false)
+    mockSendUnsubscribeLinkEmail.mockResolvedValue(false)
     supabaseClient = createSupabaseMock({ existing: null })
 
     const response = await POST(
@@ -154,7 +154,21 @@ describe('POST /api/subscribe', () => {
     )
 
     expect(response.status).toBe(500)
-    expect(supabaseClient.insert).not.toHaveBeenCalled()
+    expect(supabaseClient.insert).toHaveBeenCalled()
+    expect(supabaseClient.deleteRows).toHaveBeenCalled()
+  })
+
+  it('restores unsubscribed status when re-subscription email delivery fails', async () => {
+    mockSendUnsubscribeLinkEmail.mockResolvedValue(false)
+    supabaseClient = createSupabaseMock({ existing: { id: '1', status: 'unsubscribed' } })
+
+    const response = await POST(
+      jsonRequest('https://example.com/api/subscribe', { email: 'user@example.com' }),
+    )
+
+    expect(response.status).toBe(500)
+    expect(supabaseClient.update).toHaveBeenNthCalledWith(1, { status: 'subscribed' })
+    expect(supabaseClient.update).toHaveBeenNthCalledWith(2, { status: 'unsubscribed' })
   })
 
   it('returns 500 for malformed JSON', async () => {

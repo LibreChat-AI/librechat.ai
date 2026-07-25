@@ -25,6 +25,8 @@ export interface SupabaseMockOptions {
 }
 
 export function createSupabaseMock(options: SupabaseMockOptions = {}) {
+  const eqAfterDelete = vi.fn().mockResolvedValue({ error: null })
+  const deleteRows = vi.fn().mockReturnValue({ eq: eqAfterDelete })
   const eqAfterUpdate = vi
     .fn()
     .mockResolvedValue(
@@ -43,9 +45,25 @@ export function createSupabaseMock(options: SupabaseMockOptions = {}) {
         ? { data: null, error: { message: 'not found' } }
         : { data: options.existing, error: null },
     )
-  const eqAfterSelect = vi.fn().mockReturnValue({ single })
+  const maybeSingle = vi
+    .fn()
+    .mockResolvedValue(options.existing ? { data: options.existing, error: null } : { data: null })
+  const eqByStatus = vi.fn().mockReturnValue({ maybeSingle })
+  const eqAfterSelect = vi.fn().mockReturnValue({ single, eq: eqByStatus })
   const select = vi.fn().mockReturnValue({ eq: eqAfterSelect })
-  const from = vi.fn().mockReturnValue({ select, update, insert })
+  const from = vi.fn().mockReturnValue({ select, update, insert, delete: deleteRows })
 
-  return { from, select, eqAfterSelect, single, update, eqAfterUpdate, insert }
+  return {
+    from,
+    select,
+    eqAfterSelect,
+    eqByStatus,
+    single,
+    maybeSingle,
+    update,
+    eqAfterUpdate,
+    insert,
+    deleteRows,
+    eqAfterDelete,
+  }
 }

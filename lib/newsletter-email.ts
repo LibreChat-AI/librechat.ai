@@ -9,7 +9,7 @@ export function isNewsletterEmailConfigured(): boolean {
   )
 }
 
-export async function sendNewsletterWelcomeEmail(email: string): Promise<boolean> {
+export async function sendUnsubscribeLinkEmail(email: string): Promise<boolean> {
   const apiKey = process.env.LOOPS_API_KEY?.trim()
   const transactionalId = process.env.LOOPS_UNSUBSCRIBE_TRANSACTIONAL_ID?.trim()
   const unsubscribeUrl = createUnsubscribeUrl(email, SITE_URL)
