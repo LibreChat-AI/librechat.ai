@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   claimUnsubscribeRequestCooldown,
   isNewsletterEmailConfigured,
+  isSubscribeRequestConfigured,
+  isSubscribeRequestRateLimited,
   isUnsubscribeRequestConfigured,
   isUnsubscribeRequestIpRateLimited,
   releaseUnsubscribeRequestCooldown,
@@ -27,6 +29,7 @@ vi.mock('@upstash/redis', () => ({
 
 describe('newsletter unsubscribe email', () => {
   beforeEach(() => {
+    vi.clearAllMocks()
     process.env.LOOPS_API_KEY = 'loops-key'
     process.env.LOOPS_UNSUBSCRIBE_TRANSACTIONAL_ID = 'transactional-id'
     process.env.UNSUBSCRIBE_SECRET = 'unsubscribe-secret'
@@ -57,6 +60,12 @@ describe('newsletter unsubscribe email', () => {
     expect(isUnsubscribeRequestConfigured()).toBe(false)
   })
 
+  it('requires shared Redis for subscription requests', () => {
+    expect(isSubscribeRequestConfigured()).toBe(true)
+    delete process.env.UPSTASH_REDIS_REST_TOKEN
+    expect(isSubscribeRequestConfigured()).toBe(false)
+  })
+
   it('claims a hashed shared cooldown key', async () => {
     expect(await claimUnsubscribeRequestCooldown('user@example.com')).toBe(true)
     expect(mockRedisSet).toHaveBeenCalledWith(
@@ -71,6 +80,18 @@ describe('newsletter unsubscribe email', () => {
 
     expect(await isUnsubscribeRequestIpRateLimited('192.0.2.1')).toBe(true)
     expect(mockRateLimit).toHaveBeenCalledWith(expect.stringMatching(/^[a-f0-9]{64}$/))
+  })
+
+  it('applies global and hashed-IP subscription limits', async () => {
+    expect(await isSubscribeRequestRateLimited('192.0.2.1')).toBe(false)
+    expect(mockRateLimit).toHaveBeenNthCalledWith(1, 'global')
+    expect(mockRateLimit).toHaveBeenNthCalledWith(2, expect.stringMatching(/^[a-f0-9]{64}$/))
+
+    mockRateLimit.mockClear()
+    mockRateLimit.mockResolvedValueOnce({ success: false })
+    expect(await isSubscribeRequestRateLimited(null)).toBe(true)
+    expect(mockRateLimit).toHaveBeenCalledOnce()
+    expect(mockRateLimit).toHaveBeenCalledWith('global')
   })
 
   it('releases the same shared cooldown key', async () => {

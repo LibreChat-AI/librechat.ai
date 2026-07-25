@@ -1,7 +1,11 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseClient, isValidEmail, normalizeEmail } from '@/lib/supabase'
 import { createRateLimiter, getClientIp } from '@/lib/rate-limit'
-import { isNewsletterEmailConfigured, sendUnsubscribeLinkEmail } from '@/lib/newsletter-email'
+import {
+  isSubscribeRequestConfigured,
+  isSubscribeRequestRateLimited,
+  sendUnsubscribeLinkEmail,
+} from '@/lib/newsletter-email'
 
 const isRateLimited = createRateLimiter(5, 60_000)
 
@@ -25,11 +29,14 @@ export async function POST(request: Request) {
 
     const supabase = getSupabaseClient()
 
-    if (!supabase || !isNewsletterEmailConfigured()) {
+    if (!supabase || !isSubscribeRequestConfigured()) {
       return NextResponse.json(
         { message: 'Subscription service is not configured' },
         { status: 503 },
       )
+    }
+    if (await isSubscribeRequestRateLimited(ip)) {
+      return NextResponse.json({ message: 'Too many requests' }, { status: 429 })
     }
 
     const normalized = normalizeEmail(email)

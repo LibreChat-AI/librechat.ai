@@ -3,7 +3,8 @@ import { createSupabaseMock, jsonRequest } from '@/__tests__/helpers'
 
 const mockIsRateLimited = vi.fn(() => false)
 const mockGetClientIp = vi.fn((_request: Request) => '127.0.0.1')
-const mockIsNewsletterEmailConfigured = vi.fn(() => true)
+const mockIsSubscribeRequestConfigured = vi.fn(() => true)
+const mockIsSubscribeRequestRateLimited = vi.fn(async (_ip: string | null) => false)
 const mockSendUnsubscribeLinkEmail = vi.fn(async (_email: string) => true)
 let supabaseClient: ReturnType<typeof createSupabaseMock> | null = createSupabaseMock()
 
@@ -13,7 +14,8 @@ vi.mock('@/lib/rate-limit', () => ({
 }))
 
 vi.mock('@/lib/newsletter-email', () => ({
-  isNewsletterEmailConfigured: () => mockIsNewsletterEmailConfigured(),
+  isSubscribeRequestConfigured: () => mockIsSubscribeRequestConfigured(),
+  isSubscribeRequestRateLimited: (ip: string | null) => mockIsSubscribeRequestRateLimited(ip),
   sendUnsubscribeLinkEmail: (email: string) => mockSendUnsubscribeLinkEmail(email),
 }))
 
@@ -31,7 +33,8 @@ describe('POST /api/subscribe', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockIsRateLimited.mockReturnValue(false)
-    mockIsNewsletterEmailConfigured.mockReturnValue(true)
+    mockIsSubscribeRequestConfigured.mockReturnValue(true)
+    mockIsSubscribeRequestRateLimited.mockResolvedValue(false)
     mockSendUnsubscribeLinkEmail.mockResolvedValue(true)
     supabaseClient = createSupabaseMock()
   })
@@ -79,7 +82,7 @@ describe('POST /api/subscribe', () => {
   })
 
   it('returns 503 when unsubscribe email delivery is not configured', async () => {
-    mockIsNewsletterEmailConfigured.mockReturnValue(false)
+    mockIsSubscribeRequestConfigured.mockReturnValue(false)
 
     const response = await POST(
       jsonRequest('https://example.com/api/subscribe', { email: 'user@example.com' }),
@@ -87,6 +90,18 @@ describe('POST /api/subscribe', () => {
 
     expect(response.status).toBe(503)
     expect(await response.json()).toEqual({ message: 'Subscription service is not configured' })
+  })
+
+  it('uses the shared subscription request limiter', async () => {
+    mockIsSubscribeRequestRateLimited.mockResolvedValue(true)
+
+    const response = await POST(
+      jsonRequest('https://example.com/api/subscribe', { email: 'user@example.com' }),
+    )
+
+    expect(response.status).toBe(429)
+    expect(mockIsSubscribeRequestRateLimited).toHaveBeenCalledWith('127.0.0.1')
+    expect(supabaseClient!.select).not.toHaveBeenCalled()
   })
 
   it('returns 409 when the email is already subscribed', async () => {

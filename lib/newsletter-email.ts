@@ -20,6 +20,8 @@ export function isUnsubscribeRequestConfigured(): boolean {
   )
 }
 
+export const isSubscribeRequestConfigured = isUnsubscribeRequestConfigured
+
 function hashIdentifier(value: string): string {
   return createHash('sha256').update(value).digest('hex')
 }
@@ -29,6 +31,27 @@ function unsubscribeRequestKey(email: string): string {
 }
 
 let unsubscribeRequestIpLimiter: Ratelimit | null = null
+let subscribeRequestIpLimiter: Ratelimit | null = null
+let subscribeRequestGlobalLimiter: Ratelimit | null = null
+
+export async function isSubscribeRequestRateLimited(ip: string | null): Promise<boolean> {
+  subscribeRequestGlobalLimiter ??= new Ratelimit({
+    redis: Redis.fromEnv(),
+    limiter: Ratelimit.slidingWindow(100, '60 s'),
+    prefix: 'ratelimit:subscribe-global',
+  })
+  const globalResult = await subscribeRequestGlobalLimiter.limit('global')
+  if (!globalResult.success) return true
+  if (!ip) return false
+
+  subscribeRequestIpLimiter ??= new Ratelimit({
+    redis: Redis.fromEnv(),
+    limiter: Ratelimit.slidingWindow(5, '60 s'),
+    prefix: 'ratelimit:subscribe-ip',
+  })
+  const ipResult = await subscribeRequestIpLimiter.limit(hashIdentifier(ip))
+  return !ipResult.success
+}
 
 export async function isUnsubscribeRequestIpRateLimited(ip: string): Promise<boolean> {
   unsubscribeRequestIpLimiter ??= new Ratelimit({
