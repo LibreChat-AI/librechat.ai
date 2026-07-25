@@ -56,10 +56,17 @@ export async function POST(request: Request) {
       return NextResponse.json({ message: 'Unsubscription request received' }, { status: 200 })
     }
 
-    const { error: updateError } = await supabase
-      .from('subscribers')
-      .update({ status: 'unsubscribed' })
-      .eq('email', normalized)
+    let updateError: { message: string } | null
+    try {
+      const result = await supabase
+        .from('subscribers')
+        .update({ status: 'unsubscribed' })
+        .eq('email', normalized)
+      updateError = result.error
+    } catch (error) {
+      await releaseUnsubscribeToken(token).catch(() => undefined)
+      throw error
+    }
 
     if (updateError) {
       await releaseUnsubscribeToken(token).catch(() => undefined)

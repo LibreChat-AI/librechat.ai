@@ -152,6 +152,23 @@ describe('POST /api/unsubscribe', () => {
     expect(body).toEqual({ message: 'Unsubscription failed' })
   })
 
+  it('releases the token when the subscriber update rejects', async () => {
+    supabaseClient = createSupabaseMock({ existing: { id: '1', status: 'subscribed' } })
+    supabaseClient.eqAfterUpdate.mockRejectedValue(new Error('update failed'))
+
+    const response = await POST(
+      jsonRequest('https://example.com/api/unsubscribe', {
+        email: 'user@example.com',
+        token: createUnsubscribeToken('user@example.com'),
+      }),
+    )
+
+    expect(response.status).toBe(500)
+    expect(mockRedisDel).toHaveBeenCalledWith(
+      expect.stringMatching(/^unsubscribe-token-consumed:[a-f0-9]{64}$/),
+    )
+  })
+
   it('does not unsubscribe with an invalid token', async () => {
     const response = await POST(
       jsonRequest('https://example.com/api/unsubscribe', {

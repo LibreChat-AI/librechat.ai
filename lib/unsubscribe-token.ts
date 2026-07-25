@@ -54,9 +54,15 @@ export function verifyUnsubscribeToken(email: string, token: string): boolean {
 
   const [issuedAtValue, signature, extra] = token.split('.')
   if (!issuedAtValue || !signature || extra) return false
+  if (!/^(0|[1-9]\d*)$/.test(issuedAtValue)) return false
   const issuedAt = Number(issuedAtValue)
   const now = Math.floor(Date.now() / 1000)
-  if (!Number.isSafeInteger(issuedAt) || issuedAt > now || now - issuedAt > TOKEN_MAX_AGE_SECONDS) {
+  if (
+    !Number.isSafeInteger(issuedAt) ||
+    String(issuedAt) !== issuedAtValue ||
+    issuedAt > now ||
+    now - issuedAt > TOKEN_MAX_AGE_SECONDS
+  ) {
     return false
   }
 

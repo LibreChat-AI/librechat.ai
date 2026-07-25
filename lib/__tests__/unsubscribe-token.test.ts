@@ -52,6 +52,14 @@ describe('unsubscribe tokens', () => {
     expect(verifyUnsubscribeToken('user@example.com', token!)).toBe(false)
   })
 
+  it('rejects non-canonical timestamp representations', () => {
+    const token = createUnsubscribeToken('user@example.com')!
+    const [timestamp, signature] = token.split('.')
+
+    expect(verifyUnsubscribeToken('user@example.com', `0${timestamp}.${signature}`)).toBe(false)
+    expect(verifyUnsubscribeToken('user@example.com', `+${timestamp}.${signature}`)).toBe(false)
+  })
+
   it('records and releases consumed tokens by hash', async () => {
     const token = createUnsubscribeToken('user@example.com')!
 
