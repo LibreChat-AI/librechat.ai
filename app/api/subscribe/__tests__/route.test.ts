@@ -81,15 +81,16 @@ describe('POST /api/subscribe', () => {
     expect(body).toEqual({ message: 'Subscription service is not configured' })
   })
 
-  it('returns 503 when unsubscribe email delivery is not configured', async () => {
+  it('preserves Supabase-only subscriptions when email delivery is not configured', async () => {
     mockIsSubscribeRequestConfigured.mockReturnValue(false)
 
     const response = await POST(
-      jsonRequest('https://example.com/api/subscribe', { email: 'user@example.com' }),
+      jsonRequest('https://example.com/api/subscribe', { email: 'new@example.com' }),
     )
 
-    expect(response.status).toBe(503)
-    expect(await response.json()).toEqual({ message: 'Subscription service is not configured' })
+    expect(response.status).toBe(201)
+    expect(mockIsSubscribeRequestRateLimited).not.toHaveBeenCalled()
+    expect(mockSendUnsubscribeLinkEmail).not.toHaveBeenCalled()
   })
 
   it('uses the shared subscription request limiter', async () => {
@@ -174,7 +175,7 @@ describe('POST /api/subscribe', () => {
     expect(supabaseClient.deleteRows).toHaveBeenCalled()
   })
 
-  it('keeps a successful re-subscription when email delivery fails', async () => {
+  it('does not re-subscribe when email delivery fails', async () => {
     mockSendUnsubscribeLinkEmail.mockResolvedValue(false)
     supabaseClient = createSupabaseMock({ existing: { id: '1', status: 'unsubscribed' } })
 
@@ -182,11 +183,11 @@ describe('POST /api/subscribe', () => {
       jsonRequest('https://example.com/api/subscribe', { email: 'user@example.com' }),
     )
 
-    expect(response.status).toBe(200)
-    expect(supabaseClient.update).toHaveBeenCalledTimes(1)
+    expect(response.status).toBe(500)
+    expect(supabaseClient.update).not.toHaveBeenCalled()
   })
 
-  it('does not roll back a resubscription transition owned by another request', async () => {
+  it('does not claim a resubscription transition owned by another request', async () => {
     supabaseClient = createSupabaseMock({ existing: { id: '1', status: 'unsubscribed' } })
     supabaseClient.maybeSingleAfterUpdate.mockResolvedValue({ data: null, error: null })
 
@@ -195,7 +196,7 @@ describe('POST /api/subscribe', () => {
     )
 
     expect(response.status).toBe(409)
-    expect(mockSendUnsubscribeLinkEmail).not.toHaveBeenCalled()
+    expect(mockSendUnsubscribeLinkEmail).toHaveBeenCalledWith('user@example.com')
     expect(supabaseClient.update).toHaveBeenCalledTimes(1)
   })
 

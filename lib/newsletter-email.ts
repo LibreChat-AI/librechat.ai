@@ -104,7 +104,9 @@ export async function sendUnsubscribeLinkEmail(email: string): Promise<boolean> 
       body: JSON.stringify({
         email,
         transactionalId,
-        addToAudience: true,
+        // Loops transactional emails can be sent to recipients outside the
+        // Audience, so do not create a marketing contact as a side effect.
+        addToAudience: false,
         dataVariables: { unsubscribeUrl },
       }),
     })

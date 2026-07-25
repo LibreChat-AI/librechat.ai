@@ -29,13 +29,14 @@ export async function POST(request: Request) {
 
     const supabase = getSupabaseClient()
 
-    if (!supabase || !isSubscribeRequestConfigured()) {
+    if (!supabase) {
       return NextResponse.json(
         { message: 'Subscription service is not configured' },
         { status: 503 },
       )
     }
-    if (await isSubscribeRequestRateLimited(ip)) {
+    const sendSubscriptionEmail = isSubscribeRequestConfigured()
+    if (sendSubscriptionEmail && (await isSubscribeRequestRateLimited(ip))) {
       return NextResponse.json({ message: 'Too many requests' }, { status: 429 })
     }
 
@@ -54,6 +55,9 @@ export async function POST(request: Request) {
       }
 
       // Re-subscribe if previously unsubscribed
+      if (sendSubscriptionEmail && !(await sendUnsubscribeLinkEmail(normalized))) {
+        return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })
+      }
       const { data: transitioned, error: transitionError } = await supabase
         .from('subscribers')
         .update({ status: 'subscribed' })
@@ -67,7 +71,6 @@ export async function POST(request: Request) {
       if (!transitioned) {
         return NextResponse.json({ message: 'Email already subscribed' }, { status: 409 })
       }
-      await sendUnsubscribeLinkEmail(normalized)
       return NextResponse.json({ message: 'Subscription successful' }, { status: 200 })
     }
 
@@ -81,7 +84,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })
     }
 
-    if (!(await sendUnsubscribeLinkEmail(normalized))) {
+    if (sendSubscriptionEmail && !(await sendUnsubscribeLinkEmail(normalized))) {
       await supabase.from('subscribers').delete().eq('email', normalized)
       return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })
     }

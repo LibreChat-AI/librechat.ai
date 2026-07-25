@@ -1,5 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto'
 
+const TOKEN_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
+
 function getSecret(): string | null {
   return process.env.UNSUBSCRIBE_SECRET?.trim() || null
 }
@@ -13,7 +15,9 @@ export function isUnsubscribeConfigured(): boolean {
 export function createUnsubscribeToken(email: string): string | null {
   const secret = getSecret()
   if (!secret) return null
-  return createHmac('sha256', secret).update(email).digest('base64url')
+  const issuedAt = Math.floor(Date.now() / 1000)
+  const signature = createHmac('sha256', secret).update(`${email}:${issuedAt}`).digest('base64url')
+  return `${issuedAt}.${signature}`
 }
 
 export function createUnsubscribeUrl(email: string, origin: string): string | null {
@@ -27,10 +31,19 @@ export function createUnsubscribeUrl(email: string, origin: string): string | nu
 }
 
 export function verifyUnsubscribeToken(email: string, token: string): boolean {
-  const expected = createUnsubscribeToken(email)
-  if (!expected) return false
+  const secret = getSecret()
+  if (!secret) return false
 
-  const actualBuffer = new TextEncoder().encode(token)
+  const [issuedAtValue, signature, extra] = token.split('.')
+  if (!issuedAtValue || !signature || extra) return false
+  const issuedAt = Number(issuedAtValue)
+  const now = Math.floor(Date.now() / 1000)
+  if (!Number.isSafeInteger(issuedAt) || issuedAt > now || now - issuedAt > TOKEN_MAX_AGE_SECONDS) {
+    return false
+  }
+
+  const expected = createHmac('sha256', secret).update(`${email}:${issuedAt}`).digest('base64url')
+  const actualBuffer = new TextEncoder().encode(signature)
   const expectedBuffer = new TextEncoder().encode(expected)
   return (
     actualBuffer.length === expectedBuffer.length && timingSafeEqual(actualBuffer, expectedBuffer)
