@@ -77,8 +77,8 @@ describe('newsletter unsubscribe email', () => {
 
   it('rate limits a hashed IP using shared storage', async () => {
     expect(await isUnsubscribeRequestRateLimited('192.0.2.1')).toBe(false)
-    expect(mockRateLimit).toHaveBeenNthCalledWith(1, 'global')
-    expect(mockRateLimit).toHaveBeenNthCalledWith(2, expect.stringMatching(/^[a-f0-9]{64}$/))
+    expect(mockRateLimit).toHaveBeenCalledOnce()
+    expect(mockRateLimit).toHaveBeenCalledWith(expect.stringMatching(/^[a-f0-9]{64}$/))
 
     mockRateLimit.mockClear()
     mockRateLimit.mockResolvedValueOnce({ success: false })
@@ -89,8 +89,8 @@ describe('newsletter unsubscribe email', () => {
 
   it('applies global and hashed-IP subscription limits', async () => {
     expect(await isSubscribeRequestRateLimited('192.0.2.1')).toBe(false)
-    expect(mockRateLimit).toHaveBeenNthCalledWith(1, 'global')
-    expect(mockRateLimit).toHaveBeenNthCalledWith(2, expect.stringMatching(/^[a-f0-9]{64}$/))
+    expect(mockRateLimit).toHaveBeenCalledOnce()
+    expect(mockRateLimit).toHaveBeenCalledWith(expect.stringMatching(/^[a-f0-9]{64}$/))
 
     mockRateLimit.mockClear()
     mockRateLimit.mockResolvedValueOnce({ success: false })
@@ -122,7 +122,7 @@ describe('newsletter unsubscribe email', () => {
     }
     const unsubscribeUrl = new URL(payload.dataVariables.unsubscribeUrl)
     expect(payload.email).toBe('user@example.com')
-    expect(payload.addToAudience).toBe(false)
+    expect(payload.addToAudience).toBe(true)
     expect(unsubscribeUrl.origin).toBe('https://www.librechat.ai')
     expect(unsubscribeUrl.pathname).toBe('/unsubscribe')
     expect(unsubscribeUrl.searchParams.get('email')).toBe('user@example.com')

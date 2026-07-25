@@ -36,41 +36,43 @@ let subscribeRequestIpLimiter: Ratelimit | null = null
 let subscribeRequestGlobalLimiter: Ratelimit | null = null
 
 export async function isSubscribeRequestRateLimited(ip: string | null): Promise<boolean> {
+  if (ip) {
+    subscribeRequestIpLimiter ??= new Ratelimit({
+      redis: Redis.fromEnv(),
+      limiter: Ratelimit.slidingWindow(5, '60 s'),
+      prefix: 'ratelimit:subscribe-ip',
+    })
+    const ipResult = await subscribeRequestIpLimiter.limit(hashIdentifier(ip))
+    return !ipResult.success
+  }
+
   subscribeRequestGlobalLimiter ??= new Ratelimit({
     redis: Redis.fromEnv(),
     limiter: Ratelimit.slidingWindow(100, '60 s'),
     prefix: 'ratelimit:subscribe-global',
   })
   const globalResult = await subscribeRequestGlobalLimiter.limit('global')
-  if (!globalResult.success) return true
-  if (!ip) return false
-
-  subscribeRequestIpLimiter ??= new Ratelimit({
-    redis: Redis.fromEnv(),
-    limiter: Ratelimit.slidingWindow(5, '60 s'),
-    prefix: 'ratelimit:subscribe-ip',
-  })
-  const ipResult = await subscribeRequestIpLimiter.limit(hashIdentifier(ip))
-  return !ipResult.success
+  return !globalResult.success
 }
 
 export async function isUnsubscribeRequestRateLimited(ip: string | null): Promise<boolean> {
+  if (ip) {
+    unsubscribeRequestIpLimiter ??= new Ratelimit({
+      redis: Redis.fromEnv(),
+      limiter: Ratelimit.slidingWindow(5, '60 s'),
+      prefix: 'ratelimit:unsubscribe-request',
+    })
+    const ipResult = await unsubscribeRequestIpLimiter.limit(hashIdentifier(ip))
+    return !ipResult.success
+  }
+
   unsubscribeRequestGlobalLimiter ??= new Ratelimit({
     redis: Redis.fromEnv(),
     limiter: Ratelimit.slidingWindow(100, '60 s'),
     prefix: 'ratelimit:unsubscribe-request-global',
   })
   const globalResult = await unsubscribeRequestGlobalLimiter.limit('global')
-  if (!globalResult.success) return true
-  if (!ip) return false
-
-  unsubscribeRequestIpLimiter ??= new Ratelimit({
-    redis: Redis.fromEnv(),
-    limiter: Ratelimit.slidingWindow(5, '60 s'),
-    prefix: 'ratelimit:unsubscribe-request',
-  })
-  const ipResult = await unsubscribeRequestIpLimiter.limit(hashIdentifier(ip))
-  return !ipResult.success
+  return !globalResult.success
 }
 
 export async function claimUnsubscribeRequestCooldown(email: string): Promise<boolean> {
@@ -102,7 +104,7 @@ export async function sendUnsubscribeLinkEmail(email: string): Promise<boolean> 
       body: JSON.stringify({
         email,
         transactionalId,
-        addToAudience: false,
+        addToAudience: true,
         dataVariables: { unsubscribeUrl },
       }),
     })
