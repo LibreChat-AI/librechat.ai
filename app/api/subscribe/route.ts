@@ -1,13 +1,14 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseClient, isValidEmail, normalizeEmail } from '@/lib/supabase'
 import { createRateLimiter, getClientIp } from '@/lib/rate-limit'
+import { isNewsletterEmailConfigured, sendNewsletterWelcomeEmail } from '@/lib/newsletter-email'
 
 const isRateLimited = createRateLimiter(5, 60_000)
 
 export async function POST(request: Request) {
   try {
     const ip = getClientIp(request)
-    if (isRateLimited(ip)) {
+    if (ip && isRateLimited(ip)) {
       return NextResponse.json({ message: 'Too many requests' }, { status: 429 })
     }
 
@@ -24,7 +25,7 @@ export async function POST(request: Request) {
 
     const supabase = getSupabaseClient()
 
-    if (!supabase) {
+    if (!supabase || !isNewsletterEmailConfigured()) {
       return NextResponse.json(
         { message: 'Subscription service is not configured' },
         { status: 503 },
@@ -42,12 +43,18 @@ export async function POST(request: Request) {
 
     if (existing) {
       if (existing.status === 'subscribed') {
+        if (!(await sendNewsletterWelcomeEmail(normalized))) {
+          return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })
+        }
         return NextResponse.json({ message: 'Email already subscribed' }, { status: 409 })
       }
 
       // Re-subscribe if previously unsubscribed
       await supabase.from('subscribers').update({ status: 'subscribed' }).eq('email', normalized)
 
+      if (!(await sendNewsletterWelcomeEmail(normalized))) {
+        return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })
+      }
       return NextResponse.json({ message: 'Subscription successful' }, { status: 200 })
     }
 
@@ -61,6 +68,9 @@ export async function POST(request: Request) {
       return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })
     }
 
+    if (!(await sendNewsletterWelcomeEmail(normalized))) {
+      return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })
+    }
     return NextResponse.json({ message: 'Subscription successful' }, { status: 201 })
   } catch {
     return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })

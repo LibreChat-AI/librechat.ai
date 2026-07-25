@@ -50,12 +50,12 @@ export function createRateLimiter(maxRequests: number, windowMs: number) {
  * Extract a rate-limit key from request client IP headers.
  *
  * `cf-connecting-ip` is only trusted when TRUST_CF_CONNECTING_IP=true (every
- * request is guaranteed to arrive through Cloudflare). Otherwise every
- * request uses the same fallback bucket: on a directly reachable origin,
- * x-real-ip and X-Forwarded-For are requester-controlled and cannot safely
- * identify a client.
+ * request is guaranteed to arrive through Cloudflare). On a directly
+ * reachable origin, x-real-ip and X-Forwarded-For are requester-controlled,
+ * so return null and let callers skip per-client limiting instead of collapsing
+ * unrelated visitors into one shared bucket.
  */
-export function getClientIp(request: Request): string {
-  if (process.env.TRUST_CF_CONNECTING_IP !== 'true') return 'unknown'
-  return request.headers.get('cf-connecting-ip')?.trim() || 'unknown'
+export function getClientIp(request: Request): string | null {
+  if (process.env.TRUST_CF_CONNECTING_IP !== 'true') return null
+  return request.headers.get('cf-connecting-ip')?.trim() || null
 }

@@ -3,11 +3,18 @@ import { createSupabaseMock, jsonRequest } from '@/__tests__/helpers'
 
 const mockIsRateLimited = vi.fn(() => false)
 const mockGetClientIp = vi.fn((_request: Request) => '127.0.0.1')
+const mockIsNewsletterEmailConfigured = vi.fn(() => true)
+const mockSendNewsletterWelcomeEmail = vi.fn(async (_email: string) => true)
 let supabaseClient: ReturnType<typeof createSupabaseMock> | null = createSupabaseMock()
 
 vi.mock('@/lib/rate-limit', () => ({
   createRateLimiter: () => mockIsRateLimited,
   getClientIp: (request: Request) => mockGetClientIp(request),
+}))
+
+vi.mock('@/lib/newsletter-email', () => ({
+  isNewsletterEmailConfigured: () => mockIsNewsletterEmailConfigured(),
+  sendNewsletterWelcomeEmail: (email: string) => mockSendNewsletterWelcomeEmail(email),
 }))
 
 vi.mock('@/lib/supabase', async (importOriginal) => {
@@ -24,6 +31,8 @@ describe('POST /api/subscribe', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockIsRateLimited.mockReturnValue(false)
+    mockIsNewsletterEmailConfigured.mockReturnValue(true)
+    mockSendNewsletterWelcomeEmail.mockResolvedValue(true)
     supabaseClient = createSupabaseMock()
   })
 
@@ -69,6 +78,17 @@ describe('POST /api/subscribe', () => {
     expect(body).toEqual({ message: 'Subscription service is not configured' })
   })
 
+  it('returns 503 when unsubscribe email delivery is not configured', async () => {
+    mockIsNewsletterEmailConfigured.mockReturnValue(false)
+
+    const response = await POST(
+      jsonRequest('https://example.com/api/subscribe', { email: 'user@example.com' }),
+    )
+
+    expect(response.status).toBe(503)
+    expect(await response.json()).toEqual({ message: 'Subscription service is not configured' })
+  })
+
   it('returns 409 when the email is already subscribed', async () => {
     supabaseClient = createSupabaseMock({ existing: { id: '1', status: 'subscribed' } })
 
@@ -109,6 +129,7 @@ describe('POST /api/subscribe', () => {
       email: 'new@example.com',
       status: 'subscribed',
     })
+    expect(mockSendNewsletterWelcomeEmail).toHaveBeenCalledWith('new@example.com')
   })
 
   it('returns 500 when insert fails', async () => {

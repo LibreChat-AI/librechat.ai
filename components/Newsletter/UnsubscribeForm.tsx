@@ -3,17 +3,15 @@ import toast, { Toaster } from 'react-hot-toast'
 import validator from 'validator'
 import style from './newsletterform.module.css'
 
-const isDevelopment = true //TODO
-
-const UnsubscribeForm = () => {
-  const [email, setEmail] = useState('')
+const UnsubscribeForm = ({ email = '', token = '' }: { email?: string; token?: string }) => {
   const [isLoading, setIsLoading] = useState(false)
+  const hasSignedLink = validator.isEmail(email) && token.length > 0
 
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault()
 
-    if (!validator.isEmail(email)) {
-      toast.error('Invalid email format')
+    if (!hasSignedLink) {
+      toast.error('This unsubscribe link is invalid')
       return
     }
 
@@ -25,14 +23,11 @@ const UnsubscribeForm = () => {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ email }),
+        body: JSON.stringify({ email, token }),
       })
 
       if (response.status === 200) {
         toast.success('Unsubscription successful')
-        setEmail('')
-      } else if (response.status === 404) {
-        toast.error('Subscriber not found')
       } else {
         toast.error('Unsubscription failed')
       }
@@ -52,16 +47,15 @@ const UnsubscribeForm = () => {
         <form onSubmit={handleSubmit} className={style[`form-container`]}>
           <input
             type="email"
-            placeholder={isDevelopment ? 'Coming soon...' : 'Enter your email'}
+            placeholder="Email address"
             value={email}
-            onChange={(e) => setEmail(e.target.value)}
             className={style[`email-input`]}
-            readOnly={isDevelopment}
+            readOnly
           />
           <button
             type="submit"
             className={style[`subscribe-button`]}
-            disabled={isLoading || isDevelopment}
+            disabled={isLoading || !hasSignedLink}
           >
             {isLoading ? 'Unsubscribing...' : 'Unsubscribe'}
           </button>

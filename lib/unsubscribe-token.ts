@@ -16,6 +16,16 @@ export function createUnsubscribeToken(email: string): string | null {
   return createHmac('sha256', secret).update(email).digest('base64url')
 }
 
+export function createUnsubscribeUrl(email: string, origin: string): string | null {
+  const token = createUnsubscribeToken(email)
+  if (!token) return null
+
+  const url = new URL('/unsubscribe', origin)
+  url.searchParams.set('email', email)
+  url.searchParams.set('token', token)
+  return url.toString()
+}
+
 export function verifyUnsubscribeToken(email: string, token: string): boolean {
   const expected = createUnsubscribeToken(email)
   if (!expected) return false

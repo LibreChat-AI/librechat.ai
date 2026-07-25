@@ -8,7 +8,7 @@ const isRateLimited = createRateLimiter(5, 60_000)
 export async function POST(request: Request) {
   try {
     const ip = getClientIp(request)
-    if (isRateLimited(ip)) {
+    if (ip && isRateLimited(ip)) {
       return NextResponse.json({ message: 'Too many requests' }, { status: 429 })
     }
 

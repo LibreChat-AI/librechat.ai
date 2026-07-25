@@ -9,8 +9,8 @@ import { getClientIp } from '@/lib/rate-limit'
  * Without them the app still works — just without rate limiting.
  *
  * Sliding window: 10 requests per 60 seconds per IP.
- * Client IP resolution is shared with subscribe/unsubscribe via getClientIp
- * (including the TRUST_CF_CONNECTING_IP gate for Cloudflare).
+ * Client IP resolution is shared with subscribe/unsubscribe via getClientIp.
+ * Per-client limiting is skipped when no authenticated ingress identity exists.
  */
 
 let ratelimit: Ratelimit | null = null
@@ -35,7 +35,10 @@ export async function checkRateLimit(
   const limiter = getRatelimit()
   if (!limiter) return { allowed: true }
 
-  const { success, reset } = await limiter.limit(getClientIp(req))
+  const ip = getClientIp(req)
+  if (!ip) return { allowed: true }
+
+  const { success, reset } = await limiter.limit(ip)
 
   if (!success) {
     return { allowed: false, reset }

@@ -58,7 +58,7 @@ describe('getClientIp', () => {
       },
     })
 
-    expect(getClientIp(request)).toBe('unknown')
+    expect(getClientIp(request)).toBeNull()
   })
 
   it('does not let a requester rotate the x-forwarded-for bucket', () => {
@@ -67,7 +67,7 @@ describe('getClientIp', () => {
       headers: { 'x-forwarded-for': '203.0.113.1, 10.0.0.1' },
     })
 
-    expect(getClientIp(request)).toBe('unknown')
+    expect(getClientIp(request)).toBeNull()
   })
 
   it('ignores cf-connecting-ip unless TRUST_CF_CONNECTING_IP is enabled', () => {
@@ -79,7 +79,7 @@ describe('getClientIp', () => {
       },
     })
 
-    expect(getClientIp(request)).toBe('unknown')
+    expect(getClientIp(request)).toBeNull()
   })
 
   it('trusts cf-connecting-ip when TRUST_CF_CONNECTING_IP is true', () => {
@@ -95,19 +95,19 @@ describe('getClientIp', () => {
     expect(getClientIp(request)).toBe('192.0.2.10')
   })
 
-  it('returns unknown when no ip headers are present', () => {
+  it('returns null when no trusted ingress is configured', () => {
     delete process.env.TRUST_CF_CONNECTING_IP
     const request = new Request('https://example.com')
 
-    expect(getClientIp(request)).toBe('unknown')
+    expect(getClientIp(request)).toBeNull()
   })
 
-  it('returns unknown when the trusted Cloudflare header is missing', () => {
+  it('returns null when the trusted Cloudflare header is missing', () => {
     process.env.TRUST_CF_CONNECTING_IP = 'true'
     const request = new Request('https://example.com', {
       headers: { 'x-real-ip': '198.51.100.42' },
     })
 
-    expect(getClientIp(request)).toBe('unknown')
+    expect(getClientIp(request)).toBeNull()
   })
 })

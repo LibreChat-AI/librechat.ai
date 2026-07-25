@@ -6,6 +6,6 @@ const UnsubscribeForm = dynamic(() => import('@/components/Newsletter/Unsubscrib
   ssr: false,
 })
 
-export default function UnsubscribeClient() {
-  return <UnsubscribeForm />
+export default function UnsubscribeClient({ email, token }: { email?: string; token?: string }) {
+  return <UnsubscribeForm email={email} token={token} />
 }
