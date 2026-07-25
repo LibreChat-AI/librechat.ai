@@ -8,20 +8,11 @@ export const metadata: Metadata = {
   description: 'Unsubscribe from the LibreChat newsletter',
 }
 
-export default async function UnsubscribePage({
-  searchParams,
-}: {
-  searchParams: Promise<{ email?: string | string[]; token?: string | string[] }>
-}) {
-  const { email, token } = await searchParams
-
+export default function UnsubscribePage() {
   return (
     <HomeLayout {...baseOptions}>
       <main id="main-content" tabIndex={-1} className="mx-auto max-w-xl px-4 py-16">
-        <UnsubscribeClient
-          email={typeof email === 'string' ? email : undefined}
-          token={typeof token === 'string' ? token : undefined}
-        />
+        <UnsubscribeClient />
       </main>
     </HomeLayout>
   )

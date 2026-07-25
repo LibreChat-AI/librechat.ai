@@ -49,7 +49,7 @@ const UnsubscribeForm = ({
           }).catch(() => null)
           if (recoveryResponse?.status === 200) {
             toast.success(
-              'Unsubscription request received. If the link was invalid, a replacement has been sent.',
+              'Unsubscription request received. If a replacement is needed, it will be sent.',
             )
           } else {
             toast.error(

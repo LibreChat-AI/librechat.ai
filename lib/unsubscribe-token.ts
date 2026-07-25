@@ -25,8 +25,7 @@ export function createUnsubscribeUrl(email: string, origin: string): string | nu
   if (!token) return null
 
   const url = new URL('/unsubscribe', origin)
-  url.searchParams.set('email', email)
-  url.searchParams.set('token', token)
+  url.hash = new URLSearchParams({ email, token }).toString()
   return url.toString()
 }
 

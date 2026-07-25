@@ -43,27 +43,26 @@ export async function POST(request: Request) {
     }
 
     const normalized = normalizeEmail(email)
+    if (!(await claimSubscribeRequest(normalized))) {
+      return NextResponse.json(
+        { message: 'Subscription request already in progress' },
+        { status: 409 },
+      )
+    }
+    try {
+      // Read subscriber state only after acquiring the per-recipient lock.
+      const { data: existing } = await supabase
+        .from('subscribers')
+        .select('id, status')
+        .eq('email', normalized)
+        .single()
 
-    // Check if already subscribed
-    const { data: existing } = await supabase
-      .from('subscribers')
-      .select('id, status')
-      .eq('email', normalized)
-      .single()
+      if (existing) {
+        if (existing.status === 'subscribed') {
+          return NextResponse.json({ message: 'Email already subscribed' }, { status: 409 })
+        }
 
-    if (existing) {
-      if (existing.status === 'subscribed') {
-        return NextResponse.json({ message: 'Email already subscribed' }, { status: 409 })
-      }
-
-      // Re-subscribe if previously unsubscribed
-      if (!(await claimSubscribeRequest(normalized))) {
-        return NextResponse.json(
-          { message: 'Subscription request already in progress' },
-          { status: 409 },
-        )
-      }
-      try {
+        // Re-subscribe if previously unsubscribed
         if (!(await sendUnsubscribeLinkEmail(normalized))) {
           return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })
         }
@@ -81,18 +80,8 @@ export async function POST(request: Request) {
           return NextResponse.json({ message: 'Email already subscribed' }, { status: 409 })
         }
         return NextResponse.json({ message: 'Subscription successful' }, { status: 200 })
-      } finally {
-        await releaseSubscribeRequest(normalized).catch(() => undefined)
       }
-    }
 
-    if (!(await claimSubscribeRequest(normalized))) {
-      return NextResponse.json(
-        { message: 'Subscription request already in progress' },
-        { status: 409 },
-      )
-    }
-    try {
       if (!(await sendUnsubscribeLinkEmail(normalized))) {
         return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })
       }

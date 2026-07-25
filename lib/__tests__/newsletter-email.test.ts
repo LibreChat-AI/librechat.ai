@@ -137,12 +137,14 @@ describe('newsletter unsubscribe email', () => {
       dataVariables: { unsubscribeUrl: string }
     }
     const unsubscribeUrl = new URL(payload.dataVariables.unsubscribeUrl)
+    const credentials = new URLSearchParams(unsubscribeUrl.hash.slice(1))
     expect(payload.email).toBe('user@example.com')
     expect(payload.addToAudience).toBe(false)
     expect(unsubscribeUrl.origin).toBe('https://www.librechat.ai')
     expect(unsubscribeUrl.pathname).toBe('/unsubscribe')
-    expect(unsubscribeUrl.searchParams.get('email')).toBe('user@example.com')
-    expect(unsubscribeUrl.searchParams.get('token')).toMatch(/^\d+\.[\w-]+$/)
+    expect(unsubscribeUrl.search).toBe('')
+    expect(credentials.get('email')).toBe('user@example.com')
+    expect(credentials.get('token')).toMatch(/^\d+\.[\w-]+$/)
   })
 
   it('returns false when Loops delivery throws', async () => {
