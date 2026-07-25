@@ -1,20 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createSupabaseMock, jsonRequest } from '@/__tests__/helpers'
 
-const mockIsIpRateLimited = vi.fn(() => false)
+const mockIsIpRateLimited = vi.fn(async (_ip: string) => false)
 const mockClaimCooldown = vi.fn(async (_email: string) => true)
 const mockReleaseCooldown = vi.fn(async (_email: string) => undefined)
 const mockSendUnsubscribeLinkEmail = vi.fn(async (_email: string) => true)
 let supabaseClient: ReturnType<typeof createSupabaseMock> | null = createSupabaseMock()
 
 vi.mock('@/lib/rate-limit', () => ({
-  createRateLimiter: () => mockIsIpRateLimited,
   getClientIp: () => '127.0.0.1',
 }))
 
 vi.mock('@/lib/newsletter-email', () => ({
   claimUnsubscribeRequestCooldown: (email: string) => mockClaimCooldown(email),
   isUnsubscribeRequestConfigured: () => true,
+  isUnsubscribeRequestIpRateLimited: (ip: string) => mockIsIpRateLimited(ip),
   releaseUnsubscribeRequestCooldown: (email: string) => mockReleaseCooldown(email),
   sendUnsubscribeLinkEmail: (email: string) => mockSendUnsubscribeLinkEmail(email),
 }))
@@ -42,7 +42,7 @@ const { POST } = await import('../route')
 describe('POST /api/unsubscribe/request', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    mockIsIpRateLimited.mockReturnValue(false)
+    mockIsIpRateLimited.mockResolvedValue(false)
     mockClaimCooldown.mockResolvedValue(true)
     mockSendUnsubscribeLinkEmail.mockResolvedValue(true)
     supabaseClient = createSupabaseMock()
@@ -86,6 +86,20 @@ describe('POST /api/unsubscribe/request', () => {
 
     expect(response.status).toBe(200)
     expect(mockSendUnsubscribeLinkEmail).not.toHaveBeenCalled()
+  })
+
+  it('rate limits requests by trusted IP using the shared limiter', async () => {
+    mockIsIpRateLimited.mockResolvedValue(true)
+
+    const response = await POST(
+      jsonRequest('https://example.com/api/unsubscribe/request', {
+        email: 'user@example.com',
+      }),
+    )
+
+    expect(response.status).toBe(429)
+    expect(mockIsIpRateLimited).toHaveBeenCalledWith('127.0.0.1')
+    expect(mockClaimCooldown).not.toHaveBeenCalled()
   })
 
   it('releases the recipient cooldown when delivery fails', async () => {

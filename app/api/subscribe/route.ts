@@ -60,14 +60,7 @@ export async function POST(request: Request) {
       if (!transitioned) {
         return NextResponse.json({ message: 'Email already subscribed' }, { status: 409 })
       }
-      if (!(await sendUnsubscribeLinkEmail(normalized))) {
-        await supabase
-          .from('subscribers')
-          .update({ status: 'unsubscribed' })
-          .eq('id', transitioned.id)
-          .eq('status', 'subscribed')
-        return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })
-      }
+      await sendUnsubscribeLinkEmail(normalized)
       return NextResponse.json({ message: 'Subscription successful' }, { status: 200 })
     }
 

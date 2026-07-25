@@ -3,12 +3,21 @@ import {
   claimUnsubscribeRequestCooldown,
   isNewsletterEmailConfigured,
   isUnsubscribeRequestConfigured,
+  isUnsubscribeRequestIpRateLimited,
   releaseUnsubscribeRequestCooldown,
   sendUnsubscribeLinkEmail,
 } from '@/lib/newsletter-email'
 
 const mockRedisSet = vi.fn(async () => 'OK')
 const mockRedisDel = vi.fn(async () => 1)
+const mockRateLimit = vi.fn(async () => ({ success: true }))
+
+vi.mock('@upstash/ratelimit', () => ({
+  Ratelimit: class {
+    static slidingWindow = vi.fn(() => 'sliding-window')
+    limit = mockRateLimit
+  },
+}))
 
 vi.mock('@upstash/redis', () => ({
   Redis: {
@@ -55,6 +64,13 @@ describe('newsletter unsubscribe email', () => {
       '1',
       { nx: true, ex: 900 },
     )
+  })
+
+  it('rate limits a hashed IP using shared storage', async () => {
+    mockRateLimit.mockResolvedValueOnce({ success: false })
+
+    expect(await isUnsubscribeRequestIpRateLimited('192.0.2.1')).toBe(true)
+    expect(mockRateLimit).toHaveBeenCalledWith(expect.stringMatching(/^[a-f0-9]{64}$/))
   })
 
   it('releases the same shared cooldown key', async () => {

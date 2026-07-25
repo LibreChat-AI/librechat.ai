@@ -1,23 +1,19 @@
 import { after, NextResponse } from 'next/server'
 import { getSupabaseClient, isValidEmail, normalizeEmail } from '@/lib/supabase'
-import { createRateLimiter, getClientIp } from '@/lib/rate-limit'
+import { getClientIp } from '@/lib/rate-limit'
 import {
   claimUnsubscribeRequestCooldown,
   isUnsubscribeRequestConfigured,
+  isUnsubscribeRequestIpRateLimited,
   releaseUnsubscribeRequestCooldown,
   sendUnsubscribeLinkEmail,
 } from '@/lib/newsletter-email'
 
-const isIpRateLimited = createRateLimiter(5, 60_000)
 const response = { message: 'If that address is subscribed, an unsubscribe link has been sent' }
 
 export async function POST(request: Request) {
   try {
     const ip = getClientIp(request)
-    if (ip && isIpRateLimited(ip)) {
-      return NextResponse.json({ message: 'Too many requests' }, { status: 429 })
-    }
-
     const body: unknown = await request.json()
     if (!body || typeof body !== 'object' || !('email' in body)) {
       return NextResponse.json(response)
@@ -36,6 +32,9 @@ export async function POST(request: Request) {
         { message: 'Unsubscription service is not configured' },
         { status: 503 },
       )
+    }
+    if (ip && (await isUnsubscribeRequestIpRateLimited(ip))) {
+      return NextResponse.json({ message: 'Too many requests' }, { status: 429 })
     }
     if (!(await claimUnsubscribeRequestCooldown(normalized))) {
       return NextResponse.json(response)

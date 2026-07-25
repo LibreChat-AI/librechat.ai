@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { Ratelimit } from '@upstash/ratelimit'
 import { Redis } from '@upstash/redis'
 import { createUnsubscribeUrl } from '@/lib/unsubscribe-token'
 
@@ -19,9 +20,24 @@ export function isUnsubscribeRequestConfigured(): boolean {
   )
 }
 
+function hashIdentifier(value: string): string {
+  return createHash('sha256').update(value).digest('hex')
+}
+
 function unsubscribeRequestKey(email: string): string {
-  const hash = createHash('sha256').update(email).digest('hex')
-  return `unsubscribe-request:${hash}`
+  return `unsubscribe-request:${hashIdentifier(email)}`
+}
+
+let unsubscribeRequestIpLimiter: Ratelimit | null = null
+
+export async function isUnsubscribeRequestIpRateLimited(ip: string): Promise<boolean> {
+  unsubscribeRequestIpLimiter ??= new Ratelimit({
+    redis: Redis.fromEnv(),
+    limiter: Ratelimit.slidingWindow(5, '60 s'),
+    prefix: 'ratelimit:unsubscribe-request',
+  })
+  const { success } = await unsubscribeRequestIpLimiter.limit(hashIdentifier(ip))
+  return !success
 }
 
 export async function claimUnsubscribeRequestCooldown(email: string): Promise<boolean> {

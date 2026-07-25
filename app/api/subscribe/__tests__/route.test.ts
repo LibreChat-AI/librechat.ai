@@ -159,7 +159,7 @@ describe('POST /api/subscribe', () => {
     expect(supabaseClient.deleteRows).toHaveBeenCalled()
   })
 
-  it('restores unsubscribed status when re-subscription email delivery fails', async () => {
+  it('keeps a successful re-subscription when email delivery fails', async () => {
     mockSendUnsubscribeLinkEmail.mockResolvedValue(false)
     supabaseClient = createSupabaseMock({ existing: { id: '1', status: 'unsubscribed' } })
 
@@ -167,11 +167,8 @@ describe('POST /api/subscribe', () => {
       jsonRequest('https://example.com/api/subscribe', { email: 'user@example.com' }),
     )
 
-    expect(response.status).toBe(500)
-    expect(supabaseClient.update).toHaveBeenNthCalledWith(1, { status: 'subscribed' })
-    expect(supabaseClient.update).toHaveBeenNthCalledWith(2, { status: 'unsubscribed' })
-    expect(supabaseClient.eqAfterUpdate).toHaveBeenLastCalledWith('id', '1')
-    expect(supabaseClient.eqAfterConditionalUpdate).toHaveBeenLastCalledWith('status', 'subscribed')
+    expect(response.status).toBe(200)
+    expect(supabaseClient.update).toHaveBeenCalledTimes(1)
   })
 
   it('does not roll back a resubscription transition owned by another request', async () => {
