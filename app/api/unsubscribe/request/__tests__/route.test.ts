@@ -3,6 +3,7 @@ import { createSupabaseMock, jsonRequest } from '@/__tests__/helpers'
 
 const mockIsIpRateLimited = vi.fn(() => false)
 const mockClaimCooldown = vi.fn(async (_email: string) => true)
+const mockReleaseCooldown = vi.fn(async (_email: string) => undefined)
 const mockSendUnsubscribeLinkEmail = vi.fn(async (_email: string) => true)
 let supabaseClient: ReturnType<typeof createSupabaseMock> | null = createSupabaseMock()
 
@@ -14,6 +15,7 @@ vi.mock('@/lib/rate-limit', () => ({
 vi.mock('@/lib/newsletter-email', () => ({
   claimUnsubscribeRequestCooldown: (email: string) => mockClaimCooldown(email),
   isUnsubscribeRequestConfigured: () => true,
+  releaseUnsubscribeRequestCooldown: (email: string) => mockReleaseCooldown(email),
   sendUnsubscribeLinkEmail: (email: string) => mockSendUnsubscribeLinkEmail(email),
 }))
 
@@ -42,6 +44,7 @@ describe('POST /api/unsubscribe/request', () => {
     vi.clearAllMocks()
     mockIsIpRateLimited.mockReturnValue(false)
     mockClaimCooldown.mockResolvedValue(true)
+    mockSendUnsubscribeLinkEmail.mockResolvedValue(true)
     supabaseClient = createSupabaseMock()
   })
 
@@ -83,5 +86,18 @@ describe('POST /api/unsubscribe/request', () => {
 
     expect(response.status).toBe(200)
     expect(mockSendUnsubscribeLinkEmail).not.toHaveBeenCalled()
+  })
+
+  it('releases the recipient cooldown when delivery fails', async () => {
+    mockSendUnsubscribeLinkEmail.mockResolvedValue(false)
+    supabaseClient = createSupabaseMock({ existing: { id: '1', status: 'subscribed' } })
+
+    await POST(
+      jsonRequest('https://example.com/api/unsubscribe/request', {
+        email: 'user@example.com',
+      }),
+    )
+
+    expect(mockReleaseCooldown).toHaveBeenCalledWith('user@example.com')
   })
 })

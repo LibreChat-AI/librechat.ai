@@ -19,35 +19,47 @@ export function isUnsubscribeRequestConfigured(): boolean {
   )
 }
 
+function unsubscribeRequestKey(email: string): string {
+  const hash = createHash('sha256').update(email).digest('hex')
+  return `unsubscribe-request:${hash}`
+}
+
 export async function claimUnsubscribeRequestCooldown(email: string): Promise<boolean> {
-  const key = createHash('sha256').update(email).digest('hex')
-  const result = await Redis.fromEnv().set(`unsubscribe-request:${key}`, '1', {
+  const result = await Redis.fromEnv().set(unsubscribeRequestKey(email), '1', {
     nx: true,
     ex: 15 * 60,
   })
   return result === 'OK'
 }
 
+export async function releaseUnsubscribeRequestCooldown(email: string): Promise<void> {
+  await Redis.fromEnv().del(unsubscribeRequestKey(email))
+}
+
 export async function sendUnsubscribeLinkEmail(email: string): Promise<boolean> {
-  const apiKey = process.env.LOOPS_API_KEY?.trim()
-  const transactionalId = process.env.LOOPS_UNSUBSCRIBE_TRANSACTIONAL_ID?.trim()
-  const publicUrl = process.env.NEWSLETTER_PUBLIC_URL?.trim()
-  const unsubscribeUrl = publicUrl ? createUnsubscribeUrl(email, publicUrl) : null
-  if (!apiKey || !transactionalId || !unsubscribeUrl) return false
+  try {
+    const apiKey = process.env.LOOPS_API_KEY?.trim()
+    const transactionalId = process.env.LOOPS_UNSUBSCRIBE_TRANSACTIONAL_ID?.trim()
+    const publicUrl = process.env.NEWSLETTER_PUBLIC_URL?.trim()
+    const unsubscribeUrl = publicUrl ? createUnsubscribeUrl(email, publicUrl) : null
+    if (!apiKey || !transactionalId || !unsubscribeUrl) return false
 
-  const response = await fetch('https://app.loops.so/api/v1/transactional', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      email,
-      transactionalId,
-      addToAudience: false,
-      dataVariables: { unsubscribeUrl },
-    }),
-  })
+    const response = await fetch('https://app.loops.so/api/v1/transactional', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        email,
+        transactionalId,
+        addToAudience: false,
+        dataVariables: { unsubscribeUrl },
+      }),
+    })
 
-  return response.ok
+    return response.ok
+  } catch {
+    return false
+  }
 }

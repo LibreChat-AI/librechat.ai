@@ -4,6 +4,7 @@ import { createRateLimiter, getClientIp } from '@/lib/rate-limit'
 import {
   claimUnsubscribeRequestCooldown,
   isUnsubscribeRequestConfigured,
+  releaseUnsubscribeRequestCooldown,
   sendUnsubscribeLinkEmail,
 } from '@/lib/newsletter-email'
 
@@ -48,7 +49,9 @@ export async function POST(request: Request) {
       .maybeSingle()
 
     after(async () => {
-      if (subscriber) await sendUnsubscribeLinkEmail(normalized)
+      if (!subscriber) return
+      const sent = await sendUnsubscribeLinkEmail(normalized)
+      if (!sent) await releaseUnsubscribeRequestCooldown(normalized)
     })
     return NextResponse.json(response)
   } catch {

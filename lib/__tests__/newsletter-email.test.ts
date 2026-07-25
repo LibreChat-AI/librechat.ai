@@ -3,14 +3,16 @@ import {
   claimUnsubscribeRequestCooldown,
   isNewsletterEmailConfigured,
   isUnsubscribeRequestConfigured,
+  releaseUnsubscribeRequestCooldown,
   sendUnsubscribeLinkEmail,
 } from '@/lib/newsletter-email'
 
 const mockRedisSet = vi.fn(async () => 'OK')
+const mockRedisDel = vi.fn(async () => 1)
 
 vi.mock('@upstash/redis', () => ({
   Redis: {
-    fromEnv: () => ({ set: mockRedisSet }),
+    fromEnv: () => ({ set: mockRedisSet, del: mockRedisDel }),
   },
 }))
 
@@ -55,6 +57,13 @@ describe('newsletter unsubscribe email', () => {
     )
   })
 
+  it('releases the same shared cooldown key', async () => {
+    await releaseUnsubscribeRequestCooldown('user@example.com')
+    expect(mockRedisDel).toHaveBeenCalledWith(
+      expect.stringMatching(/^unsubscribe-request:[a-f0-9]{64}$/),
+    )
+  })
+
   it('sends a signed unsubscribe URL to the subscriber', async () => {
     const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => {
       return new Response(null, { status: 200 })
@@ -76,5 +85,14 @@ describe('newsletter unsubscribe email', () => {
     expect(unsubscribeUrl.pathname).toBe('/unsubscribe')
     expect(unsubscribeUrl.searchParams.get('email')).toBe('user@example.com')
     expect(unsubscribeUrl.searchParams.get('token')).toMatch(/^[\w-]+$/)
+  })
+
+  it('returns false when Loops delivery throws', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => Promise.reject(new Error('network failure'))),
+    )
+
+    expect(await sendUnsubscribeLinkEmail('user@example.com')).toBe(false)
   })
 })
