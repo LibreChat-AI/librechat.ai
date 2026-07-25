@@ -1,5 +1,6 @@
 import { Ratelimit } from '@upstash/ratelimit'
 import { Redis } from '@upstash/redis'
+import { getClientIp } from '@/lib/rate-limit'
 
 /**
  * Rate limiter for the AI chat endpoint.
@@ -8,6 +9,8 @@ import { Redis } from '@upstash/redis'
  * Without them the app still works — just without rate limiting.
  *
  * Sliding window: 10 requests per 60 seconds per IP.
+ * Client IP resolution is shared with subscribe/unsubscribe via getClientIp
+ * (including the TRUST_CF_CONNECTING_IP gate for Cloudflare).
  */
 
 let ratelimit: Ratelimit | null = null
@@ -32,27 +35,7 @@ export async function checkRateLimit(
   const limiter = getRatelimit()
   if (!limiter) return { allowed: true }
 
-  // `cf-connecting-ip` is the client address Cloudflare authenticates and a
-  // client cannot forge — but only when every request is guaranteed to reach
-  // the app through Cloudflare. On a preview/platform hostname or a non-proxied
-  // origin a client can set that header freely and rotate it for a fresh
-  // allowance, so honor it only when the deployment asserts that guarantee via
-  // TRUST_CF_CONNECTING_IP (production fronts the origin with Cloudflare, see
-  // next.config.mjs). Otherwise fall back to the platform-set `x-real-ip`, then
-  // the left-most X-Forwarded-For hop for local/non-proxied environments where
-  // limiting is best-effort anyway. The right-most XFF hop is deliberately not
-  // used: it is the nearest proxy's address, shared by every user behind it.
-  const cfConnectingIp =
-    process.env.TRUST_CF_CONNECTING_IP === 'true'
-      ? req.headers.get('cf-connecting-ip')?.trim()
-      : undefined
-  const ip =
-    cfConnectingIp ||
-    req.headers.get('x-real-ip')?.trim() ||
-    req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
-    'unknown'
-
-  const { success, reset } = await limiter.limit(ip)
+  const { success, reset } = await limiter.limit(getClientIp(req))
 
   if (!success) {
     return { allowed: false, reset }

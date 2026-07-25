@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createRateLimiter, getClientIp } from '@/lib/rate-limit'
 
 describe('createRateLimiter', () => {
@@ -42,32 +42,71 @@ describe('createRateLimiter', () => {
 })
 
 describe('getClientIp', () => {
-  it('prefers the first x-forwarded-for address', () => {
+  const originalTrust = process.env.TRUST_CF_CONNECTING_IP
+
+  afterEach(() => {
+    if (originalTrust === undefined) delete process.env.TRUST_CF_CONNECTING_IP
+    else process.env.TRUST_CF_CONNECTING_IP = originalTrust
+  })
+
+  it('ignores x-real-ip and x-forwarded-for without a trusted ingress', () => {
+    delete process.env.TRUST_CF_CONNECTING_IP
+    const request = new Request('https://example.com', {
+      headers: {
+        'x-real-ip': '198.51.100.42',
+        'x-forwarded-for': '203.0.113.1, 10.0.0.1',
+      },
+    })
+
+    expect(getClientIp(request)).toBe('unknown')
+  })
+
+  it('does not let a requester rotate the x-forwarded-for bucket', () => {
+    delete process.env.TRUST_CF_CONNECTING_IP
     const request = new Request('https://example.com', {
       headers: { 'x-forwarded-for': '203.0.113.1, 10.0.0.1' },
     })
 
-    expect(getClientIp(request)).toBe('203.0.113.1')
+    expect(getClientIp(request)).toBe('unknown')
   })
 
-  it('falls back to x-real-ip', () => {
+  it('ignores cf-connecting-ip unless TRUST_CF_CONNECTING_IP is enabled', () => {
+    delete process.env.TRUST_CF_CONNECTING_IP
     const request = new Request('https://example.com', {
-      headers: { 'x-real-ip': '198.51.100.42' },
+      headers: {
+        'cf-connecting-ip': '192.0.2.10',
+        'x-real-ip': '198.51.100.42',
+      },
     })
 
-    expect(getClientIp(request)).toBe('198.51.100.42')
+    expect(getClientIp(request)).toBe('unknown')
   })
 
-  it('falls back to cf-connecting-ip', () => {
+  it('trusts cf-connecting-ip when TRUST_CF_CONNECTING_IP is true', () => {
+    process.env.TRUST_CF_CONNECTING_IP = 'true'
     const request = new Request('https://example.com', {
-      headers: { 'cf-connecting-ip': '192.0.2.10' },
+      headers: {
+        'cf-connecting-ip': '192.0.2.10',
+        'x-real-ip': '198.51.100.42',
+        'x-forwarded-for': '203.0.113.1',
+      },
     })
 
     expect(getClientIp(request)).toBe('192.0.2.10')
   })
 
   it('returns unknown when no ip headers are present', () => {
+    delete process.env.TRUST_CF_CONNECTING_IP
     const request = new Request('https://example.com')
+
+    expect(getClientIp(request)).toBe('unknown')
+  })
+
+  it('returns unknown when the trusted Cloudflare header is missing', () => {
+    process.env.TRUST_CF_CONNECTING_IP = 'true'
+    const request = new Request('https://example.com', {
+      headers: { 'x-real-ip': '198.51.100.42' },
+    })
 
     expect(getClientIp(request)).toBe('unknown')
   })
