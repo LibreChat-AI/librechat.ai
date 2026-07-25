@@ -23,6 +23,10 @@ function tokenGenerationKey(email: string): string {
   return `unsubscribe-token-generation:${createHash('sha256').update(email).digest('hex')}`
 }
 
+function tokenGenerationCounterKey(email: string): string {
+  return `unsubscribe-token-generation-counter:${createHash('sha256').update(email).digest('hex')}`
+}
+
 export async function consumeUnsubscribeToken(token: string): Promise<boolean> {
   const result = await Redis.fromEnv().set(consumedTokenKey(token), '1', {
     nx: true,
@@ -48,7 +52,7 @@ export function createUnsubscribeToken(email: string, generation = 1): string | 
 export async function createUnsubscribeUrl(email: string, origin: string): Promise<string | null> {
   const generationResult = await Redis.fromEnv().eval(
     "local generation = redis.call('incr', KEYS[1]); redis.call('expire', KEYS[1], ARGV[1]); return generation",
-    [tokenGenerationKey(email)],
+    [tokenGenerationCounterKey(email)],
     [TOKEN_MAX_AGE_SECONDS],
   )
   const generation = Number(generationResult)
@@ -59,6 +63,18 @@ export async function createUnsubscribeUrl(email: string, origin: string): Promi
   const url = new URL('/unsubscribe', origin)
   url.hash = new URLSearchParams({ email, token }).toString()
   return url.toString()
+}
+
+export async function activateUnsubscribeToken(email: string, token: string): Promise<boolean> {
+  const [, generationValue] = token.split('.')
+  if (!generationValue || !/^[1-9]\d*$/.test(generationValue)) return false
+
+  const result = await Redis.fromEnv().eval(
+    "local current = redis.call('get', KEYS[1]); if not current or tonumber(current) < tonumber(ARGV[1]) then redis.call('set', KEYS[1], ARGV[1], 'EX', ARGV[2]); return 1 end; return 0",
+    [tokenGenerationKey(email)],
+    [generationValue, TOKEN_MAX_AGE_SECONDS],
+  )
+  return result === 1
 }
 
 export async function verifyUnsubscribeToken(email: string, token: string): Promise<boolean> {

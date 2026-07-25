@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  activateUnsubscribeToken,
   consumeUnsubscribeToken,
   createUnsubscribeToken,
   releaseUnsubscribeToken,
@@ -76,6 +77,17 @@ describe('unsubscribe tokens', () => {
     mockRedisGet.mockResolvedValueOnce(2)
 
     expect(await verifyUnsubscribeToken('user@example.com', token)).toBe(false)
+  })
+
+  it('activates a delivered token generation', async () => {
+    const token = createUnsubscribeToken('user@example.com', 2)!
+
+    expect(await activateUnsubscribeToken('user@example.com', token)).toBe(true)
+    expect(mockRedisEval).toHaveBeenCalledWith(
+      expect.stringContaining("redis.call('set', KEYS[1], ARGV[1], 'EX', ARGV[2])"),
+      [expect.stringMatching(/^unsubscribe-token-generation:[a-f0-9]{64}$/)],
+      ['2', 604800],
+    )
   })
 
   it('records and releases consumed tokens by hash', async () => {

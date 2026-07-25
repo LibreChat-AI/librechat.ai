@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { Ratelimit } from '@upstash/ratelimit'
 import { Redis } from '@upstash/redis'
-import { createUnsubscribeUrl } from '@/lib/unsubscribe-token'
+import { activateUnsubscribeToken, createUnsubscribeUrl } from '@/lib/unsubscribe-token'
 
 export function isNewsletterEmailConfigured(): boolean {
   return Boolean(
@@ -164,7 +164,10 @@ export async function sendUnsubscribeLinkEmail(email: string): Promise<boolean> 
       }),
     })
 
-    return response.ok
+    if (!response.ok) return false
+
+    const token = new URLSearchParams(new URL(unsubscribeUrl).hash.slice(1)).get('token')
+    return Boolean(token && (await activateUnsubscribeToken(email, token)))
   } catch {
     return false
   }
