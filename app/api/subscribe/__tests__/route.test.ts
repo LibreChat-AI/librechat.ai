@@ -6,6 +6,7 @@ const mockIsFallbackRateLimited = vi.fn(() => false)
 const mockGetClientIp = vi.fn((_request: Request): string | null => '127.0.0.1')
 const mockClaimSubscribeRequest = vi.fn(async (_email: string): Promise<string | null> => 'owner')
 const mockReleaseSubscribeRequest = vi.fn(async (_email: string, _owner: string) => undefined)
+const mockRenewSubscribeRequest = vi.fn(async (_email: string, _owner: string) => true)
 const mockIsSubscribeRequestConfigured = vi.fn(() => true)
 const mockIsSubscribeRequestRateLimited = vi.fn(async (_ip: string | null) => false)
 const mockSendUnsubscribeLinkEmail = vi.fn(async (_email: string) => true)
@@ -23,6 +24,7 @@ vi.mock('@/lib/newsletter-email', () => ({
   isSubscribeRequestRateLimited: (ip: string | null) => mockIsSubscribeRequestRateLimited(ip),
   releaseSubscribeRequest: (email: string, owner: string) =>
     mockReleaseSubscribeRequest(email, owner),
+  renewSubscribeRequest: (email: string, owner: string) => mockRenewSubscribeRequest(email, owner),
   sendUnsubscribeLinkEmail: (email: string) => mockSendUnsubscribeLinkEmail(email),
 }))
 
@@ -43,6 +45,7 @@ describe('POST /api/subscribe', () => {
     mockIsFallbackRateLimited.mockReturnValue(false)
     mockGetClientIp.mockReturnValue('127.0.0.1')
     mockClaimSubscribeRequest.mockResolvedValue('owner')
+    mockRenewSubscribeRequest.mockResolvedValue(true)
     mockIsSubscribeRequestConfigured.mockReturnValue(true)
     mockIsSubscribeRequestRateLimited.mockResolvedValue(false)
     mockSendUnsubscribeLinkEmail.mockResolvedValue(true)
@@ -218,7 +221,10 @@ describe('POST /api/subscribe', () => {
     )
 
     expect(response.status).toBe(500)
-    expect(supabaseClient.insert).not.toHaveBeenCalled()
+    expect(supabaseClient.insert).toHaveBeenCalled()
+    expect(supabaseClient.deleteRows).toHaveBeenCalled()
+    expect(supabaseClient.eqAfterDelete).toHaveBeenCalledWith('email', 'new@example.com')
+    expect(supabaseClient.eqAfterConditionalDelete).toHaveBeenCalledWith('status', 'subscribed')
   })
 
   it('does not re-subscribe when email delivery fails', async () => {
@@ -230,7 +236,8 @@ describe('POST /api/subscribe', () => {
     )
 
     expect(response.status).toBe(500)
-    expect(supabaseClient.update).not.toHaveBeenCalled()
+    expect(supabaseClient.update).toHaveBeenNthCalledWith(1, { status: 'subscribed' })
+    expect(supabaseClient.update).toHaveBeenNthCalledWith(2, { status: 'unsubscribed' })
   })
 
   it('does not claim a resubscription transition owned by another request', async () => {
@@ -242,8 +249,21 @@ describe('POST /api/subscribe', () => {
     )
 
     expect(response.status).toBe(409)
-    expect(mockSendUnsubscribeLinkEmail).toHaveBeenCalledWith('user@example.com')
+    expect(mockSendUnsubscribeLinkEmail).not.toHaveBeenCalled()
     expect(supabaseClient.update).toHaveBeenCalledTimes(1)
+  })
+
+  it('stops when ownership of the subscription lease is lost', async () => {
+    mockRenewSubscribeRequest.mockResolvedValue(false)
+    supabaseClient = createSupabaseMock({ existing: null })
+
+    const response = await POST(
+      jsonRequest('https://example.com/api/subscribe', { email: 'new@example.com' }),
+    )
+
+    expect(response.status).toBe(500)
+    expect(supabaseClient.insert).not.toHaveBeenCalled()
+    expect(mockSendUnsubscribeLinkEmail).not.toHaveBeenCalled()
   })
 
   it('returns 500 for malformed JSON', async () => {

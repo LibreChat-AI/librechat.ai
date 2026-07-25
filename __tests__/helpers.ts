@@ -25,7 +25,8 @@ export interface SupabaseMockOptions {
 }
 
 export function createSupabaseMock(options: SupabaseMockOptions = {}) {
-  const eqAfterDelete = vi.fn().mockResolvedValue({ error: null })
+  const eqAfterConditionalDelete = vi.fn().mockResolvedValue({ error: null })
+  const eqAfterDelete = vi.fn().mockReturnValue({ eq: eqAfterConditionalDelete })
   const deleteRows = vi.fn().mockReturnValue({ eq: eqAfterDelete })
   const maybeSingleAfterUpdate = vi.fn().mockResolvedValue(
     options.updateError
@@ -81,5 +82,6 @@ export function createSupabaseMock(options: SupabaseMockOptions = {}) {
     insert,
     deleteRows,
     eqAfterDelete,
+    eqAfterConditionalDelete,
   }
 }

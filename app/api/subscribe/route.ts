@@ -6,6 +6,7 @@ import {
   isSubscribeRequestConfigured,
   isSubscribeRequestRateLimited,
   releaseSubscribeRequest,
+  renewSubscribeRequest,
   sendUnsubscribeLinkEmail,
 } from '@/lib/newsletter-email'
 
@@ -50,6 +51,24 @@ export async function POST(request: Request) {
         { status: 409 },
       )
     }
+    let leaseValid = true
+    const leaseRenewal = setInterval(() => {
+      void renewSubscribeRequest(normalized, lockOwner)
+        .then((renewed) => {
+          leaseValid &&= renewed
+        })
+        .catch(() => {
+          leaseValid = false
+        })
+    }, 20_000)
+    leaseRenewal.unref()
+    const renewLease = async () => {
+      if (!leaseValid || !(await renewSubscribeRequest(normalized, lockOwner))) {
+        leaseValid = false
+        return false
+      }
+      return true
+    }
     try {
       // Read subscriber state only after acquiring the per-recipient lock.
       const { data: existing, error: lookupError } = await supabase
@@ -67,7 +86,7 @@ export async function POST(request: Request) {
         }
 
         // Re-subscribe if previously unsubscribed
-        if (!(await sendUnsubscribeLinkEmail(normalized))) {
+        if (!(await renewLease())) {
           return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })
         }
         const { data: transitioned, error: transitionError } = await supabase
@@ -83,10 +102,18 @@ export async function POST(request: Request) {
         if (!transitioned) {
           return NextResponse.json({ message: 'Email already subscribed' }, { status: 409 })
         }
+        if (!(await renewLease()) || !(await sendUnsubscribeLinkEmail(normalized))) {
+          await supabase
+            .from('subscribers')
+            .update({ status: 'unsubscribed' })
+            .eq('email', normalized)
+            .eq('status', 'subscribed')
+          return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })
+        }
         return NextResponse.json({ message: 'Subscription successful' }, { status: 200 })
       }
 
-      if (!(await sendUnsubscribeLinkEmail(normalized))) {
+      if (!(await renewLease())) {
         return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })
       }
 
@@ -100,8 +127,18 @@ export async function POST(request: Request) {
         return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })
       }
 
+      if (!(await renewLease()) || !(await sendUnsubscribeLinkEmail(normalized))) {
+        await supabase
+          .from('subscribers')
+          .delete()
+          .eq('email', normalized)
+          .eq('status', 'subscribed')
+        return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })
+      }
+
       return NextResponse.json({ message: 'Subscription successful' }, { status: 201 })
     } finally {
+      clearInterval(leaseRenewal)
       await releaseSubscribeRequest(normalized, lockOwner).catch(() => undefined)
     }
   } catch {

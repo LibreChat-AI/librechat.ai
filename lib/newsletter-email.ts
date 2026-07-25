@@ -96,6 +96,15 @@ export async function claimSubscribeRequest(email: string): Promise<string | nul
   return result === 'OK' ? owner : null
 }
 
+export async function renewSubscribeRequest(email: string, owner: string): Promise<boolean> {
+  const result = await Redis.fromEnv().eval(
+    "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('expire', KEYS[1], 60) else return 0 end",
+    [subscribeRequestKey(email)],
+    [owner],
+  )
+  return result === 1
+}
+
 export async function releaseSubscribeRequest(email: string, owner: string): Promise<void> {
   await Redis.fromEnv().eval(
     "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",

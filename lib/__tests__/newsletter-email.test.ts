@@ -9,6 +9,7 @@ import {
   isUnsubscribeRequestRateLimited,
   releaseUnsubscribeRequestCooldown,
   releaseSubscribeRequest,
+  renewSubscribeRequest,
   sendUnsubscribeLinkEmail,
 } from '@/lib/newsletter-email'
 
@@ -90,6 +91,13 @@ describe('newsletter unsubscribe email', () => {
     await releaseSubscribeRequest('user@example.com', owner!)
     expect(mockRedisEval).toHaveBeenCalledWith(
       expect.stringContaining("redis.call('get', KEYS[1])"),
+      [expect.stringMatching(/^subscribe-request:[a-f0-9]{64}$/)],
+      [owner],
+    )
+
+    expect(await renewSubscribeRequest('user@example.com', owner!)).toBe(true)
+    expect(mockRedisEval).toHaveBeenLastCalledWith(
+      expect.stringContaining("redis.call('expire', KEYS[1], 60)"),
       [expect.stringMatching(/^subscribe-request:[a-f0-9]{64}$/)],
       [owner],
     )
