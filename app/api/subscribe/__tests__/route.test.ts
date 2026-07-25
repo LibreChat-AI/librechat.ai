@@ -3,6 +3,7 @@ import { createSupabaseMock, jsonRequest } from '@/__tests__/helpers'
 
 const mockIsRateLimited = vi.fn(() => false)
 const mockGetClientIp = vi.fn((_request: Request) => '127.0.0.1')
+const mockIsNewsletterEmailConfigured = vi.fn(() => true)
 const mockIsSubscribeRequestConfigured = vi.fn(() => true)
 const mockIsSubscribeRequestRateLimited = vi.fn(async (_ip: string | null) => false)
 const mockSendUnsubscribeLinkEmail = vi.fn(async (_email: string) => true)
@@ -14,6 +15,7 @@ vi.mock('@/lib/rate-limit', () => ({
 }))
 
 vi.mock('@/lib/newsletter-email', () => ({
+  isNewsletterEmailConfigured: () => mockIsNewsletterEmailConfigured(),
   isSubscribeRequestConfigured: () => mockIsSubscribeRequestConfigured(),
   isSubscribeRequestRateLimited: (ip: string | null) => mockIsSubscribeRequestRateLimited(ip),
   sendUnsubscribeLinkEmail: (email: string) => mockSendUnsubscribeLinkEmail(email),
@@ -33,6 +35,7 @@ describe('POST /api/subscribe', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockIsRateLimited.mockReturnValue(false)
+    mockIsNewsletterEmailConfigured.mockReturnValue(true)
     mockIsSubscribeRequestConfigured.mockReturnValue(true)
     mockIsSubscribeRequestRateLimited.mockResolvedValue(false)
     mockSendUnsubscribeLinkEmail.mockResolvedValue(true)
@@ -82,6 +85,7 @@ describe('POST /api/subscribe', () => {
   })
 
   it('preserves Supabase-only subscriptions when email delivery is not configured', async () => {
+    mockIsNewsletterEmailConfigured.mockReturnValue(false)
     mockIsSubscribeRequestConfigured.mockReturnValue(false)
 
     const response = await POST(
@@ -90,6 +94,17 @@ describe('POST /api/subscribe', () => {
 
     expect(response.status).toBe(201)
     expect(mockIsSubscribeRequestRateLimited).not.toHaveBeenCalled()
+    expect(mockSendUnsubscribeLinkEmail).not.toHaveBeenCalled()
+  })
+
+  it('returns 503 when email is configured without its shared limiter', async () => {
+    mockIsSubscribeRequestConfigured.mockReturnValue(false)
+
+    const response = await POST(
+      jsonRequest('https://example.com/api/subscribe', { email: 'new@example.com' }),
+    )
+
+    expect(response.status).toBe(503)
     expect(mockSendUnsubscribeLinkEmail).not.toHaveBeenCalled()
   })
 
@@ -171,8 +186,7 @@ describe('POST /api/subscribe', () => {
     )
 
     expect(response.status).toBe(500)
-    expect(supabaseClient.insert).toHaveBeenCalled()
-    expect(supabaseClient.deleteRows).toHaveBeenCalled()
+    expect(supabaseClient.insert).not.toHaveBeenCalled()
   })
 
   it('does not re-subscribe when email delivery fails', async () => {

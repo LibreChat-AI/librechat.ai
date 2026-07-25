@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { getSupabaseClient, isValidEmail, normalizeEmail } from '@/lib/supabase'
 import { createRateLimiter, getClientIp } from '@/lib/rate-limit'
 import {
+  isNewsletterEmailConfigured,
   isSubscribeRequestConfigured,
   isSubscribeRequestRateLimited,
   sendUnsubscribeLinkEmail,
@@ -35,7 +36,13 @@ export async function POST(request: Request) {
         { status: 503 },
       )
     }
-    const sendSubscriptionEmail = isSubscribeRequestConfigured()
+    const sendSubscriptionEmail = isNewsletterEmailConfigured()
+    if (sendSubscriptionEmail && !isSubscribeRequestConfigured()) {
+      return NextResponse.json(
+        { message: 'Subscription service is not configured' },
+        { status: 503 },
+      )
+    }
     if (sendSubscriptionEmail && (await isSubscribeRequestRateLimited(ip))) {
       return NextResponse.json({ message: 'Too many requests' }, { status: 429 })
     }
@@ -74,6 +81,10 @@ export async function POST(request: Request) {
       return NextResponse.json({ message: 'Subscription successful' }, { status: 200 })
     }
 
+    if (sendSubscriptionEmail && !(await sendUnsubscribeLinkEmail(normalized))) {
+      return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })
+    }
+
     // Insert new subscriber
     const { error } = await supabase
       .from('subscribers')
@@ -81,11 +92,6 @@ export async function POST(request: Request) {
 
     if (error) {
       console.error('Subscription error:', error.message)
-      return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })
-    }
-
-    if (sendSubscriptionEmail && !(await sendUnsubscribeLinkEmail(normalized))) {
-      await supabase.from('subscribers').delete().eq('email', normalized)
       return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })
     }
 

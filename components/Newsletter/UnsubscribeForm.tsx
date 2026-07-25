@@ -38,12 +38,21 @@ const UnsubscribeForm = ({
       )
 
       if (response.status === 200) {
-        if (hasSignedLink) setUseSignedLink(false)
-        toast.success(
-          hasSignedLink
-            ? 'Unsubscription request received'
-            : 'If that address is subscribed, an unsubscribe link has been sent',
-        )
+        if (hasSignedLink) {
+          setUseSignedLink(false)
+          await fetch('/api/unsubscribe/request', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ email }),
+          }).catch(() => null)
+          toast.success(
+            'Unsubscription request received. If the link was invalid, a replacement has been sent.',
+          )
+        } else {
+          toast.success('If that address is subscribed, an unsubscribe link has been sent')
+        }
       } else {
         toast.error('Unsubscription failed')
       }
