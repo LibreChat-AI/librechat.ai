@@ -8,10 +8,17 @@ import {
 
 const mockRedisSet = vi.fn(async () => 'OK')
 const mockRedisDel = vi.fn(async () => 1)
+const mockRedisGet = vi.fn(async () => 1)
+const mockRedisEval = vi.fn(async () => 1)
 
 vi.mock('@upstash/redis', () => ({
   Redis: {
-    fromEnv: () => ({ set: mockRedisSet, del: mockRedisDel }),
+    fromEnv: () => ({
+      set: mockRedisSet,
+      del: mockRedisDel,
+      get: mockRedisGet,
+      eval: mockRedisEval,
+    }),
   },
 }))
 
@@ -31,33 +38,44 @@ describe('unsubscribe tokens', () => {
     vi.useRealTimers()
   })
 
-  it('accepts a current token', () => {
+  it('accepts a current token', async () => {
     const token = createUnsubscribeToken('user@example.com')
 
     expect(token).not.toBeNull()
-    expect(verifyUnsubscribeToken('user@example.com', token!)).toBe(true)
+    expect(await verifyUnsubscribeToken('user@example.com', token!)).toBe(true)
   })
 
-  it('rejects an expired token', () => {
+  it('rejects an expired token', async () => {
     const token = createUnsubscribeToken('user@example.com')
     vi.advanceTimersByTime(7 * 24 * 60 * 60 * 1000 + 1000)
 
-    expect(verifyUnsubscribeToken('user@example.com', token!)).toBe(false)
+    expect(await verifyUnsubscribeToken('user@example.com', token!)).toBe(false)
   })
 
-  it('rejects tokens issued in the future', () => {
+  it('rejects tokens issued in the future', async () => {
     const token = createUnsubscribeToken('user@example.com')
     vi.setSystemTime(new Date('2026-07-25T11:59:59Z'))
 
-    expect(verifyUnsubscribeToken('user@example.com', token!)).toBe(false)
+    expect(await verifyUnsubscribeToken('user@example.com', token!)).toBe(false)
   })
 
-  it('rejects non-canonical timestamp representations', () => {
+  it('rejects non-canonical timestamp representations', async () => {
     const token = createUnsubscribeToken('user@example.com')!
-    const [timestamp, signature] = token.split('.')
+    const [timestamp, generation, signature] = token.split('.')
 
-    expect(verifyUnsubscribeToken('user@example.com', `0${timestamp}.${signature}`)).toBe(false)
-    expect(verifyUnsubscribeToken('user@example.com', `+${timestamp}.${signature}`)).toBe(false)
+    expect(
+      await verifyUnsubscribeToken('user@example.com', `0${timestamp}.${generation}.${signature}`),
+    ).toBe(false)
+    expect(
+      await verifyUnsubscribeToken('user@example.com', `+${timestamp}.${generation}.${signature}`),
+    ).toBe(false)
+  })
+
+  it('rejects tokens from an earlier subscription generation', async () => {
+    const token = createUnsubscribeToken('user@example.com', 1)!
+    mockRedisGet.mockResolvedValueOnce(2)
+
+    expect(await verifyUnsubscribeToken('user@example.com', token)).toBe(false)
   })
 
   it('records and releases consumed tokens by hash', async () => {

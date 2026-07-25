@@ -6,17 +6,27 @@ const mockIsRateLimited = vi.fn(() => false)
 const mockGetClientIp = vi.fn((_request: Request) => '127.0.0.1')
 const mockRedisSet = vi.fn(async (): Promise<string | null> => 'OK')
 const mockRedisDel = vi.fn(async () => 1)
+const mockRedisGet = vi.fn(async () => 1)
+const mockClaimSubscribeRequest = vi.fn(async (): Promise<string | null> => 'owner')
+const mockReleaseSubscribeRequest = vi.fn(async () => undefined)
+const mockRenewSubscribeRequest = vi.fn(async () => true)
 let supabaseClient: ReturnType<typeof createSupabaseMock> | null = createSupabaseMock()
 
 vi.mock('@upstash/redis', () => ({
   Redis: {
-    fromEnv: () => ({ set: mockRedisSet, del: mockRedisDel }),
+    fromEnv: () => ({ set: mockRedisSet, del: mockRedisDel, get: mockRedisGet }),
   },
 }))
 
 vi.mock('@/lib/rate-limit', () => ({
   createRateLimiter: () => mockIsRateLimited,
   getClientIp: (request: Request) => mockGetClientIp(request),
+}))
+
+vi.mock('@/lib/newsletter-email', () => ({
+  claimSubscribeRequest: () => mockClaimSubscribeRequest(),
+  releaseSubscribeRequest: () => mockReleaseSubscribeRequest(),
+  renewSubscribeRequest: () => mockRenewSubscribeRequest(),
 }))
 
 vi.mock('@/lib/supabase', async (importOriginal) => {
@@ -34,6 +44,9 @@ describe('POST /api/unsubscribe', () => {
     vi.clearAllMocks()
     mockIsRateLimited.mockReturnValue(false)
     mockRedisSet.mockResolvedValue('OK')
+    mockRedisGet.mockResolvedValue(1)
+    mockClaimSubscribeRequest.mockResolvedValue('owner')
+    mockRenewSubscribeRequest.mockResolvedValue(true)
     supabaseClient = createSupabaseMock()
     process.env.UNSUBSCRIBE_SECRET = 'test-unsubscribe-secret'
     process.env.UPSTASH_REDIS_REST_URL = 'https://redis.example.com'
@@ -179,6 +192,34 @@ describe('POST /api/unsubscribe', () => {
 
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual({ message: 'Unsubscription request received' })
+    expect(supabaseClient?.update).not.toHaveBeenCalled()
+  })
+
+  it('does not unsubscribe with a token from an earlier subscription', async () => {
+    mockRedisGet.mockResolvedValue(2)
+
+    const response = await POST(
+      jsonRequest('https://example.com/api/unsubscribe', {
+        email: 'user@example.com',
+        token: createUnsubscribeToken('user@example.com', 1),
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(supabaseClient?.update).not.toHaveBeenCalled()
+  })
+
+  it('does not race a subscription operation for the same address', async () => {
+    mockClaimSubscribeRequest.mockResolvedValue(null)
+
+    const response = await POST(
+      jsonRequest('https://example.com/api/unsubscribe', {
+        email: 'user@example.com',
+        token: createUnsubscribeToken('user@example.com'),
+      }),
+    )
+
+    expect(response.status).toBe(200)
     expect(supabaseClient?.update).not.toHaveBeenCalled()
   })
 

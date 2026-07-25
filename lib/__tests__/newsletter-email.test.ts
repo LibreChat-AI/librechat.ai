@@ -16,6 +16,7 @@ import {
 const mockRedisSet = vi.fn(async () => 'OK')
 const mockRedisDel = vi.fn(async () => 1)
 const mockRedisEval = vi.fn(async () => 1)
+const mockRedisGet = vi.fn(async () => 1)
 const mockRateLimit = vi.fn(async () => ({ success: true }))
 
 vi.mock('@upstash/ratelimit', () => ({
@@ -27,7 +28,12 @@ vi.mock('@upstash/ratelimit', () => ({
 
 vi.mock('@upstash/redis', () => ({
   Redis: {
-    fromEnv: () => ({ set: mockRedisSet, del: mockRedisDel, eval: mockRedisEval }),
+    fromEnv: () => ({
+      set: mockRedisSet,
+      del: mockRedisDel,
+      get: mockRedisGet,
+      eval: mockRedisEval,
+    }),
   },
 }))
 
@@ -157,7 +163,7 @@ describe('newsletter unsubscribe email', () => {
     expect(unsubscribeUrl.pathname).toBe('/unsubscribe')
     expect(unsubscribeUrl.search).toBe('')
     expect(credentials.get('email')).toBe('user@example.com')
-    expect(credentials.get('token')).toMatch(/^\d+\.[\w-]+$/)
+    expect(credentials.get('token')).toMatch(/^\d+\.\d+\.[\w-]+$/)
   })
 
   it('returns false when Loops delivery throws', async () => {

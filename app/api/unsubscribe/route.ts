@@ -2,6 +2,11 @@ import { NextResponse } from 'next/server'
 import { getSupabaseClient, isValidEmail, normalizeEmail } from '@/lib/supabase'
 import { createRateLimiter, getClientIp } from '@/lib/rate-limit'
 import {
+  claimSubscribeRequest,
+  releaseSubscribeRequest,
+  renewSubscribeRequest,
+} from '@/lib/newsletter-email'
+import {
   consumeUnsubscribeToken,
   isUnsubscribeConfigured,
   releaseUnsubscribeToken,
@@ -49,32 +54,44 @@ export async function POST(request: Request) {
     }
 
     const normalized = normalizeEmail(email)
-    if (!verifyUnsubscribeToken(normalized, token)) {
+    const lockOwner = await claimSubscribeRequest(normalized)
+    if (!lockOwner) {
       return NextResponse.json({ message: 'Unsubscription request received' }, { status: 200 })
     }
-    if (!(await consumeUnsubscribeToken(token))) {
-      return NextResponse.json({ message: 'Unsubscription request received' }, { status: 200 })
-    }
-
-    let updateError: { message: string } | null
     try {
-      const result = await supabase
-        .from('subscribers')
-        .update({ status: 'unsubscribed' })
-        .eq('email', normalized)
-      updateError = result.error
-    } catch (error) {
-      await releaseUnsubscribeToken(token).catch(() => undefined)
-      throw error
-    }
+      if (!(await verifyUnsubscribeToken(normalized, token))) {
+        return NextResponse.json({ message: 'Unsubscription request received' }, { status: 200 })
+      }
+      if (!(await consumeUnsubscribeToken(token))) {
+        return NextResponse.json({ message: 'Unsubscription request received' }, { status: 200 })
+      }
+      if (!(await renewSubscribeRequest(normalized, lockOwner))) {
+        await releaseUnsubscribeToken(token).catch(() => undefined)
+        return NextResponse.json({ message: 'Unsubscription failed' }, { status: 500 })
+      }
 
-    if (updateError) {
-      await releaseUnsubscribeToken(token).catch(() => undefined)
-      console.error('Unsubscription error:', updateError.message)
-      return NextResponse.json({ message: 'Unsubscription failed' }, { status: 500 })
-    }
+      let updateError: { message: string } | null
+      try {
+        const result = await supabase
+          .from('subscribers')
+          .update({ status: 'unsubscribed' })
+          .eq('email', normalized)
+        updateError = result.error
+      } catch (error) {
+        await releaseUnsubscribeToken(token).catch(() => undefined)
+        throw error
+      }
 
-    return NextResponse.json({ message: 'Unsubscription request received' }, { status: 200 })
+      if (updateError) {
+        await releaseUnsubscribeToken(token).catch(() => undefined)
+        console.error('Unsubscription error:', updateError.message)
+        return NextResponse.json({ message: 'Unsubscription failed' }, { status: 500 })
+      }
+
+      return NextResponse.json({ message: 'Unsubscription request received' }, { status: 200 })
+    } finally {
+      await releaseSubscribeRequest(normalized, lockOwner).catch(() => undefined)
+    }
   } catch {
     return NextResponse.json({ message: 'Unsubscription failed' }, { status: 500 })
   }
