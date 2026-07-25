@@ -27,11 +27,20 @@ export interface SupabaseMockOptions {
 export function createSupabaseMock(options: SupabaseMockOptions = {}) {
   const eqAfterDelete = vi.fn().mockResolvedValue({ error: null })
   const deleteRows = vi.fn().mockReturnValue({ eq: eqAfterDelete })
-  const eqAfterUpdate = vi
-    .fn()
-    .mockResolvedValue(
-      options.updateError ? { error: { message: 'update failed' } } : { error: null },
-    )
+  const maybeSingleAfterUpdate = vi.fn().mockResolvedValue(
+    options.updateError
+      ? { data: null, error: { message: 'update failed' } }
+      : {
+          data: options.existing?.status === 'unsubscribed' ? options.existing : null,
+          error: null,
+        },
+  )
+  const selectAfterUpdate = vi.fn().mockReturnValue({ maybeSingle: maybeSingleAfterUpdate })
+  const eqAfterConditionalUpdate = vi.fn().mockReturnValue({ select: selectAfterUpdate })
+  const eqAfterUpdate = vi.fn().mockReturnValue({
+    eq: eqAfterConditionalUpdate,
+    error: options.updateError ? { message: 'update failed' } : null,
+  })
   const update = vi.fn().mockReturnValue({ eq: eqAfterUpdate })
   const insert = vi
     .fn()
@@ -66,6 +75,9 @@ export function createSupabaseMock(options: SupabaseMockOptions = {}) {
     maybeSingle,
     update,
     eqAfterUpdate,
+    eqAfterConditionalUpdate,
+    selectAfterUpdate,
+    maybeSingleAfterUpdate,
     insert,
     deleteRows,
     eqAfterDelete,

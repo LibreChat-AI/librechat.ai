@@ -47,12 +47,25 @@ export async function POST(request: Request) {
       }
 
       // Re-subscribe if previously unsubscribed
-      await supabase.from('subscribers').update({ status: 'subscribed' }).eq('email', normalized)
+      const { data: transitioned, error: transitionError } = await supabase
+        .from('subscribers')
+        .update({ status: 'subscribed' })
+        .eq('email', normalized)
+        .eq('status', 'unsubscribed')
+        .select('id')
+        .maybeSingle()
+      if (transitionError) {
+        return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })
+      }
+      if (!transitioned) {
+        return NextResponse.json({ message: 'Email already subscribed' }, { status: 409 })
+      }
       if (!(await sendUnsubscribeLinkEmail(normalized))) {
         await supabase
           .from('subscribers')
           .update({ status: 'unsubscribed' })
-          .eq('email', normalized)
+          .eq('id', transitioned.id)
+          .eq('status', 'subscribed')
         return NextResponse.json({ message: 'Subscription failed' }, { status: 500 })
       }
       return NextResponse.json({ message: 'Subscription successful' }, { status: 200 })

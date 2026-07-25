@@ -114,6 +114,7 @@ describe('POST /api/subscribe', () => {
     expect(body).toEqual({ message: 'Subscription successful' })
     expect(supabaseClient.update).toHaveBeenCalledWith({ status: 'subscribed' })
     expect(supabaseClient.eqAfterUpdate).toHaveBeenCalledWith('email', 'user@example.com')
+    expect(supabaseClient.eqAfterConditionalUpdate).toHaveBeenCalledWith('status', 'unsubscribed')
   })
 
   it('creates a new subscriber', async () => {
@@ -169,6 +170,21 @@ describe('POST /api/subscribe', () => {
     expect(response.status).toBe(500)
     expect(supabaseClient.update).toHaveBeenNthCalledWith(1, { status: 'subscribed' })
     expect(supabaseClient.update).toHaveBeenNthCalledWith(2, { status: 'unsubscribed' })
+    expect(supabaseClient.eqAfterUpdate).toHaveBeenLastCalledWith('id', '1')
+    expect(supabaseClient.eqAfterConditionalUpdate).toHaveBeenLastCalledWith('status', 'subscribed')
+  })
+
+  it('does not roll back a resubscription transition owned by another request', async () => {
+    supabaseClient = createSupabaseMock({ existing: { id: '1', status: 'unsubscribed' } })
+    supabaseClient.maybeSingleAfterUpdate.mockResolvedValue({ data: null, error: null })
+
+    const response = await POST(
+      jsonRequest('https://example.com/api/subscribe', { email: 'user@example.com' }),
+    )
+
+    expect(response.status).toBe(409)
+    expect(mockSendUnsubscribeLinkEmail).not.toHaveBeenCalled()
+    expect(supabaseClient.update).toHaveBeenCalledTimes(1)
   })
 
   it('returns 500 for malformed JSON', async () => {
