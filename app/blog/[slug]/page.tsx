@@ -129,6 +129,15 @@ export default async function BlogPostPage(props: PageProps) {
   )
 }
 
+/**
+ * Posts are prerendered from generateStaticParams below, but some embed server
+ * components that read live data at request time (see SiteStats). Without a
+ * revalidate window those pages would be baked once at build and never rebuilt,
+ * so a data source configured after the build would never show up. An hour
+ * matches the cache window the widgets themselves use.
+ */
+export const revalidate = 3600
+
 export function generateStaticParams(): { slug: string }[] {
   return blog.map((post) => ({
     slug: getSlug(post.info.path),
