@@ -9,7 +9,7 @@ import { getClientIp } from '@/lib/rate-limit'
  * Without them the app still works — just without rate limiting.
  *
  * Sliding window: 10 requests per 60 seconds per IP.
- * Client IP resolution is shared with subscribe/unsubscribe via getClientIp.
+ * Client IP resolution is exposed via getClientIp for other API routes.
  * Per-client limiting is skipped when no authenticated ingress identity exists.
  */
 

@@ -20,7 +20,7 @@ module.exports = {
     } else if (path.startsWith('/blog') || path.startsWith('/changelog')) {
       changefreq = 'daily'
       priority = 0.7
-    } else if (/^\/(privacy|tos|cookie|subscribe|unsubscribe)/.test(path)) {
+    } else if (/^\/(privacy|tos|cookie)/.test(path)) {
       changefreq = 'yearly'
       priority = 0.3
     }

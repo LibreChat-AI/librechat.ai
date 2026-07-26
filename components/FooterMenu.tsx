@@ -45,13 +45,6 @@ const menuItems: {
     ],
   },
   {
-    heading: 'newsletter',
-    items: [
-      { key: 'subscribe', href: '/subscribe' },
-      { key: 'unsubscribe', href: '/unsubscribe' },
-    ],
-  },
-  {
     heading: 'legal',
     items: [
       { key: 'termsOfService', href: '/tos' },

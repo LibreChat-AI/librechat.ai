@@ -326,7 +326,6 @@ const en = {
       resources: 'Resources',
       documentation: 'Documentation',
       blog: 'Blog',
-      newsletter: 'Newsletter',
       legal: 'Legal',
     },
     items: {
@@ -342,8 +341,6 @@ const en = {
       remoteInstall: 'Remote Install',
       blog: 'Blog',
       blogAuthors: 'Blog Authors',
-      subscribe: 'Subscribe',
-      unsubscribe: 'Unsubscribe',
       termsOfService: 'Terms of Service',
       privacyPolicy: 'Privacy policy',
       cookiePolicy: 'Cookie policy',

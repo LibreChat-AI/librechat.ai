@@ -1,5 +1,3 @@
-import { vi } from 'vitest'
-
 export function jsonRequest(
   url: string,
   body: unknown,
@@ -15,73 +13,4 @@ export function jsonRequest(
     headers,
     body: JSON.stringify(body),
   })
-}
-
-export interface SupabaseMockOptions {
-  existing?: { id: string; status: string } | null
-  fetchError?: boolean
-  insertError?: boolean
-  updateError?: boolean
-}
-
-export function createSupabaseMock(options: SupabaseMockOptions = {}) {
-  const eqAfterConditionalDelete = vi.fn().mockResolvedValue({ error: null })
-  const eqAfterDelete = vi.fn().mockReturnValue({ eq: eqAfterConditionalDelete })
-  const deleteRows = vi.fn().mockReturnValue({ eq: eqAfterDelete })
-  const maybeSingleAfterUpdate = vi.fn().mockResolvedValue(
-    options.updateError
-      ? { data: null, error: { message: 'update failed' } }
-      : {
-          data: options.existing ?? { id: '1', status: 'subscribed' },
-          error: null,
-        },
-  )
-  const selectAfterUpdate = vi.fn().mockReturnValue({ maybeSingle: maybeSingleAfterUpdate })
-  const eqAfterConditionalUpdate = vi.fn().mockReturnValue({ select: selectAfterUpdate })
-  const eqAfterUpdate = vi.fn().mockReturnValue({
-    eq: eqAfterConditionalUpdate,
-    error: options.updateError ? { message: 'update failed' } : null,
-  })
-  const update = vi.fn().mockReturnValue({ eq: eqAfterUpdate })
-  const insert = vi
-    .fn()
-    .mockResolvedValue(
-      options.insertError ? { error: { message: 'insert failed' } } : { error: null },
-    )
-  const single = vi
-    .fn()
-    .mockResolvedValue(
-      options.fetchError || !options.existing
-        ? { data: null, error: { message: 'not found' } }
-        : { data: options.existing, error: null },
-    )
-  const maybeSingle = vi
-    .fn()
-    .mockResolvedValue(
-      options.fetchError
-        ? { data: null, error: { message: 'fetch failed' } }
-        : { data: options.existing ?? null, error: null },
-    )
-  const eqByStatus = vi.fn().mockReturnValue({ maybeSingle })
-  const eqAfterSelect = vi.fn().mockReturnValue({ single, maybeSingle, eq: eqByStatus })
-  const select = vi.fn().mockReturnValue({ eq: eqAfterSelect })
-  const from = vi.fn().mockReturnValue({ select, update, insert, delete: deleteRows })
-
-  return {
-    from,
-    select,
-    eqAfterSelect,
-    eqByStatus,
-    single,
-    maybeSingle,
-    update,
-    eqAfterUpdate,
-    eqAfterConditionalUpdate,
-    selectAfterUpdate,
-    maybeSingleAfterUpdate,
-    insert,
-    deleteRows,
-    eqAfterDelete,
-    eqAfterConditionalDelete,
-  }
 }

@@ -284,7 +284,6 @@ export const zh: UIStrings = {
       resources: '资源',
       documentation: '文档',
       blog: '博客',
-      newsletter: '订阅资讯',
       legal: '法律',
     },
     items: {
@@ -300,8 +299,6 @@ export const zh: UIStrings = {
       remoteInstall: '远程安装',
       blog: '博客',
       blogAuthors: '博客作者',
-      subscribe: '订阅',
-      unsubscribe: '取消订阅',
       termsOfService: '服务条款',
       privacyPolicy: '隐私政策',
       cookiePolicy: 'Cookie 政策',

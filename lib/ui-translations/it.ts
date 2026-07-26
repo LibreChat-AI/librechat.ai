@@ -306,7 +306,6 @@ export const it: UIStrings = {
       resources: 'Risorse',
       documentation: 'Documentazione',
       blog: 'Blog',
-      newsletter: 'Newsletter',
       legal: 'Note legali',
     },
     items: {
@@ -322,8 +321,6 @@ export const it: UIStrings = {
       remoteInstall: 'Installazione remota',
       blog: 'Blog',
       blogAuthors: 'Autori del blog',
-      subscribe: 'Iscriviti',
-      unsubscribe: 'Annulla iscrizione',
       termsOfService: 'Termini di servizio',
       privacyPolicy: 'Informativa sulla privacy',
       cookiePolicy: 'Informativa sui cookie',

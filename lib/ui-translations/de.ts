@@ -315,7 +315,6 @@ export const de: UIStrings = {
       resources: 'Ressourcen',
       documentation: 'Dokumentation',
       blog: 'Blog',
-      newsletter: 'Newsletter',
       legal: 'Rechtliches',
     },
     items: {
@@ -331,8 +330,6 @@ export const de: UIStrings = {
       remoteInstall: 'Remote-Installation',
       blog: 'Blog',
       blogAuthors: 'Blog-Autoren',
-      subscribe: 'Abonnieren',
-      unsubscribe: 'Abbestellen',
       termsOfService: 'Nutzungsbedingungen',
       privacyPolicy: 'Datenschutzerklärung',
       cookiePolicy: 'Cookie-Richtlinie',

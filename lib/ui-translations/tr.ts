@@ -303,7 +303,6 @@ export const tr: UIStrings = {
       resources: 'Kaynaklar',
       documentation: 'Dokümantasyon',
       blog: 'Blog',
-      newsletter: 'Bülten',
       legal: 'Yasal',
     },
     items: {
@@ -319,8 +318,6 @@ export const tr: UIStrings = {
       remoteInstall: 'Uzak kurulum',
       blog: 'Blog',
       blogAuthors: 'Blog yazarları',
-      subscribe: 'Abone ol',
-      unsubscribe: 'Abonelikten çık',
       termsOfService: 'Hizmet şartları',
       privacyPolicy: 'Gizlilik politikası',
       cookiePolicy: 'Çerez politikası',
