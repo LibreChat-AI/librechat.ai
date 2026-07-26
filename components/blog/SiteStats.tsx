@@ -12,6 +12,11 @@ import { cn } from '@/lib/utils'
  *
  * No secret is ever shipped to the client: the fetch runs on the server and only
  * the rendered numbers reach the browser.
+ *
+ * The fallback path deliberately performs no fetch, which means it registers no
+ * revalidation of its own. The blog post route sets `revalidate` for that reason
+ * (see app/blog/[slug]/page.tsx) so a key added after the build still takes
+ * effect on the next regeneration instead of being stuck on the snapshot.
  */
 
 type Stat = { label: string; value: string }
