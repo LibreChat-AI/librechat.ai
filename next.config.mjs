@@ -101,18 +101,28 @@ const OG_VERSION = computeOgVersion()
  * for the same reason as the RSC flight payload.
  */
 const SHARED_CDN_CACHE = 'public, s-maxage=86400, stale-while-revalidate=604800'
-const cdnCacheHeaders = [
-  '/docs/:path*',
-  // Localized docs (/<locale>/docs/...). Without this they match no cache rule,
-  // so Cloudflare never edge-caches them and every language switch is a full
-  // origin round-trip — including the 307 that untranslated pages redirect with.
-  '/(zh|es|fr|de|ja|pt-BR|it|nl|pl|vi|ko|id|tr)/docs/:path*',
-  '/(blog|changelog|authors|privacy|tos|cookie)(.*)',
-].flatMap((source) => [
+
+/**
+ * Pages that render live data need an edge TTL matching the ISR window of the
+ * route that builds them (`revalidate` in app/blog/[slug]/page.tsx). Under the
+ * shared blog rule the CDN would keep serving a day-old document, so a post
+ * showing "live" numbers would be up to 24h stale no matter how often the origin
+ * regenerated it. Keep the two windows in step when changing either.
+ */
+const LIVE_DATA_CDN_CACHE = 'public, s-maxage=3600, stale-while-revalidate=86400'
+const LIVE_DATA_PATHS = ['/blog/2026-07-26_clickhouse-analytics']
+
+/**
+ * Cache rules for one source: the document response stays shared-cacheable at
+ * the given TTL, while the two variants that share its cache key — the RSC
+ * flight payload and the markdown negotiation — are marked uncacheable, for the
+ * reasons in the note above.
+ */
+const cdnRulesFor = (source, cache) => [
   {
     source,
     missing: [{ type: 'header', key: 'RSC' }],
-    headers: [{ key: 'Cache-Control', value: SHARED_CDN_CACHE }],
+    headers: [{ key: 'Cache-Control', value: cache }],
   },
   {
     source,
@@ -124,7 +134,21 @@ const cdnCacheHeaders = [
     has: [{ type: 'header', key: 'accept', value: '.*text/markdown.*' }],
     headers: [{ key: 'Cache-Control', value: 'private, no-store' }],
   },
-])
+]
+
+// The narrower live-data rules come last so their Cache-Control overrides the
+// shared value on the paths they match.
+const cdnCacheHeaders = [
+  ...[
+    '/docs/:path*',
+    // Localized docs (/<locale>/docs/...). Without this they match no cache rule,
+    // so Cloudflare never edge-caches them and every language switch is a full
+    // origin round-trip — including the 307 that untranslated pages redirect with.
+    '/(zh|es|fr|de|ja|pt-BR|it|nl|pl|vi|ko|id|tr)/docs/:path*',
+    '/(blog|changelog|authors|privacy|tos|cookie)(.*)',
+  ].flatMap((source) => cdnRulesFor(source, SHARED_CDN_CACHE)),
+  ...LIVE_DATA_PATHS.flatMap((source) => cdnRulesFor(source, LIVE_DATA_CDN_CACHE)),
+]
 
 /** @type {import('next').NextConfig} */
 const config = {
