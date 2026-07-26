@@ -18,6 +18,8 @@ import { TrackedLink, TrackedAnchor } from '@/components/TrackedLink'
 import { CredentialsGeneratorMDX } from '@/components/tools/CredentialsGeneratorMDX'
 import { YAMLValidatorMDX } from '@/components/tools/YAMLValidatorMDX'
 import { CompatibilityMatrix } from '@/components/CompatibilityMatrix'
+import { AnalyticsArchitecture } from '@/components/blog/AnalyticsArchitecture'
+import { SiteStats } from '@/components/blog/SiteStats'
 import type { ReactNode } from 'react'
 
 function mapCalloutType(type?: string): 'info' | 'warn' | 'error' {
@@ -256,6 +258,8 @@ export const mdxComponents = {
   Accordions,
   OptionTable,
   CompatibilityMatrix,
+  AnalyticsArchitecture,
+  SiteStats,
   Frame,
   ThemeImage,
   Video,
