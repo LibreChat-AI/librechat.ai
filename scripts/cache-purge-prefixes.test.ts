@@ -9,6 +9,7 @@ import {
   broadPrefixes,
   computePurge,
   dropCoveredPrefixes,
+  encodePath,
   homepageUrls,
   parseArgs,
   parseChangedLine,
@@ -414,6 +415,80 @@ describe('public assets', () => {
   })
 })
 
+describe('URL encoding', () => {
+  /**
+   * `public/images/logos/Stripe wordmark - Slate.svg` is a real file here. A raw
+   * space does not merely miss that asset: Cloudflare rejects the call, so every
+   * URL batched alongside it goes unpurged too.
+   */
+  it.each([
+    [
+      'public/images/logos/Stripe wordmark - Slate.svg',
+      '/images/logos/Stripe%20wordmark%20-%20Slate.svg',
+    ],
+    ['public/images/café.png', '/images/caf%C3%A9.png'],
+    ['public/images/a#b.png', '/images/a%23b.png'],
+    ['public/images/a?b.png', '/images/a%3Fb.png'],
+    ['public/images/a%b.png', '/images/a%25b.png'],
+  ])('encodes %s', (file, expected) => {
+    expect(prefixesForFile(file, locales).files).toEqual([`https://www.librechat.ai${expected}`])
+  })
+
+  it('keeps the path separators as separators', () => {
+    expect(encodePath('images/logos/a b.png')).toBe('images/logos/a%20b.png')
+  })
+
+  it('emits no raw space or hash anywhere in a purge payload', () => {
+    const result = computePurge(['M\tpublic/images/logos/Stripe wordmark - Slate.svg'], locales)
+    for (const url of result.files) expect(url).not.toMatch(/[ #]/)
+  })
+})
+
+describe('optimized image variants', () => {
+  it('adds the optimizer prefix for a raster image', () => {
+    expect(prefixesForFile('public/images/logos/x.png', locales).prefixes).toContain(
+      'www.librechat.ai/_next/image',
+    )
+  })
+
+  it('leaves it out for a non-image asset', () => {
+    expect(prefixesForFile('public/manifest.json', locales).prefixes).toEqual([])
+  })
+
+  it('keeps it through the escalation to broad, which is pages-only', () => {
+    const result = computePurge(['M\tpublic/images/logos/x.png'], locales)
+    expect(result.broad).toBe(true)
+    expect(result.prefixes).toContain('www.librechat.ai/_next/image')
+    expect(result.files).toContain('https://www.librechat.ai/images/logos/x.png')
+  })
+})
+
+describe('broad recovery', () => {
+  it('is pages-only with no diff to work from', () => {
+    const result = computePurge([], locales, { forceBroad: true })
+    // dropCoveredPrefixes sorts, so compare as sets.
+    expect([...result.prefixes].sort()).toEqual([...broadPrefixes(locales)].sort())
+    expect(result.files).toEqual(homepageUrls())
+  })
+
+  /**
+   * The manual escape hatch has to be able to recover what a failed run left
+   * behind, and asset URLs and removed locales only exist in a diff.
+   */
+  it('picks up asset URLs and the optimizer prefix when given a range', () => {
+    const result = computePurge(['M\tpublic/images/logos/x.png'], locales, { forceBroad: true })
+    expect(result.prefixes).toEqual(expect.arrayContaining(broadPrefixes(locales)))
+    expect(result.prefixes).toContain('www.librechat.ai/_next/image')
+    expect(result.files).toContain('https://www.librechat.ai/images/logos/x.png')
+  })
+
+  it('does not send a page prefix the broad set already covers', () => {
+    const result = computePurge(['M\tcontent/docs/local/docker.mdx'], locales, { forceBroad: true })
+    expect(result.prefixes).not.toContain('www.librechat.ai/docs/local/docker')
+    expect(result.prefixes).toContain('www.librechat.ai/docs')
+  })
+})
+
 describe('fallbacks', () => {
   it.each([
     'lib/source.ts',
@@ -470,7 +545,7 @@ describe('computePurge', () => {
   it('escalates to broad when any file is shared', () => {
     const result = computePurge(['content/docs/local/docker.mdx', 'lib/source.ts'], locales)
     expect(result.broad).toBe(true)
-    expect(result.prefixes).toEqual(broadPrefixes(locales))
+    expect([...result.prefixes].sort()).toEqual([...broadPrefixes(locales)].sort())
     expect(result.files).toEqual(homepageUrls())
   })
 

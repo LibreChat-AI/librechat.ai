@@ -59,8 +59,8 @@ on:
   # a failed run, or any deploy that produced no deployment event.
   workflow_dispatch:
     inputs:
-      broad:
-        description: 'Purge the broad set (all top-level prefixes) instead of a diff'
+      broad_pages:
+        description: 'Purge every cached page prefix, not just the ones a diff points at'
         type: boolean
         default: true
       dry_run:
@@ -68,7 +68,7 @@ on:
         type: boolean
         default: false
       range:
-        description: 'With broad=false: commit range to map, e.g. abc1234..def5678'
+        description: 'Commit range, e.g. abc1234..def5678. Required unless broad_pages is set; supply it WITH broad_pages to also purge changed asset URLs and removed locales.'
         type: string
         required: false
 
@@ -77,6 +77,9 @@ permissions:
   # Reading the previous successful production deployment, to know where the
   # diff starts.
   deployments: read
+  # Writing the "this commit was purged" marker that the next run baselines
+  # from, so a failed purge is retried rather than skipped past.
+  statuses: write
 
 # Keyed per deployment, NOT a single shared group. GitHub keeps at most one
 # pending run per concurrency group: "any existing pending job or workflow in the
@@ -111,6 +114,9 @@ env:
   # second between calls keeps us under every per-second bucket, and 429s are
   # retried with backoff below, which is what makes the floor safe too.
   SLEEP_BETWEEN_CALLS: 1
+  # Commit-status context marking "the cache was successfully purged for this
+  # SHA". The next run's baseline is the newest deployment carrying it.
+  PURGE_STATUS_CONTEXT: cache-purge
 
 jobs:
   purge:
@@ -152,26 +158,31 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           EVENT: ${{ github.event_name }}
-          INPUT_BROAD: ${{ inputs.broad }}
+          INPUT_BROAD: ${{ inputs.broad_pages }}
           INPUT_RANGE: ${{ inputs.range }}
           HEAD_SHA: ${{ github.event.deployment.sha }}
           DEPLOYMENT_ID: ${{ github.event.deployment.id }}
           REPO: ${{ github.repository }}
           # Only deployments from the Vercel integration count as live releases.
           VERCEL_CREATOR: 'vercel[bot]'
+          PURGE_STATUS_CONTEXT: ${{ env.PURGE_STATUS_CONTEXT }}
         run: |
           set -euo pipefail
 
           emit() { echo "$1=$2" >> "$GITHUB_OUTPUT"; }
 
           if [ "$EVENT" = "workflow_dispatch" ]; then
-            if [ "$INPUT_BROAD" = "true" ]; then
-              echo "Manual dispatch: broad purge requested."
+            if [ "$INPUT_BROAD" = "true" ] && [ -z "${INPUT_RANGE:-}" ]; then
+              # Pages only. Cannot reach changed asset URLs or a locale that was
+              # removed, because both are discovered from a diff — supply a range
+              # as well to recover those.
+              echo "Manual dispatch: broad page purge, no range given."
+              echo "::warning::No range supplied: changed asset URLs and removed locales cannot be discovered."
               emit mode broad
               exit 0
             fi
             if [ -z "${INPUT_RANGE:-}" ]; then
-              echo "::error::broad=false requires a 'range' input (e.g. abc1234..def5678)."
+              echo "::error::broad_pages=false requires a 'range' input (e.g. abc1234..def5678)."
               exit 1
             fi
             # Constrain the shape before it reaches git, so a value like
@@ -217,19 +228,31 @@ jobs:
                       | select(.id < $current)
                     ][0:40][]
                     | "\(.id) \(.sha)"' <<< "$deployments")
+            # The baseline is the last commit we actually PURGED, not merely the
+            # last one deployed. If B's purge fails or is cancelled and C then
+            # deploys, taking B as the baseline would compute B..C and leave
+            # everything unique to A..B stale forever, with no run left that
+            # would ever revisit it. Walking back to the newest deployment
+            # carrying the `PURGE_STATUS_CONTEXT` commit status makes the next
+            # run absorb the failed one's range: the diff widens to A..C.
             while read -r id sha; do
               [ -n "$id" ] || continue
               [ "$sha" = "$head" ] && continue
               state=$(gh api "repos/$REPO/deployments/$id/statuses?per_page=1" --jq '.[0].state // ""')
-              if [ "$state" = "success" ]; then
+              [ "$state" = "success" ] || continue
+              purged=$(gh api "repos/$REPO/commits/$sha/statuses" \
+                --jq "[.[] | select(.context == \"$PURGE_STATUS_CONTEXT\" and .state == \"success\")] | length")
+              if [ "${purged:-0}" -gt 0 ]; then
                 base="$sha"
-                echo "Previous successful Vercel production deployment: $sha (deployment $id)"
+                echo "Baseline: $sha (deployment $id) — last commit with a successful purge."
                 break
               fi
+              echo "Skipping $sha (deployment $id): deployed, but never purged successfully."
             done <<< "$ids"
 
             if [ -z "$base" ]; then
-              echo "::warning::No earlier successful Vercel production deployment found; purging broadly."
+              # Also the first-ever run, when no commit carries the marker yet.
+              echo "::warning::No earlier successfully purged deployment found; purging broadly."
               emit mode broad
               exit 0
             fi
@@ -248,7 +271,12 @@ jobs:
             exit 0
           fi
 
-          emit mode diff
+          if [ "$EVENT" = "workflow_dispatch" ] && [ "$INPUT_BROAD" = "true" ]; then
+            # Broad page coverage, topped up from the range.
+            emit mode broad
+          else
+            emit mode diff
+          fi
           emit base "$base"
           emit head "$head"
 
@@ -264,9 +292,14 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ "$MODE" = "broad" ]; then
+          # Broad with no range: pages only, nothing a diff would have revealed.
+          if [ "$MODE" = "broad" ] && [ -z "${BASE:-}" ]; then
             node scripts/cache-purge-prefixes.mjs --broad --json > purge.json
           else
+            # Broad *with* a range still walks the diff, so the broad page set is
+            # topped up with changed asset URLs and locales removed in the range.
+            broad_flag=""
+            [ "$MODE" = "broad" ] && broad_flag="--broad"
             # --no-renames is load-bearing. Git's rename detection is on by
             # default, and it reports a moved file as its destination alone, so
             # a page moved without edits would never have its old URL purged and
@@ -306,7 +339,8 @@ jobs:
             git show "$BASE:lib/i18n.ts" > base-i18n.ts 2>/dev/null || rm -f base-i18n.ts
             [ -s base-i18n.ts ] && export BASE_I18N_FILE=base-i18n.ts
 
-            node scripts/cache-purge-prefixes.mjs - --json --explain < changed.tsv > purge.json
+            # shellcheck disable=SC2086 # broad_flag is intentionally unquoted: empty means no flag.
+            node scripts/cache-purge-prefixes.mjs - --json --explain $broad_flag < changed.tsv > purge.json
           fi
 
           jq -r '.prefixes[]' purge.json > prefixes.txt
@@ -474,3 +508,26 @@ jobs:
           purge_all files files.txt
 
           echo "::notice::Cloudflare purge complete."
+
+      # Only reached when every call above succeeded, because `set -e` plus
+      # purge_call's non-zero return aborts the step otherwise. That is the
+      # point: the marker means "the cache is known-good at this SHA", and the
+      # next run picks its baseline from the newest deployment carrying one. A
+      # run that fails leaves no marker, so the following run's diff widens to
+      # include this one's range instead of stepping over it.
+      - name: Record the purge against this commit
+        if: ${{ !inputs.dry_run && steps.compute.outputs.count != '0' && github.event_name == 'deployment_status' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.deployment.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          gh api -X POST "repos/$REPO/statuses/$SHA" \
+            -f state=success \
+            -f context="$PURGE_STATUS_CONTEXT" \
+            -f target_url="$RUN_URL" \
+            -f description="Purged $(wc -l < prefixes.txt) prefixes, $(wc -l < files.txt) URLs" \
+            > /dev/null
+          echo "Marked $SHA as purged."

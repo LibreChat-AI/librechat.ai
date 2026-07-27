@@ -143,6 +143,18 @@ export function homepageUrls() {
   return [`https://${HOST}/`]
 }
 
+/**
+ * Percent-encode a repository path for use in a URL, segment by segment so the
+ * separators survive.
+ *
+ * Not cosmetic: `public/images/logos/Stripe wordmark - Slate.svg` is a real file
+ * here, and a raw space in a `files` entry does not just miss that asset — the
+ * whole call is rejected, so every URL batched with it goes unpurged too.
+ */
+export function encodePath(path) {
+  return path.split('/').map(encodeURIComponent).join('/')
+}
+
 /** Strip a trailing `index` segment so a section index maps to the section root. */
 function stripIndex(slug) {
   if (slug === 'index') return ''
@@ -341,11 +353,26 @@ export function prefixesForFile(file, locales, status = 'M') {
   // the replacement has different dimensions.
   const asset = file.match(/^public\/(.+)$/)
   if (asset) {
+    // A raster image passed to next/image is also served from /_next/image with
+    // the source as a query parameter, and those cache keys cannot be
+    // enumerated. Query strings cannot appear in a prefix, so the only reachable
+    // unit is the whole optimizer path.
+    //
+    // On this zone that purge is currently a no-op: /_next/image returns
+    // cf-cache-status DYNAMIC, so Cloudflare holds nothing there and the stale
+    // bytes live in Vercel's optimizer cache instead. It is one prefix on a rare
+    // trigger, and it becomes correct the moment the zone's Cache Rule covers
+    // that path, so it is cheaper to carry it than to remember to add it later.
+    // The durable fix for the Vercel layer is a versioned or content-hashed
+    // source URL, the way OG_VERSION already works for social cards.
+    const optimizable = /\.(png|jpe?g|webp|avif|gif|svg)$/i.test(asset[1])
     return {
-      prefixes: [],
-      files: [`https://${HOST}/${asset[1]}`],
+      prefixes: optimizable ? [`${HOST}/_next/image`] : [],
+      files: [`https://${HOST}/${encodePath(asset[1])}`],
       broad: true,
-      reason: 'public asset — purging its URL, plus pages (OG fingerprint, image dimensions)',
+      reason: optimizable
+        ? 'public image — its URL, the optimizer path, plus pages (OG fingerprint, dimensions)'
+        : 'public asset — purging its URL, plus pages (OG fingerprint, image dimensions)',
     }
   }
 
@@ -381,14 +408,22 @@ export function dropCoveredPrefixes(prefixes) {
  */
 export const COLLAPSE_THRESHOLD = 200
 
-/** Map a list of changed files to the purge payload. */
-export function computePurge(files, locales) {
+/**
+ * Map a list of changed files to the purge payload.
+ *
+ * `forceBroad` starts from the site-wide set instead of arriving there by
+ * escalation. Combined with a file list it is the recovery mode: broad page
+ * coverage *plus* everything only a diff can reveal — the exact URLs of changed
+ * assets, and locales that existed at the base but not at the head. With an
+ * empty file list it degrades to the plain broad set.
+ */
+export function computePurge(files, locales, { forceBroad = false } = {}) {
   const reasons = []
   const set = new Set()
   // Exact URLs, for the things that have no usable prefix: static assets, and
   // the homepage when the purge goes broad.
   const urls = new Set()
-  let broad = false
+  let broad = forceBroad
 
   for (const line of files) {
     if (!line) continue
@@ -410,14 +445,17 @@ export function computePurge(files, locales) {
   }
 
   if (broad) {
-    // Asset URLs survive the escalation: the broad set is pages only, so
-    // dropping them here would leave the changed asset cached at the edge.
+    // Asset URLs and any prefix outside the broad set survive the escalation.
+    // The broad set is pages only, so replacing the collected prefixes wholesale
+    // would silently drop things it does not cover — the changed asset itself,
+    // and /_next/image. dropCoveredPrefixes then removes the page prefixes the
+    // broad set already subsumes, so nothing is sent twice.
     for (const url of homepageUrls()) urls.add(url)
     return {
       broad: true,
       collapsed,
       selectiveCount: prefixes.length,
-      prefixes: broadPrefixes(locales),
+      prefixes: dropCoveredPrefixes([...broadPrefixes(locales), ...set]),
       files: [...urls].sort(),
       reasons,
     }
@@ -467,27 +505,18 @@ async function main(argv) {
   const { flags, positional } = parseArgs(argv)
   const locales = readLocales()
 
+  // Read the file list even with --broad: recovery runs pass both, so that the
+  // broad page set is topped up with the asset URLs and removed locales that
+  // only a diff can reveal.
   let files = []
-  if (!flags.has('--broad')) {
-    if (positional.length === 1 && positional[0] === '-') {
-      const stdin = readFileSync(0, 'utf8')
-      files = stdin.split('\n')
-    } else {
-      files = positional
-    }
-    files = files.map((f) => f.trim()).filter(Boolean)
+  if (positional.length === 1 && positional[0] === '-') {
+    files = readFileSync(0, 'utf8').split('\n')
+  } else {
+    files = positional
   }
+  files = files.map((f) => f.trim()).filter(Boolean)
 
-  const result = flags.has('--broad')
-    ? {
-        broad: true,
-        collapsed: false,
-        selectiveCount: 0,
-        prefixes: broadPrefixes(locales),
-        files: homepageUrls(),
-        reasons: [],
-      }
-    : computePurge(files, locales)
+  const result = computePurge(files, locales, { forceBroad: flags.has('--broad') })
 
   if (flags.has('--explain')) {
     for (const r of result.reasons) {
