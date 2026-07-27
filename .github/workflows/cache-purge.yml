@@ -117,6 +117,10 @@ env:
   # Commit-status context marking "the cache was successfully purged for this
   # SHA". The next run's baseline is the newest deployment carrying it.
   PURGE_STATUS_CONTEXT: cache-purge
+  # How far back to look for the last purged Vercel release. One page is 100
+  # deployments, which on this repo is ~3.3 days because translate_docs.yml
+  # creates a Production record every 30 minutes; 5 pages is a fortnight.
+  MAX_DEPLOYMENT_PAGES: 5
 
 jobs:
   purge:
@@ -177,7 +181,7 @@ jobs:
               # removed, because both are discovered from a diff — supply a range
               # as well to recover those.
               echo "Manual dispatch: broad page purge, no range given."
-              echo "::warning::No range supplied: changed asset URLs and removed locales cannot be discovered."
+              echo "::warning::No range supplied: purging public/ wholesale; a locale removed in the meantime cannot be discovered."
               emit mode broad
               exit 0
             fi
@@ -219,15 +223,24 @@ jobs:
             #   yet still differs from head, so it would be accepted as the
             #   "previous" build and the real B..C delta would go unpurged.
             base=""
-            # Bounded to 40 inside jq rather than with `head`, whose SIGPIPE
-            # would trip `pipefail`.
-            deployments=$(gh api "repos/$REPO/deployments?environment=Production&per_page=100")
-            ids=$(jq -r --argjson current "$DEPLOYMENT_ID" --arg creator "$VERCEL_CREATOR" '
-                    [ .[]
-                      | select(.creator.login == $creator)
-                      | select(.id < $current)
-                    ][0:40][]
-                    | "\(.id) \(.sha)"' <<< "$deployments")
+            # Pagination is not optional here. `environment=Production` is
+            # dominated by the half-hourly translate_docs.yml jobs, which declare
+            # that environment and so create a deployment record each run.
+            # Measured on this repo: one page of 100 covers about 3.3 days and
+            # holds 5 Vercel releases against 95 Actions records. Any release gap
+            # longer than that would push the real baseline off page one, and the
+            # run would silently degrade to a broad purge every time.
+            page=1
+            while [ "$page" -le "$MAX_DEPLOYMENT_PAGES" ] && [ -z "$base" ]; do
+              deployments=$(gh api \
+                "repos/$REPO/deployments?environment=Production&per_page=100&page=$page")
+              [ "$(jq 'length' <<< "$deployments")" -gt 0 ] || break
+              ids=$(jq -r --argjson current "$DEPLOYMENT_ID" --arg creator "$VERCEL_CREATOR" '
+                      [ .[]
+                        | select(.creator.login == $creator)
+                        | select(.id < $current)
+                      ][]
+                      | "\(.id) \(.sha)"' <<< "$deployments")
             # The baseline is the last commit we actually PURGED, not merely the
             # last one deployed. If B's purge fails or is cancelled and C then
             # deploys, taking B as the baseline would compute B..C and leave
@@ -235,20 +248,31 @@ jobs:
             # would ever revisit it. Walking back to the newest deployment
             # carrying the `PURGE_STATUS_CONTEXT` commit status makes the next
             # run absorb the failed one's range: the diff widens to A..C.
-            while read -r id sha; do
-              [ -n "$id" ] || continue
-              [ "$sha" = "$head" ] && continue
-              state=$(gh api "repos/$REPO/deployments/$id/statuses?per_page=1" --jq '.[0].state // ""')
-              [ "$state" = "success" ] || continue
-              purged=$(gh api "repos/$REPO/commits/$sha/statuses" \
-                --jq "[.[] | select(.context == \"$PURGE_STATUS_CONTEXT\" and .state == \"success\")] | length")
-              if [ "${purged:-0}" -gt 0 ]; then
-                base="$sha"
-                echo "Baseline: $sha (deployment $id) — last commit with a successful purge."
-                break
-              fi
-              echo "Skipping $sha (deployment $id): deployed, but never purged successfully."
-            done <<< "$ids"
+              while read -r id sha; do
+                [ -n "$id" ] || continue
+                [ -z "$base" ] || break
+                [ "$sha" = "$head" ] && continue
+                # "Has it EVER succeeded", not "is its newest status success".
+                # GitHub appends an `inactive` status to earlier deployments in an
+                # environment once a newer one succeeds (auto_inactive, on by
+                # default). That is not happening on this repo today — the
+                # superseded deployment 5623426305 carries a lone `success` — but
+                # if it ever started, reading only the newest status would reject
+                # every candidate and quietly pin the workflow to broad purges.
+                succeeded=$(gh api "repos/$REPO/deployments/$id/statuses" \
+                  --jq '[.[] | select(.state == "success")] | length')
+                [ "${succeeded:-0}" -gt 0 ] || continue
+                purged=$(gh api "repos/$REPO/commits/$sha/statuses" \
+                  --jq "[.[] | select(.context == \"$PURGE_STATUS_CONTEXT\" and .state == \"success\")] | length")
+                if [ "${purged:-0}" -gt 0 ]; then
+                  base="$sha"
+                  echo "Baseline: $sha (deployment $id) — last commit with a successful purge."
+                  break
+                fi
+                echo "Skipping $sha (deployment $id): deployed, but never purged successfully."
+              done <<< "$ids"
+              page=$((page + 1))
+            done
 
             if [ -z "$base" ]; then
               # Also the first-ever run, when no commit carries the marker yet.
@@ -292,9 +316,12 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Broad with no range: pages only, nothing a diff would have revealed.
+          # No range to work from: a manual run without one, an unreachable base,
+          # or no previously purged deployment. --assets covers public/ wholesale
+          # because nothing here can tell which asset changed, and these are the
+          # runs that exist precisely because something already went wrong.
           if [ "$MODE" = "broad" ] && [ -z "${BASE:-}" ]; then
-            node scripts/cache-purge-prefixes.mjs --broad --json > purge.json
+            node scripts/cache-purge-prefixes.mjs --broad --assets --json > purge.json
           else
             # Broad *with* a range still walks the diff, so the broad page set is
             # topped up with changed asset URLs and locales removed in the range.

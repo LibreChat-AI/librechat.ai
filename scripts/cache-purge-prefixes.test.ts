@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest'
 import {
   COLLAPSE_THRESHOLD,
   KNOWN_FLAGS,
+  assetFallbackTargets,
   broadPrefixes,
   computePurge,
   dropCoveredPrefixes,
@@ -77,7 +78,7 @@ describe('readLocales', () => {
 
 describe('parseArgs', () => {
   it('accepts exactly the three documented flags', () => {
-    expect(KNOWN_FLAGS).toEqual(['--broad', '--json', '--explain'])
+    expect(KNOWN_FLAGS).toEqual(['--broad', '--assets', '--json', '--explain'])
   })
 
   it('separates known flags from file arguments', () => {
@@ -99,7 +100,7 @@ describe('parseArgs', () => {
 
   it('names the offending flag and the accepted ones', () => {
     expect(() => parseArgs(['--deleted'])).toThrow(
-      'Unknown flag: --deleted\nKnown flags: --broad, --json, --explain',
+      'Unknown flag: --deleted\nKnown flags: --broad, --assets, --json, --explain',
     )
   })
 
@@ -486,6 +487,40 @@ describe('broad recovery', () => {
     const result = computePurge(['M\tcontent/docs/local/docker.mdx'], locales, { forceBroad: true })
     expect(result.prefixes).not.toContain('www.librechat.ai/docs/local/docker')
     expect(result.prefixes).toContain('www.librechat.ai/docs')
+  })
+})
+
+describe('asset fallback for runs with no diff', () => {
+  const assets = assetFallbackTargets()
+
+  it('covers every top-level entry under public/', () => {
+    expect(assets.prefixes).toEqual(
+      expect.arrayContaining(['www.librechat.ai/images', 'www.librechat.ai/videos']),
+    )
+    expect(assets.files).toEqual(
+      expect.arrayContaining([
+        'https://www.librechat.ai/favicon.ico',
+        'https://www.librechat.ai/site.webmanifest',
+      ]),
+    )
+  })
+
+  it('encodes the entries it emits', () => {
+    for (const url of assets.files) expect(url).not.toMatch(/[ #]/)
+  })
+
+  /**
+   * Deliberately not in the ordinary broad set: evicting every image whenever a
+   * shared file changes is the asset MISS wave that avoiding purge_everything
+   * exists to prevent. It belongs only to the paths that cannot see a diff.
+   */
+  it('stays out of the ordinary broad set', () => {
+    const broad = broadPrefixes(locales)
+    for (const prefix of assets.prefixes) expect(broad).not.toContain(prefix)
+  })
+
+  it('is reachable from the flag the recovery path uses', () => {
+    expect(KNOWN_FLAGS).toContain('--assets')
   })
 })
 

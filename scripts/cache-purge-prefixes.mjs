@@ -24,12 +24,13 @@
  *   node scripts/cache-purge-prefixes.mjs --broad
  *
  * Flags:
- *   --broad        ignore the file list and emit the broad (site-wide) set
+ *   --broad        start from the broad (site-wide) page set
+ *   --assets       add every public/ asset, for recovery runs with no diff
  *   --json         emit {prefixes, files, broad, reasons} instead of plain lines
  *   --explain      write the per-file mapping decisions to stderr
  */
 
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 
@@ -153,6 +154,29 @@ export function homepageUrls() {
  */
 export function encodePath(path) {
   return path.split('/').map(encodeURIComponent).join('/')
+}
+
+/**
+ * Everything under `public/`, as purge targets, read from the checkout.
+ *
+ * For the recovery paths that have no diff to work from: a manual run with no
+ * range, an unreachable base commit, or no previously purged deployment. The
+ * broad set covers pages only, so without this a run that cannot see the diff
+ * leaves a replaced asset served from the edge — and those are exactly the runs
+ * that exist because something already went wrong.
+ *
+ * Top-level directories become prefixes and top-level files become exact URLs,
+ * which on this repo is 2 + 21 entries: precise, bounded, and no guessing about
+ * what changed. Deliberately NOT part of the ordinary broad set, where evicting
+ * every image on any shared-file change would be the asset MISS wave that
+ * avoiding `purge_everything` exists to prevent.
+ */
+export function assetFallbackTargets(repoRoot = REPO_ROOT) {
+  const entries = readdirSync(resolve(repoRoot, 'public'), { withFileTypes: true })
+  return {
+    prefixes: entries.filter((e) => e.isDirectory()).map((e) => `${HOST}/${encodePath(e.name)}`),
+    files: entries.filter((e) => e.isFile()).map((e) => `https://${HOST}/${encodePath(e.name)}`),
+  }
 }
 
 /** Strip a trailing `index` segment so a section index maps to the section root. */
@@ -472,7 +496,7 @@ export function computePurge(files, locales, { forceBroad = false } = {}) {
 }
 
 /** Every flag this script understands. A typo must not be mistaken for one of these. */
-export const KNOWN_FLAGS = ['--broad', '--json', '--explain']
+export const KNOWN_FLAGS = ['--broad', '--assets', '--json', '--explain']
 
 /**
  * Split argv into flags and positionals, rejecting anything unrecognised.
@@ -517,6 +541,12 @@ async function main(argv) {
   files = files.map((f) => f.trim()).filter(Boolean)
 
   const result = computePurge(files, locales, { forceBroad: flags.has('--broad') })
+
+  if (flags.has('--assets')) {
+    const assets = assetFallbackTargets()
+    result.prefixes = dropCoveredPrefixes([...result.prefixes, ...assets.prefixes])
+    result.files = [...new Set([...result.files, ...assets.files])].sort()
+  }
 
   if (flags.has('--explain')) {
     for (const r of result.reasons) {
