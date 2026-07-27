@@ -1,10 +1,14 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
   COLLAPSE_THRESHOLD,
+  KNOWN_FLAGS,
   broadPrefixes,
   computePurge,
   dropCoveredPrefixes,
   homepageUrls,
+  parseArgs,
   prefixesForFile,
   readLocales,
 } from './cache-purge-prefixes.mjs'
@@ -33,6 +37,60 @@ describe('readLocales', () => {
 
   it('excludes the default language, which has no URL prefix', () => {
     expect(locales).not.toContain('en')
+  })
+})
+
+describe('parseArgs', () => {
+  it('accepts exactly the three documented flags', () => {
+    expect(KNOWN_FLAGS).toEqual(['--broad', '--json', '--explain'])
+  })
+
+  it('separates known flags from file arguments', () => {
+    const { flags, positional } = parseArgs(['--json', 'content/docs/index.mdx', '--explain'])
+    expect([...flags]).toEqual(['--json', '--explain'])
+    expect(positional).toEqual(['content/docs/index.mdx'])
+  })
+
+  it('treats a bare - as the stdin operand, not a flag', () => {
+    expect(parseArgs(['-', '--json']).positional).toEqual(['-'])
+  })
+
+  it.each(['--deleted', '--diff-filter=D', '--dry-run', '-x', '-broad'])(
+    'rejects %s instead of ignoring it',
+    (flag) => {
+      expect(() => parseArgs([flag, 'content/docs/index.mdx'])).toThrow(/Unknown flag/)
+    },
+  )
+
+  it('names the offending flag and the accepted ones', () => {
+    expect(() => parseArgs(['--deleted'])).toThrow(
+      'Unknown flag: --deleted\nKnown flags: --broad, --json, --explain',
+    )
+  })
+
+  /**
+   * A mistyped `--broad` would compute an empty result, hit the workflow's
+   * "nothing to purge" branch and skip the purge silently, so the workflow's own
+   * invocations are pinned to the flags the script actually accepts.
+   */
+  it('accepts every flag the workflow passes', () => {
+    const workflow = readFileSync(
+      fileURLToPath(new URL('../.github/workflows/cache-purge.yml', import.meta.url)),
+      'utf8',
+    )
+    const invocations = [...workflow.matchAll(/cache-purge-prefixes\.mjs([^\n]*)/g)].map(
+      (match) => {
+        const tokens = match[1].trim().split(/\s+/).filter(Boolean)
+        const redirect = tokens.findIndex((token) => token.startsWith('>') || token === '|')
+        return redirect === -1 ? tokens : tokens.slice(0, redirect)
+      },
+    )
+
+    expect(invocations).toHaveLength(2)
+    for (const argv of invocations) {
+      expect(argv.length).toBeGreaterThan(0)
+      expect(() => parseArgs(argv)).not.toThrow()
+    }
   })
 })
 

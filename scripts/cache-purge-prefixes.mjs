@@ -301,9 +301,38 @@ export function computePurge(files, locales) {
   }
 }
 
+/** Every flag this script understands. A typo must not be mistaken for one of these. */
+export const KNOWN_FLAGS = ['--broad', '--json', '--explain']
+
+/**
+ * Split argv into flags and positionals, rejecting anything unrecognised.
+ *
+ * Silently ignoring an unknown flag is dangerous here rather than merely untidy:
+ * a mistyped `--broad` in the workflow would produce an empty result, land in
+ * the "nothing to purge" branch, and skip the purge without a word — the exact
+ * silent staleness this whole workflow exists to prevent.
+ */
+export function parseArgs(argv) {
+  const flags = new Set()
+  const positional = []
+
+  for (const arg of argv) {
+    // A bare `-` is the read-from-stdin operand, not a flag.
+    if (arg === '-' || !arg.startsWith('-')) {
+      positional.push(arg)
+      continue
+    }
+    if (!KNOWN_FLAGS.includes(arg)) {
+      throw new Error(`Unknown flag: ${arg}\nKnown flags: ${KNOWN_FLAGS.join(', ')}`)
+    }
+    flags.add(arg)
+  }
+
+  return { flags, positional }
+}
+
 async function main(argv) {
-  const flags = new Set(argv.filter((a) => a.startsWith('--')))
-  const positional = argv.filter((a) => !a.startsWith('--'))
+  const { flags, positional } = parseArgs(argv)
   const locales = readLocales()
 
   let files = []
@@ -350,7 +379,7 @@ async function main(argv) {
 
 if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
   main(process.argv.slice(2)).catch((error) => {
-    process.stderr.write(`${error.stack ?? error}\n`)
+    process.stderr.write(`${error.message ?? error}\n`)
     process.exit(1)
   })
 }
