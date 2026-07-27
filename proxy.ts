@@ -97,10 +97,18 @@ export default function proxy(request: NextRequest, event: NextFetchEvent) {
     return response
   }
 
-  // Locale detection + default-locale rewriting for the docs.
+  // English docs have an explicit prefix-less route. Let Next.js render the
+  // same public pathname on the server and client so Fumadocs pathname-based
+  // state (breadcrumbs and active sidebar items) hydrates deterministically.
+  if (pathname === '/docs' || pathname.startsWith('/docs/')) {
+    return NextResponse.next()
+  }
+
+  // Localized docs keep their visible locale prefix. The middleware also
+  // canonicalizes the default locale from /en/docs/* back to /docs/*.
   return i18nMiddleware(request, event)
 }
 
 export const config = {
-  matcher: ['/', '/docs/:path*', '/(zh|es|fr|de|ja|pt-BR|it|nl|pl|vi|ko|id|tr)/docs/:path*'],
+  matcher: ['/', '/docs/:path*', '/(en|zh|es|fr|de|ja|pt-BR|it|nl|pl|vi|ko|id|tr)/docs/:path*'],
 }

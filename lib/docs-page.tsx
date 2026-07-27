@@ -1,42 +1,52 @@
-import { docsSource } from '@/lib/source'
-import { mdxComponents } from '@/lib/mdx-components'
+import 'server-only'
+
 import { DocsHub } from '@/components/DocsHub'
-import { QuickStartHub } from '@/components/QuickStartHub'
 import { FeaturesHub } from '@/components/FeaturesHub'
-import { LocalInstallHub } from '@/components/LocalInstallHub'
-import { CredentialsGeneratorMDX } from '@/components/tools/CredentialsGeneratorMDX'
-import { YAMLValidatorMDX } from '@/components/tools/YAMLValidatorMDX'
-import { DocsPage, DocsBody, DocsTitle, DocsDescription } from 'fumadocs-ui/page'
-import { notFound, redirect } from 'next/navigation'
-import { LLMCopyButton, ViewOptions } from '@/components/page-actions'
 import { Feedback } from '@/components/Feedback'
 import { JsonLd } from '@/components/JsonLd'
-import { articleSchema, breadcrumbSchema } from '@/lib/structured-data'
-import { ogImageUrl } from '@/lib/og'
+import { LocalInstallHub } from '@/components/LocalInstallHub'
 import { MachineTranslatedBanner } from '@/components/MachineTranslatedBanner'
+import { QuickStartHub } from '@/components/QuickStartHub'
+import { LLMCopyButton, ViewOptions } from '@/components/page-actions'
+import { CredentialsGeneratorMDX } from '@/components/tools/CredentialsGeneratorMDX'
+import { YAMLValidatorMDX } from '@/components/tools/YAMLValidatorMDX'
 import { i18n, localizedDocsHref } from '@/lib/i18n'
+import { mdxComponents } from '@/lib/mdx-components'
+import { ogImageUrl } from '@/lib/og'
+import { docsSource } from '@/lib/source'
+import { articleSchema, breadcrumbSchema } from '@/lib/structured-data'
+import { DocsBody, DocsDescription, DocsPage, DocsTitle } from 'fumadocs-ui/page'
+import { notFound, redirect } from 'next/navigation'
 import type { Metadata } from 'next'
 
-interface PageProps {
-  params: Promise<{ lang: string; slug?: string[] }>
+export interface DocsRouteParams {
+  lang: string
+  slug?: string[]
 }
 
-export default async function Page(props: PageProps) {
-  const params = await props.params
+function englishDocsHref(slug?: string[]): string {
+  const slugPath = (slug ?? []).join('/')
+  return slugPath ? `/docs/${slugPath}` : '/docs'
+}
+
+function isRealTranslation(lang: string, path: string): boolean {
+  return lang !== i18n.defaultLanguage && path.endsWith(`.${lang}.mdx`)
+}
+
+export async function renderDocsPage(params: DocsRouteParams) {
   const page = docsSource.getPage(params.slug, params.lang)
   if (!page) notFound()
 
-  const slugPath = (params.slug ?? []).join('/')
-  const englishHref = slugPath ? `/docs/${slugPath}` : '/docs'
+  const englishHref = englishDocsHref(params.slug)
 
-  // generateStaticParams omits non-default locales without a translated file, but
+  // generateLocalizedDocsParams omits locales without a translated file, but
   // dynamicParams defaults to true, and the Fumadocs sidebar still emits
   // /<locale>/docs/* links for untranslated slugs (its node url uses the locale
   // even when the file resolves to the English fallback). Redirect such URLs to the
   // English page: no duplicate English content at a localized URL, and the sidebar
   // links resolve instead of 404ing. A real translation (path ends .<locale>.mdx)
   // renders normally.
-  if (params.lang !== i18n.defaultLanguage && !page.path.endsWith(`.${params.lang}.mdx`)) {
+  if (params.lang !== i18n.defaultLanguage && !isRealTranslation(params.lang, page.path)) {
     redirect(englishHref)
   }
 
@@ -55,13 +65,10 @@ export default async function Page(props: PageProps) {
     YAMLValidatorMDX: () => <YAMLValidatorMDX lang={params.lang} />,
   }
 
-  // Fumadocs 14.7.7 falls back to the English page for a non-default locale that
-  // has no foo.<locale>.mdx yet, so getPage alone can't tell a real translation
-  // from a fallback. A real translation's file path ends in `.<locale>.mdx`; a
-  // fallback ends in plain `.mdx`. Gate the banner (and the hreflang alternates
-  // below) on that so untranslated English fallbacks aren't treated as translated.
-  const isTranslated =
-    params.lang !== i18n.defaultLanguage && page.path.endsWith(`.${params.lang}.mdx`)
+  // Fumadocs falls back to the English page for a non-default locale that has
+  // no foo.<locale>.mdx yet. Gate the banner (and the hreflang alternates below)
+  // on the generated file suffix so English fallbacks aren't treated as translated.
+  const isTranslated = isRealTranslation(params.lang, page.path)
 
   // On localized pages page.path is the generated locale file (foo.de.mdx).
   // Point all GitHub links at the English source instead: the locale file is
@@ -69,14 +76,14 @@ export default async function Page(props: PageProps) {
   // excluded from the workflow trigger, so edits made directly to it are silently
   // overwritten. Fixing the source is the durable way to improve a translation.
   const localeSuffix = new RegExp(
-    `\\.(${i18n.languages.filter((l) => l !== i18n.defaultLanguage).join('|')})\\.mdx$`,
+    `\\.(${i18n.languages.filter((lang) => lang !== i18n.defaultLanguage).join('|')})\\.mdx$`,
   )
   const sourcePath = page.path.replace(localeSuffix, '.mdx')
   const githubHref = `https://github.com/LibreChat-AI/librechat.ai/blob/main/content/docs/${sourcePath}`
 
   // `lastModified` is populated only when a git last-modified loader option is
   // enabled (this site doesn't), so it's optional and absent from the strict
-  // fumadocs 16 data type — read it defensively.
+  // fumadocs data type — read it defensively.
   const lastModifiedRaw = (page.data as { lastModified?: Date | string }).lastModified
   const lastModified =
     lastModifiedRaw instanceof Date ? lastModifiedRaw.toISOString() : lastModifiedRaw
@@ -124,8 +131,7 @@ export default async function Page(props: PageProps) {
           Raw Markdown is only served for the English /docs/*.md route (see the
           next.config rewrite + proxy passthrough); a localized /<locale>/docs/*.md
           URL would 404. Point these at the English source so Copy Markdown / Open
-          in LibreChat work on translated pages too. For English pages englishHref
-          equals page.url, so this is unchanged there.
+          in LibreChat work on translated pages too.
         */}
         <LLMCopyButton markdownUrl={`${englishHref}.md`} lang={params.lang} />
         <ViewOptions markdownUrl={`${englishHref}.md`} githubUrl={githubHref} lang={params.lang} />
@@ -145,27 +151,33 @@ export default async function Page(props: PageProps) {
   )
 }
 
-export async function generateStaticParams() {
-  // Fumadocs emits one param set per page for EVERY language even when no
+export function generateEnglishDocsParams() {
+  return docsSource
+    .generateParams()
+    .filter((params) => params.lang === i18n.defaultLanguage)
+    .map(({ slug }) => ({ slug }))
+}
+
+export function generateLocalizedDocsParams() {
+  // Fumadocs emits one param set per page for every language even when no
   // localized file exists (getPage falls back to English). Materializing those
-  // would publish hundreds of duplicate-English pages at /<locale>/docs/* and
-  // list them in the sitemap. Keep the default language plus only locales that
-  // have a real translated file on disk (same discriminator as the hreflang gate).
-  return docsSource.generateParams().filter((p) => {
-    if (p.lang === i18n.defaultLanguage) return true
-    return docsSource.getPage(p.slug, p.lang)?.path.endsWith(`.${p.lang}.mdx`) ?? false
+  // would publish duplicate-English pages at /<locale>/docs/* and in the sitemap.
+  return docsSource.generateParams().filter((params) => {
+    if (params.lang === i18n.defaultLanguage) return false
+    return (
+      docsSource.getPage(params.slug, params.lang)?.path.endsWith(`.${params.lang}.mdx`) ?? false
+    )
   })
 }
 
-export async function generateMetadata(props: PageProps): Promise<Metadata> {
-  const params = await props.params
+export async function generateDocsMetadata(params: DocsRouteParams): Promise<Metadata> {
   const page = docsSource.getPage(params.slug, params.lang)
   if (!page) notFound()
-  // Match Page(): a non-default locale resolving to an English fallback redirects
-  // to the English page, so don't emit metadata for a URL that won't render here.
-  if (params.lang !== i18n.defaultLanguage && !page.path.endsWith(`.${params.lang}.mdx`)) {
-    const slugPath = (params.slug ?? []).join('/')
-    redirect(slugPath ? `/docs/${slugPath}` : '/docs')
+
+  // Match renderDocsPage(): a non-default locale resolving to an English
+  // fallback redirects to its canonical English page.
+  if (params.lang !== i18n.defaultLanguage && !isRealTranslation(params.lang, page.path)) {
+    redirect(englishDocsHref(params.slug))
   }
 
   return {
@@ -174,10 +186,7 @@ export async function generateMetadata(props: PageProps): Promise<Metadata> {
     alternates: {
       canonical: page.url,
       // Only advertise an hreflang alternate for locales that actually have a
-      // translated file. getPage falls back to the English page for a missing
-      // locale, so check the resolved file path ends in `.<locale>.mdx` instead
-      // of just truthiness, to avoid pointing crawlers at English-fallback
-      // alternates for skipped / not-yet-translated pages.
+      // translated file. getPage falls back to English for a missing locale.
       languages: Object.fromEntries(
         i18n.languages
           .filter((locale) => {
@@ -189,9 +198,7 @@ export async function generateMetadata(props: PageProps): Promise<Metadata> {
             const slugPath = (params.slug ?? []).join('/')
             const href =
               locale === i18n.defaultLanguage
-                ? slugPath
-                  ? `/docs/${slugPath}`
-                  : '/docs'
+                ? englishDocsHref(params.slug)
                 : slugPath
                   ? `/${locale}/docs/${slugPath}`
                   : `/${locale}/docs`

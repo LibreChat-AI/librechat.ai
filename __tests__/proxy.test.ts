@@ -1,7 +1,7 @@
-import type { NextRequest } from 'next/server'
+import { NextRequest, type NextFetchEvent } from 'next/server'
 import { describe, expect, it } from 'vitest'
 import { LOCALIZED_HOME_LOCALES, LOCALE_COOKIE } from '@/lib/i18n'
-import { preferredLocale } from '../proxy'
+import proxy, { preferredLocale } from '../proxy'
 
 function requestWithPreferences({
   cookie,
@@ -43,5 +43,54 @@ describe('preferredLocale', () => {
     })
 
     expect(preferredLocale(request, LOCALIZED_HOME_LOCALES)).toBe('fr')
+  })
+})
+
+describe('docs proxy routing', () => {
+  const event = {} as NextFetchEvent
+
+  async function runProxy(path: string, headers?: HeadersInit): Promise<Response> {
+    const response = await proxy(
+      new NextRequest(`https://www.librechat.ai${path}`, { headers }),
+      event,
+    )
+    if (!response) throw new Error(`Proxy returned no response for ${path}`)
+    return response
+  }
+
+  it('passes browser requests for the explicit English route through unchanged', async () => {
+    const response = await runProxy('/docs/local/docker', { accept: 'text/html' })
+
+    expect(response.headers.get('x-middleware-next')).toBe('1')
+    expect(response.headers.get('x-middleware-rewrite')).toBeNull()
+  })
+
+  it('preserves content negotiation for raw Markdown', async () => {
+    const response = await runProxy('/docs/local/docker', { accept: 'text/markdown' })
+
+    expect(response.headers.get('x-middleware-rewrite')).toBe(
+      'https://www.librechat.ai/llms.mdx/docs/local/docker',
+    )
+  })
+
+  it('leaves explicit .md routes for the Next.js raw Markdown rewrite', async () => {
+    const response = await runProxy('/docs/local/docker.md', { accept: 'text/markdown' })
+
+    expect(response.headers.get('x-middleware-next')).toBe('1')
+    expect(response.headers.get('x-middleware-rewrite')).toBeNull()
+  })
+
+  it('redirects the prefixed default locale to the canonical English URL', async () => {
+    const response = await runProxy('/en/docs/quick_start')
+
+    expect(response.status).toBe(307)
+    expect(response.headers.get('location')).toBe('https://www.librechat.ai/docs/quick_start')
+  })
+
+  it('passes localized docs routes through with their visible prefix', async () => {
+    const response = await runProxy('/it/docs/translation')
+
+    expect(response.headers.get('x-middleware-next')).toBe('1')
+    expect(response.headers.get('x-middleware-rewrite')).toBeNull()
   })
 })
