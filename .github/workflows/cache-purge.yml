@@ -121,6 +121,10 @@ env:
   # deployments, which on this repo is ~3.3 days because translate_docs.yml
   # creates a Production record every 30 minutes; 5 pages is a fortnight.
   MAX_DEPLOYMENT_PAGES: 5
+  # How far back a blind recovery reaches when it has no baseline to work from.
+  # Only ever an approximation of where to start, so it is paired with the broad
+  # page set; its job is to surface deletions, which a range-less run cannot see.
+  FALLBACK_WINDOW: '30 days ago'
 
 jobs:
   purge:
@@ -175,13 +179,38 @@ jobs:
 
           emit() { echo "$1=$2" >> "$GITHUB_OUTPUT"; }
 
+          # Last resort before giving up on a range entirely.
+          #
+          # A range-less purge is blind to deletions: every target is enumerated
+          # from the deployed checkout, so a file removed in the meantime has no
+          # entry anywhere and its old URL survives at the edge. A time-boxed
+          # range is approximate about *where* to start, but it is a real diff,
+          # so removals inside it come through as `D` and get purged like any
+          # other change. Strictly better than nothing; still paired with the
+          # broad page set, because the window may not reach far enough back.
+          fallback_range() {
+            local since ref
+            ref="${1:-}"
+            [ -n "$ref" ] || ref=$(git rev-parse HEAD)
+            since=$(git rev-list -1 --before="$FALLBACK_WINDOW" "$ref" 2>/dev/null || true)
+            if [ -n "$since" ] && [ "$since" != "$ref" ]; then
+              echo "::warning::No usable baseline; falling back to the last $FALLBACK_WINDOW ($since..$ref)."
+              emit mode broad
+              emit base "$since"
+              emit head "$ref"
+              return 0
+            fi
+            return 1
+          }
+
           if [ "$EVENT" = "workflow_dispatch" ]; then
             if [ "$INPUT_BROAD" = "true" ] && [ -z "${INPUT_RANGE:-}" ]; then
               # Pages only. Cannot reach changed asset URLs or a locale that was
               # removed, because both are discovered from a diff — supply a range
               # as well to recover those.
               echo "Manual dispatch: broad page purge, no range given."
-              echo "::warning::No range supplied: purging public/ wholesale; a locale removed in the meantime cannot be discovered."
+              fallback_range && exit 0
+              echo "::warning::No range and no fallback window; deletions in the meantime cannot be discovered."
               emit mode broad
               exit 0
             fi
@@ -276,7 +305,9 @@ jobs:
 
             if [ -z "$base" ]; then
               # Also the first-ever run, when no commit carries the marker yet.
-              echo "::warning::No earlier successfully purged deployment found; purging broadly."
+              echo "No earlier successfully purged deployment found."
+              fallback_range "$head" && exit 0
+              echo "::warning::No baseline and no fallback window; purging broadly."
               emit mode broad
               exit 0
             fi
@@ -285,7 +316,9 @@ jobs:
           # A force-push or a dropped branch can orphan the base commit. Mapping
           # nothing would leave the cache stale, so fall back to the broad set.
           if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
-            echo "::warning::Base commit $base is not reachable in this checkout; purging broadly."
+            echo "Base commit $base is not reachable in this checkout."
+            fallback_range "$head" && exit 0
+            echo "::warning::No fallback window either; purging broadly."
             emit mode broad
             exit 0
           fi
@@ -323,10 +356,16 @@ jobs:
           if [ "$MODE" = "broad" ] && [ -z "${BASE:-}" ]; then
             node scripts/cache-purge-prefixes.mjs --broad --assets --json > purge.json
           else
-            # Broad *with* a range still walks the diff, so the broad page set is
-            # topped up with changed asset URLs and locales removed in the range.
+            # Broad *with* a range still walks the diff, so the broad page set
+            # is topped up with changed asset URLs and locales removed in the
+            # range. --assets rides along for the same reason it applies to a
+            # range-less run: broad means the diff is not trusted to be
+            # complete, and the window may not reach back far enough. A run that
+            # escalates to broad from a *trusted* diff does not get it — there we
+            # know exactly which assets changed, and evicting every image on any
+            # shared-file change is what avoiding purge_everything is for.
             broad_flag=""
-            [ "$MODE" = "broad" ] && broad_flag="--broad"
+            [ "$MODE" = "broad" ] && broad_flag="--broad --assets"
             # --no-renames is load-bearing. Git's rename detection is on by
             # default, and it reports a moved file as its destination alone, so
             # a page moved without edits would never have its old URL purged and
