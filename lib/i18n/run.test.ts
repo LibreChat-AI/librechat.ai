@@ -477,4 +477,176 @@ describe('runTranslation', () => {
     const tm = await TM.load('de', cache)
     expect(tm.get(hashText('# Changed Heading'))).toBeUndefined()
   })
+
+  it('records a give-up so a block that never validates is not re-attempted next run', async () => {
+    // The pipeline's dominant cost before this: the source-fallback returned English
+    // but cached nothing, so every unfixable block burned BLOCK_VALIDATION_ATTEMPTS
+    // model calls on every run of every locale, forever, while reporting translated=0.
+    let calls = 0
+    const breaking: TranslateModel = {
+      generate: async ({ prompt }) => {
+        calls++
+        const text = prompt.split(/Translate the following[^\n]*:\n/).pop() ?? ''
+        return text.startsWith('#') ? `${text}\n\n\`\`\`\nx\n\`\`\`` : text
+      },
+    }
+    await writeFile(join(content, 'index.mdx'), `---\ntitle: Hello\n---\n\n# Head\n\nBody.\n`)
+    const first = await runTranslation({
+      contentDir: content,
+      cacheDir: cache,
+      locales: ['de'],
+      model: breaking,
+    })
+    expect(first.skipped).toEqual([])
+    expect(calls).toBeGreaterThanOrEqual(3)
+
+    calls = 0
+    const second = await runTranslation({
+      contentDir: content,
+      cacheDir: cache,
+      locales: ['de'],
+      model: breaking,
+    })
+    expect(calls).toBe(0)
+    expect(second.skipped).toEqual([])
+    // Still published, still English for that one block.
+    expect(await readFile(join(content, 'index.de.mdx'), 'utf8')).toContain('# Head [#head]')
+
+    // A forced retranslation must give the block a fresh chance.
+    calls = 0
+    await runTranslation({
+      contentDir: content,
+      cacheDir: cache,
+      locales: ['de'],
+      model: breaking,
+      force: true,
+    })
+    expect(calls).toBeGreaterThanOrEqual(3)
+  })
+
+  // A frontmatter title translated to an unclosed JSX tag: inline validation is
+  // regex-based and accepts it, so only the whole-file MDX parse catches it. This
+  // is the `skip` path (validateTranslation failing after every block passed).
+  const breaksFileViaTitle = (title: string): TranslateModel => ({
+    generate: async ({ prompt }) => {
+      const text = prompt.split(/Translate the following[^\n]*:\n/).pop() ?? ''
+      return text === title ? '<Foo' : text
+    },
+  })
+
+  it('keeps reusable cache entries when a file fails whole-file validation', async () => {
+    // Block hashes are content-global, so evicting a failed file's cache hits also
+    // makes every other page sharing those blocks pay to re-translate them.
+    await runTranslation({ contentDir: content, cacheDir: cache, locales: ['de'], model: stub })
+    expect(await readdir(content)).toContain('index.de.mdx')
+
+    // Only the title changes, so the body blocks are pure cache hits this run.
+    await writeFile(
+      join(content, 'index.mdx'),
+      `---\ntitle: Greetings\n---\n\n# Hello\n\nA paragraph.\n`,
+    )
+    const stats = await runTranslation({
+      contentDir: content,
+      cacheDir: cache,
+      locales: ['de'],
+      model: breaksFileViaTitle('Greetings'),
+    })
+    expect(stats.skipped.some((s) => s.includes('index.mdx'))).toBe(true)
+    expect(await readdir(content)).not.toContain('index.de.mdx')
+
+    const tm = await TM.load('de', cache)
+    // Evicted: produced by this run's model call, and structurally suspect.
+    expect(tm.get(hashText('Greetings'))).toBeUndefined()
+    // Kept: cache hits written by the earlier run, which did validate.
+    expect(tm.get(hashText('A paragraph.'))).toBe('A paragraph.')
+    expect(tm.get(hashText('# Hello'))).toBe('# Hello')
+  })
+
+  it('keeps a give-up marker when the file fails whole-file validation', async () => {
+    // A give-up block is byte-identical to the source, so it can never be the
+    // structural culprit. Dropping its marker would re-burn the attempts on every
+    // future run of a page that never converges.
+    const model: TranslateModel = {
+      generate: async ({ prompt }) => {
+        const text = prompt.split(/Translate the following[^\n]*:\n/).pop() ?? ''
+        if (text.startsWith('#')) return `${text}\n\n\`\`\`\nx\n\`\`\``
+        return text === 'Hello' ? '<Foo' : text
+      },
+    }
+    const stats = await runTranslation({
+      contentDir: content,
+      cacheDir: cache,
+      locales: ['de'],
+      model,
+    })
+    expect(stats.skipped.some((s) => s.includes('index.mdx'))).toBe(true)
+
+    const raw = JSON.parse(await readFile(join(cache, 'de.json'), 'utf8'))
+    expect(Object.keys(raw).some((k) => k.startsWith('giveup:'))).toBe(true)
+  })
+
+  it('stops re-translating a file that keeps failing whole-file validation', async () => {
+    // Without a bound this is an unbounded per-run charge: the file's blocks are
+    // evicted on every failure, re-translated on the next run, and the page serves
+    // English either way.
+    let calls = 0
+    const model: TranslateModel = {
+      generate: async ({ prompt }) => {
+        calls++
+        const text = prompt.split(/Translate the following[^\n]*:\n/).pop() ?? ''
+        return text === 'Hello' ? '<Foo' : text
+      },
+    }
+    const opts = { contentDir: content, cacheDir: cache, locales: ['de'], model }
+
+    for (let run = 1; run <= 3; run++) {
+      calls = 0
+      const stats = await runTranslation(opts)
+      expect(stats.skipped.some((s) => s.includes('index.mdx'))).toBe(true)
+      expect(stats.quarantined).toEqual([])
+      expect(calls).toBeGreaterThan(0)
+    }
+
+    calls = 0
+    const after = await runTranslation(opts)
+    expect(calls).toBe(0)
+    expect(after.skipped).toEqual([])
+    expect(after.quarantined.some((q) => q.includes('index.mdx'))).toBe(true)
+    expect(await readdir(content)).not.toContain('index.de.mdx')
+  })
+
+  it('retries a quarantined file once its source changes', async () => {
+    const breaks: TranslateModel = {
+      generate: async ({ prompt }) => {
+        const text = prompt.split(/Translate the following[^\n]*:\n/).pop() ?? ''
+        return text === 'Hello' ? '<Foo' : text
+      },
+    }
+    const opts = { contentDir: content, cacheDir: cache, locales: ['de'], model: breaks }
+    for (let run = 1; run <= 4; run++) await runTranslation(opts)
+    expect((await runTranslation(opts)).quarantined.length).toBeGreaterThan(0)
+
+    // The counter is keyed by source content, so an edit earns a fresh budget.
+    await writeFile(join(content, 'index.mdx'), `---\ntitle: Howdy\n---\n\n# Hi\n\nText.\n`)
+    const stats = await runTranslation({
+      contentDir: content,
+      cacheDir: cache,
+      locales: ['de'],
+      model: stub,
+    })
+    expect(stats.quarantined).toEqual([])
+    expect(stats.skipped).toEqual([])
+    expect(await readdir(content)).toContain('index.de.mdx')
+  })
+
+  it('reports how many file translations were attempted', async () => {
+    const stats = await runTranslation({
+      contentDir: content,
+      cacheDir: cache,
+      locales: ['de', 'fr'],
+      model: stub,
+    })
+    // index.mdx + meta.json, per locale.
+    expect(stats.attempted).toBe(4)
+  })
 })

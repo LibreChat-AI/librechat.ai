@@ -27,6 +27,15 @@ export const TARGET_LOCALES = [
 export const PROMPT_VERSION = '2'
 
 /**
+ * Bump when the preservation validator changes. Blocks the model could never get
+ * past validation are recorded as "give up, keep English" markers namespaced by
+ * this version, so relaxing or tightening `validate.ts` retries exactly those
+ * blocks without invalidating the (far larger) set of good translations that a
+ * PROMPT_VERSION bump would discard.
+ */
+export const VALIDATOR_VERSION = '1'
+
+/**
  * Model id used for translation. Validate CJK quality before changing the default.
  * `||` (not `??`) so an empty string — which CI sets when the optional
  * OPENROUTER_TRANSLATE_MODEL repo variable is unset — falls back to the default

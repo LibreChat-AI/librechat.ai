@@ -46,18 +46,26 @@ function corpus(file: matter.GrayMatterFile<string>): string {
  * count-checked here; JSX tags/structural props and heading ids are likewise
  * handled in segmentation, not by this guard.
  *
- * `link target`, `heading level`, and `template placeholder` are intentionally NOT
- * sorted: they are compared in document order so a translation that swaps two link
- * destinations between their labels, swaps two heading depths, or swaps two
+ * `heading level` and `template placeholder` are intentionally NOT sorted: they are
+ * compared in document order so a translation that swaps two heading depths or two
  * placeholder positions (e.g. `User: {input}\nAI: {output}` → `User: {output}\nAI:
  * {input}`) — same multiset, broken meaning — is rejected. The other classes are
  * sorted, tolerating benign reordering since position is not load-bearing for them.
+ *
+ * `link target` is sorted too, deliberately. Ordered comparison also rejects a
+ * translation that merely reorders links while keeping every destination intact —
+ * which target languages legitimately do when clause order changes, and which was
+ * this guard's most common failure in production (`[a, b] -> [b, a]` on tables and
+ * multi-link paragraphs). Every such rejection costs three model calls and leaves
+ * the block in English forever. Sorting still catches the failure that actually
+ * breaks a page — a destination added, dropped, or localized — and gives up only
+ * the ability to detect two links trading labels with no other change.
  */
 function preservedTokens(text: string): Record<string, string[]> {
   const structure = collectBlockStructure(text)
   return {
     'inline code': collectInlineCode(text).sort(),
-    'link target': collectUrls(text),
+    'link target': collectUrls(text).sort(),
     'template placeholder': collectPlaceholders(text),
     'table structure': structure.tables.sort(),
     'blockquote marker': structure.quotes.sort(),
@@ -68,7 +76,7 @@ function preservedTokens(text: string): Record<string, string[]> {
 function preservedInlineTokens(text: string): Record<string, string[]> {
   return {
     'inline code': collectInlineCode(text).sort(),
-    'link target': collectRawUrls(text),
+    'link target': collectRawUrls(text).sort(),
     'template placeholder': collectPlaceholders(text),
     'table structure': [],
     'blockquote marker': [],

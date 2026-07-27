@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import { translate, buildSystemPrompt, stripWrappingFence, type TranslateModel } from './engine'
+import {
+  translate,
+  buildSystemPrompt,
+  stripWrappingFence,
+  outputTokenBudget,
+  type TranslateModel,
+} from './engine'
 
 const echo: TranslateModel = { generate: async ({ prompt }) => prompt.split('\n').at(-1) ?? '' }
 
@@ -38,5 +44,25 @@ describe('engine', () => {
     await translate({ text: '# Hello', locale: 'de', kind: 'block', model: capturing })
     expect(captured?.system).toBeTruthy()
     expect(captured?.system).toContain(buildSystemPrompt('Deutsch', 'block'))
+  })
+
+  it('outputTokenBudget scales with the block and stays far below the context window', () => {
+    // Unbounded, the provider reserves its whole 65536-token window per request,
+    // which inflates the credit hold on every call regardless of block size.
+    expect(outputTokenBudget('Hi')).toBe(512)
+    expect(outputTokenBudget('x'.repeat(600))).toBe(1800)
+    expect(outputTokenBudget('x'.repeat(100_000))).toBe(8192)
+  })
+
+  it('translate caps the output budget for the block it sends', async () => {
+    let captured: { maxOutputTokens?: number } | undefined
+    const capturing: TranslateModel = {
+      generate: async (input) => {
+        captured = input
+        return input.prompt
+      },
+    }
+    await translate({ text: '# Hello', locale: 'de', kind: 'block', model: capturing })
+    expect(captured?.maxOutputTokens).toBe(outputTokenBudget('# Hello'))
   })
 })

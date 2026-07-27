@@ -6,7 +6,23 @@ import { withRetry } from './retry'
 import { progress } from './progress'
 
 export interface TranslateModel {
-  generate(input: { system: string; prompt: string }): Promise<string>
+  generate(input: { system: string; prompt: string; maxOutputTokens?: number }): Promise<string>
+}
+
+/**
+ * Output budget for one block. Without it the provider reserves its full context
+ * window (65536 tokens) per request no matter how small the block is, which both
+ * inflates the credit reservation — the pipeline died for three weeks on
+ * "requires more credits, or fewer max_tokens... you requested up to 65536" — and
+ * lets a looping model run far past any plausible translation.
+ *
+ * A translation runs longer than its source in most target languages, and CJK
+ * tokenizes at roughly one token per character, so budget 3x the source length in
+ * characters. The floor covers short inline strings; the ceiling is well above the
+ * largest block the segmenter emits.
+ */
+export function outputTokenBudget(text: string): number {
+  return Math.min(8192, Math.max(512, text.length * 3))
 }
 
 export function createOpenRouterModel(): TranslateModel {
@@ -33,9 +49,10 @@ export function createOpenRouterModel(): TranslateModel {
   // backoff lives in one place; TRANSLATE_MAX_RETRIES tunes the budget in CI.
   const maxRetries = Number(process.env.TRANSLATE_MAX_RETRIES) || 6
   return {
-    async generate({ system, prompt }) {
+    async generate({ system, prompt, maxOutputTokens }) {
       const { text } = await withRetry(
-        () => generateText({ model, system, prompt, temperature: 0.2, maxRetries: 0 }),
+        () =>
+          generateText({ model, system, prompt, temperature: 0.2, maxRetries: 0, maxOutputTokens }),
         {
           retries: maxRetries,
           // Backoff is routine on the flex tier: count it for the progress UI
@@ -89,6 +106,10 @@ export async function translate(opts: {
     ? `Surrounding context (for reference only, DO NOT translate or include in your output):\n${opts.context}\n\n`
     : ''
   const prompt = `${context}Translate the following into ${localeName}:\n${opts.text}`
-  const raw = await opts.model.generate({ system, prompt })
+  const raw = await opts.model.generate({
+    system,
+    prompt,
+    maxOutputTokens: outputTokenBudget(opts.text),
+  })
   return stripWrappingFence(raw)
 }
