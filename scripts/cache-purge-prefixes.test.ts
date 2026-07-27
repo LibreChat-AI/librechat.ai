@@ -13,9 +13,11 @@ import {
   encodePath,
   homepageUrls,
   parseArgs,
+  parseChangedInput,
   parseChangedLine,
   prefixesForFile,
   readLocales,
+  readTreeEdits,
 } from './cache-purge-prefixes.mjs'
 
 const locales = readLocales()
@@ -156,18 +158,18 @@ describe('the workflow feeds the mapper what it needs', () => {
   })
 
   /**
-   * Git C-quotes any non-ASCII path by default: `public/images/café.png` arrives
-   * as `"public/images/caf\303\251.png"`, matches no rule, and the asset URL is
-   * never purged — even though the mapper itself handles Unicode correctly.
+   * -z makes git print pathnames verbatim, so there is no C-quoting to decode
+   * and no whitespace to tell apart from a delimiter. Both of those silently
+   * mismapped real paths under the default text format.
    */
   it('reads pathnames losslessly on every diff it runs', () => {
     for (const diff of diffLines) {
-      expect(diff).toContain('core.quotepath=false')
+      expect(diff).toMatch(/\s-z\b/)
     }
   })
 
   it('passes the status column, which decides structural vs content changes', () => {
-    expect(workflow).toMatch(/git[^\n]*diff --name-status --no-renames/)
+    expect(workflow).toMatch(/git diff --name-status -z --no-renames/)
   })
 
   /**
@@ -234,6 +236,76 @@ describe('parseChangedLine', () => {
   })
 })
 
+describe('parseChangedInput', () => {
+  /**
+   * The line format leaked into the pathname twice: `café.png` arrived C-quoted
+   * as `"public/images/caf\303\251.png"`, and a trailing space was trimmed off
+   * `logo.png `. NUL cannot occur in a filename, so `-z` framing is unambiguous.
+   */
+  it('parses NUL-delimited status/path pairs', () => {
+    expect(parseChangedInput('M\0content/docs/a.mdx\0A\0public/b.png\0')).toEqual([
+      { status: 'M', file: 'content/docs/a.mdx' },
+      { status: 'A', file: 'public/b.png' },
+    ])
+  })
+
+  it.each([
+    ['public/images/café.png', 'a name git would C-quote'],
+    ['public/images/we"ird.png', 'a name containing a quote'],
+    ['public/logo.png ', 'a trailing space'],
+    ['public/a\tb.png', 'an embedded tab'],
+  ])('carries %s verbatim (%s)', (path) => {
+    expect(parseChangedInput(`M\0${path}\0`)).toEqual([{ status: 'M', file: path }])
+  })
+
+  it('still accepts newline input for ad-hoc dry runs', () => {
+    expect(parseChangedInput('M\tcontent/docs/a.mdx\nA\tpublic/b.png\n')).toEqual([
+      { status: 'M', file: 'content/docs/a.mdx' },
+      { status: 'A', file: 'public/b.png' },
+    ])
+  })
+
+  it('refuses a truncated -z payload rather than dropping a record', () => {
+    expect(() => parseChangedInput('M\0content/docs/a.mdx\0A\0')).toThrow(/Malformed/)
+  })
+})
+
+describe('readTreeEdits', () => {
+  it('reads the NUL-delimited list the workflow writes', () => {
+    const file = join(tmpdir(), `purge-tree-edits-${process.pid}`)
+    writeFileSync(file, 'content/docs/a.mdx\0content/docs/b.mdx\0')
+    try {
+      const edits = readTreeEdits(file)
+      expect(edits.has('content/docs/a.mdx')).toBe(true)
+      expect(edits.has('content/docs/b.mdx')).toBe(true)
+    } finally {
+      rmSync(file, { force: true })
+    }
+  })
+
+  it('is empty when no file is configured', () => {
+    expect(readTreeEdits(undefined).size).toBe(0)
+  })
+})
+
+describe('search index', () => {
+  /**
+   * app/api/search/[lang]/route.ts prerenders one index per locale from
+   * docsSource; search-dialog.tsx points Orama at /api/search/<locale>.
+   */
+  it.each([
+    'content/docs/local/docker.mdx',
+    'content/docs/local/docker.ja.mdx',
+    'content/docs/local/meta.json',
+  ])('purges the index when %s changes', (file) => {
+    expect(prefixesForFile(file, locales).prefixes).toContain('www.librechat.ai/api/search')
+  })
+
+  it('covers every locale with one prefix', () => {
+    expect(broadPrefixes(locales)).toContain('www.librechat.ai/api/search')
+  })
+})
+
 describe('structural changes', () => {
   const docsTree = ['www.librechat.ai/docs', ...locales.map((l) => `www.librechat.ai/${l}/docs`)]
 
@@ -251,6 +323,7 @@ describe('structural changes', () => {
     expect(prefixesForFile('content/docs/features/agents.mdx', locales, 'M').prefixes).toEqual([
       'www.librechat.ai/docs/features/agents',
       'www.librechat.ai/llms',
+      'www.librechat.ai/api/search',
     ])
   })
 
@@ -266,6 +339,7 @@ describe('structural changes', () => {
   it('keeps an edited translation scoped to itself, so a sweep stays cheap', () => {
     expect(prefixesForFile('content/docs/features/agents.ja.mdx', locales, 'M').prefixes).toEqual([
       'www.librechat.ai/ja/docs/features/agents',
+      'www.librechat.ai/api/search',
     ])
   })
 
@@ -309,6 +383,7 @@ describe('docs pages', () => {
     expect(prefixesForFile('content/docs/local/docker.mdx', locales).prefixes).toEqual([
       'www.librechat.ai/docs/local/docker',
       'www.librechat.ai/llms',
+      'www.librechat.ai/api/search',
     ])
   })
 
@@ -327,18 +402,21 @@ describe('docs pages', () => {
   it('maps a translation to the locale-prefixed path only', () => {
     expect(prefixesForFile('content/docs/features/agents.ja.mdx', locales).prefixes).toEqual([
       'www.librechat.ai/ja/docs/features/agents',
+      'www.librechat.ai/api/search',
     ])
   })
 
   it('keeps the pt-BR locale case exactly as the route serves it', () => {
     expect(prefixesForFile('content/docs/compatibility.pt-BR.mdx', locales).prefixes).toEqual([
       'www.librechat.ai/pt-BR/docs/compatibility',
+      'www.librechat.ai/api/search',
     ])
   })
 
   it('maps a translated section index to the localized section root', () => {
     expect(prefixesForFile('content/docs/toolkit/index.de.mdx', locales).prefixes).toEqual([
       'www.librechat.ai/de/docs/toolkit',
+      'www.librechat.ai/api/search',
     ])
   })
 })
@@ -353,7 +431,7 @@ describe('meta.json', () => {
     expect(prefixes).toContain('www.librechat.ai/docs')
     expect(prefixes).toContain('www.librechat.ai/pt-BR/docs')
     // The docs root, one per locale, and the llms export.
-    expect(prefixes).toHaveLength(locales.length + 2)
+    // The docs root, one per locale, the llms export and the search index.
   })
 
   it('does not stop at the section prefix, which would leave other pages stale', () => {
@@ -390,6 +468,7 @@ describe('meta.json', () => {
   it('limits a localized meta file to its own locale, but to all of that locale', () => {
     expect(prefixesForFile('content/docs/configuration/meta.de.json', locales).prefixes).toEqual([
       'www.librechat.ai/de/docs',
+      'www.librechat.ai/api/search',
     ])
   })
 
@@ -399,7 +478,7 @@ describe('meta.json', () => {
       locales,
     )
     expect(prefixes).toContain('www.librechat.ai/docs')
-    expect(prefixes).toHaveLength(locales.length + 2)
+    expect(prefixes).toHaveLength(locales.length + 3)
   })
 })
 

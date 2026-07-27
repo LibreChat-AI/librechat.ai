@@ -114,8 +114,12 @@ env:
   # second between calls keeps us under every per-second bucket, and 429s are
   # retried with backoff below, which is what makes the floor safe too.
   SLEEP_BETWEEN_CALLS: 1
-  # Commit-status context marking "the cache was successfully purged for this
-  # SHA". The next run's baseline is the newest deployment carrying it.
+  # Commit-status context marking "the cache was successfully purged". The real
+  # context carries the deployment id — `cache-purge/12345` — because a SHA is
+  # not a unique key: a rollback redeploys one that was already purged. Ordering
+  # by timestamp is not enough either, since an earlier deployment's overlapping
+  # purge can post its marker after a later deployment was created. The id is
+  # the only thing that identifies which deployment a marker belongs to.
   PURGE_STATUS_CONTEXT: cache-purge
   # How far back to look for the last purged Vercel release. One page is 100
   # deployments, which on this repo is ~3.3 days because translate_docs.yml
@@ -276,7 +280,7 @@ jobs:
                         | select(.creator.login == $creator)
                         | select(.id < $current)
                       ][]
-                      | "\(.id) \(.sha) \(.created_at)"' <<< "$deployments")
+                      | "\(.id) \(.sha)"' <<< "$deployments")
             # The baseline is the last commit we actually PURGED, not merely the
             # last one deployed. If B's purge fails or is cancelled and C then
             # deploys, taking B as the baseline would compute B..C and leave
@@ -284,7 +288,7 @@ jobs:
             # would ever revisit it. Walking back to the newest deployment
             # carrying the `PURGE_STATUS_CONTEXT` commit status makes the next
             # run absorb the failed one's range: the diff widens to A..C.
-              while read -r id sha created; do
+              while read -r id sha; do
                 [ -n "$id" ] || continue
                 [ -z "$base" ] || break
                 [ "$sha" = "$head" ] && continue
@@ -298,16 +302,10 @@ jobs:
                 succeeded=$(gh api "repos/$REPO/deployments/$id/statuses" \
                   --jq '[.[] | select(.state == "success")] | length')
                 [ "${succeeded:-0}" -gt 0 ] || continue
-                # The marker must post-date THIS deployment, not merely exist on
-                # the commit. A rollback redeploys a SHA that was purged the first
-                # time round; if the rollback's own purge fails, an undated check
-                # would accept its stale marker and the next run would diff from a
-                # build whose cache was never cleared. GitHub timestamps are UTC
-                # ISO-8601, so a lexicographic compare is a chronological one.
+                # Keyed to this deployment, not just this commit.
                 purged=$(gh api "repos/$REPO/commits/$sha/statuses" \
-                  --jq "[.[] | select(.context == \"$PURGE_STATUS_CONTEXT\"
-                                      and .state == \"success\"
-                                      and .created_at > \"$created\")] | length")
+                  --jq "[.[] | select(.context == \"$PURGE_STATUS_CONTEXT/$id\"
+                                      and .state == \"success\")] | length")
                 if [ "${purged:-0}" -gt 0 ]; then
                   base="$sha"
                   echo "Baseline: $sha (deployment $id) — last commit with a successful purge."
@@ -390,44 +388,32 @@ jobs:
             # --name-status because add/delete are not equivalent to modify here:
             # they reshape the page tree and the locale map that every docs page
             # renders, so the mapper widens the purge for them.
-            # core.quotepath=false, or git C-quotes any non-ASCII path:
-            # `public/images/café.png` arrives as `"public/images/caf\303\251.png"`,
-            # which matches no rule, so the asset URL is never purged even though
-            # the mapper handles Unicode correctly. A name containing a quote or
-            # backslash is still quoted, and that is caught below rather than
-            # silently mismapped.
-            git -c core.quotepath=false diff --name-status --no-renames \
-              "$BASE" "$HEAD" > changed.tsv
+            # -z, not the default text format. Git prints pathnames verbatim
+            # under it, so there is no C-quoting to decode and no whitespace to
+            # tell apart from a delimiter — the two things that silently
+            # mismapped `café.png` and `logo.png ` before. NUL cannot occur in a
+            # filename, so the framing is unambiguous by construction.
+            #
+            # --no-renames keeps a move reported as delete + add: git's rename
+            # detection would otherwise name only the destination and the old URL
+            # would never be purged. --name-status because add/delete reshape the
+            # page tree and locale map that every docs page renders.
+            git diff --name-status -z --no-renames "$BASE" "$HEAD" > changed.z
 
-            # Frontmatter `title:`/`icon:` populate the page-tree node that the
-            # sidebar draws on *every* docs page, so editing one is structural
-            # even though git calls it a plain M. -G selects files whose patch
-            # adds or removes a line matching the regex, which is exactly the
-            # set we need and one extra git call. It also matches a `title:` at
-            # the start of a line inside a fenced code block in the body: that
-            # over-purges to the docs root, which is safe.
-            git -c core.quotepath=false diff --name-only --no-renames -G'^(title|icon):' \
-              "$BASE" "$HEAD" -- content/docs > tree-edits.txt || : > tree-edits.txt
-
-            # Anything still quoted holds a character git cannot render plainly.
-            # Mapping it would silently under-purge, so stop instead.
-            if cut -f2- changed.tsv | grep -q '^"'; then
-              echo "::error::Changed path needs C-quoting, which this mapper cannot parse:" >&2
-              cut -f2- changed.tsv | grep '^"' >&2
-              exit 1
-            fi
-
-            # getline in BEGIN, not the NR==FNR idiom: with an empty first file
-            # that idiom misreads the first line of the second file.
-            awk -F'\t' -v treefile=tree-edits.txt '
-              BEGIN { while ((getline line < treefile) > 0) tree[line] = 1 }
-              { status = $1; file = $NF
-                if (status == "M" && (file in tree)) status = "T"
-                print status "\t" file }' changed.tsv > changed.marked.tsv
-            mv changed.marked.tsv changed.tsv
+            # Frontmatter title/icon populate the page-tree node the sidebar
+            # draws on every docs page, so editing one is structural even though
+            # git calls it M. -G selects files whose patch touches such a line.
+            # It also matches a `title:` opening a line inside a fenced code
+            # block, which over-purges to the docs root: safe.
+            #
+            # The mapper pairs this with the diff. Doing it there rather than in
+            # awk is not a preference: ubuntu-latest's awk is mawk, which does
+            # not handle a NUL record separator.
+            git diff --name-only -z --no-renames -G'^(title|icon):' \
+              "$BASE" "$HEAD" -- content/docs > tree-edits.z || : > tree-edits.z
 
             echo "Changed files ($BASE..$HEAD):"
-            sed 's/^/  /' changed.tsv
+            tr '\0' '\n' < changed.z | paste - - | sed 's/^/  /'
 
             # A locale removed in this deploy is absent from the deployed
             # lib/i18n.ts, so the mapper would never emit its prefixes. Give it
@@ -436,7 +422,8 @@ jobs:
             [ -s base-i18n.ts ] && export BASE_I18N_FILE=base-i18n.ts
 
             # shellcheck disable=SC2086 # broad_flag is intentionally unquoted: empty means no flag.
-            node scripts/cache-purge-prefixes.mjs - --json --explain $broad_flag < changed.tsv > purge.json
+            TREE_EDITS_FILE=tree-edits.z \
+              node scripts/cache-purge-prefixes.mjs - --json --explain $broad_flag < changed.z > purge.json
           fi
 
           jq -r '.prefixes[]' purge.json > prefixes.txt
@@ -618,12 +605,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           SHA: ${{ github.event.deployment.sha }}
+          DEPLOYMENT_ID: ${{ github.event.deployment.id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
           gh api -X POST "repos/$REPO/statuses/$SHA" \
             -f state=success \
-            -f context="$PURGE_STATUS_CONTEXT" \
+            -f context="$PURGE_STATUS_CONTEXT/$DEPLOYMENT_ID" \
             -f target_url="$RUN_URL" \
             -f description="Purged $(wc -l < prefixes.txt) prefixes, $(wc -l < files.txt) URLs" \
             > /dev/null

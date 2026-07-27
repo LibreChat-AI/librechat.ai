@@ -119,6 +119,7 @@ export function broadPrefixes(locales) {
     `${HOST}/authors`,
     // Machine-readable docs surfaces.
     `${HOST}/llms`,
+    `${HOST}/api/search`,
     // Localized landing pages + localized docs.
     ...locales.map((locale) => `${HOST}/${locale}`),
     // Standalone pages.
@@ -178,6 +179,22 @@ export function assetFallbackTargets(repoRoot = REPO_ROOT) {
     files: entries.filter((e) => e.isFile()).map((e) => `https://${HOST}/${encodePath(e.name)}`),
   }
 }
+
+/**
+ * The prerendered per-locale search index.
+ *
+ * app/api/search/[lang]/route.ts builds one JSON index per locale from
+ * docsSource with `revalidate = false`, and components/search-dialog.tsx points
+ * Orama at `/api/search/<locale>`, so a docs edit changes it. One prefix covers
+ * every locale.
+ *
+ * Latent today: the route returns cf-cache-status DYNAMIC, and being build
+ * output rather than a cache it is replaced by the deploy itself, so there is
+ * nothing stale to clear. It is here because if the zone's Cache Rule ever
+ * covers /api, a stale index means search returning deleted pages — user-visible
+ * and hard to attribute — and the cost of carrying it is one item.
+ */
+const SEARCH_INDEX_PREFIX = `${HOST}/api/search`
 
 /** Strip a trailing `index` segment so a section index maps to the section root. */
 function stripIndex(slug) {
@@ -240,6 +257,59 @@ export function parseChangedLine(line) {
 }
 
 /**
+ * Parse a whole `git diff --name-status` payload into `{status, file}` records.
+ *
+ * NUL-delimited (`-z`) is the format the workflow uses and the only one that is
+ * unambiguous: git prints pathnames verbatim, so there is no C-quoting to decode
+ * and no whitespace to distinguish from a delimiter. Every bug this seam has
+ * produced — `"public/images/caf\303\251.png"` arriving quoted, a trailing space
+ * being trimmed off a name — was the line-based format leaking into the path.
+ *
+ * Newline-delimited input is still accepted so ad-hoc dry runs can pipe a plain
+ * `--name-status` or a bare list of paths.
+ */
+export function parseChangedInput(raw) {
+  if (!raw.includes('\0')) {
+    return raw
+      .split('\n')
+      .map((line) => line.replace(/\r$/, ''))
+      .filter((line) => line !== '')
+      .map(parseChangedLine)
+  }
+
+  // `-z` emits status and path as separate records: `M<NUL>path<NUL>`.
+  const records = raw.split('\0')
+  if (records.length > 0 && records[records.length - 1] === '') records.pop()
+  if (records.length % 2 !== 0) {
+    throw new Error(`Malformed -z diff: ${records.length} records, expected pairs`)
+  }
+  const changes = []
+  for (let i = 0; i < records.length; i += 2) {
+    changes.push({ status: records[i][0], file: records[i + 1] })
+  }
+  return changes
+}
+
+/**
+ * Paths whose frontmatter `title:`/`icon:` changed, as a NUL-delimited file from
+ * `git diff --name-only -z -G`. Read here rather than joined in the workflow
+ * because ubuntu-latest's `awk` is mawk, which does not handle a NUL record
+ * separator — and doing it here makes it testable.
+ */
+export function readTreeEdits(path = process.env.TREE_EDITS_FILE) {
+  if (!path) return new Set()
+  try {
+    return new Set(
+      readFileSync(path, 'utf8')
+        .split('\0')
+        .filter((entry) => entry !== ''),
+    )
+  } catch {
+    return new Set()
+  }
+}
+
+/**
  * Map one changed file to the prefixes it invalidates.
  *
  * `status` is a git status letter (`A`, `M`, `D`); it decides whether a change
@@ -270,7 +340,7 @@ export function prefixesForFile(file, locales, status = 'M') {
       const locale = meta[2]
       if (locale) {
         return {
-          prefixes: [docsPrefix(locale, '')],
+          prefixes: [docsPrefix(locale, ''), SEARCH_INDEX_PREFIX],
           broad: false,
           reason: `${locale} sidebar — every ${locale} docs page`,
         }
@@ -284,7 +354,7 @@ export function prefixesForFile(file, locales, status = 'M') {
       // the untranslated file matters there, since getOrderedDocsPages() pins
       // itself to i18n.defaultLanguage.
       return {
-        prefixes: [...docsTreePrefixes(locales), `${HOST}/llms`],
+        prefixes: [...docsTreePrefixes(locales), `${HOST}/llms`, SEARCH_INDEX_PREFIX],
         broad: false,
         reason: 'sidebar in every locale — every docs page (+ llms export)',
       }
@@ -300,13 +370,13 @@ export function prefixesForFile(file, locales, status = 'M') {
       const locale = translated[2]
       if (STRUCTURAL.has(status)) {
         return {
-          prefixes: docsTreePrefixes(locales),
+          prefixes: [...docsTreePrefixes(locales), SEARCH_INDEX_PREFIX],
           broad: false,
           reason: `${locale} translation ${STRUCTURAL_REASON[status]} — language switcher and hreflang on every docs page`,
         }
       }
       return {
-        prefixes: [docsPrefix(locale, slug)],
+        prefixes: [docsPrefix(locale, slug), SEARCH_INDEX_PREFIX],
         broad: false,
         reason: `${locale} page`,
       }
@@ -322,13 +392,13 @@ export function prefixesForFile(file, locales, status = 'M') {
       const slug = stripIndex(english[1])
       if (STRUCTURAL.has(status)) {
         return {
-          prefixes: [...docsTreePrefixes(locales), `${HOST}/llms`],
+          prefixes: [...docsTreePrefixes(locales), `${HOST}/llms`, SEARCH_INDEX_PREFIX],
           broad: false,
           reason: `English page ${STRUCTURAL_REASON[status]} — page tree on every docs page (+ llms export)`,
         }
       }
       return {
-        prefixes: [docsPrefix('', slug), `${HOST}/llms`],
+        prefixes: [docsPrefix('', slug), `${HOST}/llms`, SEARCH_INDEX_PREFIX],
         broad: false,
         reason: 'English page (+ generated llms surfaces)',
       }
@@ -449,9 +519,9 @@ export function computePurge(files, locales, { forceBroad = false } = {}) {
   const urls = new Set()
   let broad = forceBroad
 
-  for (const line of files) {
-    if (!line) continue
-    const { status, file } = parseChangedLine(line)
+  for (const entry of files) {
+    if (!entry) continue
+    const { status, file } = typeof entry === 'string' ? parseChangedLine(entry) : entry
     if (!file) continue
     const result = prefixesForFile(file, locales, status)
     reasons.push({ file, status, ...result })
@@ -534,15 +604,18 @@ async function main(argv) {
   // only a diff can reveal.
   let files = []
   if (positional.length === 1 && positional[0] === '-') {
-    files = readFileSync(0, 'utf8').split('\n')
+    files = parseChangedInput(readFileSync(0, 'utf8'))
   } else {
-    files = positional
+    // Bare paths on the command line are modifications by definition.
+    files = positional.map((file) => ({ status: 'M', file }))
   }
-  // Strip the record delimiter only. Whitespace at the edges of a path belongs
-  // to the path: git prints `public/logo.png ` with the trailing space intact
-  // even under core.quotepath=false, and trimming it would purge `/logo.png`
-  // while the real `/logo.png%20` stayed cached.
-  files = files.map((line) => line.replace(/\r$/, '')).filter((line) => line !== '')
+
+  // Frontmatter title/icon edits are structural even though git calls them M:
+  // those values populate the page-tree node every docs page renders.
+  const treeEdits = readTreeEdits()
+  for (const change of files) {
+    if (change.status === 'M' && treeEdits.has(change.file)) change.status = 'T'
+  }
 
   const result = computePurge(files, locales, { forceBroad: flags.has('--broad') })
 
