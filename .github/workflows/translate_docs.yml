@@ -16,11 +16,16 @@ on:
   # Convergence sweep. A push only translates after a content change, and adding a
   # new language doesn't touch content/docs at all — so a big batch (several new
   # locales and/or long files) can't fully land in the single push-triggered run
-  # under the flex-tier rate limit. This half-hourly run writes generated docs to
+  # under the flex-tier rate limit. This run writes generated docs to
   # TRANSLATE_BRANCH and keeps translation memory in the Actions cache, so main stays
   # free of partial progress commits and cache files.
+  #
+  # Every 3 hours, not every 30 minutes: content pushes trigger this workflow
+  # directly, so the sweep only has to catch up unfinished batches. The "Check for
+  # pending work" step below makes a sweep with nothing to do exit before installing
+  # dependencies or touching the API.
   schedule:
-    - cron: '*/30 * * * *'
+    - cron: '23 */3 * * *'
   workflow_dispatch:
     inputs:
       force:
@@ -33,6 +38,12 @@ permissions:
 
 env:
   TRANSLATE_BRANCH: automation/docs-translations
+  # Durable home for the translation memory. A GitHub Actions cache is evictable
+  # (7-day idle, or LRU once the repo passes 10 GB), and losing it means paying to
+  # re-translate all ~135k blocks across 13 locales from scratch. This ref is a
+  # single force-pushed orphan commit — no history growth — and it is deliberately
+  # NOT the translations branch, so the memory can never ride a docs PR into main.
+  MEMORY_BRANCH: automation/i18n-memory
 
 concurrency:
   group: translate-docs
@@ -61,13 +72,30 @@ jobs:
             git switch -c "$TRANSLATE_BRANCH" origin/main
           fi
 
+      # Layer 1 (fallback): the Actions cache. Restore/save split rather than
+      # actions/cache — the key is unique per run, so the combined action re-uploaded
+      # the whole memory (~4 MB) even on sweeps that translated nothing, churning the
+      # repo's shared 10 GB cache budget. Only a run that did work saves now.
       - name: Restore translation memory
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: content/.i18n-cache
           key: translate-docs-${{ github.run_id }}
           restore-keys: |
             translate-docs-
+
+      # Layer 2 (authoritative): MEMORY_BRANCH. Written last in every run, so it is
+      # never staler than the Actions cache and correctly overwrites it here. On the
+      # very first run the ref does not exist yet and layer 1 carries the handover.
+      - name: Restore translation memory from the memory branch
+        run: |
+          if ! git fetch --depth 1 origin "+refs/heads/${MEMORY_BRANCH}:refs/remotes/origin/${MEMORY_BRANCH}" 2>/dev/null; then
+            echo "no ${MEMORY_BRANCH} yet; using the Actions cache for this run"
+            exit 0
+          fi
+          mkdir -p content/.i18n-cache
+          git archive "origin/${MEMORY_BRANCH}" | tar -x -C content/.i18n-cache
+          echo "translation memory restored from ${MEMORY_BRANCH}"
 
       - name: Seed translation memory from git history
         run: |
@@ -82,16 +110,45 @@ jobs:
             git reset -- content/.i18n-cache || true
           fi
 
+      # A sweep has work only if main moved since the last complete run or that run
+      # left files unfinished. Checking here — before the toolchain install and any
+      # API call — makes an idle sweep a ~20s no-op instead of a full 13-locale pass
+      # over every doc. `source-rev` is written by this workflow; `state.json` by the
+      # translate script (see scripts/translate.ts).
+      - name: Check for pending work
+        id: check
+        run: |
+          main_sha=$(git rev-parse origin/main)
+          echo "main_sha=$main_sha" >> "$GITHUB_OUTPUT"
+          if [ "${{ inputs.force }}" = "true" ]; then
+            echo "a forced run always translates"
+            exit 0
+          fi
+          state=content/.i18n-cache/state.json
+          rev=content/.i18n-cache/source-rev
+          [ -f "$state" ] && [ -f "$rev" ] || exit 0
+          [ "$(cat "$rev")" = "$main_sha" ] || exit 0
+          complete=$(jq -r '.complete // false' "$state")
+          pending=$(jq -r '.pending // 1' "$state")
+          if [ "$complete" = "true" ] && [ "$pending" = "0" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "main is unchanged since the last complete run and nothing is pending"
+          fi
+
       - uses: pnpm/action-setup@v4
+        if: steps.check.outputs.skip != 'true'
 
       - uses: actions/setup-node@v4
+        if: steps.check.outputs.skip != 'true'
         with:
           node-version: 20
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+        if: steps.check.outputs.skip != 'true'
 
       - name: Translate docs
+        if: steps.check.outputs.skip != 'true'
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENROUTER_TRANSLATE_MODEL: ${{ secrets.OPENROUTER_TRANSLATE_MODEL }}
@@ -102,7 +159,56 @@ jobs:
           fi
           npx tsx scripts/translate.ts $FLAGS
 
+      # Only after a translate step that exited 0, so a run that died on credits or
+      # auth can't record its revision and let the next sweep skip itself.
+      - name: Record translated source revision
+        if: steps.check.outputs.skip != 'true'
+        env:
+          MAIN_SHA: ${{ steps.check.outputs.main_sha }}
+        run: |
+          mkdir -p content/.i18n-cache
+          printf '%s\n' "$MAIN_SHA" > content/.i18n-cache/source-rev
+
+      # Both layers run after any translate attempt, even a failed one: the blocks
+      # that did translate are already in the memory and must not be paid for twice.
+      - name: Save translation memory
+        if: ${{ !cancelled() && steps.check.outputs.skip != 'true' && steps.check.conclusion == 'success' }}
+        uses: actions/cache/save@v4
+        with:
+          path: content/.i18n-cache
+          key: translate-docs-${{ github.run_id }}
+
+      # A parentless commit built with a throwaway index and force-pushed over the
+      # ref, so the branch is always exactly one commit and never accumulates
+      # history. Plumbing rather than `git worktree add --orphan` (git 2.42+) so it
+      # does not depend on the runner's git version, and a temporary GIT_INDEX_FILE
+      # so this checkout's index and working tree — which still hold the docs about
+      # to be committed — are untouched. Runs are serialized by the job's
+      # concurrency group, so the force-push cannot race another run.
+      - name: Push translation memory to the memory branch
+        if: ${{ !cancelled() && steps.check.outputs.skip != 'true' && steps.check.conclusion == 'success' }}
+        run: |
+          if [ -z "$(ls -A content/.i18n-cache 2>/dev/null)" ]; then
+            echo "no translation memory to persist"
+            exit 0
+          fi
+          snapshot=$(mktemp -d)
+          cp -r content/.i18n-cache/. "$snapshot/"
+          index=$(mktemp -u)
+          GIT_INDEX_FILE="$index" git --work-tree="$snapshot" add -A
+          tree=$(GIT_INDEX_FILE="$index" git write-tree)
+          commit=$(git commit-tree "$tree" -m "chore: docs translation memory [skip ci]")
+          git push --force origin "${commit}:refs/heads/${MEMORY_BRANCH}"
+          rm -f "$index"
+          rm -rf "$snapshot"
+          echo "translation memory persisted to ${MEMORY_BRANCH} as ${commit}"
+
+      # `!cancelled()` so a translate step that failed part-way still commits the
+      # pages it did finish; gated on the check step so a failure in checkout or
+      # branch preparation stops here instead. `steps.check` is also the last step
+      # that must have run for `content/docs` to be in a known state.
       - name: Commit translations to branch
+        if: ${{ !cancelled() && steps.check.conclusion == 'success' }}
         run: |
           git add content/docs
           if git diff --cached --quiet; then
