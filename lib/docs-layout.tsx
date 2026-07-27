@@ -1,3 +1,5 @@
+import 'server-only'
+
 import { DocsLayout } from 'fumadocs-ui/layouts/docs'
 import { DocsI18nProvider } from '@/components/DocsI18nProvider'
 import { docsSource } from '@/lib/source'
@@ -8,14 +10,7 @@ import { getUI } from '@/lib/ui-i18n'
 import { VersionSwitcher } from '@/components/VersionSwitcher'
 import type { ReactNode } from 'react'
 
-export default async function Layout({
-  params,
-  children,
-}: {
-  params: Promise<{ lang: string }>
-  children: ReactNode
-}) {
-  const { lang } = await params
+export function renderDocsLayout({ lang, children }: { lang: string; children: ReactNode }) {
   const tree = docsSource.pageTree[lang] ?? docsSource.pageTree[i18n.defaultLanguage]
   const t = getUI(lang)
   const docsHref = localizedDocsHref('/docs', lang)
