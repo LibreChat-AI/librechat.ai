@@ -667,14 +667,39 @@ describe('fallbacks', () => {
     expect(prefixes).toContain('www.librechat.ai/docs/features')
   })
 
-  it.each(['.github/workflows/ci.yml', 'e2e/home.spec.ts', 'README.md', 'lib/i18n/tm.test.ts'])(
-    'purges nothing for %s',
-    (file) => {
-      const result = prefixesForFile(file, locales)
-      expect(result.broad).toBe(false)
-      expect(result.prefixes).toEqual([])
-    },
-  )
+  it.each([
+    '.github/workflows/ci.yml',
+    'e2e/home.spec.ts',
+    'README.md',
+    'lib/i18n/tm.test.ts',
+    'content/.i18n-cache/de.json',
+  ])('purges nothing for %s', (file) => {
+    const result = prefixesForFile(file, locales)
+    expect(result.broad).toBe(false)
+    expect(result.prefixes).toEqual([])
+  })
+
+  /**
+   * Translation memory, not content: only lib/i18n/tm.ts reads it, reached solely
+   * from scripts/translate.ts. Left unclassified it escalated to broad, which
+   * absorbed every correctly mapped locale prefix in a translation publish — the
+   * most frequent commit type here.
+   */
+  it('does not let translation memory absorb a translation publish', () => {
+    const publish = [
+      'M\tcontent/docs/features/agents.de.mdx',
+      'M\tcontent/docs/features/agents.fr.mdx',
+      'M\tcontent/.i18n-cache/de.json',
+      'M\tcontent/.i18n-cache/fr.json',
+    ]
+    const result = computePurge(publish, locales)
+    expect(result.broad).toBe(false)
+    expect(result.prefixes).toEqual([
+      'www.librechat.ai/api/search',
+      'www.librechat.ai/de/docs/features/agents',
+      'www.librechat.ai/fr/docs/features/agents',
+    ])
+  })
 })
 
 describe('computePurge', () => {

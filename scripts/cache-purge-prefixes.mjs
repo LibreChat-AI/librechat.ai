@@ -91,6 +91,16 @@ export function readLocales(repoRoot = REPO_ROOT, basePath = process.env.BASE_I1
 const INERT = [
   /^\.github\//,
   /^docs\//, // repo-internal notes; site content lives in content/
+  // Translation memory, not content. Only lib/i18n/tm.ts reads it, that module
+  // is reached solely through lib/i18n/run.ts from scripts/translate.ts, and
+  // nothing under app/, components/, src/, next.config.mjs or source.config.ts
+  // touches it — lib/docs-page.tsx mentions it in a comment only. Left
+  // unclassified it escalates to broad, which is what a translation publish
+  // used to do: 46 correctly mapped locale prefixes absorbed by four cache
+  // files. It is gitignored and untracked since 7db141c, so it should not
+  // appear in a diff at all; translate_docs.yml still checks it out and
+  // `git reset`s it while seeding, so keep the rule rather than rely on that.
+  /^content\/\.i18n-cache(\/|$)/,
   /^e2e\//,
   /^__tests__\//,
   /^scripts\/screenshots\//,
@@ -647,6 +657,14 @@ async function main(argv) {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
+  // `... | head -5` closes stdout early. The workflow redirects to a file so it
+  // never happens there, but a dry run being skimmed by hand should end quietly
+  // rather than throw an unhandled EPIPE over the output being reviewed.
+  process.stdout.on('error', (error) => {
+    if (error.code === 'EPIPE') process.exit(0)
+    throw error
+  })
+
   main(process.argv.slice(2)).catch((error) => {
     process.stderr.write(`${error.message ?? error}\n`)
     process.exit(1)
