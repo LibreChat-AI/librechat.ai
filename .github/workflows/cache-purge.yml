@@ -277,8 +277,35 @@ jobs:
             # they reshape the page tree and the locale map that every docs page
             # renders, so the mapper widens the purge for them.
             git diff --name-status --no-renames "$BASE" "$HEAD" > changed.tsv
+
+            # Frontmatter `title:`/`icon:` populate the page-tree node that the
+            # sidebar draws on *every* docs page, so editing one is structural
+            # even though git calls it a plain M. -G selects files whose patch
+            # adds or removes a line matching the regex, which is exactly the
+            # set we need and one extra git call. It also matches a `title:` at
+            # the start of a line inside a fenced code block in the body: that
+            # over-purges to the docs root, which is safe.
+            git diff --name-only --no-renames -G'^(title|icon):' "$BASE" "$HEAD" \
+              -- content/docs > tree-edits.txt || : > tree-edits.txt
+
+            # getline in BEGIN, not the NR==FNR idiom: with an empty first file
+            # that idiom misreads the first line of the second file.
+            awk -F'\t' -v treefile=tree-edits.txt '
+              BEGIN { while ((getline line < treefile) > 0) tree[line] = 1 }
+              { status = $1; file = $NF
+                if (status == "M" && (file in tree)) status = "T"
+                print status "\t" file }' changed.tsv > changed.marked.tsv
+            mv changed.marked.tsv changed.tsv
+
             echo "Changed files ($BASE..$HEAD):"
             sed 's/^/  /' changed.tsv
+
+            # A locale removed in this deploy is absent from the deployed
+            # lib/i18n.ts, so the mapper would never emit its prefixes. Give it
+            # the file as it was at the base to union against.
+            git show "$BASE:lib/i18n.ts" > base-i18n.ts 2>/dev/null || rm -f base-i18n.ts
+            [ -s base-i18n.ts ] && export BASE_I18N_FILE=base-i18n.ts
+
             node scripts/cache-purge-prefixes.mjs - --json --explain < changed.tsv > purge.json
           fi
 
@@ -366,16 +393,18 @@ jobs:
             payload=$(jq -Rs --arg field "$field" \
               'split("\n") | map(select(length > 0)) | {($field): .}' < "$payload_file")
 
+            local headers
             while :; do
               body=$(mktemp)
-              http=$(curl -sS -o "$body" -w '%{http_code}' -X POST "$endpoint" \
+              headers=$(mktemp)
+              http=$(curl -sS -o "$body" -D "$headers" -w '%{http_code}' -X POST "$endpoint" \
                 -H "Authorization: Bearer ${CF_API_TOKEN}" \
                 -H 'Content-Type: application/json' \
                 --data "$payload") || http=000
 
               if [ "$http" = "200" ] && [ "$(jq -r '.success' "$body")" = "true" ]; then
                 echo "  purged $(jq -r --arg f "$field" '.[$f] | length' <<< "$payload") $field (id $(jq -r '.result.id // "n/a"' "$body"))"
-                rm -f "$body"
+                rm -f "$body" "$headers"
                 return 0
               fi
 
@@ -384,11 +413,24 @@ jobs:
               # only delays the failure.
               if { [ "$http" = "429" ] || [ "$http" -ge 500 ] 2>/dev/null || [ "$http" = "000" ]; } \
                  && [ "$attempt" -lt "$max_attempts" ]; then
-                echo "::warning::Purge attempt $attempt failed (HTTP $http); retrying in ${delay}s."
-                sleep "$delay"
+                # Purge runs deliberately overlap (see the concurrency note), and
+                # the rate limit is per account, so several can be throttled at
+                # once. With a fixed backoff they would retry in lockstep, keep
+                # colliding, and give up together. Honour Retry-After when the
+                # server sends it, and jitter every wait so the herd spreads out.
+                local wait retry_after
+                wait="$delay"
+                retry_after=$(grep -i '^retry-after:' "$headers" | tr -d '\r' | awk '{print $2}' | head -1)
+                case "${retry_after:-}" in
+                  '' | *[!0-9]*) ;;
+                  *) [ "$retry_after" -gt "$wait" ] && wait="$retry_after" ;;
+                esac
+                wait=$((wait + RANDOM % 5))
+                echo "::warning::Purge attempt $attempt failed (HTTP $http); retrying in ${wait}s."
+                sleep "$wait"
                 attempt=$((attempt + 1))
                 delay=$((delay * 2))
-                rm -f "$body"
+                rm -f "$body" "$headers"
                 continue
               fi
 
@@ -396,7 +438,7 @@ jobs:
               echo "Request: $payload" >&2
               echo "Response:" >&2
               cat "$body" >&2
-              rm -f "$body"
+              rm -f "$body" "$headers"
               return 1
             done
           }

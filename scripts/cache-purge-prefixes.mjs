@@ -49,16 +49,37 @@ export const HOST = 'www.librechat.ai'
  * `pnpm install` and no TypeScript loader — the purge has to work even when the
  * dependency install would fail.
  */
-export function readLocales(repoRoot = REPO_ROOT) {
-  const src = readFileSync(resolve(repoRoot, 'lib/i18n.ts'), 'utf8')
+function parseLocales(src, label) {
   const block = src.match(/languages:\s*\[([^\]]*)\]/)
-  if (!block) throw new Error('lib/i18n.ts: could not find i18n.languages')
+  if (!block) throw new Error(`${label}: could not find i18n.languages`)
   const defaultLanguage = src.match(/defaultLanguage:\s*'([^']+)'/)?.[1]
-  if (!defaultLanguage) throw new Error('lib/i18n.ts: could not find i18n.defaultLanguage')
+  if (!defaultLanguage) throw new Error(`${label}: could not find i18n.defaultLanguage`)
   const languages = [...block[1].matchAll(/'([^']+)'/g)].map((m) => m[1])
   const locales = languages.filter((l) => l !== defaultLanguage)
-  if (locales.length === 0) throw new Error('lib/i18n.ts: parsed an empty locale list')
+  if (locales.length === 0) throw new Error(`${label}: parsed an empty locale list`)
   return locales
+}
+
+export function readLocales(repoRoot = REPO_ROOT, basePath = process.env.BASE_I18N_FILE) {
+  const locales = parseLocales(
+    readFileSync(resolve(repoRoot, 'lib/i18n.ts'), 'utf8'),
+    'lib/i18n.ts',
+  )
+  if (!basePath) return locales
+
+  // A locale dropped in this deploy still has cached pages under /<locale>, but
+  // the deployed file no longer names it, so `broadPrefixes()` would not purge
+  // them and that language would sit there until the TTL. Union with the file as
+  // it was at the diff base. A base that cannot be read or parsed (the range
+  // predates i18n, say) is not fatal: warn and carry on with what deployed.
+  try {
+    const baseSrc = readFileSync(basePath, 'utf8')
+    if (!baseSrc.trim()) return locales
+    return [...new Set([...locales, ...parseLocales(baseSrc, basePath)])]
+  } catch (error) {
+    process.stderr.write(`::warning::Could not read locales from ${basePath}: ${error.message}\n`)
+    return locales
+  }
 }
 
 /**
@@ -153,10 +174,19 @@ function docsTreePrefixes(locales) {
 }
 
 /**
- * Git statuses that add or remove a file. These are the ones that reshape the
- * shared page tree and the locale map; a plain modification does not.
+ * Statuses that reshape what every docs page renders, rather than only the page
+ * they belong to. `A`/`D` come from git. `T` is ours: the workflow marks a
+ * modification whose patch touches a frontmatter `title:`/`icon:` line, because
+ * those values populate the page-tree node the sidebar draws on every page, and
+ * git would otherwise report the edit as an ordinary `M`.
  */
-const STRUCTURAL = new Set(['A', 'D'])
+const STRUCTURAL = new Set(['A', 'D', 'T'])
+
+const STRUCTURAL_REASON = {
+  A: 'added',
+  D: 'deleted',
+  T: 'frontmatter title/icon changed',
+}
 
 /**
  * Parse one line of `git diff --name-status --no-renames` into `{status, file}`.
@@ -236,7 +266,7 @@ export function prefixesForFile(file, locales, status = 'M') {
         return {
           prefixes: docsTreePrefixes(locales),
           broad: false,
-          reason: `${locale} translation ${status === 'A' ? 'added' : 'deleted'} — language switcher and hreflang on every docs page`,
+          reason: `${locale} translation ${STRUCTURAL_REASON[status]} — language switcher and hreflang on every docs page`,
         }
       }
       return {
@@ -258,7 +288,7 @@ export function prefixesForFile(file, locales, status = 'M') {
         return {
           prefixes: [...docsTreePrefixes(locales), `${HOST}/llms`],
           broad: false,
-          reason: `English page ${status === 'A' ? 'added' : 'deleted'} — page tree on every docs page (+ llms export)`,
+          reason: `English page ${STRUCTURAL_REASON[status]} — page tree on every docs page (+ llms export)`,
         }
       }
       return {

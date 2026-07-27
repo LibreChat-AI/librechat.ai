@@ -1,4 +1,6 @@
-import { readFileSync } from 'node:fs'
+import { readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
@@ -38,6 +40,37 @@ describe('readLocales', () => {
 
   it('excludes the default language, which has no URL prefix', () => {
     expect(locales).not.toContain('en')
+  })
+
+  /**
+   * A locale dropped in this deploy is gone from the deployed lib/i18n.ts, so
+   * broadPrefixes() would never emit `/<locale>` and that language's cached
+   * pages would sit at the edge until the TTL expired.
+   */
+  it('unions in a locale that existed at the diff base but was removed', () => {
+    const base = join(tmpdir(), `purge-base-i18n-${process.pid}.ts`)
+    writeFileSync(
+      base,
+      `export const i18n = { defaultLanguage: 'en', languages: ['en', 'zh', 'sv'] }`,
+    )
+    try {
+      const unioned = readLocales(undefined, base)
+      expect(unioned).toContain('sv')
+      expect(unioned).toEqual(expect.arrayContaining(locales))
+      expect(broadPrefixes(unioned)).toContain('www.librechat.ai/sv')
+    } finally {
+      rmSync(base, { force: true })
+    }
+  })
+
+  it('falls back to the deployed list when the base file cannot be parsed', () => {
+    const base = join(tmpdir(), `purge-bad-i18n-${process.pid}.ts`)
+    writeFileSync(base, 'this is not the i18n config')
+    try {
+      expect(readLocales(undefined, base)).toEqual(locales)
+    } finally {
+      rmSync(base, { force: true })
+    }
   })
 })
 
@@ -180,6 +213,31 @@ describe('structural changes', () => {
     expect(prefixesForFile('content/docs/features/agents.ja.mdx', locales, 'M').prefixes).toEqual([
       'www.librechat.ai/ja/docs/features/agents',
     ])
+  })
+
+  /**
+   * The sidebar draws each page's title and icon from the page-tree node, so a
+   * frontmatter edit changes every docs page even though git reports it as M.
+   * The workflow marks those files `T` via `git diff -G'^(title|icon):'`.
+   */
+  it('treats a frontmatter title/icon edit as structural', () => {
+    const { prefixes, reason } = prefixesForFile('content/docs/features/agents.mdx', locales, 'T')
+    expect(prefixes).toContain('www.librechat.ai/docs')
+    expect(prefixes).toContain('www.librechat.ai/zh/docs')
+    expect(reason).toContain('frontmatter')
+  })
+
+  it('marks a translated page structural on a frontmatter edit too', () => {
+    expect(prefixesForFile('content/docs/features/agents.ja.mdx', locales, 'T').prefixes).toContain(
+      'www.librechat.ai/docs',
+    )
+  })
+
+  it('parses the T status the workflow injects', () => {
+    expect(parseChangedLine('T\tcontent/docs/features/agents.mdx')).toEqual({
+      status: 'T',
+      file: 'content/docs/features/agents.mdx',
+    })
   })
 
   it('maps a rename as delete + add, covering the old URL', () => {
