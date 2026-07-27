@@ -138,7 +138,27 @@ describe('meta.json', () => {
     const { prefixes } = prefixesForFile('content/docs/local/meta.json', locales)
     expect(prefixes).toContain('www.librechat.ai/docs/local')
     expect(prefixes).toContain('www.librechat.ai/pt-BR/docs/local')
-    expect(prefixes).toHaveLength(locales.length + 1)
+    // English + one per locale + the llms export.
+    expect(prefixes).toHaveLength(locales.length + 2)
+  })
+
+  /**
+   * app/llms-full.txt/route.ts builds the export from getOrderedDocsPages(),
+   * which walks docsSource.pageTree — the tree meta.json defines. Reordering a
+   * section reorders the export.
+   */
+  it('purges the llms export when the untranslated meta.json changes', () => {
+    expect(prefixesForFile('content/docs/local/meta.json', locales).prefixes).toContain(
+      'www.librechat.ai/llms',
+    )
+  })
+
+  it('leaves the llms export alone for a localized meta file', () => {
+    // getOrderedDocsPages() pins itself to i18n.defaultLanguage, so a translated
+    // sidebar cannot reach the English export.
+    expect(prefixesForFile('content/docs/local/meta.de.json', locales).prefixes).not.toContain(
+      'www.librechat.ai/llms',
+    )
   })
 
   it('purges everything under /docs for the root meta.json', () => {
@@ -176,6 +196,40 @@ describe('blog and changelog', () => {
   })
 })
 
+describe('public assets', () => {
+  /**
+   * No page prefix can reach /images/foo.png, so without its own URL the asset
+   * stays cached. app/api/og/route.tsx records the real incident: the legacy
+   * unversioned socialcards were served stale for ~15 days.
+   */
+  it.each([
+    ['public/images/logo.svg', 'https://www.librechat.ai/images/logo.svg'],
+    ['public/favicon.ico', 'https://www.librechat.ai/favicon.ico'],
+    [
+      'public/images/socialcards/default-image.png',
+      'https://www.librechat.ai/images/socialcards/default-image.png',
+    ],
+  ])('purges %s at its own URL', (file, url) => {
+    expect(prefixesForFile(file, locales).files).toEqual([url])
+  })
+
+  it('also purges pages, because a replaced asset can move OG_VERSION and image dimensions', () => {
+    expect(prefixesForFile('public/librechat.png', locales).broad).toBe(true)
+  })
+
+  it('keeps the asset URL after escalating to broad', () => {
+    const result = computePurge(['public/images/logo.svg'], locales)
+    expect(result.broad).toBe(true)
+    expect(result.files).toContain('https://www.librechat.ai/images/logo.svg')
+    expect(result.files).toContain('https://www.librechat.ai/')
+  })
+
+  it('carries an asset URL through alongside an unrelated shared-file escalation', () => {
+    const result = computePurge(['public/favicon.ico', 'lib/source.ts'], locales)
+    expect(result.files).toContain('https://www.librechat.ai/favicon.ico')
+  })
+})
+
 describe('fallbacks', () => {
   it.each([
     'lib/source.ts',
@@ -184,7 +238,6 @@ describe('fallbacks', () => {
     'next.config.mjs',
     'proxy.ts',
     'package.json',
-    'public/images/logo.svg',
   ])('falls back to a broad purge for %s', (file) => {
     expect(prefixesForFile(file, locales).broad).toBe(true)
   })

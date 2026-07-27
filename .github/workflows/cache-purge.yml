@@ -77,10 +77,20 @@ permissions:
   # diff starts.
   deployments: read
 
-# Never cancel a purge in flight, and never let two run at once: a cancelled run
-# leaves part of the cache stale with nothing to retry it.
+# Keyed per deployment, NOT a single shared group. GitHub keeps at most one
+# pending run per concurrency group: "any existing pending job or workflow in the
+# same concurrency group will be canceled and the new queued job or workflow will
+# take its place" — and that happens even with `cancel-in-progress: false`.
+# https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency
+#
+# With one shared group and three deploys in quick succession (B running, C
+# pending, D arriving), C is dropped. D's baseline is then deployment C, which
+# did go live, so everything changed between B and C is never purged by anyone
+# and stays stale for the full TTL. Purges are idempotent and each call handles
+# its own rate limiting, so letting runs overlap is strictly safer than
+# serialising them and losing one.
 concurrency:
-  group: cache-purge
+  group: cache-purge-${{ github.event.deployment.sha || github.run_id }}
   cancel-in-progress: false
 
 env:
@@ -104,12 +114,20 @@ env:
 jobs:
   purge:
     name: Purge changed prefixes
-    # Only successful *production* deployments. `deployment_status` also fires
-    # for pending/failure states and for every preview deployment.
+    # Only successful *production* deployments from Vercel. `deployment_status`
+    # also fires for pending/failure states and for every preview deployment.
+    #
+    # The creator check is not redundant: a job-level `environment: Production`
+    # makes GitHub create a Production deployment too, and translate_docs.yml
+    # (every 30 minutes) and update-screenshots.yml both do that. Those are not
+    # releases. They cannot reach this trigger today, because events raised by
+    # GITHUB_TOKEN do not start workflow runs, but resting on that side effect
+    # would mean a purge on every translation sweep the day it changes.
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.deployment_status.state == 'success' &&
-       github.event.deployment.environment == 'Production')
+       github.event.deployment.environment == 'Production' &&
+       github.event.deployment.creator.login == 'vercel[bot]')
     runs-on: ubuntu-latest
     steps:
       # Full history: the diff base is the previous deployed commit, which can be
@@ -136,7 +154,10 @@ jobs:
           INPUT_BROAD: ${{ inputs.broad }}
           INPUT_RANGE: ${{ inputs.range }}
           HEAD_SHA: ${{ github.event.deployment.sha }}
+          DEPLOYMENT_ID: ${{ github.event.deployment.id }}
           REPO: ${{ github.repository }}
+          # Only deployments from the Vercel integration count as live releases.
+          VERCEL_CREATOR: 'vercel[bot]'
         run: |
           set -euo pipefail
 
@@ -162,29 +183,52 @@ jobs:
             head="${INPUT_RANGE##*..}"
           else
             head="$HEAD_SHA"
+            if ! printf '%s' "${DEPLOYMENT_ID:-}" | grep -Eq '^[0-9]+$'; then
+              echo "::error::deployment_status payload carried no numeric deployment id."
+              exit 1
+            fi
             # Walk production deployments newest-first and take the first one
             # that succeeded on a *different* commit. Skipping same-sha entries
-            # means a manual redeploy of the current commit re-purges that
-            # commit's prefixes instead of computing an empty diff.
+            # means a redeploy of the current commit re-purges that commit's
+            # prefixes instead of computing an empty diff.
+            #
+            # Two filters keep the baseline honest:
+            #
+            #   creator == vercel[bot] — a job-level `environment: Production`
+            #   also creates a Production deployment, and translate_docs.yml and
+            #   update-screenshots.yml both do that. Those SHAs were never a live
+            #   build. If a Vercel build for B fails while a translation run
+            #   succeeds on B, taking B as the baseline would silently skip
+            #   everything in A..B.
+            #
+            #   id < this deployment — deployment ids increase monotonically, so
+            #   this is an "older than the event we are processing" test. Without
+            #   it, a deploy that finishes while this runner is queued is newer
+            #   yet still differs from head, so it would be accepted as the
+            #   "previous" build and the real B..C delta would go unpurged.
             base=""
-            # Newest first (the API returns deployments in descending order).
             # Bounded to 40 inside jq rather than with `head`, whose SIGPIPE
             # would trip `pipefail`.
-            ids=$(gh api "repos/$REPO/deployments?environment=Production&per_page=100" \
-                    --jq '.[0:40][] | "\(.id) \(.sha)"')
+            deployments=$(gh api "repos/$REPO/deployments?environment=Production&per_page=100")
+            ids=$(jq -r --argjson current "$DEPLOYMENT_ID" --arg creator "$VERCEL_CREATOR" '
+                    [ .[]
+                      | select(.creator.login == $creator)
+                      | select(.id < $current)
+                    ][0:40][]
+                    | "\(.id) \(.sha)"' <<< "$deployments")
             while read -r id sha; do
               [ -n "$id" ] || continue
               [ "$sha" = "$head" ] && continue
               state=$(gh api "repos/$REPO/deployments/$id/statuses?per_page=1" --jq '.[0].state // ""')
               if [ "$state" = "success" ]; then
                 base="$sha"
-                echo "Previous successful production deployment: $sha (deployment $id)"
+                echo "Previous successful Vercel production deployment: $sha (deployment $id)"
                 break
               fi
             done <<< "$ids"
 
             if [ -z "$base" ]; then
-              echo "::warning::No previous successful production deployment found; purging broadly."
+              echo "::warning::No earlier successful Vercel production deployment found; purging broadly."
               emit mode broad
               exit 0
             fi

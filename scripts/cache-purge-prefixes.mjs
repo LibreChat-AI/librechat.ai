@@ -163,10 +163,16 @@ export function prefixesForFile(file, locales) {
       // The untranslated meta.json is the source of truth for section structure;
       // fumadocs falls back to it for any locale whose meta.<locale>.json is
       // missing a key, so a change to it reaches every language.
+      //
+      // /llms goes with it: app/llms-full.txt/route.ts builds the export from
+      // getOrderedDocsPages(), which walks `docsSource.pageTree` — the tree this
+      // file defines. Reordering a section therefore reorders the export. Only
+      // the untranslated file matters here, since getOrderedDocsPages() pins
+      // itself to i18n.defaultLanguage.
       return {
-        prefixes: [docsPrefix('', dir), ...locales.map((l) => docsPrefix(l, dir))],
+        prefixes: [docsPrefix('', dir), ...locales.map((l) => docsPrefix(l, dir)), `${HOST}/llms`],
         broad: false,
-        reason: `section /${dir || '(root)'} in every locale (sidebar + ordering)`,
+        reason: `section /${dir || '(root)'} in every locale (sidebar + ordering, + llms export)`,
       }
     }
 
@@ -226,9 +232,30 @@ export function prefixesForFile(file, locales) {
     }
   }
 
+  // --- public/ -------------------------------------------------------------
+  // Static assets are served from the site root at the same URL forever, so
+  // nothing else purges them: a page prefix purge cannot reach /images/foo.png.
+  // Replacing one in place is exactly how the socialcards went stale for ~15
+  // days (see the note in app/api/og/route.tsx), so purge the asset's own URL.
+  //
+  // Still broad on top of that, because a replaced asset can change page HTML
+  // two ways we cannot trace per page: OG_SOURCES in lib/og-version.mjs feeds
+  // OG_VERSION, which next.config.mjs inlines into every page's card URLs, and
+  // remark-image adds build-time width/height for local images, which move if
+  // the replacement has different dimensions.
+  const asset = file.match(/^public\/(.+)$/)
+  if (asset) {
+    return {
+      prefixes: [],
+      files: [`https://${HOST}/${asset[1]}`],
+      broad: true,
+      reason: 'public asset — purging its URL, plus pages (OG fingerprint, image dimensions)',
+    }
+  }
+
   // --- everything else -----------------------------------------------------
   // lib/, components/, app/, next.config.mjs, proxy.ts, source.config.ts,
-  // package.json, public/, ... any of these can change every rendered page.
+  // package.json, ... any of these can change every rendered page.
   // Per-page dependency analysis is not attempted.
   return { prefixes: [], broad: true, reason: 'shared/global file' }
 }
@@ -262,6 +289,9 @@ export const COLLAPSE_THRESHOLD = 200
 export function computePurge(files, locales) {
   const reasons = []
   const set = new Set()
+  // Exact URLs, for the things that have no usable prefix: static assets, and
+  // the homepage when the purge goes broad.
+  const urls = new Set()
   let broad = false
 
   for (const file of files) {
@@ -270,6 +300,7 @@ export function computePurge(files, locales) {
     reasons.push({ file, ...result })
     if (result.broad) broad = true
     for (const prefix of result.prefixes) set.add(prefix)
+    for (const url of result.files ?? []) urls.add(url)
   }
 
   const prefixes = dropCoveredPrefixes([...set])
@@ -281,12 +312,15 @@ export function computePurge(files, locales) {
   }
 
   if (broad) {
+    // Asset URLs survive the escalation: the broad set is pages only, so
+    // dropping them here would leave the changed asset cached at the edge.
+    for (const url of homepageUrls()) urls.add(url)
     return {
       broad: true,
       collapsed,
       selectiveCount: prefixes.length,
       prefixes: broadPrefixes(locales),
-      files: homepageUrls(),
+      files: [...urls].sort(),
       reasons,
     }
   }
@@ -296,7 +330,7 @@ export function computePurge(files, locales) {
     collapsed,
     selectiveCount: prefixes.length,
     prefixes,
-    files: [],
+    files: [...urls].sort(),
     reasons,
   }
 }
