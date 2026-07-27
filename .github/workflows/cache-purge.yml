@@ -24,8 +24,9 @@ name: Cloudflare Cache Purge
 # 1. Prefix matching is a plain string match, so `/docs/features/agents` also
 #    purges `/docs/features/agents-anything`. That is over-purging: it costs one
 #    origin fetch, it is never stale. Acceptable.
-# 2. Deletions are included in the diff (`git diff --name-only` reports them),
-#    so removing a page purges its prefix and the stale entry goes.
+# 2. Deletions are included in the diff, so removing a page purges its prefix
+#    and the stale entry goes. Renames need `--no-renames` to show up as one:
+#    git's rename detection would otherwise report only the destination.
 
 on:
   # The purge MUST happen after Vercel has finished deploying. Running it when
@@ -251,9 +252,9 @@ jobs:
           emit base "$base"
           emit head "$head"
 
-      # Map changed files -> prefixes. `git diff --name-only` reports added,
-      # modified *and* deleted paths (no --diff-filter, so D is included);
-      # a deleted page still needs its prefix purged or the stale entry survives.
+      # Map changed files -> prefixes. The diff reports added, modified *and*
+      # deleted paths (no --diff-filter, so D is included); a deleted page still
+      # needs its prefix purged or the stale entry survives.
       - name: Compute prefixes
         id: compute
         env:
@@ -266,10 +267,19 @@ jobs:
           if [ "$MODE" = "broad" ]; then
             node scripts/cache-purge-prefixes.mjs --broad --json > purge.json
           else
+            # --no-renames is load-bearing. Git's rename detection is on by
+            # default, and it reports a moved file as its destination alone, so
+            # a page moved without edits would never have its old URL purged and
+            # Cloudflare would keep serving it. With the flag, a rename arrives
+            # as a delete plus an add, which is what it is for the cache.
+            #
+            # --name-status because add/delete are not equivalent to modify here:
+            # they reshape the page tree and the locale map that every docs page
+            # renders, so the mapper widens the purge for them.
+            git diff --name-status --no-renames "$BASE" "$HEAD" > changed.tsv
             echo "Changed files ($BASE..$HEAD):"
-            git diff --name-only "$BASE" "$HEAD" | sed 's/^/  /'
-            git diff --name-only "$BASE" "$HEAD" \
-              | node scripts/cache-purge-prefixes.mjs - --json --explain > purge.json
+            sed 's/^/  /' changed.tsv
+            node scripts/cache-purge-prefixes.mjs - --json --explain < changed.tsv > purge.json
           fi
 
           jq -r '.prefixes[]' purge.json > prefixes.txt

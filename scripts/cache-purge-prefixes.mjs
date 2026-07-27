@@ -12,9 +12,15 @@
  * URL only ever removes the HTML variant. A prefix purge removes every cache
  * key that starts with the prefix — HTML and every `_rsc` variant together.
  *
+ * Input is either bare paths or `git diff --name-status` lines. The status
+ * matters: adding or deleting a docs page reshapes the page tree and the locale
+ * map that *every* docs page renders, while editing one does not. Always pair it
+ * with `--no-renames`, or git reports a moved page as its destination only and
+ * the old URL is never purged.
+ *
  * Usage:
  *   node scripts/cache-purge-prefixes.mjs <file> [<file>...]
- *   git diff --name-only A B | node scripts/cache-purge-prefixes.mjs -
+ *   git diff --name-status --no-renames A B | node scripts/cache-purge-prefixes.mjs -
  *   node scripts/cache-purge-prefixes.mjs --broad
  *
  * Flags:
@@ -128,14 +134,57 @@ function docsPrefix(locale, slug) {
 }
 
 /**
+ * The docs root in every language — i.e. every docs page there is.
+ *
+ * Needed more often than it looks, because two things are rendered into *every*
+ * docs page rather than just the page they describe:
+ *
+ *   - the sidebar. lib/docs-layout.tsx hands the complete `docsSource.pageTree`
+ *     to `DocsLayout` for every page, so anything that reshapes the tree (a
+ *     meta.json edit, a page added or removed) changes every page in that
+ *     language.
+ *   - the language switcher. `getAvailableLocalesBySlug()` in lib/doc-locales.ts
+ *     builds one site-wide slug -> locales map and lib/docs-layout.tsx passes it
+ *     into `DocsI18nProvider` on every page, so adding or deleting a single
+ *     translation changes every docs page in every language.
+ */
+function docsTreePrefixes(locales) {
+  return [docsPrefix('', ''), ...locales.map((locale) => docsPrefix(locale, ''))]
+}
+
+/**
+ * Git statuses that add or remove a file. These are the ones that reshape the
+ * shared page tree and the locale map; a plain modification does not.
+ */
+const STRUCTURAL = new Set(['A', 'D'])
+
+/**
+ * Parse one line of `git diff --name-status --no-renames` into `{status, file}`.
+ *
+ * A bare path (no status column) is treated as a modification, so passing plain
+ * filenames on the command line still works for ad-hoc dry runs.
+ */
+export function parseChangedLine(line) {
+  const parts = line.split('\t')
+  if (parts.length < 2 || !/^[A-Z]\d*$/.test(parts[0])) return { status: 'M', file: line }
+  // Last field: for a rename/copy `--name-status` emits `R100<TAB>old<TAB>new`.
+  // The workflow passes --no-renames so those never appear, but if one did we
+  // would rather purge the destination than choke on the line.
+  return { status: parts[0][0], file: parts[parts.length - 1] }
+}
+
+/**
  * Map one changed file to the prefixes it invalidates.
  *
- * Returns `{prefixes, broad, reason}`. `broad: true` means the file is shared
- * or unrecognised and the caller must fall back to the site-wide set — the
- * default for anything this function does not understand, so a new file type
+ * `status` is a git status letter (`A`, `M`, `D`); it decides whether a change
+ * is structural, since adds and deletes reshape what every docs page renders.
+ *
+ * Returns `{prefixes, files?, broad, reason}`. `broad: true` means the file is
+ * shared or unrecognised and the caller must fall back to the site-wide set —
+ * the default for anything this function does not understand, so a new file type
  * over-purges instead of silently going stale.
  */
-export function prefixesForFile(file, locales) {
+export function prefixesForFile(file, locales, status = 'M') {
   const localeAlt = locales.map((l) => l.replaceAll(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')
 
   if (INERT.some((re) => re.test(file))) {
@@ -147,40 +196,49 @@ export function prefixesForFile(file, locales) {
   if (docs) {
     const rest = docs[1]
 
-    // meta.json / meta.<locale>.json — sidebar and ordering for a whole section,
-    // so every page in that section (and its subsections) changes.
+    // meta.json / meta.<locale>.json — the sidebar. NOT section-scoped: every
+    // docs page renders the whole tree (see docsTreePrefixes), so a reordered
+    // section leaves a stale sidebar on pages nowhere near it.
     const meta = rest.match(new RegExp(`^(?:(.*)\\/)?meta(?:\\.(${localeAlt}))?\\.json$`))
     if (meta) {
-      const dir = meta[1] ?? ''
       const locale = meta[2]
       if (locale) {
         return {
-          prefixes: [docsPrefix(locale, dir)],
+          prefixes: [docsPrefix(locale, '')],
           broad: false,
-          reason: `${locale} sidebar for section /${dir || '(root)'}`,
+          reason: `${locale} sidebar — every ${locale} docs page`,
         }
       }
-      // The untranslated meta.json is the source of truth for section structure;
+      // The untranslated meta.json is the source of truth for structure;
       // fumadocs falls back to it for any locale whose meta.<locale>.json is
       // missing a key, so a change to it reaches every language.
       //
       // /llms goes with it: app/llms-full.txt/route.ts builds the export from
-      // getOrderedDocsPages(), which walks `docsSource.pageTree` — the tree this
-      // file defines. Reordering a section therefore reorders the export. Only
-      // the untranslated file matters here, since getOrderedDocsPages() pins
+      // getOrderedDocsPages(), which walks the same `docsSource.pageTree`. Only
+      // the untranslated file matters there, since getOrderedDocsPages() pins
       // itself to i18n.defaultLanguage.
       return {
-        prefixes: [docsPrefix('', dir), ...locales.map((l) => docsPrefix(l, dir)), `${HOST}/llms`],
+        prefixes: [...docsTreePrefixes(locales), `${HOST}/llms`],
         broad: false,
-        reason: `section /${dir || '(root)'} in every locale (sidebar + ordering, + llms export)`,
+        reason: 'sidebar in every locale — every docs page (+ llms export)',
       }
     }
 
-    // <path>.<locale>.mdx — one translated page.
+    // <path>.<locale>.mdx — one translated page, unless the file appeared or
+    // disappeared: `getAvailableLocalesBySlug()` is a site-wide map embedded in
+    // every docs page, and lib/docs-page.tsx derives hreflang alternates from
+    // which translations exist, so an add/delete changes every page's markup.
     const translated = rest.match(new RegExp(`^(.*)\\.(${localeAlt})\\.mdx$`))
     if (translated) {
       const slug = stripIndex(translated[1])
       const locale = translated[2]
+      if (STRUCTURAL.has(status)) {
+        return {
+          prefixes: docsTreePrefixes(locales),
+          broad: false,
+          reason: `${locale} translation ${status === 'A' ? 'added' : 'deleted'} — language switcher and hreflang on every docs page`,
+        }
+      }
       return {
         prefixes: [docsPrefix(locale, slug)],
         broad: false,
@@ -188,13 +246,21 @@ export function prefixesForFile(file, locales) {
       }
     }
 
-    // <path>.mdx — one English page. Also purge /llms*, which is generated from
-    // the English docs. Translations are separate files and map on their own;
-    // a locale URL with no translation 307s to the English one and that redirect
-    // does not change when the English body does.
+    // <path>.mdx — one English page, unless it appeared or disappeared, which
+    // adds or removes a node from the page tree every docs page renders.
+    // Otherwise translations map on their own; a locale URL with no translation
+    // 307s to the English one, and that redirect does not change when the
+    // English body does. /llms* is generated from the English docs either way.
     const english = rest.match(/^(.*)\.mdx$/)
     if (english) {
       const slug = stripIndex(english[1])
+      if (STRUCTURAL.has(status)) {
+        return {
+          prefixes: [...docsTreePrefixes(locales), `${HOST}/llms`],
+          broad: false,
+          reason: `English page ${status === 'A' ? 'added' : 'deleted'} — page tree on every docs page (+ llms export)`,
+        }
+      }
       return {
         prefixes: [docsPrefix('', slug), `${HOST}/llms`],
         broad: false,
@@ -294,10 +360,12 @@ export function computePurge(files, locales) {
   const urls = new Set()
   let broad = false
 
-  for (const file of files) {
+  for (const line of files) {
+    if (!line) continue
+    const { status, file } = parseChangedLine(line)
     if (!file) continue
-    const result = prefixesForFile(file, locales)
-    reasons.push({ file, ...result })
+    const result = prefixesForFile(file, locales, status)
+    reasons.push({ file, status, ...result })
     if (result.broad) broad = true
     for (const prefix of result.prefixes) set.add(prefix)
     for (const url of result.files ?? []) urls.add(url)
@@ -394,7 +462,8 @@ async function main(argv) {
   if (flags.has('--explain')) {
     for (const r of result.reasons) {
       const target = r.broad ? 'BROAD' : r.prefixes.length ? r.prefixes.join(', ') : '(nothing)'
-      process.stderr.write(`${r.file}\n  -> ${target}\n     ${r.reason}\n`)
+      const urls = r.files?.length ? `\n     files: ${r.files.join(', ')}` : ''
+      process.stderr.write(`[${r.status}] ${r.file}\n  -> ${target}\n     ${r.reason}${urls}\n`)
     }
     if (result.collapsed) {
       process.stderr.write(

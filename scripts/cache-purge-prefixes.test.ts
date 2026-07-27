@@ -9,6 +9,7 @@ import {
   dropCoveredPrefixes,
   homepageUrls,
   parseArgs,
+  parseChangedLine,
   prefixesForFile,
   readLocales,
 } from './cache-purge-prefixes.mjs'
@@ -94,6 +95,103 @@ describe('parseArgs', () => {
   })
 })
 
+describe('the workflow feeds the mapper what it needs', () => {
+  const workflow = readFileSync(
+    fileURLToPath(new URL('../.github/workflows/cache-purge.yml', import.meta.url)),
+    'utf8',
+  )
+
+  /**
+   * Git's rename detection is on by default and reports a moved file as its
+   * destination alone, so without this flag a page moved without edits keeps its
+   * old URL cached until the TTL expires.
+   */
+  it('disables rename detection on every diff it runs', () => {
+    // Executable lines only: a `git diff` mentioned inside a `#` comment is prose.
+    const diffs = workflow
+      .split('\n')
+      .filter((line) => !line.trim().startsWith('#'))
+      .filter((line) => line.includes('git diff'))
+    expect(diffs.length).toBeGreaterThan(0)
+    for (const diff of diffs) {
+      expect(diff).toContain('--no-renames')
+    }
+  })
+
+  it('passes the status column, which decides structural vs content changes', () => {
+    expect(workflow).toContain('git diff --name-status --no-renames')
+  })
+})
+
+describe('parseChangedLine', () => {
+  it.each([
+    ['A\tcontent/docs/features/new.mdx', 'A', 'content/docs/features/new.mdx'],
+    ['D\tcontent/docs/features/old.mdx', 'D', 'content/docs/features/old.mdx'],
+    ['M\tcontent/docs/features/edit.mdx', 'M', 'content/docs/features/edit.mdx'],
+  ])('parses %s', (line, status, file) => {
+    expect(parseChangedLine(line)).toEqual({ status, file })
+  })
+
+  it('treats a bare path as a modification, so ad-hoc dry runs still work', () => {
+    expect(parseChangedLine('content/docs/local/docker.mdx')).toEqual({
+      status: 'M',
+      file: 'content/docs/local/docker.mdx',
+    })
+  })
+
+  it('takes the destination if a rename ever slips through', () => {
+    expect(parseChangedLine('R100\tcontent/docs/a.mdx\tcontent/docs/b.mdx')).toEqual({
+      status: 'R',
+      file: 'content/docs/b.mdx',
+    })
+  })
+})
+
+describe('structural changes', () => {
+  const docsTree = ['www.librechat.ai/docs', ...locales.map((l) => `www.librechat.ai/${l}/docs`)]
+
+  /**
+   * lib/docs-layout.tsx hands the complete docsSource.pageTree to DocsLayout for
+   * every page, so adding or removing a node changes every docs page's sidebar.
+   */
+  it.each(['A', 'D'])('purges the whole docs tree when an English page is %sed', (status) => {
+    const { prefixes } = prefixesForFile('content/docs/features/agents.mdx', locales, status)
+    for (const prefix of docsTree) expect(prefixes).toContain(prefix)
+    expect(prefixes).toContain('www.librechat.ai/llms')
+  })
+
+  it('keeps an edited English page scoped to itself', () => {
+    expect(prefixesForFile('content/docs/features/agents.mdx', locales, 'M').prefixes).toEqual([
+      'www.librechat.ai/docs/features/agents',
+      'www.librechat.ai/llms',
+    ])
+  })
+
+  /**
+   * getAvailableLocalesBySlug() is one site-wide map embedded in every docs page,
+   * and lib/docs-page.tsx derives hreflang from which translations exist.
+   */
+  it.each(['A', 'D'])('purges the whole docs tree when a translation is %sed', (status) => {
+    const { prefixes } = prefixesForFile('content/docs/features/agents.ja.mdx', locales, status)
+    for (const prefix of docsTree) expect(prefixes).toContain(prefix)
+  })
+
+  it('keeps an edited translation scoped to itself, so a sweep stays cheap', () => {
+    expect(prefixesForFile('content/docs/features/agents.ja.mdx', locales, 'M').prefixes).toEqual([
+      'www.librechat.ai/ja/docs/features/agents',
+    ])
+  })
+
+  it('maps a rename as delete + add, covering the old URL', () => {
+    const result = computePurge(
+      ['D\tcontent/docs/local/docker.mdx', 'A\tcontent/docs/local/docker-compose.mdx'],
+      locales,
+    )
+    // Both sides are structural, so the tree purge covers the vacated URL.
+    expect(result.prefixes).toContain('www.librechat.ai/docs')
+  })
+})
+
 describe('docs pages', () => {
   it('maps an English page to its docs path', () => {
     expect(prefixesForFile('content/docs/local/docker.mdx', locales).prefixes).toEqual([
@@ -134,12 +232,22 @@ describe('docs pages', () => {
 })
 
 describe('meta.json', () => {
-  it('purges a section in every locale, because it drives sidebar and ordering', () => {
+  /**
+   * Not section-scoped: lib/docs-layout.tsx renders the complete page tree into
+   * every docs page, so a sidebar change reaches pages in unrelated sections.
+   */
+  it('purges every docs page in every locale, not just the section it sits in', () => {
     const { prefixes } = prefixesForFile('content/docs/local/meta.json', locales)
-    expect(prefixes).toContain('www.librechat.ai/docs/local')
-    expect(prefixes).toContain('www.librechat.ai/pt-BR/docs/local')
-    // English + one per locale + the llms export.
+    expect(prefixes).toContain('www.librechat.ai/docs')
+    expect(prefixes).toContain('www.librechat.ai/pt-BR/docs')
+    // The docs root, one per locale, and the llms export.
     expect(prefixes).toHaveLength(locales.length + 2)
+  })
+
+  it('does not stop at the section prefix, which would leave other pages stale', () => {
+    expect(prefixesForFile('content/docs/local/meta.json', locales).prefixes).not.toContain(
+      'www.librechat.ai/docs/local',
+    )
   })
 
   /**
@@ -167,18 +275,19 @@ describe('meta.json', () => {
     expect(prefixes).toContain('www.librechat.ai/zh/docs')
   })
 
-  it('limits a localized meta file to its own locale', () => {
+  it('limits a localized meta file to its own locale, but to all of that locale', () => {
     expect(prefixesForFile('content/docs/configuration/meta.de.json', locales).prefixes).toEqual([
-      'www.librechat.ai/de/docs/configuration',
+      'www.librechat.ai/de/docs',
     ])
   })
 
-  it('handles a deeply nested section', () => {
+  it('treats a deeply nested meta.json the same as any other', () => {
     const { prefixes } = prefixesForFile(
       'content/docs/configuration/librechat_yaml/ai_endpoints/meta.json',
       locales,
     )
-    expect(prefixes).toContain('www.librechat.ai/docs/configuration/librechat_yaml/ai_endpoints')
+    expect(prefixes).toContain('www.librechat.ai/docs')
+    expect(prefixes).toHaveLength(locales.length + 2)
   })
 })
 
