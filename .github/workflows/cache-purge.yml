@@ -125,6 +125,13 @@ env:
   # Only ever an approximation of where to start, so it is paired with the broad
   # page set; its job is to surface deletions, which a range-less run cannot see.
   FALLBACK_WINDOW: '30 days ago'
+  # Bound every Cloudflare call. Without these, a peer that accepts the
+  # connection and then stops responding never returns, so the retry loop never
+  # sees a failure and the job sits until the platform timeout — and since runs
+  # deliberately overlap, several can pile up that way. With them, a stall
+  # becomes an ordinary retryable failure.
+  CURL_CONNECT_TIMEOUT: 10
+  CURL_MAX_TIME: 60
 
 jobs:
   purge:
@@ -269,7 +276,7 @@ jobs:
                         | select(.creator.login == $creator)
                         | select(.id < $current)
                       ][]
-                      | "\(.id) \(.sha)"' <<< "$deployments")
+                      | "\(.id) \(.sha) \(.created_at)"' <<< "$deployments")
             # The baseline is the last commit we actually PURGED, not merely the
             # last one deployed. If B's purge fails or is cancelled and C then
             # deploys, taking B as the baseline would compute B..C and leave
@@ -277,7 +284,7 @@ jobs:
             # would ever revisit it. Walking back to the newest deployment
             # carrying the `PURGE_STATUS_CONTEXT` commit status makes the next
             # run absorb the failed one's range: the diff widens to A..C.
-              while read -r id sha; do
+              while read -r id sha created; do
                 [ -n "$id" ] || continue
                 [ -z "$base" ] || break
                 [ "$sha" = "$head" ] && continue
@@ -291,8 +298,16 @@ jobs:
                 succeeded=$(gh api "repos/$REPO/deployments/$id/statuses" \
                   --jq '[.[] | select(.state == "success")] | length')
                 [ "${succeeded:-0}" -gt 0 ] || continue
+                # The marker must post-date THIS deployment, not merely exist on
+                # the commit. A rollback redeploys a SHA that was purged the first
+                # time round; if the rollback's own purge fails, an undated check
+                # would accept its stale marker and the next run would diff from a
+                # build whose cache was never cleared. GitHub timestamps are UTC
+                # ISO-8601, so a lexicographic compare is a chronological one.
                 purged=$(gh api "repos/$REPO/commits/$sha/statuses" \
-                  --jq "[.[] | select(.context == \"$PURGE_STATUS_CONTEXT\" and .state == \"success\")] | length")
+                  --jq "[.[] | select(.context == \"$PURGE_STATUS_CONTEXT\"
+                                      and .state == \"success\"
+                                      and .created_at > \"$created\")] | length")
                 if [ "${purged:-0}" -gt 0 ]; then
                   base="$sha"
                   echo "Baseline: $sha (deployment $id) — last commit with a successful purge."
@@ -375,7 +390,14 @@ jobs:
             # --name-status because add/delete are not equivalent to modify here:
             # they reshape the page tree and the locale map that every docs page
             # renders, so the mapper widens the purge for them.
-            git diff --name-status --no-renames "$BASE" "$HEAD" > changed.tsv
+            # core.quotepath=false, or git C-quotes any non-ASCII path:
+            # `public/images/café.png` arrives as `"public/images/caf\303\251.png"`,
+            # which matches no rule, so the asset URL is never purged even though
+            # the mapper handles Unicode correctly. A name containing a quote or
+            # backslash is still quoted, and that is caught below rather than
+            # silently mismapped.
+            git -c core.quotepath=false diff --name-status --no-renames \
+              "$BASE" "$HEAD" > changed.tsv
 
             # Frontmatter `title:`/`icon:` populate the page-tree node that the
             # sidebar draws on *every* docs page, so editing one is structural
@@ -384,8 +406,16 @@ jobs:
             # set we need and one extra git call. It also matches a `title:` at
             # the start of a line inside a fenced code block in the body: that
             # over-purges to the docs root, which is safe.
-            git diff --name-only --no-renames -G'^(title|icon):' "$BASE" "$HEAD" \
-              -- content/docs > tree-edits.txt || : > tree-edits.txt
+            git -c core.quotepath=false diff --name-only --no-renames -G'^(title|icon):' \
+              "$BASE" "$HEAD" -- content/docs > tree-edits.txt || : > tree-edits.txt
+
+            # Anything still quoted holds a character git cannot render plainly.
+            # Mapping it would silently under-purge, so stop instead.
+            if cut -f2- changed.tsv | grep -q '^"'; then
+              echo "::error::Changed path needs C-quoting, which this mapper cannot parse:" >&2
+              cut -f2- changed.tsv | grep '^"' >&2
+              exit 1
+            fi
 
             # getline in BEGIN, not the NR==FNR idiom: with an empty first file
             # that idiom misreads the first line of the second file.
@@ -498,6 +528,7 @@ jobs:
               body=$(mktemp)
               headers=$(mktemp)
               http=$(curl -sS -o "$body" -D "$headers" -w '%{http_code}' -X POST "$endpoint" \
+                --connect-timeout "$CURL_CONNECT_TIMEOUT" --max-time "$CURL_MAX_TIME" \
                 -H "Authorization: Bearer ${CF_API_TOKEN}" \
                 -H 'Content-Type: application/json' \
                 --data "$payload") || http=000

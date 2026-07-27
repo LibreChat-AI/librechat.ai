@@ -141,20 +141,48 @@ describe('the workflow feeds the mapper what it needs', () => {
    * destination alone, so without this flag a page moved without edits keeps its
    * old URL cached until the TTL expires.
    */
+  // Executable lines only: a `git diff` mentioned inside a `#` comment is prose.
+  // Matched loosely because the command carries `-c` options before `diff`.
+  const diffLines = workflow
+    .split('\n')
+    .filter((line) => !line.trim().startsWith('#'))
+    .filter((line) => /\bgit\b[^\n]*\bdiff\b/.test(line))
+
   it('disables rename detection on every diff it runs', () => {
-    // Executable lines only: a `git diff` mentioned inside a `#` comment is prose.
-    const diffs = workflow
-      .split('\n')
-      .filter((line) => !line.trim().startsWith('#'))
-      .filter((line) => line.includes('git diff'))
-    expect(diffs.length).toBeGreaterThan(0)
-    for (const diff of diffs) {
+    expect(diffLines.length).toBeGreaterThan(0)
+    for (const diff of diffLines) {
       expect(diff).toContain('--no-renames')
     }
   })
 
+  /**
+   * Git C-quotes any non-ASCII path by default: `public/images/café.png` arrives
+   * as `"public/images/caf\303\251.png"`, matches no rule, and the asset URL is
+   * never purged — even though the mapper itself handles Unicode correctly.
+   */
+  it('reads pathnames losslessly on every diff it runs', () => {
+    for (const diff of diffLines) {
+      expect(diff).toContain('core.quotepath=false')
+    }
+  })
+
   it('passes the status column, which decides structural vs content changes', () => {
-    expect(workflow).toContain('git diff --name-status --no-renames')
+    expect(workflow).toMatch(/git[^\n]*diff --name-status --no-renames/)
+  })
+
+  /**
+   * A peer that accepts the connection and then stops responding would otherwise
+   * never return, so the retry loop never sees a failure and the job sits until
+   * the platform timeout. Runs overlap by design, so several can pile up.
+   */
+  it('bounds every Cloudflare request so a stall becomes a retry', () => {
+    const curls = workflow
+      .split('\n')
+      .filter((line) => !line.trim().startsWith('#'))
+      .filter((line) => /\bcurl\b/.test(line))
+    expect(curls.length).toBeGreaterThan(0)
+    expect(workflow).toContain('--connect-timeout "$CURL_CONNECT_TIMEOUT"')
+    expect(workflow).toContain('--max-time "$CURL_MAX_TIME"')
   })
 
   /**
