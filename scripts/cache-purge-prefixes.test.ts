@@ -154,6 +154,23 @@ describe('the workflow feeds the mapper what it needs', () => {
   it('passes the status column, which decides structural vs content changes', () => {
     expect(workflow).toContain('git diff --name-status --no-renames')
   })
+
+  /**
+   * Every run block sets `set -euo pipefail`, under which a `grep` that matches
+   * nothing exits 1, the pipeline inherits that, and the assignment kills the
+   * step. This bit the Retry-After lookup: a 5xx or a connection failure carries
+   * no such header, so the two most common retryable cases aborted after one
+   * call with no diagnostic instead of backing off. "No match" is a normal
+   * outcome when reading an optional header, so it must not be fatal.
+   */
+  it('never assigns from a bare grep, which aborts the step under pipefail', () => {
+    const risky = workflow
+      .split('\n')
+      .filter((line) => !line.trim().startsWith('#'))
+      .filter((line) => /=\$\(/.test(line) && /\bgrep\b/.test(line))
+      .filter((line) => !/\|\|\s*(true|:)/.test(line))
+    expect(risky).toEqual([])
+  })
 })
 
 describe('parseChangedLine', () => {
