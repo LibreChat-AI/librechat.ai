@@ -538,7 +538,11 @@ async function main(argv) {
   } else {
     files = positional
   }
-  files = files.map((f) => f.trim()).filter(Boolean)
+  // Strip the record delimiter only. Whitespace at the edges of a path belongs
+  // to the path: git prints `public/logo.png ` with the trailing space intact
+  // even under core.quotepath=false, and trimming it would purge `/logo.png`
+  // while the real `/logo.png%20` stayed cached.
+  files = files.map((line) => line.replace(/\r$/, '')).filter((line) => line !== '')
 
   const result = computePurge(files, locales, { forceBroad: flags.has('--broad') })
 

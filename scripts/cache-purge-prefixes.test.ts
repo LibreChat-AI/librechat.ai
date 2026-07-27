@@ -219,6 +219,13 @@ describe('parseChangedLine', () => {
     })
   })
 
+  it('strips a carriage return, which is a delimiter artifact rather than path', () => {
+    expect(parseChangedLine('M\tpublic/logo.png\r'.replace(/\r$/, ''))).toEqual({
+      status: 'M',
+      file: 'public/logo.png',
+    })
+  })
+
   it('takes the destination if a rename ever slips through', () => {
     expect(parseChangedLine('R100\tcontent/docs/a.mdx\tcontent/docs/b.mdx')).toEqual({
       status: 'R',
@@ -461,6 +468,17 @@ describe('URL encoding', () => {
     ['public/images/a%b.png', '/images/a%25b.png'],
   ])('encodes %s', (file, expected) => {
     expect(prefixesForFile(file, locales).files).toEqual([`https://www.librechat.ai${expected}`])
+  })
+
+  /**
+   * Git prints a trailing space literally, even under core.quotepath=false, so
+   * trimming the record would purge `/logo.png` while the real `/logo.png%20`
+   * stayed cached.
+   */
+  it('keeps whitespace that belongs to the path', () => {
+    expect(prefixesForFile('public/logo.png ', locales).files).toEqual([
+      'https://www.librechat.ai/logo.png%20',
+    ])
   })
 
   it('keeps the path separators as separators', () => {
