@@ -1,0 +1,373 @@
+name: Cloudflare Cache Purge
+
+# Purges the Cloudflare edge cache for the pages a production deploy actually
+# changed, so a docs edit is visible immediately instead of waiting out the 24h
+# edge TTL (`SHARED_CDN_CACHE` in next.config.mjs). Nothing here changes a TTL.
+#
+# WHY PREFIXES, NOT URLS
+# The App Router serves the HTML document and the RSC flight payload at the same
+# path; the flight request carries a `?_rsc=<hash>` query that Next generates
+# client-side from router headers. Cloudflare keeps the query string in the
+# cache key, so those variants are separate entries whose keys cannot be
+# enumerated from CI. Measured against production:
+#   purge by URL  /docs/local/docker            -> HTML variant only
+#   purge by URL  /docs/local/docker?_rsc=x     -> that one RSC variant
+#   purge by prefix www.librechat.ai/docs/local/docker -> HTML *and* RSC
+# Prefix is therefore the only usable unit. Note the format: `hostname/path`,
+# no scheme, no query string.
+#
+# WHY NOT `purge_everything`
+# It also evicts /_next/static/**, which would put every asset on the site into
+# a MISS wave on every deploy.
+#
+# KNOWN, ACCEPTED BEHAVIOURS
+# 1. Prefix matching is a plain string match, so `/docs/features/agents` also
+#    purges `/docs/features/agents-anything`. That is over-purging: it costs one
+#    origin fetch, it is never stale. Acceptable.
+# 2. Deletions are included in the diff (`git diff --name-only` reports them),
+#    so removing a page purges its prefix and the stale entry goes.
+
+on:
+  # The purge MUST happen after Vercel has finished deploying. Running it when
+  # the commit lands (`on: push`) is worse than not purging at all: Cloudflare
+  # would immediately refill every purged entry from the *old* origin build and
+  # re-pin it for another 24h.
+  #
+  # Vercel's GitHub integration publishes a GitHub Deployment for every
+  # production build and marks it `success` when the build is ready and the
+  # production alias points at it. That is a real completion signal, it needs no
+  # new credentials, and it arrives when the work is done rather than after a
+  # guessed wait. Verified present on this repo: deployments with
+  # `environment: Production` created by `vercel[bot]`, status `success`.
+  #
+  # Limitations, written down rather than papered over:
+  #   - It depends on Vercel's GitHub integration staying enabled. If a deploy
+  #     ever reaches production without producing a GitHub Deployment, no purge
+  #     runs and those pages fall back to the 24h TTL. Use the manual
+  #     `workflow_dispatch` broad purge to recover.
+  #   - `success` is posted when Vercel considers the deployment ready. The
+  #     alias swap is effectively simultaneous, but a purge issued in the same
+  #     second could still race an edge that has not seen the new origin.
+  #     SETTLE_SECONDS below covers that window.
+  #   - `deployment_status` workflows only run from the file on the default
+  #     branch, so this cannot be exercised until it is merged to main.
+  deployment_status:
+
+  # Manual escape hatch: purge the four top-level prefixes (and the rest of the
+  # broad set) without needing a deploy. Use it after a Cloudflare rule change,
+  # a failed run, or any deploy that produced no deployment event.
+  workflow_dispatch:
+    inputs:
+      broad:
+        description: 'Purge the broad set (all top-level prefixes) instead of a diff'
+        type: boolean
+        default: true
+      dry_run:
+        description: 'Log the computed prefixes without calling the Cloudflare API'
+        type: boolean
+        default: false
+      range:
+        description: 'With broad=false: commit range to map, e.g. abc1234..def5678'
+        type: string
+        required: false
+
+permissions:
+  contents: read
+  # Reading the previous successful production deployment, to know where the
+  # diff starts.
+  deployments: read
+
+# Never cancel a purge in flight, and never let two run at once: a cancelled run
+# leaves part of the cache stale with nothing to retry it.
+concurrency:
+  group: cache-purge
+  cancel-in-progress: false
+
+env:
+  # Grace period between "Vercel says ready" and the first purge call. Cheap
+  # insurance against purging an edge a moment before it can see the new origin;
+  # raise it if a purged page is ever observed refilling with old content.
+  SETTLE_SECONDS: 15
+  # Cloudflare documents "Maximum 30 prefixes per API call" for purge by prefix.
+  # The general limits table allows 100 operations per request (500 on
+  # Enterprise), so 30 is the tighter of the two documented numbers and is what
+  # we chunk on. Sources:
+  #   https://developers.cloudflare.com/cache/how-to/purge-cache/purge_by_prefix/
+  #   https://developers.cloudflare.com/cache/how-to/purge-cache/#availability-and-limits
+  MAX_ITEMS_PER_CALL: 30
+  # Request rate is limited per account, and the floor across plans is 5
+  # requests per minute (Free); Pro is 5/s, Business 10/s, Enterprise 50/s. One
+  # second between calls keeps us under every per-second bucket, and 429s are
+  # retried with backoff below, which is what makes the floor safe too.
+  SLEEP_BETWEEN_CALLS: 1
+
+jobs:
+  purge:
+    name: Purge changed prefixes
+    # Only successful *production* deployments. `deployment_status` also fires
+    # for pending/failure states and for every preview deployment.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.deployment_status.state == 'success' &&
+       github.event.deployment.environment == 'Production')
+    runs-on: ubuntu-latest
+    steps:
+      # Full history: the diff base is the previous deployed commit, which can be
+      # many commits back when deploys are batched or a build was superseded.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Resolve what to map. Three cases:
+      #   dispatch + broad          -> broad set, no diff
+      #   dispatch + explicit range -> that range
+      #   deployment_status         -> previous successful production deploy .. this one
+      #
+      # Using the previous *deployed* commit rather than `push.before` matters:
+      # when several commits land quickly Vercel may supersede a build, so some
+      # commits never deploy on their own. Diffing deploy-to-deploy covers every
+      # commit that actually shipped between two live builds; diffing push-to-push
+      # would silently skip the superseded ones.
+      - name: Resolve diff range
+        id: range
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          INPUT_BROAD: ${{ inputs.broad }}
+          INPUT_RANGE: ${{ inputs.range }}
+          HEAD_SHA: ${{ github.event.deployment.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          emit() { echo "$1=$2" >> "$GITHUB_OUTPUT"; }
+
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            if [ "$INPUT_BROAD" = "true" ]; then
+              echo "Manual dispatch: broad purge requested."
+              emit mode broad
+              exit 0
+            fi
+            if [ -z "${INPUT_RANGE:-}" ]; then
+              echo "::error::broad=false requires a 'range' input (e.g. abc1234..def5678)."
+              exit 1
+            fi
+            # Constrain the shape before it reaches git, so a value like
+            # `--upload-pack=...` can't be read as an option.
+            if ! printf '%s' "$INPUT_RANGE" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._/-]*\.\.[A-Za-z0-9][A-Za-z0-9._/-]*$'; then
+              echo "::error::Invalid range '$INPUT_RANGE'. Expected <base>..<head>."
+              exit 1
+            fi
+            base="${INPUT_RANGE%%..*}"
+            head="${INPUT_RANGE##*..}"
+          else
+            head="$HEAD_SHA"
+            # Walk production deployments newest-first and take the first one
+            # that succeeded on a *different* commit. Skipping same-sha entries
+            # means a manual redeploy of the current commit re-purges that
+            # commit's prefixes instead of computing an empty diff.
+            base=""
+            # Newest first (the API returns deployments in descending order).
+            # Bounded to 40 inside jq rather than with `head`, whose SIGPIPE
+            # would trip `pipefail`.
+            ids=$(gh api "repos/$REPO/deployments?environment=Production&per_page=100" \
+                    --jq '.[0:40][] | "\(.id) \(.sha)"')
+            while read -r id sha; do
+              [ -n "$id" ] || continue
+              [ "$sha" = "$head" ] && continue
+              state=$(gh api "repos/$REPO/deployments/$id/statuses?per_page=1" --jq '.[0].state // ""')
+              if [ "$state" = "success" ]; then
+                base="$sha"
+                echo "Previous successful production deployment: $sha (deployment $id)"
+                break
+              fi
+            done <<< "$ids"
+
+            if [ -z "$base" ]; then
+              echo "::warning::No previous successful production deployment found; purging broadly."
+              emit mode broad
+              exit 0
+            fi
+          fi
+
+          # A force-push or a dropped branch can orphan the base commit. Mapping
+          # nothing would leave the cache stale, so fall back to the broad set.
+          if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            echo "::warning::Base commit $base is not reachable in this checkout; purging broadly."
+            emit mode broad
+            exit 0
+          fi
+          if ! git cat-file -e "${head}^{commit}" 2>/dev/null; then
+            echo "::warning::Head commit $head is not reachable in this checkout; purging broadly."
+            emit mode broad
+            exit 0
+          fi
+
+          emit mode diff
+          emit base "$base"
+          emit head "$head"
+
+      # Map changed files -> prefixes. `git diff --name-only` reports added,
+      # modified *and* deleted paths (no --diff-filter, so D is included);
+      # a deleted page still needs its prefix purged or the stale entry survives.
+      - name: Compute prefixes
+        id: compute
+        env:
+          MODE: ${{ steps.range.outputs.mode }}
+          BASE: ${{ steps.range.outputs.base }}
+          HEAD: ${{ steps.range.outputs.head }}
+        run: |
+          set -euo pipefail
+
+          if [ "$MODE" = "broad" ]; then
+            node scripts/cache-purge-prefixes.mjs --broad --json > purge.json
+          else
+            echo "Changed files ($BASE..$HEAD):"
+            git diff --name-only "$BASE" "$HEAD" | sed 's/^/  /'
+            git diff --name-only "$BASE" "$HEAD" \
+              | node scripts/cache-purge-prefixes.mjs - --json --explain > purge.json
+          fi
+
+          jq -r '.prefixes[]' purge.json > prefixes.txt
+          jq -r '.files[]?' purge.json > files.txt
+          broad=$(jq -r '.broad' purge.json)
+          collapsed=$(jq -r '.collapsed' purge.json)
+
+          {
+            echo "### Cloudflare purge plan"
+            echo
+            echo "- mode: \`$([ "$broad" = "true" ] && echo broad || echo selective)\`"
+            [ "$collapsed" = "true" ] && echo "- **collapsed to broad**: the diff produced more prefixes than the cap"
+            echo "- prefixes: $(wc -l < prefixes.txt)"
+            echo "- exact URLs: $(wc -l < files.txt)"
+            echo
+            echo '```'
+            cat prefixes.txt files.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "count=$(wc -l < prefixes.txt)" >> "$GITHUB_OUTPUT"
+
+      # Nothing mapped means the deploy touched only files that cannot change a
+      # rendered page (.github/**, tests, repo notes). Say so out loud; do not
+      # dress it up as a successful purge.
+      - name: Nothing to purge
+        if: steps.compute.outputs.count == '0'
+        run: echo "::notice::No cached route changed in this deploy — no purge issued."
+
+      - name: Dry run
+        if: inputs.dry_run && steps.compute.outputs.count != '0'
+        run: |
+          set -euo pipefail
+          echo "DRY RUN — the Cloudflare API is not called. Prefixes:"
+          cat prefixes.txt
+          if [ -s files.txt ]; then
+            echo "Exact URLs:"
+            cat files.txt
+          fi
+
+      # Fail loudly on missing configuration. A purge that quietly skips is the
+      # exact failure this workflow exists to prevent.
+      - name: Check credentials
+        if: ${{ !inputs.dry_run && steps.compute.outputs.count != '0' }}
+        env:
+          CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+        run: |
+          set -euo pipefail
+          missing=""
+          [ -n "${CF_API_TOKEN:-}" ] || missing="$missing CLOUDFLARE_API_TOKEN"
+          [ -n "${CF_ZONE_ID:-}" ] || missing="$missing CLOUDFLARE_ZONE_ID"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository secret(s):$missing. Add them (API token needs" \
+                 "the Zone > Cache Purge permission on the librechat.ai zone) and re-run." >&2
+            exit 1
+          fi
+
+      - name: Wait for the deploy to settle
+        if: ${{ !inputs.dry_run && steps.compute.outputs.count != '0' && github.event_name == 'deployment_status' }}
+        run: sleep "$SETTLE_SECONDS"
+
+      - name: Purge
+        if: ${{ !inputs.dry_run && steps.compute.outputs.count != '0' }}
+        env:
+          CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+        run: |
+          set -euo pipefail
+
+          endpoint="https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/purge_cache"
+
+          # One purge call. Fails the job on a non-200 *or* on `success: false`
+          # in the body — Cloudflare returns 200 with success:false for things
+          # like an unauthorised prefix, and treating that as a win is how a
+          # cache silently stays stale. Never `|| true`.
+          purge_call() {
+            local field="$1" payload_file="$2" attempt=1 max_attempts=5 delay=5
+            local body http
+
+            # `files` and `prefixes` are mutually exclusive in the API, so each
+            # kind goes in its own call.
+            local payload
+            payload=$(jq -Rs --arg field "$field" \
+              'split("\n") | map(select(length > 0)) | {($field): .}' < "$payload_file")
+
+            while :; do
+              body=$(mktemp)
+              http=$(curl -sS -o "$body" -w '%{http_code}' -X POST "$endpoint" \
+                -H "Authorization: Bearer ${CF_API_TOKEN}" \
+                -H 'Content-Type: application/json' \
+                --data "$payload") || http=000
+
+              if [ "$http" = "200" ] && [ "$(jq -r '.success' "$body")" = "true" ]; then
+                echo "  purged $(jq -r --arg f "$field" '.[$f] | length' <<< "$payload") $field (id $(jq -r '.result.id // "n/a"' "$body"))"
+                rm -f "$body"
+                return 0
+              fi
+
+              # 429 (rate limited) and 5xx are worth retrying; anything else is a
+              # real error (bad token, wrong zone, malformed prefix) and retrying
+              # only delays the failure.
+              if { [ "$http" = "429" ] || [ "$http" -ge 500 ] 2>/dev/null || [ "$http" = "000" ]; } \
+                 && [ "$attempt" -lt "$max_attempts" ]; then
+                echo "::warning::Purge attempt $attempt failed (HTTP $http); retrying in ${delay}s."
+                sleep "$delay"
+                attempt=$((attempt + 1))
+                delay=$((delay * 2))
+                rm -f "$body"
+                continue
+              fi
+
+              echo "::error::Cloudflare purge failed (HTTP $http)." >&2
+              echo "Request: $payload" >&2
+              echo "Response:" >&2
+              cat "$body" >&2
+              rm -f "$body"
+              return 1
+            done
+          }
+
+          # Chunk to MAX_ITEMS_PER_CALL and pace the calls.
+          purge_all() {
+            local field="$1" source="$2"
+            [ -s "$source" ] || return 0
+            local total chunkdir
+            total=$(wc -l < "$source")
+            chunkdir=$(mktemp -d)
+            split -l "$MAX_ITEMS_PER_CALL" "$source" "$chunkdir/chunk."
+            echo "Purging $total $field in $(ls "$chunkdir" | wc -l) call(s)..."
+            local first=1
+            for chunk in "$chunkdir"/chunk.*; do
+              [ "$first" = "1" ] || sleep "$SLEEP_BETWEEN_CALLS"
+              first=0
+              purge_call "$field" "$chunk"
+            done
+            rm -rf "$chunkdir"
+          }
+
+          purge_all prefixes prefixes.txt
+          # The homepage has no usable prefix — `www.librechat.ai/` prefixes the
+          # whole zone, static assets included — so it is purged by exact URL.
+          purge_all files files.txt
+
+          echo "::notice::Cloudflare purge complete."
