@@ -42,8 +42,8 @@ export interface RunStats {
   skipped: string[]
   /**
    * Files left in English because they failed validation too many times in a row.
-   * Reported separately from `skipped`: they are a settled outcome, not work still
-   * outstanding, so they must not keep the pipeline looking unconverged forever.
+   * Reported separately from `skipped`: they are a settled outcome rather than work
+   * a rerun could still complete, and only the latter should count as a failure rate.
    */
   quarantined: string[]
   /**

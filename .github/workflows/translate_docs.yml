@@ -20,12 +20,14 @@ on:
   # TRANSLATE_BRANCH and keeps translation memory in the Actions cache, so main stays
   # free of partial progress commits and cache files.
   #
-  # Every 3 hours, not every 30 minutes: content pushes trigger this workflow
-  # directly, so the sweep only has to catch up unfinished batches. The "Check for
-  # pending work" step below makes a sweep with nothing to do exit before installing
-  # dependencies or touching the API.
+  # Every 6 hours. Content pushes trigger this workflow directly, so the sweep is
+  # only a catch-up for batches that could not finish in one run. A sweep with
+  # nothing to do is genuinely free in API terms — every block is a cache hit — so
+  # it is not worth a skip mechanism to avoid a few minutes of CI. An earlier
+  # revision fingerprinted the inputs to skip idle sweeps; it saved no spend and
+  # kept finding new ways to skip work that had not actually been published.
   schedule:
-    - cron: '23 */3 * * *'
+    - cron: '23 */6 * * *'
   workflow_dispatch:
     inputs:
       force:
@@ -61,6 +63,7 @@ jobs:
           fetch-depth: 0
 
       - name: Prepare translation branch
+        id: prepare
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -105,8 +108,8 @@ jobs:
           for src in "$snapshot"/*.json; do
             [ -e "$src" ] || continue
             name=$(basename "$src")
-            # state.json is a control file, not memory: it belongs to the runner that
-            # wrote it and is never carried on the branch. Skip it defensively.
+            # state.json belonged to the removed skip check. Older caches may still
+            # carry one; it is not memory, so keep it off the branch.
             [ "$name" = "state.json" ] && continue
             target="content/.i18n-cache/$name"
             # Both operands must be JSON objects. A truncated or non-object file makes
@@ -150,113 +153,20 @@ jobs:
             git reset -- content/.i18n-cache || true
           fi
 
-      # A sweep has work only if the translation inputs moved since the last complete
-      # run, or that run left files unfinished. Checking here — before the toolchain
-      # install and any API call — makes an idle sweep a ~20s no-op instead of a full
-      # 13-locale pass over every doc.
-      #
-      # The fingerprint covers the docs tree and the translation code, NOT main's
-      # commit: this repo takes app and blog commits constantly, and every one of them
-      # would change a commit sha while leaving the translation inputs byte-identical,
-      # so the skip would almost never fire. Tree hashes change only when the inputs
-      # actually do. lib/i18n and the entrypoint are included so a locale list, prompt
-      # version, or validator change correctly forces a fresh pass.
-      #
-      # Both control files live only in the Actions cache, never on the memory branch:
-      # they describe what this pipeline last published, and if the cache is evicted
-      # their absence simply means "no skip", which is the safe default.
-      - name: Check for pending work
-        id: check
-        run: |
-          # Derived from TARGET_LOCALES rather than hardcoded, so the exclusion can
-          # never drift from the runner's own LOCALE_RE. Matching any two-letter
-          # suffix would classify a legitimate source like `example.ai.mdx` as
-          # generated output: the runner would translate it, but it would be absent
-          # from the fingerprint, and since the push filter is glob-only and equally
-          # broad, nothing would ever schedule that work.
-          locales=$(
-            git show "origin/main:lib/i18n/config.ts" |
-              sed -n '/TARGET_LOCALES = \[/,/\] as const/p' |
-              grep -oE "'[^']+'" | tr -d "'" | paste -sd'|'
-          )
-          [ -n "$locales" ] || { echo "::error::could not derive TARGET_LOCALES"; exit 1; }
-          echo "locales: $locales"
-
-          # Source files only. The generated `*.<locale>.mdx` and `meta.<locale>.json`
-          # live in the same tree, so hashing the tree object itself would change
-          # every time the translation branch is merged into main — an output-only
-          # push that this workflow deliberately does not trigger on, yet which would
-          # cost the next sweep a full 13-locale pass.
-          fingerprint=$(
-            {
-              # ls-tree separates the path with a TAB, so the meta pattern must anchor
-              # on whitespace as well as `/` — otherwise the generated meta.<locale>
-              # files at the root of content/docs slip through and the fingerprint
-              # moves on every publish anyway.
-              git ls-tree -r "origin/main:content/docs" |
-                grep -vE "\.($locales)\.mdx$" |
-                grep -vE "(^|[/[:space:]])meta\.($locales)\.json$"
-              git rev-parse "origin/main:lib/i18n"
-              # lib/i18n.ts too, not just the directory: the prompt takes its target
-              # language names from LOCALE_NAMES there, so correcting one would
-              # otherwise neither trigger this path-filtered workflow nor move the
-              # fingerprint, and every sweep would skip with the old translations.
-              git rev-parse "origin/main:lib/i18n.ts"
-              git rev-parse "origin/main:scripts/translate.ts"
-              # The lockfile too. Segmentation, validation and serialization all run
-              # through dependencies — the MDX parser, gray-matter, the AI SDK — so an
-              # upgrade can change the output for unchanged source. Neither the push
-              # filter nor the source trees notice that, and the sweep would keep
-              # skipping on a stale `pending: 0`. Over-triggers on unrelated bumps,
-              # which costs a pass of cache hits and no API calls.
-              git rev-parse "origin/main:pnpm-lock.yaml"
-            } | sha256sum | cut -d' ' -f1
-          )
-          echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
-          if [ "${{ inputs.force }}" = "true" ]; then
-            echo "a forced run always translates"
-            exit 0
-          fi
-          state=content/.i18n-cache/state.json
-          rev=content/.i18n-cache/source-fingerprint
-          [ -f "$state" ] && [ -f "$rev" ] || exit 0
-          [ "$(cat "$rev")" = "$fingerprint" ] || exit 0
-          # Fall back to "not complete" if the file is unreadable or malformed rather
-          # than letting jq fail the step under `bash -e`: a truncated state.json
-          # would otherwise block every future run before it can translate anything.
-          complete=$(jq -r '.complete // false' "$state" 2>/dev/null || echo false)
-          pending=$(jq -r '.pending // 1' "$state" 2>/dev/null || echo 1)
-          if [ "$complete" = "true" ] && [ "$pending" = "0" ]; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "translation inputs are unchanged since the last complete run and nothing is pending"
-          fi
-
       - uses: pnpm/action-setup@v4
-        if: steps.check.outputs.skip != 'true'
 
       - uses: actions/setup-node@v4
-        if: steps.check.outputs.skip != 'true'
         with:
           node-version: 24
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
-        if: steps.check.outputs.skip != 'true'
 
       - name: Translate docs
-        if: steps.check.outputs.skip != 'true'
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENROUTER_TRANSLATE_MODEL: ${{ secrets.OPENROUTER_TRANSLATE_MODEL }}
         run: |
-          # Drop the published marker before touching anything. It is restored only by
-          # a run that publishes successfully. Without this, a run whose inputs already
-          # matched the recorded fingerprint — a retry of unfinished work, or --force —
-          # would write `complete: true, pending: 0` alongside the still-matching old
-          # fingerprint if its push then failed, and the next sweep would skip without
-          # ever republishing the output this run produced.
-          rm -f content/.i18n-cache/source-fingerprint
-
           FLAGS=""
           if [ "${{ inputs.force }}" = "true" ]; then
             FLAGS="--force"
@@ -264,11 +174,11 @@ jobs:
           npx tsx scripts/translate.ts $FLAGS
 
       # `!cancelled()` so a translate step that failed part-way still commits the
-      # pages it did finish; gated on the check step so a failure in checkout or
-      # branch preparation stops here instead. `steps.check` is also the last step
-      # that must have run for `content/docs` to be in a known state.
+      # pages it did finish; gated on the prepare step so a failure in checkout or
+      # branch preparation stops here instead, when `content/docs` is not in a known
+      # state.
       - name: Commit translations to branch
-        if: ${{ !cancelled() && steps.check.conclusion == 'success' }}
+        if: ${{ !cancelled() && steps.prepare.conclusion == 'success' }}
         run: |
           git add content/docs
           if git diff --cached --quiet; then
@@ -311,25 +221,10 @@ jobs:
             exit 1
           fi
 
-      # Deliberately after the translations are published, and success-gated on that
-      # push. A completion marker written earlier would let the next sweep skip on the
-      # strength of translations that never reached the remote — and the block cache
-      # cannot recreate a file that was never written, so the pages would stay stale
-      # until something else moved the fingerprint.
-      - name: Record translated source fingerprint
-        if: steps.check.outputs.skip != 'true'
-        env:
-          FINGERPRINT: ${{ steps.check.outputs.fingerprint }}
-        run: |
-          mkdir -p content/.i18n-cache
-          printf '%s\n' "$FINGERPRINT" > content/.i18n-cache/source-fingerprint
-
       # Both layers run after any translate attempt, even a failed one: the blocks
       # that did translate are already in the memory and must not be paid for twice.
-      # The fingerprint is only present if the step above ran, so a failed publish
-      # persists the memory without ever claiming the run completed.
       - name: Save translation memory
-        if: ${{ !cancelled() && steps.check.outputs.skip != 'true' && steps.check.conclusion == 'success' }}
+        if: ${{ !cancelled() && steps.prepare.conclusion == 'success' }}
         uses: actions/cache/save@v4
         with:
           path: content/.i18n-cache
@@ -354,7 +249,7 @@ jobs:
       # first makes the step idempotent, so an idle run repairs the branch and a
       # branch already in sync costs one rev-parse.
       - name: Push translation memory to the memory branch
-        if: ${{ !cancelled() && steps.check.conclusion == 'success' }}
+        if: ${{ !cancelled() && steps.prepare.conclusion == 'success' }}
         run: |
           snapshot=$(mktemp -d)
           for src in content/.i18n-cache/*.json; do

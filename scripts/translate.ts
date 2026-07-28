@@ -1,12 +1,10 @@
 import { join } from 'node:path'
-import { mkdir, writeFile, rename } from 'node:fs/promises'
 import { runTranslation } from '../lib/i18n/run'
 import { createOpenRouterModel } from '../lib/i18n/engine'
 import { TARGET_LOCALES } from '../lib/i18n/config'
 import { progress } from '../lib/i18n/progress'
 
 const CACHE_DIR = join(process.cwd(), 'content/.i18n-cache')
-const STATE_FILE = join(CACHE_DIR, 'state.json')
 
 /**
  * Errors that mean the run failed for an account-level reason rather than a
@@ -31,32 +29,10 @@ function arg(name: string): string | undefined {
   return hit?.split('=').slice(1).join('=')
 }
 
-/**
- * Persist what the next run needs in order to decide whether it has any work to
- * do. It lives in the cache directory so it rides along in the Actions cache with
- * the translation memory. `complete` is written false up front so a crash mid-run
- * can never leave a stale "nothing pending" behind for the workflow's skip check.
- */
-async function writeState(state: {
-  complete: boolean
-  pending?: number
-  attempted?: number
-}): Promise<void> {
-  await mkdir(CACHE_DIR, { recursive: true })
-  // Write-then-rename, same as the translation memory. A plain write truncates
-  // first, so a crash mid-write leaves empty or partial JSON — and the workflow
-  // reads this file with jq before translating, so a malformed state would fail
-  // every subsequent run at the pending-work check instead of translating.
-  const tmp = `${STATE_FILE}.tmp`
-  await writeFile(tmp, `${JSON.stringify(state, null, 2)}\n`)
-  await rename(tmp, STATE_FILE)
-}
-
 async function main() {
   const force = process.argv.includes('--force')
   const dryRun = process.argv.includes('--dry-run')
-  const localesArg = arg('locales')
-  const locales = localesArg?.split(',') ?? [...TARGET_LOCALES]
+  const locales = arg('locales')?.split(',') ?? [...TARGET_LOCALES]
   const only = arg('only') ?? null
 
   if (!dryRun && !process.env.OPENROUTER_API_KEY) {
@@ -67,11 +43,6 @@ async function main() {
   // Auto-detect: live dashboard in an interactive terminal, periodic heartbeat
   // lines under CI (no TTY). A dry run does no API work, so keep it quiet.
   progress.configure(dryRun ? 'silent' : undefined)
-
-  // A partial run (--only/--locales) says nothing about whether the whole docs set
-  // is converged, so it must not write the state that the skip check reads.
-  const tracksState = !dryRun && !only && !localesArg
-  if (tracksState) await writeState({ complete: false })
 
   const stats = await runTranslation({
     contentDir: join(process.cwd(), 'content/docs'),
@@ -87,13 +58,9 @@ async function main() {
     `[translate] locales=${locales.join(',')} translated=${stats.translatedBlocks} cached=${stats.cachedBlocks} skipped=${stats.skipped.length}/${stats.attempted} quarantined=${stats.quarantined.length}`,
   )
   for (const s of stats.skipped) console.warn(`[translate] skipped ${s}`)
-  // Not counted as pending: these are settled (the page serves English until its
-  // source changes), so they must not keep every scheduled sweep doing a full pass.
+  // Settled, not outstanding: the page serves English until its source changes, so
+  // these are reported apart from the failures that a rerun could still fix.
   for (const q of stats.quarantined) console.warn(`[translate] quarantined ${q}`)
-
-  if (tracksState) {
-    await writeState({ complete: true, pending: stats.skipped.length, attempted: stats.attempted })
-  }
 
   const fatal = stats.providerErrors.filter((s) => FATAL_SKIP_RE.test(s))
   if (fatal.length > 0) {
