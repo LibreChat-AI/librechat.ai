@@ -73,7 +73,7 @@ This repository powers **[www.librechat.ai](https://www.librechat.ai)**: the doc
 
 ### Prerequisites
 
-- [Node.js](https://nodejs.org) **20.19+**
+- [Node.js](https://nodejs.org) **22.x–24.x** (CI and production run 24)
 - [pnpm](https://pnpm.io) **9.5+**
 
 ### Setup

@@ -46,18 +46,26 @@ function corpus(file: matter.GrayMatterFile<string>): string {
  * count-checked here; JSX tags/structural props and heading ids are likewise
  * handled in segmentation, not by this guard.
  *
- * `link target`, `heading level`, and `template placeholder` are intentionally NOT
- * sorted: they are compared in document order so a translation that swaps two link
- * destinations between their labels, swaps two heading depths, or swaps two
+ * `heading level` and `template placeholder` are intentionally NOT sorted: they are
+ * compared in document order so a translation that swaps two heading depths or two
  * placeholder positions (e.g. `User: {input}\nAI: {output}` → `User: {output}\nAI:
  * {input}`) — same multiset, broken meaning — is rejected. The other classes are
  * sorted, tolerating benign reordering since position is not load-bearing for them.
+ *
+ * `link target` is sorted too, deliberately. Ordered comparison also rejects a
+ * translation that merely reorders links while keeping every destination intact —
+ * which target languages legitimately do when clause order changes, and which was
+ * this guard's most common failure in production (`[a, b] -> [b, a]` on tables and
+ * multi-link paragraphs). Every such rejection costs three model calls and leaves
+ * the block in English forever. Sorting still catches the failure that actually
+ * breaks a page — a destination added, dropped, or localized — and gives up only
+ * the ability to detect two links trading labels with no other change.
  */
 function preservedTokens(text: string): Record<string, string[]> {
   const structure = collectBlockStructure(text)
   return {
     'inline code': collectInlineCode(text).sort(),
-    'link target': collectUrls(text),
+    'link target': collectUrls(text).sort(),
     'template placeholder': collectPlaceholders(text),
     'table structure': structure.tables.sort(),
     'blockquote marker': structure.quotes.sort(),
@@ -68,7 +76,7 @@ function preservedTokens(text: string): Record<string, string[]> {
 function preservedInlineTokens(text: string): Record<string, string[]> {
   return {
     'inline code': collectInlineCode(text).sort(),
-    'link target': collectRawUrls(text),
+    'link target': collectRawUrls(text).sort(),
     'template placeholder': collectPlaceholders(text),
     'table structure': [],
     'blockquote marker': [],
@@ -78,6 +86,15 @@ function preservedInlineTokens(text: string): Record<string, string[]> {
 
 function sameMultiset(a: string[], b: string[]): boolean {
   return a.length === b.length && a.every((value, i) => value === b[i])
+}
+
+function parsesAsMdx(text: string): boolean {
+  try {
+    collectBlockStructure(text)
+    return true
+  } catch {
+    return false
+  }
 }
 
 function validatePreservedParts(
@@ -119,6 +136,25 @@ function validatePreservedInlineParts(
   source: string,
   output: string,
 ): { ok: boolean; error?: string } {
+  // An inline value is spliced back into MDX — a frontmatter title, or a meta.json
+  // label whose source string is reused as a page title elsewhere. The regex
+  // collectors below see none of the structure the whole-file check compares, so a
+  // label translated to `# Hallo` or `[a]: /b` validated here, got cached, and then
+  // broke whole-file validation for every page reusing that source string, with no
+  // way to evict it.
+  //
+  // When the source parses on its own, hold the output to exactly the structure a
+  // block must preserve: headings, reference definitions, tables, and blockquotes
+  // included. Source prose is sometimes legitimately unparseable standalone
+  // (`<Optional>: ...`) and must round-trip, so that case keeps the regex-only
+  // comparison below.
+  if (parsesAsMdx(source)) {
+    if (!parsesAsMdx(output)) {
+      return { ok: false, error: 'output is not parseable MDX but the source was' }
+    }
+    return validatePreservedParts(source, output)
+  }
+
   const srcTokens = preservedInlineTokens(source)
   const outTokens = preservedInlineTokens(output)
 

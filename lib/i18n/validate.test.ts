@@ -236,10 +236,25 @@ describe('validateTranslation', () => {
     expect(result.error).toMatch(/heading level/i)
   })
 
-  it('rejects a translation that swaps two link destinations', () => {
+  it('accepts a translation that reorders links but keeps every destination', () => {
     const src = `---\ntitle: T\ndescription: D\n---\n\nUse [Nginx](/docs/nginx) or [Traefik](/docs/traefik).\n`
-    // Labels translated but destinations swapped: same URL multiset, wrong links.
-    const bad = `---\ntitle: T\ndescription: D\n---\n\nVerwende [Nginx](/docs/traefik) oder [Traefik](/docs/nginx).\n`
+    // Clause order flipped, both destinations intact. Target languages reorder
+    // clauses routinely; rejecting this stranded whole blocks in English.
+    const good = `---\ntitle: T\ndescription: D\n---\n\n[Traefik](/docs/traefik) oder [Nginx](/docs/nginx) verwenden.\n`
+    expect(validateTranslation(src, good).ok).toBe(true)
+  })
+
+  it('rejects a translation that localizes a link destination', () => {
+    const src = `---\ntitle: T\ndescription: D\n---\n\nUse [Nginx](/docs/nginx) or [Traefik](/docs/traefik).\n`
+    const bad = `---\ntitle: T\ndescription: D\n---\n\nVerwende [Nginx](/de/docs/nginx) oder [Traefik](/docs/traefik).\n`
+    const result = validateTranslation(src, bad)
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatch(/link target/i)
+  })
+
+  it('rejects a translation that drops a link destination', () => {
+    const src = `---\ntitle: T\ndescription: D\n---\n\nUse [Nginx](/docs/nginx) or [Traefik](/docs/traefik).\n`
+    const bad = `---\ntitle: T\ndescription: D\n---\n\nVerwende [Nginx](/docs/nginx) oder Traefik.\n`
     const result = validateTranslation(src, bad)
     expect(result.ok).toBe(false)
     expect(result.error).toMatch(/link target/i)
