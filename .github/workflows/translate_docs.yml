@@ -109,7 +109,22 @@ jobs:
             # wrote it and is never carried on the branch. Skip it defensively.
             [ "$name" = "state.json" ] && continue
             target="content/.i18n-cache/$name"
-            if [ -f "$target" ]; then
+            # Both operands must be JSON objects. A truncated or non-object file makes
+            # jq exit nonzero, which fails this step under `bash -e` — and because
+            # caches are immutable and the prefix restore keeps selecting the newest
+            # one, every later sweep would fail here too. TM.load() already recovers
+            # from a corrupt memory file by discarding it; merging must not take that
+            # recovery away.
+            if ! jq -e 'type == "object"' "$src" >/dev/null 2>&1; then
+              echo "::warning::ignoring malformed $name on ${MEMORY_BRANCH}"
+              continue
+            fi
+            if [ ! -f "$target" ]; then
+              cp "$src" "$target"
+            elif ! jq -e 'type == "object"' "$target" >/dev/null 2>&1; then
+              echo "::warning::replacing malformed cached $name with the branch snapshot"
+              cp "$src" "$target"
+            else
               # `.[1] * .[0]` — the restored cache ($target) wins collisions, not the
               # branch snapshot. jq's `*` gives the right operand precedence, which
               # would let an older branch value overwrite a newer cached one: a stale
@@ -117,8 +132,6 @@ jobs:
               # a page that should already have quarantined.
               jq -s '.[1] * .[0]' "$target" "$src" > "$target.merged"
               mv "$target.merged" "$target"
-            else
-              cp "$src" "$target"
             fi
           done
           rm -rf "$snapshot"
@@ -190,6 +203,13 @@ jobs:
               # fingerprint, and every sweep would skip with the old translations.
               git rev-parse "origin/main:lib/i18n.ts"
               git rev-parse "origin/main:scripts/translate.ts"
+              # The lockfile too. Segmentation, validation and serialization all run
+              # through dependencies — the MDX parser, gray-matter, the AI SDK — so an
+              # upgrade can change the output for unchanged source. Neither the push
+              # filter nor the source trees notice that, and the sweep would keep
+              # skipping on a stale `pending: 0`. Over-triggers on unrelated bumps,
+              # which costs a pass of cache hits and no API calls.
+              git rev-parse "origin/main:pnpm-lock.yaml"
             } | sha256sum | cut -d' ' -f1
           )
           echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
@@ -325,8 +345,16 @@ jobs:
       # Carries the per-locale memory only. The control files stay in the Actions
       # cache: they are a statement about what this pipeline published, and letting a
       # branch snapshot restore them could resurrect a stale "nothing pending".
+      #
+      # Runs on idle sweeps too, not just working ones. If a previous run translated,
+      # saved its cache, and then failed this push, the next sweep sees a matching
+      # fingerprint with nothing pending and skips — so gating this on `skip` would
+      # leave the durable branch stale until unrelated work happened to come along,
+      # and an eviction in that window means re-buying every block. Comparing trees
+      # first makes the step idempotent, so an idle run repairs the branch and a
+      # branch already in sync costs one rev-parse.
       - name: Push translation memory to the memory branch
-        if: ${{ !cancelled() && steps.check.outputs.skip != 'true' && steps.check.conclusion == 'success' }}
+        if: ${{ !cancelled() && steps.check.conclusion == 'success' }}
         run: |
           snapshot=$(mktemp -d)
           for src in content/.i18n-cache/*.json; do
@@ -343,8 +371,12 @@ jobs:
           index=$(mktemp -u)
           GIT_INDEX_FILE="$index" git --work-tree="$snapshot" add -A
           tree=$(GIT_INDEX_FILE="$index" git write-tree)
-          commit=$(git commit-tree "$tree" -m "chore: docs translation memory [skip ci]")
-          git push --force origin "${commit}:refs/heads/${MEMORY_BRANCH}"
           rm -f "$index"
           rm -rf "$snapshot"
+          if [ "$(git rev-parse --verify --quiet "origin/${MEMORY_BRANCH}^{tree}" || true)" = "$tree" ]; then
+            echo "${MEMORY_BRANCH} already holds this memory"
+            exit 0
+          fi
+          commit=$(git commit-tree "$tree" -m "chore: docs translation memory [skip ci]")
+          git push --force origin "${commit}:refs/heads/${MEMORY_BRANCH}"
           echo "translation memory persisted to ${MEMORY_BRANCH} as ${commit}"
