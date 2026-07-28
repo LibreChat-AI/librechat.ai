@@ -35,10 +35,10 @@ const SELECTORS = {
 }
 
 /**
- * The demo sits behind a CDN that treats the stock `HeadlessChrome` token as a
- * bot, which gets `/api/config` rejected from CI egress IPs. LibreChat only
- * renders the login form once that request succeeds, so without this the job
- * just times out waiting for an input that is never going to appear.
+ * Presents as an ordinary desktop browser rather than advertising
+ * `HeadlessChrome`. This is hygiene, not a fix: a CI run with this user agent
+ * still gets `/api/*` rejected, so the demo's 403 is not UA-driven. Kept
+ * because it removes one variable from the next diagnosis.
  */
 async function desktopUserAgent(browser: Browser): Promise<string> {
   const context = await browser.newContext()
@@ -76,6 +76,35 @@ interface Probe {
   consoleErrors: string[]
   failedRequests: string[]
   criticalApi: string[]
+  blockedResponses: Promise<string>[]
+}
+
+/**
+ * Captures who rejected a boot-blocking request. `via: 1.1 Caddy` means the
+ * demo's own origin answered; a response carrying `cf-ray`/`cf-mitigated` but
+ * no `via` was generated at the edge. That distinction decides whether the
+ * limit is fixed in LibreChat's config or in the CDN dashboard, and it is not
+ * recoverable from the status code alone.
+ */
+async function describeBlocked(response: {
+  status(): number
+  url(): string
+  headers(): Record<string, string>
+  text(): Promise<string>
+}): Promise<string> {
+  const headers = response.headers()
+  const named = ['server', 'via', 'cf-ray', 'cf-mitigated', 'retry-after', 'content-type']
+    .filter((name) => headers[name])
+    .map((name) => `${name}: ${headers[name]}`)
+  let body: string
+  try {
+    body = (await response.text()).slice(0, 300).replaceAll(/\s+/g, ' ').trim()
+  } catch {
+    body = '(body unavailable)'
+  }
+  return [`${response.status()} ${response.url()}`, ...named, `body: ${body || '(empty)'}`].join(
+    '\n    ',
+  )
 }
 
 /**
@@ -84,7 +113,12 @@ interface Probe {
  * actionable from the CI log.
  */
 function attachProbe(page: Page): Probe {
-  const probe: Probe = { consoleErrors: [], failedRequests: [], criticalApi: [] }
+  const probe: Probe = {
+    consoleErrors: [],
+    failedRequests: [],
+    criticalApi: [],
+    blockedResponses: [],
+  }
   page.on('console', (msg) => {
     if (msg.type() === 'error') probe.consoleErrors.push(msg.text().slice(0, 300))
   })
@@ -95,8 +129,13 @@ function attachProbe(page: Page): Probe {
     const url = response.url()
     if (!CRITICAL_API.test(url)) return
     probe.criticalApi.push(`${response.status()} ${url}`)
-    if (!response.ok()) {
-      probe.failedRequests.push(`HTTP ${response.status()} ${url}`)
+    if (response.ok()) return
+    probe.failedRequests.push(`HTTP ${response.status()} ${url}`)
+    // The SPA retries hard; the first couple are enough to identify the source.
+    if (probe.blockedResponses.length < 2 && BOOT_BLOCKING_API.test(url)) {
+      probe.blockedResponses.push(
+        describeBlocked(response).catch(() => `${response.status()} ${url} (details unavailable)`),
+      )
     }
   })
   return probe
@@ -124,6 +163,9 @@ async function dumpDiagnostics(page: Page, probe: Probe, label: string, attempt:
       '--- failed requests ---',
       probe.failedRequests.join('\n') || '(none)',
       '',
+      '--- who rejected the boot-blocking request ---',
+      (await Promise.all(probe.blockedResponses)).join('\n') || '(nothing was rejected)',
+      '',
       '--- console errors ---',
       probe.consoleErrors.join('\n') || '(none)',
       '',
@@ -145,7 +187,7 @@ function explainFailure(probe: Probe, fallback: string): string {
     ...new Set(probe.failedRequests.filter((entry) => BOOT_BLOCKING_API.test(entry))),
   ]
   if (blocked.length > 0) {
-    return `${fallback}\nCause: the demo did not serve its startup config (${blocked.join('; ')}), so the app rendered an error instead of the UI. This is usually the demo's CDN rejecting the runner's egress IP.`
+    return `${fallback}\nCause: the demo did not serve its startup config (${blocked.join('; ')}), so the app rendered an error instead of the UI. See the "who rejected the boot-blocking request" section of the diagnostics for whether the edge or the origin answered.`
   }
   return fallback
 }
