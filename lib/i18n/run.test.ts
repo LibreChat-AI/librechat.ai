@@ -524,13 +524,15 @@ describe('runTranslation', () => {
     expect(calls).toBeGreaterThanOrEqual(3)
   })
 
-  // A frontmatter title translated to an unclosed JSX tag: inline validation is
-  // regex-based and accepts it, so only the whole-file MDX parse catches it. This
-  // is the `skip` path (validateTranslation failing after every block passed).
+  // A frontmatter title translated into a reference-style link definition. Inline
+  // validation collects URLs with regexes and sees none; the whole-file check parses
+  // the corpus and its AST reports a definition target. That asymmetry is the `skip`
+  // path: validateTranslation failing after every individual block passed.
+  const FILE_BREAKING_TITLE = '[a]: /b'
   const breaksFileViaTitle = (title: string): TranslateModel => ({
     generate: async ({ prompt }) => {
       const text = prompt.split(/Translate the following[^\n]*:\n/).pop() ?? ''
-      return text === title ? '<Foo' : text
+      return text === title ? FILE_BREAKING_TITLE : text
     },
   })
 
@@ -570,7 +572,7 @@ describe('runTranslation', () => {
       generate: async ({ prompt }) => {
         const text = prompt.split(/Translate the following[^\n]*:\n/).pop() ?? ''
         if (text.startsWith('#')) return `${text}\n\n\`\`\`\nx\n\`\`\``
-        return text === 'Hello' ? '<Foo' : text
+        return text === 'Hello' ? FILE_BREAKING_TITLE : text
       },
     }
     const stats = await runTranslation({
@@ -594,7 +596,7 @@ describe('runTranslation', () => {
       generate: async ({ prompt }) => {
         calls++
         const text = prompt.split(/Translate the following[^\n]*:\n/).pop() ?? ''
-        return text === 'Hello' ? '<Foo' : text
+        return text === 'Hello' ? FILE_BREAKING_TITLE : text
       },
     }
     const opts = { contentDir: content, cacheDir: cache, locales: ['de'], model }
@@ -616,12 +618,7 @@ describe('runTranslation', () => {
   })
 
   it('retries a quarantined file once its source changes', async () => {
-    const breaks: TranslateModel = {
-      generate: async ({ prompt }) => {
-        const text = prompt.split(/Translate the following[^\n]*:\n/).pop() ?? ''
-        return text === 'Hello' ? '<Foo' : text
-      },
-    }
+    const breaks = breaksFileViaTitle('Hello')
     const opts = { contentDir: content, cacheDir: cache, locales: ['de'], model: breaks }
     for (let run = 1; run <= 4; run++) await runTranslation(opts)
     expect((await runTranslation(opts)).quarantined.length).toBeGreaterThan(0)
@@ -637,6 +634,58 @@ describe('runTranslation', () => {
     expect(stats.quarantined).toEqual([])
     expect(stats.skipped).toEqual([])
     expect(await readdir(content)).toContain('index.de.mdx')
+  })
+
+  it('does not cache an inline translation that would break MDX for a reusing page', async () => {
+    // meta.json validates inline strings with regexes only, so an unparseable
+    // result used to be cached there and then break every .mdx page whose title
+    // reuses that source string — a poisoned entry no eviction path could reach,
+    // because the reusing page sees it as an ordinary cache hit.
+    await writeFile(
+      join(content, 'meta.json'),
+      JSON.stringify({ title: 'Hello', pages: ['index'] }),
+    )
+    await writeFile(join(content, 'index.mdx'), `---\ntitle: Hello\n---\n\nBody.\n`)
+    const model: TranslateModel = {
+      generate: async ({ prompt }) => {
+        const text = prompt.split(/Translate the following[^\n]*:\n/).pop() ?? ''
+        return text === 'Hello' ? '<Foo' : text
+      },
+    }
+    const stats = await runTranslation({
+      contentDir: content,
+      cacheDir: cache,
+      locales: ['de'],
+      model,
+    })
+    expect(stats.skipped).toEqual([])
+    expect(stats.quarantined).toEqual([])
+
+    const tm = await TM.load('de', cache)
+    expect(tm.get(hashText('Hello'))).toBeUndefined()
+    // The page publishes with the title left in English rather than being poisoned.
+    const out = await readFile(join(content, 'index.de.mdx'), 'utf8')
+    expect(out).toContain('title: Hello')
+    expect(out).not.toContain('<Foo')
+  })
+
+  it('removes a stale locale file when a file enters quarantine', async () => {
+    // The failing runs that unlink the locale file may never have been pushed, so a
+    // later checkout can still carry a translation predating the current source.
+    // Quarantine is not pending work, so nothing else would clean it up.
+    const opts = {
+      contentDir: content,
+      cacheDir: cache,
+      locales: ['de'],
+      model: breaksFileViaTitle('Hello'),
+    }
+    for (let run = 1; run <= 3; run++) await runTranslation(opts)
+    // Simulate the unpushed deletion: the stale locale file is back in the checkout.
+    await writeFile(join(content, 'index.de.mdx'), `---\ntitle: Veraltet\n---\n\nAlt.\n`)
+
+    const stats = await runTranslation({ ...opts, model: breaksFileViaTitle('Hello') })
+    expect(stats.quarantined.some((q) => q.includes('index.mdx'))).toBe(true)
+    expect(await readdir(content)).not.toContain('index.de.mdx')
   })
 
   it('reports how many file translations were attempted', async () => {

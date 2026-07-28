@@ -272,6 +272,13 @@ export async function runTranslation(opts: RunOptions): Promise<RunStats> {
           if (!opts.force && failures >= MAX_FILE_VALIDATION_FAILURES) {
             // Already proven unfixable for this exact source. The page serves English
             // whether or not we retry, so stop paying to re-translate every block.
+            //
+            // Still remove any locale file present: the earlier failure that deleted
+            // it may never have been pushed (a cancelled job, or a translations push
+            // that exhausted its retries), so the checkout can carry a translation
+            // that predates the current source. Quarantine is not counted as pending
+            // work, so nothing else would ever come back to clean it up.
+            await unlink(join(opts.contentDir, localePath(rel, locale, '.mdx'))).catch(() => {})
             stats.quarantined.push(
               `${rel} [${locale}]: left in English after ${failures} validation failures (edit the page, bump VALIDATOR_VERSION, or run with --force to retry)`,
             )

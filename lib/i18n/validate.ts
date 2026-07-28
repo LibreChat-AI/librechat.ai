@@ -88,6 +88,15 @@ function sameMultiset(a: string[], b: string[]): boolean {
   return a.length === b.length && a.every((value, i) => value === b[i])
 }
 
+function parsesAsMdx(text: string): boolean {
+  try {
+    collectBlockStructure(text)
+    return true
+  } catch {
+    return false
+  }
+}
+
 function validatePreservedParts(
   sourceFenceText: string,
   outputFenceText: string,
@@ -127,6 +136,18 @@ function validatePreservedInlineParts(
   source: string,
   output: string,
 ): { ok: boolean; error?: string } {
+  // An inline value is spliced back into MDX — a frontmatter title, or a meta.json
+  // label whose source string is reused as a page title elsewhere. The regex
+  // collectors below cannot see that the model turned it into something the MDX
+  // parser rejects, so a value like `<Foo` used to validate, get cached, and then
+  // break whole-file validation for every page that reuses that source string,
+  // with no way to evict it. Guard asymmetrically: source prose is sometimes
+  // legitimately unparseable on its own (`<Optional>: ...`) and must round-trip,
+  // so only reject output that breaks a source which did parse.
+  if (parsesAsMdx(source) && !parsesAsMdx(output)) {
+    return { ok: false, error: 'output is not parseable MDX but the source was' }
+  }
+
   const srcTokens = preservedInlineTokens(source)
   const outTokens = preservedInlineTokens(output)
 
