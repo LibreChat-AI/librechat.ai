@@ -33,6 +33,11 @@ const SELECTORS = {
   email: 'input[name="email"], input#email',
   password: 'input[name="password"], input#password',
   submit: 'button[data-testid="login-button"], button[type="submit"]',
+  // The demo sets interface.termsOfService.modalAcceptance, so a Terms dialog
+  // covers the entire UI until it is dismissed. LibreChat's TermsAndConditionsModal
+  // gives its buttons no test id, so match the label exactly: `:text-is()` avoids
+  // hitting the neighbouring "I do not accept".
+  acceptTerms: 'button:text-is("I accept")',
   // `.message-render` wraps every rendered message (LibreChat MessageParts.tsx),
   // so it only exists once the conversation body is on screen. Do not use
   // `convo-icon` here: that is the sidebar/endpoint icon and renders before any
@@ -65,6 +70,7 @@ const POST_LOGIN_TIMEOUT = 45_000
 const READY_STATE_TIMEOUT = 15_000
 const LOGIN_FORM_TIMEOUT = 45_000
 const MESSAGE_TIMEOUT = 45_000
+const TERMS_TIMEOUT = 8_000
 const RETRY_BACKOFF_MS = 10_000
 
 /** Recorded in diagnostics to show what the app managed to fetch. */
@@ -215,6 +221,23 @@ async function openAppPage(page: Page, url: string, label: string) {
  * /login?redirect_to=..., which is a login screen where the chat should be.
  * Each context therefore establishes its own session.
  */
+/**
+ * Dismisses the demo's Terms dialog when it appears. Best-effort: acceptance is
+ * recorded against the account, so it typically only shows for the first
+ * variant, and a run where it never appears is not an error.
+ */
+async function acceptTermsIfPresent(page: Page, label: string) {
+  const accept = page.locator(SELECTORS.acceptTerms)
+  try {
+    await accept.waitFor({ state: 'visible', timeout: TERMS_TIMEOUT })
+  } catch {
+    return
+  }
+  console.log(`${label}: dismissing terms dialog`)
+  await accept.click()
+  await accept.waitFor({ state: 'hidden', timeout: TERMS_TIMEOUT })
+}
+
 async function signIn(page: Page) {
   await openAppPage(page, `${baseURL}/login`, 'login')
   await page.waitForSelector(SELECTORS.email, { timeout: LOGIN_FORM_TIMEOUT })
@@ -256,7 +279,10 @@ async function captureVariant(
       if (new URL(page.url()).pathname.startsWith('/login')) {
         throw new Error(`Session lost: redirected to ${page.url()} instead of the conversation`)
       }
+      // Messages render behind the Terms overlay, so wait for them first: by
+      // then the app is up and the dialog is either present or never coming.
       await page.waitForSelector(SELECTORS.message, { timeout: MESSAGE_TIMEOUT })
+      await acceptTermsIfPresent(page, variant.name)
       await page.addStyleTag({ content: DISABLE_MOTION_CSS })
       await page.evaluate((zoom) => {
         document.documentElement.style.setProperty('zoom', String(zoom))
@@ -266,6 +292,16 @@ async function captureVariant(
         await document.fonts.ready
       })
       await page.waitForTimeout(500)
+      // These images ship straight onto the landing page, so refuse to save one
+      // with a dialog over it. The terms modal did exactly that and the run
+      // still reported success.
+      const dialog = page.locator('[role="dialog"]').first()
+      if (await dialog.isVisible().catch(() => false)) {
+        const text = (await dialog.innerText().catch(() => ''))
+          .replaceAll(/\s+/g, ' ')
+          .slice(0, 120)
+        throw new Error(`A dialog is covering the UI, refusing to capture: "${text}"`)
+      }
       const file = outputPath(variant)
       await mkdir(dirname(file), { recursive: true })
       await page.screenshot({ path: file, animations: 'disabled' })
