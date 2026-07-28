@@ -55,3 +55,31 @@ preview in the hero with `pnpm dev`.
 the theme `localStorage` key. If the demo's markup changes, update `SELECTORS` and
 `THEME_STORAGE_KEY` (in `config.ts`). Discover current values with the
 `agent-browser` CLI or browser devtools against the live demo.
+
+The theme key must match the one LibreChat reads (`color-theme`, set by the inline
+script in its `client/index.html`). Writing any other key silently leaves both
+variants on the app's `system` default, so the light and dark shots come out
+identical rather than failing loudly.
+
+### Debugging a failed run
+
+The demo is a SPA that only renders the login form after `GET /api/config`
+succeeds. If that request is blocked (a CDN bot rule rejecting the runner's egress
+IP is the usual cause), the page loads instantly and then no form ever appears —
+which shows up as a selector timeout that says nothing about the real cause.
+
+For every failed attempt the script writes to `screenshot-diagnostics/`:
+
+| File                       | Contents                                                    |
+| -------------------------- | ----------------------------------------------------------- |
+| `<label>-attempt-<n>.png`  | full-page screenshot of what the browser actually saw       |
+| `<label>-attempt-<n>.html` | the served DOM                                              |
+| `<label>-attempt-<n>.txt`  | URL, title, visible text, `/api/*` statuses, console errors |
+
+It also prints that report to stderr and, when a critical API request failed,
+appends the reason to the thrown error. The workflow uploads the directory as a
+`screenshot-diagnostics` artifact on failure.
+
+The script sends a normal desktop user agent rather than Playwright's default
+`HeadlessChrome` token, since the latter is what gets `/api/config` rejected from
+CI egress IPs.

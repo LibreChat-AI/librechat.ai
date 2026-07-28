@@ -1,6 +1,6 @@
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright'
-import { mkdir } from 'node:fs/promises'
-import { dirname } from 'node:path'
+import { mkdir, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 import {
   ZOOM,
   VARIANTS,
@@ -8,6 +8,7 @@ import {
   outputPath,
   screenshotBaseURL,
   themeBootstrap,
+  DIAGNOSTICS_DIR,
 } from './config'
 
 const EMAIL = process.env.DEMO_EMAIL
@@ -20,13 +21,34 @@ if (!EMAIL || !PASSWORD || !CONVERSATION_ID) {
   process.exit(1)
 }
 
-// Selectors verified against the live demo in Step 4. Adjust there if the demo differs.
+// Verified against the live demo. Each entry lists fallbacks so a cosmetic
+// markup change on the demo does not take the whole job down.
 const SELECTORS = {
-  email: 'input[name="email"]',
-  password: 'input[name="password"]',
-  submit: 'button[type="submit"]',
-  // Any element that only exists once the conversation has rendered messages.
-  message: '[data-testid="convo-icon"], .message, [data-testid="message"]',
+  email: 'input[name="email"], input#email',
+  password: 'input[name="password"], input#password',
+  submit: 'button[data-testid="login-button"], button[type="submit"]',
+  // `.message-render` wraps every rendered message (LibreChat MessageParts.tsx),
+  // so it only exists once the conversation body is on screen. Do not use
+  // `convo-icon` here: that is the sidebar/endpoint icon and renders before any
+  // message does, which would let us shoot an empty chat pane.
+  message: '.message-render, [data-testid="message"]',
+}
+
+/**
+ * The demo sits behind a CDN that treats the stock `HeadlessChrome` token as a
+ * bot, which gets `/api/config` rejected from CI egress IPs. LibreChat only
+ * renders the login form once that request succeeds, so without this the job
+ * just times out waiting for an input that is never going to appear.
+ */
+async function desktopUserAgent(browser: Browser): Promise<string> {
+  const context = await browser.newContext()
+  try {
+    const page = await context.newPage()
+    const ua = await page.evaluate(() => navigator.userAgent)
+    return ua.replace('HeadlessChrome', 'Chrome')
+  } finally {
+    await context.close()
+  }
 }
 
 const DISABLE_MOTION_CSS =
@@ -35,6 +57,98 @@ const DISABLE_MOTION_CSS =
 const NAVIGATION_TIMEOUT = 60_000
 const POST_LOGIN_TIMEOUT = 45_000
 const READY_STATE_TIMEOUT = 15_000
+const LOGIN_FORM_TIMEOUT = 45_000
+const MESSAGE_TIMEOUT = 45_000
+const RETRY_BACKOFF_MS = 10_000
+
+/** Recorded in diagnostics to show what the app managed to fetch. */
+const CRITICAL_API = /\/api\/(config|banner|auth\/refresh)/
+
+/**
+ * LibreChat renders the login form only when `startupConfig.emailLoginEnabled`
+ * is true, so a failure here means no form ever appears. Kept narrower than
+ * CRITICAL_API: `/api/banner` is optional and `/api/auth/refresh` returns 404
+ * for a logged-out visitor, so neither implies anything is wrong.
+ */
+const BOOT_BLOCKING_API = /\/api\/config/
+
+interface Probe {
+  consoleErrors: string[]
+  failedRequests: string[]
+  criticalApi: string[]
+}
+
+/**
+ * Records why a page failed to render. Without this a CDN block and a genuine
+ * markup change produce the same bare "selector timed out" and neither is
+ * actionable from the CI log.
+ */
+function attachProbe(page: Page): Probe {
+  const probe: Probe = { consoleErrors: [], failedRequests: [], criticalApi: [] }
+  page.on('console', (msg) => {
+    if (msg.type() === 'error') probe.consoleErrors.push(msg.text().slice(0, 300))
+  })
+  page.on('requestfailed', (request) => {
+    probe.failedRequests.push(`${request.failure()?.errorText ?? 'failed'} ${request.url()}`)
+  })
+  page.on('response', (response) => {
+    const url = response.url()
+    if (!CRITICAL_API.test(url)) return
+    probe.criticalApi.push(`${response.status()} ${url}`)
+    if (!response.ok()) {
+      probe.failedRequests.push(`HTTP ${response.status()} ${url}`)
+    }
+  })
+  return probe
+}
+
+async function dumpDiagnostics(page: Page, probe: Probe, label: string, attempt: number) {
+  const slug = `${label}-attempt-${attempt}`
+  try {
+    await mkdir(DIAGNOSTICS_DIR, { recursive: true })
+    await page.screenshot({ path: join(DIAGNOSTICS_DIR, `${slug}.png`), fullPage: true })
+    await writeFile(join(DIAGNOSTICS_DIR, `${slug}.html`), await page.content(), 'utf8')
+    const visibleText = await page
+      .evaluate(() => document.body.innerText.slice(0, 2000))
+      .catch(() => '(unavailable)')
+    const report = [
+      `url: ${page.url()}`,
+      `title: ${await page.title().catch(() => '(unavailable)')}`,
+      '',
+      '--- visible text ---',
+      visibleText,
+      '',
+      '--- critical API responses ---',
+      probe.criticalApi.join('\n') || '(none observed)',
+      '',
+      '--- failed requests ---',
+      probe.failedRequests.join('\n') || '(none)',
+      '',
+      '--- console errors ---',
+      probe.consoleErrors.join('\n') || '(none)',
+      '',
+    ].join('\n')
+    await writeFile(join(DIAGNOSTICS_DIR, `${slug}.txt`), report, 'utf8')
+    console.error(`--- diagnostics for ${slug} ---\n${report}`)
+  } catch (err) {
+    console.error(`${slug}: could not write diagnostics:`, err)
+  }
+}
+
+/**
+ * Turns the generic selector timeout into the actual reason when we can name
+ * it, so a future failure is readable straight from the job log.
+ */
+function explainFailure(probe: Probe, fallback: string): string {
+  // The SPA retries the request, so dedupe to keep the message readable.
+  const blocked = [
+    ...new Set(probe.failedRequests.filter((entry) => BOOT_BLOCKING_API.test(entry))),
+  ]
+  if (blocked.length > 0) {
+    return `${fallback}\nCause: the demo did not serve its startup config (${blocked.join('; ')}), so the app rendered an error instead of the UI. This is usually the demo's CDN rejecting the runner's egress IP.`
+  }
+  return fallback
+}
 
 async function openAppPage(page: Page, url: string, label: string) {
   console.log(`loading ${label}: ${url}`)
@@ -44,23 +158,33 @@ async function openAppPage(page: Page, url: string, label: string) {
   })
 }
 
-async function login(browser: Browser) {
-  const context = await browser.newContext()
+async function login(browser: Browser, userAgent: string, attempt: number) {
+  const context = await browser.newContext({ userAgent })
   try {
     const page = await context.newPage()
-    await openAppPage(page, `${baseURL}/login`, 'login')
-    await page.waitForSelector(SELECTORS.email, { timeout: 20_000 })
-    await page.fill(SELECTORS.email, EMAIL!)
-    await page.fill(SELECTORS.password, PASSWORD!)
-    await page.click(SELECTORS.submit)
-    await page.waitForURL(`${baseURL}/c/**`, { timeout: POST_LOGIN_TIMEOUT }).catch(() => undefined)
-    // Hard-fail if we are still on the login page (bad credentials, rate limit,
-    // etc.) so withRetry retries and ultimately exits non-zero instead of
-    // capturing screenshots of the login/error screen.
-    if (new URL(page.url()).pathname.startsWith('/login')) {
-      throw new Error(`Login failed: still on ${page.url()} after submitting credentials`)
+    const probe = attachProbe(page)
+    try {
+      await openAppPage(page, `${baseURL}/login`, 'login')
+      await page.waitForSelector(SELECTORS.email, { timeout: LOGIN_FORM_TIMEOUT })
+      await page.fill(SELECTORS.email, EMAIL!)
+      await page.fill(SELECTORS.password, PASSWORD!)
+      await page.click(SELECTORS.submit)
+      await page
+        .waitForURL(`${baseURL}/c/**`, { timeout: POST_LOGIN_TIMEOUT })
+        .catch(() => undefined)
+      // Hard-fail if we are still on the login page (bad credentials, rate limit,
+      // etc.) so withRetry retries and ultimately exits non-zero instead of
+      // capturing screenshots of the login/error screen.
+      if (new URL(page.url()).pathname.startsWith('/login')) {
+        throw new Error(`Login failed: still on ${page.url()} after submitting credentials`)
+      }
+      return await context.storageState()
+    } catch (err) {
+      await dumpDiagnostics(page, probe, 'login', attempt)
+      throw new Error(explainFailure(probe, err instanceof Error ? err.message : String(err)), {
+        cause: err,
+      })
     }
-    return await context.storageState()
   } finally {
     await context.close()
   }
@@ -70,9 +194,12 @@ async function captureVariant(
   browser: Browser,
   storageState: Awaited<ReturnType<BrowserContext['storageState']>>,
   variant: Variant,
+  userAgent: string,
+  attempt: number,
 ) {
   const context = await browser.newContext({
     storageState,
+    userAgent,
     viewport: variant.viewport,
     deviceScaleFactor: variant.deviceScaleFactor,
     isMobile: variant.device === 'mobile',
@@ -82,34 +209,51 @@ async function captureVariant(
   await context.addInitScript(themeBootstrap(variant.theme))
   try {
     const page = await context.newPage()
-    await openAppPage(page, `${baseURL}/c/${CONVERSATION_ID}`, variant.name)
-    await page.waitForSelector(SELECTORS.message, { timeout: 30_000 })
-    await page.addStyleTag({ content: DISABLE_MOTION_CSS })
-    await page.evaluate((zoom) => {
-      document.documentElement.style.setProperty('zoom', String(zoom))
-    }, ZOOM)
-    // Await web fonts without returning a non-serializable value to Playwright.
-    await page.evaluate(async () => {
-      await document.fonts.ready
-    })
-    await page.waitForTimeout(500)
-    const file = outputPath(variant)
-    await mkdir(dirname(file), { recursive: true })
-    await page.screenshot({ path: file, animations: 'disabled' })
-    console.log(`captured ${variant.name} -> ${variant.outputFile}`)
+    const probe = attachProbe(page)
+    try {
+      await openAppPage(page, `${baseURL}/c/${CONVERSATION_ID}`, variant.name)
+      await page.waitForSelector(SELECTORS.message, { timeout: MESSAGE_TIMEOUT })
+      await page.addStyleTag({ content: DISABLE_MOTION_CSS })
+      await page.evaluate((zoom) => {
+        document.documentElement.style.setProperty('zoom', String(zoom))
+      }, ZOOM)
+      // Await web fonts without returning a non-serializable value to Playwright.
+      await page.evaluate(async () => {
+        await document.fonts.ready
+      })
+      await page.waitForTimeout(500)
+      const file = outputPath(variant)
+      await mkdir(dirname(file), { recursive: true })
+      await page.screenshot({ path: file, animations: 'disabled' })
+      console.log(`captured ${variant.name} -> ${variant.outputFile}`)
+    } catch (err) {
+      await dumpDiagnostics(page, probe, variant.name, attempt)
+      throw new Error(explainFailure(probe, err instanceof Error ? err.message : String(err)), {
+        cause: err,
+      })
+    }
   } finally {
     await context.close()
   }
 }
 
-async function withRetry<T>(label: string, fn: () => Promise<T>, attempts = 2): Promise<T> {
+async function withRetry<T>(
+  label: string,
+  fn: (attempt: number) => Promise<T>,
+  attempts = 2,
+): Promise<T> {
   let lastErr: unknown
   for (let i = 1; i <= attempts; i++) {
     try {
-      return await fn()
+      return await fn(i)
     } catch (err) {
       lastErr = err
       console.warn(`${label}: attempt ${i}/${attempts} failed:`, err)
+      // Back off before retrying: an immediate retry runs straight back into a
+      // rate limit or bot challenge that a short pause would have cleared.
+      if (i < attempts) {
+        await new Promise((resolve) => setTimeout(resolve, RETRY_BACKOFF_MS))
+      }
     }
   }
   throw lastErr
@@ -118,9 +262,13 @@ async function withRetry<T>(label: string, fn: () => Promise<T>, attempts = 2): 
 async function main() {
   const browser = await chromium.launch()
   try {
-    const storageState = await withRetry('login', () => login(browser))
+    const userAgent = await desktopUserAgent(browser)
+    console.log(`using user agent: ${userAgent}`)
+    const storageState = await withRetry('login', (attempt) => login(browser, userAgent, attempt))
     for (const variant of VARIANTS) {
-      await withRetry(variant.name, () => captureVariant(browser, storageState, variant))
+      await withRetry(variant.name, (attempt) =>
+        captureVariant(browser, storageState, variant, userAgent, attempt),
+      )
     }
   } finally {
     await browser.close()
