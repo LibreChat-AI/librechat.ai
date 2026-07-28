@@ -155,12 +155,25 @@ jobs:
       - name: Check for pending work
         id: check
         run: |
+          # Derived from TARGET_LOCALES rather than hardcoded, so the exclusion can
+          # never drift from the runner's own LOCALE_RE. Matching any two-letter
+          # suffix would classify a legitimate source like `example.ai.mdx` as
+          # generated output: the runner would translate it, but it would be absent
+          # from the fingerprint, and since the push filter is glob-only and equally
+          # broad, nothing would ever schedule that work.
+          locales=$(
+            git show "origin/main:lib/i18n/config.ts" |
+              sed -n '/TARGET_LOCALES = \[/,/\] as const/p' |
+              grep -oE "'[^']+'" | tr -d "'" | paste -sd'|'
+          )
+          [ -n "$locales" ] || { echo "::error::could not derive TARGET_LOCALES"; exit 1; }
+          echo "locales: $locales"
+
           # Source files only. The generated `*.<locale>.mdx` and `meta.<locale>.json`
           # live in the same tree, so hashing the tree object itself would change
           # every time the translation branch is merged into main — an output-only
           # push that this workflow deliberately does not trigger on, yet which would
-          # cost the next sweep a full 13-locale pass. Same locale patterns as the
-          # `on.push.paths` exclusions above and LOCALE_RE in lib/i18n/run.ts.
+          # cost the next sweep a full 13-locale pass.
           fingerprint=$(
             {
               # ls-tree separates the path with a TAB, so the meta pattern must anchor
@@ -168,8 +181,8 @@ jobs:
               # files at the root of content/docs slip through and the fingerprint
               # moves on every publish anyway.
               git ls-tree -r "origin/main:content/docs" |
-                grep -vE '\.[a-z]{2}(-[A-Z]{2})?\.mdx$' |
-                grep -vE '(^|[/[:space:]])meta\.[a-z]{2}(-[A-Z]{2})?\.json$'
+                grep -vE "\.($locales)\.mdx$" |
+                grep -vE "(^|[/[:space:]])meta\.($locales)\.json$"
               git rev-parse "origin/main:lib/i18n"
               # lib/i18n.ts too, not just the directory: the prompt takes its target
               # language names from LOCALE_NAMES there, so correcting one would
@@ -216,6 +229,14 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENROUTER_TRANSLATE_MODEL: ${{ secrets.OPENROUTER_TRANSLATE_MODEL }}
         run: |
+          # Drop the published marker before touching anything. It is restored only by
+          # a run that publishes successfully. Without this, a run whose inputs already
+          # matched the recorded fingerprint — a retry of unfinished work, or --force —
+          # would write `complete: true, pending: 0` alongside the still-matching old
+          # fingerprint if its push then failed, and the next sweep would skip without
+          # ever republishing the output this run produced.
+          rm -f content/.i18n-cache/source-fingerprint
+
           FLAGS=""
           if [ "${{ inputs.force }}" = "true" ]; then
             FLAGS="--force"
