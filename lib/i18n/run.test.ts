@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, writeFile, readFile, readdir, rm } from 'node:fs/promis
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { runTranslation } from './run'
-import type { TranslateModel } from './engine'
+import { TruncatedOutputError, type TranslateModel } from './engine'
 import { TM } from './tm'
 import { hashText } from './segment'
 
@@ -763,6 +763,54 @@ describe('runTranslation', () => {
     expect(provider.providerErrors.some((e) => /more credits/.test(e))).toBe(true)
     // Raw message only — no file path or locale mixed in.
     expect(provider.providerErrors.every((e) => !e.includes('index.mdx'))).toBe(true)
+  })
+
+  it('keeps a quarantined file cached instead of pruning it', async () => {
+    // The page is still in the docs; its translations become useful again as soon as
+    // the source is edited or VALIDATOR_VERSION moves. Pruning them means the retry
+    // re-pays for every block that never changed.
+    const opts = { contentDir: content, cacheDir: cache, locales: ['de'], model: stub }
+    // Translate the page successfully first, so its blocks are genuinely cached.
+    await runTranslation(opts)
+    // Then break the source. The body blocks are unchanged, so they stay cache hits
+    // through the failures and survive eviction; only quarantine's prune threatens them.
+    await writeFile(join(content, 'index.mdx'), UNPARSEABLE_SOURCE)
+    for (let run = 1; run <= 3; run++) await runTranslation(opts)
+
+    const quarantining = await runTranslation(opts)
+    expect(quarantining.quarantined.some((q) => q.includes('index.mdx'))).toBe(true)
+
+    const tm = await TM.load('de', cache)
+    expect(tm.get(hashText('A paragraph.'))).toBe('A paragraph.')
+    expect(tm.get(hashText('# Hello'))).toBe('# Hello')
+  })
+
+  it('bounds a block that keeps truncating instead of retrying it forever', async () => {
+    // Truncation is deterministic per block, so it must consume the block's
+    // validation budget and fall back to English. Treated as a provider blip it
+    // would be re-paid on every round and every scheduled run, and the page would
+    // never publish at all.
+    let calls = 0
+    const truncating: TranslateModel = {
+      generate: async ({ prompt }) => {
+        const text = prompt.split(/Translate the following[^\n]*:\n/).pop() ?? ''
+        if (!text.startsWith('#')) return text
+        calls++
+        throw new TruncatedOutputError(512)
+      },
+    }
+    const opts = { contentDir: content, cacheDir: cache, locales: ['de'], model: truncating }
+    const first = await runTranslation(opts)
+    // Bounded by BLOCK_VALIDATION_ATTEMPTS, not retried per file round.
+    expect(calls).toBe(3)
+    expect(first.skipped).toEqual([])
+    // The page publishes, with that one block left in English.
+    expect(await readFile(join(content, 'index.de.mdx'), 'utf8')).toContain('# Hello')
+
+    calls = 0
+    const second = await runTranslation(opts)
+    expect(calls).toBe(0)
+    expect(second.skipped).toEqual([])
   })
 
   it('reports how many file translations were attempted', async () => {

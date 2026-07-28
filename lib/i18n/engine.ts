@@ -31,16 +31,29 @@ export function outputTokenBudget(text: string): number {
 }
 
 /**
+ * Raised when the provider stopped at the token budget. Distinct from a provider
+ * or network error because the two need opposite handling: a network blip should
+ * be retried at the file level indefinitely, but truncation is deterministic for a
+ * given block, so the runner counts it as a block validation failure and lets the
+ * bounded give-up path keep that block in English. Treated as transient instead,
+ * it would be re-paid on every file round and every scheduled run, forever.
+ */
+export class TruncatedOutputError extends Error {
+  constructor(maxOutputTokens?: number) {
+    super(`translation truncated at the ${maxOutputTokens ?? 'default'}-token budget`)
+    this.name = 'TruncatedOutputError'
+  }
+}
+
+/**
  * A response cut off at the token budget is not a translation. Its text can still
  * satisfy the structural validator — a truncated paragraph or heading usually
  * does, and so does a looping response that simply filled the cap — so without
- * this it would be cached and published as if it were complete. Throwing makes it
- * a transient failure: the block is retried, and if it keeps truncating the page
- * keeps English for that block rather than shipping a sentence that stops mid-word.
+ * this it would be cached and published as if it were complete.
  */
 export function assertNotTruncated(finishReason: string, maxOutputTokens?: number): void {
   if (finishReason === 'length') {
-    throw new Error(`translation truncated at the ${maxOutputTokens ?? 'default'}-token budget`)
+    throw new TruncatedOutputError(maxOutputTokens)
   }
 }
 

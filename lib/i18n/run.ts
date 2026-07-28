@@ -17,7 +17,7 @@ import {
   type Segment,
 } from './segment'
 import { validatePreservedText, validateTranslation } from './validate'
-import { translate, type TranslateModel } from './engine'
+import { translate, TruncatedOutputError, type TranslateModel } from './engine'
 import { TM } from './tm'
 import { TARGET_LOCALES, VALIDATOR_VERSION } from './config'
 import { progress } from './progress'
@@ -219,7 +219,20 @@ export async function runTranslation(opts: RunOptions): Promise<RunStats> {
       }
       let lastValidationError: string | undefined
       for (let attempt = 0; attempt < BLOCK_VALIDATION_ATTEMPTS; attempt++) {
-        const result = await translate({ text, locale, kind, context, model: opts.model })
+        let result: string
+        try {
+          result = await translate({ text, locale, kind, context, model: opts.model })
+        } catch (e) {
+          // Truncation is deterministic for this block, so it belongs to the bounded
+          // per-block budget: after the last attempt the give-up path keeps the block
+          // in English. Letting it escape to the file-level transient handler instead
+          // would re-pay for it on every round and every future run, forever.
+          if (e instanceof TruncatedOutputError) {
+            lastValidationError = e.message
+            continue
+          }
+          throw e
+        }
         // A model that returns nothing (refusal / reasoning-only finish) must not be
         // cached or written as an empty block — treat it as a failure for this file.
         if (result.trim() === '' && text.trim() !== '') {
@@ -299,6 +312,29 @@ export async function runTranslation(opts: RunOptions): Promise<RunStats> {
             // delete generated docs from the worktree.
             if (!opts.dryRun) {
               await unlink(join(opts.contentDir, localePath(rel, locale, '.mdx'))).catch(() => {})
+            }
+            // Keep this file's entries alive through prune(). The page is still in
+            // the docs and its translations become useful again the moment the source
+            // is edited or VALIDATOR_VERSION moves — both of which clear the failure
+            // counter and retry it. Returning without marking them would let prune
+            // delete every block and give-up marker unique to this page, so that
+            // retry would re-translate blocks that never changed. Mirrors exactly what
+            // the real translation path below hashes, jsQuote unescaping included.
+            const quarantined = matter(source)
+            for (const seg of segmentMarkdown(quarantined.content)) {
+              if (seg.kind !== 'translatable') continue
+              const segText = seg.jsQuote ? unescapeJsString(seg.text, seg.jsQuote) : seg.text
+              const segHash = hashText(segText)
+              tm.markUsed(segHash)
+              tm.markUsed(giveUpKey(segHash, seg.jsQuote ? 'inline' : 'block'))
+            }
+            for (const key of ['title', 'description']) {
+              const val = quarantined.data[key]
+              if (typeof val === 'string' && /\p{L}/u.test(val)) {
+                const valHash = hashText(val)
+                tm.markUsed(valHash)
+                tm.markUsed(giveUpKey(valHash, 'inline'))
+              }
             }
             stats.quarantined.push(
               `${rel} [${locale}]: left in English after ${failures} validation failures (edit the page, bump VALIDATOR_VERSION, or run with --force to retry)`,
