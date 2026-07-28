@@ -46,6 +46,14 @@ export interface RunStats {
    * outstanding, so they must not keep the pipeline looking unconverged forever.
    */
   quarantined: string[]
+  /**
+   * Raw provider/network/IO error messages, unformatted and with no file path or
+   * validation text mixed in. The entrypoint classifies account-level failures
+   * (credits, quota, auth) from these alone: matching those words against a
+   * formatted skip line would fire on ordinary documentation, since a validation
+   * error quotes the tokens it saw and this repo documents billing and 401s.
+   */
+  providerErrors: string[]
 }
 
 // How many files translate at once. Lower it (TRANSLATE_CONCURRENCY) to ease
@@ -153,6 +161,7 @@ export async function runTranslation(opts: RunOptions): Promise<RunStats> {
     attempted: 0,
     skipped: [],
     quarantined: [],
+    providerErrors: [],
   }
   const all = await walk(opts.contentDir)
   const sources = all.filter(
@@ -437,9 +446,11 @@ export async function runTranslation(opts: RunOptions): Promise<RunStats> {
             counted.add(rel)
             progress.fileDone(locale)
           }
-          stats.skipped.push(
-            `${rel} [${locale}]: ${lastTransientError.get(rel) ?? 'transient failure'}`,
-          )
+          const message = lastTransientError.get(rel) ?? 'transient failure'
+          stats.skipped.push(`${rel} [${locale}]: ${message}`)
+          // Kept raw and separate so the entrypoint can tell a provider outage from
+          // a content problem without pattern-matching a formatted line.
+          stats.providerErrors.push(message)
         }
         break
       }

@@ -1,5 +1,5 @@
 import { join } from 'node:path'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, writeFile, rename } from 'node:fs/promises'
 import { runTranslation } from '../lib/i18n/run'
 import { createOpenRouterModel } from '../lib/i18n/engine'
 import { TARGET_LOCALES } from '../lib/i18n/config'
@@ -14,6 +14,11 @@ const STATE_FILE = join(CACHE_DIR, 'state.json')
  * file is silently left in English. The workflow must go red on these — the
  * pipeline once sat dead for three weeks emitting green "success" runs because a
  * spend-limited key skipped every file.
+ *
+ * Matched only against raw provider errors, never against a formatted skip line. A
+ * validation failure quotes the tokens it saw, and this repo documents billing,
+ * quotas, and 401/403 responses — matching the formatted line would turn one
+ * ordinary content failure on such a page into a false credits/auth outage.
  */
 const FATAL_SKIP_RE =
   /requires more credits|insufficient|quota|billing|payment|invalid api key|no auth credentials|unauthor|forbidden|\b40[13]\b/i
@@ -38,7 +43,13 @@ async function writeState(state: {
   attempted?: number
 }): Promise<void> {
   await mkdir(CACHE_DIR, { recursive: true })
-  await writeFile(STATE_FILE, `${JSON.stringify(state, null, 2)}\n`)
+  // Write-then-rename, same as the translation memory. A plain write truncates
+  // first, so a crash mid-write leaves empty or partial JSON — and the workflow
+  // reads this file with jq before translating, so a malformed state would fail
+  // every subsequent run at the pending-work check instead of translating.
+  const tmp = `${STATE_FILE}.tmp`
+  await writeFile(tmp, `${JSON.stringify(state, null, 2)}\n`)
+  await rename(tmp, STATE_FILE)
 }
 
 async function main() {
@@ -84,7 +95,7 @@ async function main() {
     await writeState({ complete: true, pending: stats.skipped.length, attempted: stats.attempted })
   }
 
-  const fatal = stats.skipped.filter((s) => FATAL_SKIP_RE.test(s))
+  const fatal = stats.providerErrors.filter((s) => FATAL_SKIP_RE.test(s))
   if (fatal.length > 0) {
     console.error(
       `[translate] ${fatal.length} file(s) failed for an account-level reason (credits, quota, or auth). First: ${fatal[0]}`,

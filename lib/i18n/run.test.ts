@@ -524,17 +524,15 @@ describe('runTranslation', () => {
     expect(calls).toBeGreaterThanOrEqual(3)
   })
 
-  // A frontmatter title translated into a reference-style link definition. Inline
-  // validation collects URLs with regexes and sees none; the whole-file check parses
-  // the corpus and its AST reports a definition target. That asymmetry is the `skip`
-  // path: validateTranslation failing after every individual block passed.
-  const FILE_BREAKING_TITLE = '[a]: /b'
-  const breaksFileViaTitle = (title: string): TranslateModel => ({
-    generate: async ({ prompt }) => {
-      const text = prompt.split(/Translate the following[^\n]*:\n/).pop() ?? ''
-      return text === title ? FILE_BREAKING_TITLE : text
-    },
-  })
+  // The `skip` path: validateTranslation failing after every individual block
+  // passed. Now that inline output is held to the same structure a block is, model
+  // output can no longer slip a structural change past the per-block checks and
+  // fail only at the whole-file stage. What still reaches it is a source whose own
+  // corpus does not parse — here a frontmatter title carrying an unclosed JSX tag.
+  // Every block round-trips through the stub untouched and the assembled file is
+  // still rejected, which is exactly the production shape: broken input, not a
+  // misbehaving model.
+  const UNPARSEABLE_SOURCE = `---\ntitle: "<Foo"\n---\n\n# Hello\n\nA paragraph.\n`
 
   it('keeps reusable cache entries when a file fails whole-file validation', async () => {
     // Block hashes are content-global, so evicting a failed file's cache hits also
@@ -543,22 +541,19 @@ describe('runTranslation', () => {
     expect(await readdir(content)).toContain('index.de.mdx')
 
     // Only the title changes, so the body blocks are pure cache hits this run.
-    await writeFile(
-      join(content, 'index.mdx'),
-      `---\ntitle: Greetings\n---\n\n# Hello\n\nA paragraph.\n`,
-    )
+    await writeFile(join(content, 'index.mdx'), UNPARSEABLE_SOURCE)
     const stats = await runTranslation({
       contentDir: content,
       cacheDir: cache,
       locales: ['de'],
-      model: breaksFileViaTitle('Greetings'),
+      model: stub,
     })
     expect(stats.skipped.some((s) => s.includes('index.mdx'))).toBe(true)
     expect(await readdir(content)).not.toContain('index.de.mdx')
 
     const tm = await TM.load('de', cache)
     // Evicted: produced by this run's model call, and structurally suspect.
-    expect(tm.get(hashText('Greetings'))).toBeUndefined()
+    expect(tm.get(hashText('<Foo'))).toBeUndefined()
     // Kept: cache hits written by the earlier run, which did validate.
     expect(tm.get(hashText('A paragraph.'))).toBe('A paragraph.')
     expect(tm.get(hashText('# Hello'))).toBe('# Hello')
@@ -571,10 +566,10 @@ describe('runTranslation', () => {
     const model: TranslateModel = {
       generate: async ({ prompt }) => {
         const text = prompt.split(/Translate the following[^\n]*:\n/).pop() ?? ''
-        if (text.startsWith('#')) return `${text}\n\n\`\`\`\nx\n\`\`\``
-        return text === 'Hello' ? FILE_BREAKING_TITLE : text
+        return text.startsWith('#') ? `${text}\n\n\`\`\`\nx\n\`\`\`` : text
       },
     }
+    await writeFile(join(content, 'index.mdx'), UNPARSEABLE_SOURCE)
     const stats = await runTranslation({
       contentDir: content,
       cacheDir: cache,
@@ -595,10 +590,10 @@ describe('runTranslation', () => {
     const model: TranslateModel = {
       generate: async ({ prompt }) => {
         calls++
-        const text = prompt.split(/Translate the following[^\n]*:\n/).pop() ?? ''
-        return text === 'Hello' ? FILE_BREAKING_TITLE : text
+        return prompt.split(/Translate the following[^\n]*:\n/).pop() ?? ''
       },
     }
+    await writeFile(join(content, 'index.mdx'), UNPARSEABLE_SOURCE)
     const opts = { contentDir: content, cacheDir: cache, locales: ['de'], model }
 
     for (let run = 1; run <= 3; run++) {
@@ -618,8 +613,8 @@ describe('runTranslation', () => {
   })
 
   it('retries a quarantined file once its source changes', async () => {
-    const breaks = breaksFileViaTitle('Hello')
-    const opts = { contentDir: content, cacheDir: cache, locales: ['de'], model: breaks }
+    await writeFile(join(content, 'index.mdx'), UNPARSEABLE_SOURCE)
+    const opts = { contentDir: content, cacheDir: cache, locales: ['de'], model: stub }
     for (let run = 1; run <= 4; run++) await runTranslation(opts)
     expect((await runTranslation(opts)).quarantined.length).toBeGreaterThan(0)
 
@@ -673,17 +668,13 @@ describe('runTranslation', () => {
     // The failing runs that unlink the locale file may never have been pushed, so a
     // later checkout can still carry a translation predating the current source.
     // Quarantine is not pending work, so nothing else would clean it up.
-    const opts = {
-      contentDir: content,
-      cacheDir: cache,
-      locales: ['de'],
-      model: breaksFileViaTitle('Hello'),
-    }
+    await writeFile(join(content, 'index.mdx'), UNPARSEABLE_SOURCE)
+    const opts = { contentDir: content, cacheDir: cache, locales: ['de'], model: stub }
     for (let run = 1; run <= 3; run++) await runTranslation(opts)
     // Simulate the unpushed deletion: the stale locale file is back in the checkout.
     await writeFile(join(content, 'index.de.mdx'), `---\ntitle: Veraltet\n---\n\nAlt.\n`)
 
-    const stats = await runTranslation({ ...opts, model: breaksFileViaTitle('Hello') })
+    const stats = await runTranslation(opts)
     expect(stats.quarantined.some((q) => q.includes('index.mdx'))).toBe(true)
     expect(await readdir(content)).not.toContain('index.de.mdx')
   })
@@ -730,12 +721,8 @@ describe('runTranslation', () => {
   it('never deletes a locale file during a dry run', async () => {
     // Dry runs suppress every other write, orphan cleanup, and cache save, so
     // previewing a quarantined page must not remove generated docs.
-    const opts = {
-      contentDir: content,
-      cacheDir: cache,
-      locales: ['de'],
-      model: breaksFileViaTitle('Hello'),
-    }
+    await writeFile(join(content, 'index.mdx'), UNPARSEABLE_SOURCE)
+    const opts = { contentDir: content, cacheDir: cache, locales: ['de'], model: stub }
     for (let run = 1; run <= 3; run++) await runTranslation(opts)
     // The deletion from those failing runs may never have been pushed.
     await writeFile(join(content, 'index.de.mdx'), `---\ntitle: Veraltet\n---\n\nAlt.\n`)
@@ -746,6 +733,36 @@ describe('runTranslation', () => {
     expect(dry.quarantined.some((q) => q.includes('index.mdx'))).toBe(true)
     expect(await readdir(content)).toContain('index.de.mdx')
     expect(await readFile(join(content, 'index.de.mdx'), 'utf8')).toContain('Veraltet')
+  })
+
+  it('separates raw provider errors from content failures', async () => {
+    // The entrypoint fails the workflow on credits/quota/auth wording. Matching that
+    // against a formatted skip line would misfire on documentation: a validation
+    // error quotes the tokens it saw, and these docs are full of billing and 401s.
+    await writeFile(join(content, 'index.mdx'), UNPARSEABLE_SOURCE)
+    const contentOnly = await runTranslation({
+      contentDir: content,
+      cacheDir: cache,
+      locales: ['de'],
+      model: stub,
+    })
+    expect(contentOnly.skipped.some((s) => s.includes('index.mdx'))).toBe(true)
+    expect(contentOnly.providerErrors).toEqual([])
+
+    const outage: TranslateModel = {
+      generate: async () => {
+        throw new Error('This request requires more credits, or fewer max_tokens')
+      },
+    }
+    const provider = await runTranslation({
+      contentDir: content,
+      cacheDir: cache,
+      locales: ['fr'],
+      model: outage,
+    })
+    expect(provider.providerErrors.some((e) => /more credits/.test(e))).toBe(true)
+    // Raw message only — no file path or locale mixed in.
+    expect(provider.providerErrors.every((e) => !e.includes('index.mdx'))).toBe(true)
   })
 
   it('reports how many file translations were attempted', async () => {

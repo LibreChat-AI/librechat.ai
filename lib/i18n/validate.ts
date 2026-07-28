@@ -138,14 +138,21 @@ function validatePreservedInlineParts(
 ): { ok: boolean; error?: string } {
   // An inline value is spliced back into MDX — a frontmatter title, or a meta.json
   // label whose source string is reused as a page title elsewhere. The regex
-  // collectors below cannot see that the model turned it into something the MDX
-  // parser rejects, so a value like `<Foo` used to validate, get cached, and then
-  // break whole-file validation for every page that reuses that source string,
-  // with no way to evict it. Guard asymmetrically: source prose is sometimes
-  // legitimately unparseable on its own (`<Optional>: ...`) and must round-trip,
-  // so only reject output that breaks a source which did parse.
-  if (parsesAsMdx(source) && !parsesAsMdx(output)) {
-    return { ok: false, error: 'output is not parseable MDX but the source was' }
+  // collectors below see none of the structure the whole-file check compares, so a
+  // label translated to `# Hallo` or `[a]: /b` validated here, got cached, and then
+  // broke whole-file validation for every page reusing that source string, with no
+  // way to evict it.
+  //
+  // When the source parses on its own, hold the output to exactly the structure a
+  // block must preserve: headings, reference definitions, tables, and blockquotes
+  // included. Source prose is sometimes legitimately unparseable standalone
+  // (`<Optional>: ...`) and must round-trip, so that case keeps the regex-only
+  // comparison below.
+  if (parsesAsMdx(source)) {
+    if (!parsesAsMdx(output)) {
+      return { ok: false, error: 'output is not parseable MDX but the source was' }
+    }
+    return validatePreservedParts(source, output)
   }
 
   const srcTokens = preservedInlineTokens(source)
