@@ -41,20 +41,18 @@ for arg in "$@"; do
   esac
 done
 
+# Mirrors engines.node in package.json (>=22.0.0 <25). The upper bound is the point:
+# an open-ended floor accepted Node 20, which CI no longer tests, and any future
+# major nobody has verified.
 check_node_version() {
-  local required="20.19.0"
+  local min_major=22
+  local max_major=24
   local current
   current="$(node -v 2>/dev/null | sed 's/^v//')" || fail "Node.js is not installed"
-  local req_major req_minor cur_major cur_minor
-  req_major="${required%%.*}"
-  req_minor="${required#*.}"
-  req_minor="${req_minor%%.*}"
-  cur_major="${current%%.*}"
-  cur_minor="${current#*.}"
-  cur_minor="${cur_minor%%.*}"
+  local cur_major="${current%%.*}"
 
-  if (( cur_major < req_major )) || { (( cur_major == req_major )) && (( cur_minor < req_minor )); }; then
-    fail "Node.js >= v${required} required (found v${current}). Check .nvmrc"
+  if (( cur_major < min_major )) || (( cur_major > max_major )); then
+    fail "Node.js v${min_major}.x-v${max_major}.x required (found v${current}). Check .nvmrc"
   fi
   ok "Node.js v${current}"
 }
