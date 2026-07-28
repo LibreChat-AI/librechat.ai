@@ -51,6 +51,9 @@ const SELECTORS = {
  */
 const MIN_SIDEBAR_CHATS = 10
 
+/** The inventory is the same for every variant; one report per run is enough. */
+let inventoryLogged = false
+
 /**
  * Presents as an ordinary desktop browser rather than advertising
  * `HeadlessChrome`. This is hygiene, not a fix: a CI run with this user agent
@@ -260,6 +263,47 @@ async function signIn(page: Page) {
 }
 
 /**
+ * Reports every endpoint and model the demo actually serves.
+ *
+ * seed-demo.js has to name endpoints that exist, because one the server does
+ * not know renders a generic icon: invisible in review, obvious in the hero
+ * image. These routes need a session, so this is the only place that can see
+ * them. Printed once per run, and never fatal, since it is only reference
+ * output.
+ */
+async function logEndpointInventory(page: Page) {
+  const inventory = await page
+    .evaluate(async () => {
+      const get = async (path: string) => {
+        const res = await fetch(path, { credentials: 'include' })
+        return res.ok ? await res.json() : { __error: res.status }
+      }
+      return { endpoints: await get('/api/endpoints'), models: await get('/api/models') }
+    })
+    .catch((err) => ({ endpoints: { __error: String(err) }, models: {} }))
+
+  const endpoints = (inventory.endpoints ?? {}) as Record<string, Record<string, unknown>>
+  const models = (inventory.models ?? {}) as Record<string, string[]>
+  if (endpoints.__error) {
+    console.warn(`endpoint inventory unavailable: ${JSON.stringify(endpoints.__error)}`)
+    return
+  }
+
+  console.log('--- demo endpoint inventory (keep seed-demo.js CHATS in sync) ---')
+  for (const name of Object.keys(endpoints).sort()) {
+    const config = endpoints[name] ?? {}
+    const type = config.type ? ` type=${String(config.type)}` : ''
+    const icon = config.iconURL ? ' iconURL=yes' : ''
+    const available = Array.isArray(models[name]) ? models[name] : []
+    const sample = available.slice(0, 4).join(', ')
+    console.log(
+      `  ${name}${type}${icon} models=${available.length}${sample ? ` [${sample}${available.length > 4 ? ', …' : ''}]` : ''}`,
+    )
+  }
+  console.log('--- end inventory ---')
+}
+
+/**
  * Guards the point of the image. Desktop only: the sidebar is collapsed behind
  * a hamburger on mobile, which is what the original mobile shots showed too.
  */
@@ -310,6 +354,10 @@ async function captureVariant(
       // then the app is up and the dialog is either present or never coming.
       await page.waitForSelector(SELECTORS.composer, { timeout: APP_READY_TIMEOUT })
       await acceptTermsIfPresent(page, variant.name)
+      if (!inventoryLogged) {
+        inventoryLogged = true
+        await logEndpointInventory(page)
+      }
       await assertSidebarPopulated(page, variant)
       // Park the pointer and drop focus. Otherwise whatever was last clicked
       // keeps its focus ring and whatever the pointer rests over keeps its
