@@ -31,35 +31,35 @@ against the demo's current UI.
 The GitHub workflow runs in the `Production` Environment, so define these
 secrets/variables there.
 
-| Name                   | Where                              | Purpose                                    |
-| ---------------------- | ---------------------------------- | ------------------------------------------ |
-| `DEMO_EMAIL`           | secret / `.env.local`              | demo account login                         |
-| `DEMO_PASSWORD`        | secret / `.env.local`              | demo account password                      |
-| `DEMO_CONVERSATION_ID` | secret / `.env.local`              | hero conversation id                       |
-| `DEMO_BASE_URL`        | variable / `.env.local` (optional) | defaults to `https://chat.librechat.ai`    |
-| `DEMO_BYPASS_TOKEN`    | secret (required in CI)            | value of the Cloudflare WAF skip header    |
-| `DEMO_BYPASS_HEADER`   | variable (optional)                | header name, default `x-screenshot-bypass` |
+| Name                   | Where                              | Purpose                                 |
+| ---------------------- | ---------------------------------- | --------------------------------------- |
+| `DEMO_EMAIL`           | secret / `.env.local`              | demo account login                      |
+| `DEMO_PASSWORD`        | secret / `.env.local`              | demo account password                   |
+| `DEMO_CONVERSATION_ID` | secret / `.env.local`              | hero conversation id                    |
+| `DEMO_BASE_URL`        | variable / `.env.local` (optional) | defaults to `https://chat.librechat.ai` |
 
-### Cloudflare WAF skip rule (required for CI)
+### Cloudflare Bot Fight Mode must stay off
 
-Cloudflare serves `chat.librechat.ai` a **managed challenge** on `/api/*` for
-GitHub Actions egress. A page navigation survives it, but the SPA fetches
-`/api/config` over XHR and an XHR cannot solve a JS challenge, so the app
-renders "There was an internal server error" and there is nothing to capture.
-Confirmed from a runner: `cf-mitigated: challenge`, `server: cloudflare`, body
-`Just a moment...`, and no `via: 1.1 Caddy`, so the origin never saw the
-request. The same requests from a residential IP return 200.
+Bot Fight Mode challenges this job. It served `/api/config` a managed challenge
+from GitHub Actions egress (`cf-mitigated: challenge`, body `Just a moment...`,
+no `via: 1.1 Caddy`, so the origin never saw it), and because the SPA fetches
+its startup config over XHR, which cannot solve a JS challenge, the app rendered
+"There was an internal server error" and there was nothing to capture. The same
+requests from a residential IP returned 200.
 
-No change to this repo can solve that. On the Cloudflare zone for
-`chat.librechat.ai`, add a WAF custom rule:
+Bot Fight Mode cannot be worked around from this repo. Per Cloudflare's docs it
+does not run on the Ruleset Engine, so WAF custom rules with a Skip action have
+no effect on it, and it is zone-wide with no hostname or path scoping. A skip
+rule keyed on a secret header was tried and matched 162 times without stopping
+the challenge.
 
-- **If** `http.request.headers["x-screenshot-bypass"][0] eq "<secret>"`
-- **Then** Skip → Managed Challenge / remaining custom rules
-- Place it **above** the rule issuing the challenge.
+If it is ever re-enabled, this job breaks again. The options are to upgrade the
+zone to Pro, where Super Bot Fight Mode does support Skip rules, or to stop
+capturing against the live demo.
 
-Then store `<secret>` as the `DEMO_BYPASS_TOKEN` secret on the `Production`
-environment. Until that exists the job fails and uploads the diagnostics that
-prove why. Rotate the token by editing the rule and the secret together.
+Do not reach for `extraHTTPHeaders` to smuggle a bypass token: Playwright
+applies it to every request including cross-origin ones, which makes them
+preflighted, and third parties reject the unknown header.
 
 ### Run locally
 

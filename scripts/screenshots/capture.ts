@@ -1,4 +1,4 @@
-import { chromium, type Browser, type BrowserContext, type Page } from 'playwright'
+import { chromium, type Browser, type Page } from 'playwright'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import {
@@ -16,19 +16,11 @@ const PASSWORD = process.env.DEMO_PASSWORD
 const CONVERSATION_ID = process.env.DEMO_CONVERSATION_ID
 const baseURL = screenshotBaseURL(process.env.DEMO_BASE_URL)
 
-/**
- * Cloudflare serves the demo a managed challenge (`cf-mitigated: challenge`) on
- * `/api/*` from CI egress. A page navigation can survive that, but the SPA's
- * XHR for `/api/config` cannot solve a JS challenge, so the app renders an
- * error and no UI is ever captured.
- *
- * The only fix is a WAF skip rule on chat.librechat.ai matching a header the
- * public does not send. Set DEMO_BYPASS_TOKEN once that rule exists; until then
- * this is inert and the job fails with the diagnostics that prove why.
- */
-const BYPASS_HEADER = process.env.DEMO_BYPASS_HEADER?.trim() || 'x-screenshot-bypass'
-const BYPASS_TOKEN = process.env.DEMO_BYPASS_TOKEN?.trim()
-const extraHTTPHeaders = BYPASS_TOKEN ? { [BYPASS_HEADER]: BYPASS_TOKEN } : undefined
+// Do not add custom headers to the browser context. Playwright applies
+// extraHTTPHeaders to every request including cross-origin ones, which turns
+// them into preflighted CORS requests; third parties reject the unknown header
+// and the page loses scripts it expects. Anything the demo's edge needs to
+// recognise belongs in a rule keyed on something already present.
 
 if (!EMAIL || !PASSWORD || !CONVERSATION_ID) {
   console.error('Missing required env: DEMO_EMAIL, DEMO_PASSWORD, DEMO_CONVERSATION_ID')
@@ -214,49 +206,38 @@ async function openAppPage(page: Page, url: string, label: string) {
   })
 }
 
-async function login(browser: Browser, userAgent: string, attempt: number) {
-  const context = await browser.newContext({ userAgent, extraHTTPHeaders })
-  try {
-    const page = await context.newPage()
-    const probe = attachProbe(page)
-    try {
-      await openAppPage(page, `${baseURL}/login`, 'login')
-      await page.waitForSelector(SELECTORS.email, { timeout: LOGIN_FORM_TIMEOUT })
-      await page.fill(SELECTORS.email, EMAIL!)
-      await page.fill(SELECTORS.password, PASSWORD!)
-      await page.click(SELECTORS.submit)
-      await page
-        .waitForURL(`${baseURL}/c/**`, { timeout: POST_LOGIN_TIMEOUT })
-        .catch(() => undefined)
-      // Hard-fail if we are still on the login page (bad credentials, rate limit,
-      // etc.) so withRetry retries and ultimately exits non-zero instead of
-      // capturing screenshots of the login/error screen.
-      if (new URL(page.url()).pathname.startsWith('/login')) {
-        throw new Error(`Login failed: still on ${page.url()} after submitting credentials`)
-      }
-      return await context.storageState()
-    } catch (err) {
-      await dumpDiagnostics(page, probe, 'login', attempt)
-      throw new Error(explainFailure(probe, err instanceof Error ? err.message : String(err)), {
-        cause: err,
-      })
-    }
-  } finally {
-    await context.close()
+/**
+ * Signs in on the page that will take the screenshot.
+ *
+ * Deliberately not shared via `storageState`: LibreChat keeps the access token
+ * in memory and rotates the refresh token, so replaying one saved session into
+ * a second context gets 401 from /api/auth/refresh and bounces to
+ * /login?redirect_to=..., which is a login screen where the chat should be.
+ * Each context therefore establishes its own session.
+ */
+async function signIn(page: Page) {
+  await openAppPage(page, `${baseURL}/login`, 'login')
+  await page.waitForSelector(SELECTORS.email, { timeout: LOGIN_FORM_TIMEOUT })
+  await page.fill(SELECTORS.email, EMAIL!)
+  await page.fill(SELECTORS.password, PASSWORD!)
+  await page.click(SELECTORS.submit)
+  await page.waitForURL(`${baseURL}/c/**`, { timeout: POST_LOGIN_TIMEOUT }).catch(() => undefined)
+  // Hard-fail if we are still on the login page (bad credentials, rate limit,
+  // etc.) so withRetry retries and ultimately exits non-zero instead of
+  // capturing screenshots of the login/error screen.
+  if (new URL(page.url()).pathname.startsWith('/login')) {
+    throw new Error(`Login failed: still on ${page.url()} after submitting credentials`)
   }
 }
 
 async function captureVariant(
   browser: Browser,
-  storageState: Awaited<ReturnType<BrowserContext['storageState']>>,
   variant: Variant,
   userAgent: string,
   attempt: number,
 ) {
   const context = await browser.newContext({
-    storageState,
     userAgent,
-    extraHTTPHeaders,
     viewport: variant.viewport,
     deviceScaleFactor: variant.deviceScaleFactor,
     isMobile: variant.device === 'mobile',
@@ -268,7 +249,13 @@ async function captureVariant(
     const page = await context.newPage()
     const probe = attachProbe(page)
     try {
+      await signIn(page)
       await openAppPage(page, `${baseURL}/c/${CONVERSATION_ID}`, variant.name)
+      // A bounce back to /login means the session did not survive the
+      // navigation; fail here rather than shooting the login screen.
+      if (new URL(page.url()).pathname.startsWith('/login')) {
+        throw new Error(`Session lost: redirected to ${page.url()} instead of the conversation`)
+      }
       await page.waitForSelector(SELECTORS.message, { timeout: MESSAGE_TIMEOUT })
       await page.addStyleTag({ content: DISABLE_MOTION_CSS })
       await page.evaluate((zoom) => {
@@ -321,16 +308,9 @@ async function main() {
   try {
     const userAgent = await desktopUserAgent(browser)
     console.log(`using user agent: ${userAgent}`)
-    // Log presence only; the value is a secret.
-    console.log(
-      BYPASS_TOKEN
-        ? `sending CDN bypass header "${BYPASS_HEADER}"`
-        : 'no DEMO_BYPASS_TOKEN set — a CDN challenge on /api/* will fail this run',
-    )
-    const storageState = await withRetry('login', (attempt) => login(browser, userAgent, attempt))
     for (const variant of VARIANTS) {
       await withRetry(variant.name, (attempt) =>
-        captureVariant(browser, storageState, variant, userAgent, attempt),
+        captureVariant(browser, variant, userAgent, attempt),
       )
     }
   } finally {
