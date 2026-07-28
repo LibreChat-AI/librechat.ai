@@ -2,7 +2,6 @@ import { chromium, type Browser, type Page } from 'playwright'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import {
-  ZOOM,
   VARIANTS,
   type Variant,
   outputPath,
@@ -13,7 +12,6 @@ import {
 
 const EMAIL = process.env.DEMO_EMAIL
 const PASSWORD = process.env.DEMO_PASSWORD
-const CONVERSATION_ID = process.env.DEMO_CONVERSATION_ID
 const baseURL = screenshotBaseURL(process.env.DEMO_BASE_URL)
 
 // Do not add custom headers to the browser context. Playwright applies
@@ -22,8 +20,8 @@ const baseURL = screenshotBaseURL(process.env.DEMO_BASE_URL)
 // and the page loses scripts it expects. Anything the demo's edge needs to
 // recognise belongs in a rule keyed on something already present.
 
-if (!EMAIL || !PASSWORD || !CONVERSATION_ID) {
-  console.error('Missing required env: DEMO_EMAIL, DEMO_PASSWORD, DEMO_CONVERSATION_ID')
+if (!EMAIL || !PASSWORD) {
+  console.error('Missing required env: DEMO_EMAIL, DEMO_PASSWORD')
   process.exit(1)
 }
 
@@ -38,12 +36,20 @@ const SELECTORS = {
   // gives its buttons no test id, so match the label exactly: `:text-is()` avoids
   // hitting the neighbouring "I do not accept".
   acceptTerms: 'button:text-is("I accept")',
-  // `.message-render` wraps every rendered message (LibreChat MessageParts.tsx),
-  // so it only exists once the conversation body is on screen. Do not use
-  // `convo-icon` here: that is the sidebar/endpoint icon and renders before any
-  // message does, which would let us shoot an empty chat pane.
-  message: '.message-render, [data-testid="message"]',
+  // The composer. Present once the new-chat screen has rendered, on every
+  // viewport, so it is the readiness signal for the shot.
+  composer: '[data-testid="text-input"]',
+  // One row in the sidebar conversation list.
+  sidebarChat: '[data-testid="convo-item"]',
 }
+
+/**
+ * The sidebar carrying a column of different provider icons is the point of
+ * the hero image. If the demo account gets wiped or reseeded thinly we would
+ * otherwise ship a near-empty sidebar and only notice on the live site.
+ * Re-run scripts/screenshots/seed-demo.js if this trips.
+ */
+const MIN_SIDEBAR_CHATS = 10
 
 /**
  * Presents as an ordinary desktop browser rather than advertising
@@ -69,7 +75,7 @@ const NAVIGATION_TIMEOUT = 60_000
 const POST_LOGIN_TIMEOUT = 45_000
 const READY_STATE_TIMEOUT = 15_000
 const LOGIN_FORM_TIMEOUT = 45_000
-const MESSAGE_TIMEOUT = 45_000
+const APP_READY_TIMEOUT = 45_000
 const TERMS_TIMEOUT = 8_000
 const RETRY_BACKOFF_MS = 10_000
 
@@ -253,6 +259,24 @@ async function signIn(page: Page) {
   }
 }
 
+/**
+ * Guards the point of the image. Desktop only: the sidebar is collapsed behind
+ * a hamburger on mobile, which is what the original mobile shots showed too.
+ */
+async function assertSidebarPopulated(page: Page, variant: Variant) {
+  if (variant.device !== 'desktop') return
+  const chats = page.locator(SELECTORS.sidebarChat)
+  await chats.first().waitFor({ state: 'visible', timeout: APP_READY_TIMEOUT })
+  const count = await chats.count()
+  if (count < MIN_SIDEBAR_CHATS) {
+    throw new Error(
+      `Sidebar has ${count} conversations, expected at least ${MIN_SIDEBAR_CHATS}. ` +
+        'The demo account looks unseeded; run scripts/screenshots/seed-demo.js.',
+    )
+  }
+  console.log(`${variant.name}: sidebar has ${count} conversations`)
+}
+
 async function captureVariant(
   browser: Browser,
   variant: Variant,
@@ -273,16 +297,20 @@ async function captureVariant(
     const probe = attachProbe(page)
     try {
       await signIn(page)
-      await openAppPage(page, `${baseURL}/c/${CONVERSATION_ID}`, variant.name)
+      // Shoot the new-chat screen rather than a conversation: it shows the
+      // logo, the composer and the full sidebar, and it is the only frame that
+      // fits a mobile viewport without cutting the interface in half.
+      await openAppPage(page, `${baseURL}/c/new`, variant.name)
       // A bounce back to /login means the session did not survive the
       // navigation; fail here rather than shooting the login screen.
       if (new URL(page.url()).pathname.startsWith('/login')) {
-        throw new Error(`Session lost: redirected to ${page.url()} instead of the conversation`)
+        throw new Error(`Session lost: redirected to ${page.url()} instead of the app`)
       }
-      // Messages render behind the Terms overlay, so wait for them first: by
+      // The composer renders behind the Terms overlay, so wait for it first: by
       // then the app is up and the dialog is either present or never coming.
-      await page.waitForSelector(SELECTORS.message, { timeout: MESSAGE_TIMEOUT })
+      await page.waitForSelector(SELECTORS.composer, { timeout: APP_READY_TIMEOUT })
       await acceptTermsIfPresent(page, variant.name)
+      await assertSidebarPopulated(page, variant)
       // Park the pointer and drop focus. Otherwise whatever was last clicked
       // keeps its focus ring and whatever the pointer rests over keeps its
       // hover toolbar, which differs between variants and lands on the
@@ -290,9 +318,6 @@ async function captureVariant(
       await page.mouse.move(0, 0)
       await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
       await page.addStyleTag({ content: DISABLE_MOTION_CSS })
-      await page.evaluate((zoom) => {
-        document.documentElement.style.setProperty('zoom', String(zoom))
-      }, ZOOM)
       // Await web fonts without returning a non-serializable value to Playwright.
       await page.evaluate(async () => {
         await document.fonts.ready

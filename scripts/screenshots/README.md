@@ -4,22 +4,44 @@ Regenerates the four hero images in `components/home/img/` from the live
 LibreChat demo. `components/home/Hero.tsx` imports these files directly, so the
 script just overwrites them in place.
 
-## Stage A — one-time demo-account seed (manual, needs DB access)
+## Stage A — demo-account seed (needs DB access)
 
-Done once so the recurring job has rich, on-message content to shoot. Use direct
-DB access to insert fabricated assistant replies (no AI credits spent).
+The hero shot is the new-chat screen, so what sells it is the sidebar: a column
+of conversations across different providers, each rendering its own icon. A
+sparsely populated account produces a thin, unconvincing image.
 
-Seed the dedicated demo account so it shows:
+`seed-demo.js` creates that content. It runs under `mongosh`, so this repo needs
+no database dependency, and it writes assistant replies directly rather than
+generating them, so no inference is billed.
 
-- [ ] The **LibreChat agent** selected/active as the endpoint.
-- [ ] Several conversations, each using a **different provider** (e.g. OpenAI,
-      Anthropic, Google), so multi-provider is visible in the sidebar.
-- [ ] **2 projects.**
-- [ ] **2-3 pinned models/agents.**
-- [ ] One primary conversation chosen as the hero shot. Record its id; it becomes
-      `DEMO_CONVERSATION_ID`.
+```bash
+# preview without writing
+mongosh "$MONGO_URI" --eval 'DEMO_EMAIL="demo@example.com"; DRY_RUN="true"' \
+  scripts/screenshots/seed-demo.js
 
-If the account is ever wiped, repeat this checklist.
+# seed
+mongosh "$MONGO_URI" --eval 'DEMO_EMAIL="demo@example.com"' \
+  scripts/screenshots/seed-demo.js
+
+# remove everything a previous run seeded
+mongosh "$MONGO_URI" --eval 'DEMO_EMAIL="demo@example.com"; CLEAN="true"' \
+  scripts/screenshots/seed-demo.js
+```
+
+It creates ~25 conversations spread across providers, a pinned "Getting started"
+conversation, and a **LibreChat agent** carrying the LibreChat logo. Everything
+it writes is tagged `docs-hero-seed`, so re-running replaces the previous batch
+and never touches conversations made by hand.
+
+**Before the first run, check the `CHATS` list at the top of the script.** The
+`endpoint` values must match endpoints the demo actually has configured in its
+`librechat.yaml`; an endpoint the server does not know falls back to a generic
+icon and the sidebar looks broken. The script prints the endpoints it used so a
+wrong one is easy to spot afterwards.
+
+The capture refuses to save a desktop image with fewer than 10 sidebar
+conversations, so if the account is ever wiped the job fails loudly instead of
+shipping a thin hero image. Re-run the seed if that happens.
 
 ## Stage B — recurring capture (automated)
 

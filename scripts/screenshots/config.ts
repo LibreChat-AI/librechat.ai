@@ -1,7 +1,6 @@
 import { resolve } from 'node:path'
 
 export const BASE_URL = 'https://chat.librechat.ai'
-export const ZOOM = 1.1
 // LibreChat persists the theme under this key (client/index.html reads it in an
 // inline script before the bundle boots, and packages/client ThemeProvider uses
 // the same key). Writing any other key leaves the app on its 'system' default.
