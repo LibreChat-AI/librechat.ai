@@ -33,11 +33,16 @@ conversation, and a **LibreChat agent** carrying the LibreChat logo. Everything
 it writes is tagged `docs-hero-seed`, so re-running replaces the previous batch
 and never touches conversations made by hand.
 
-**Before the first run, check the `CHATS` list at the top of the script.** The
-`endpoint` values must match endpoints the demo actually has configured in its
-`librechat.yaml`; an endpoint the server does not know falls back to a generic
-icon and the sidebar looks broken. The script prints the endpoints it used so a
-wrong one is easy to spot afterwards.
+The `CHATS` list covers **one conversation per endpoint the demo serves**, so
+the sidebar shows the full spread of provider icons. It was built from a live
+inventory rather than guessed.
+
+Keeping it current: every capture run prints the demo's real endpoints and
+models under `--- demo endpoint inventory ---` in the job log. If the demo's
+`librechat.yaml` gains or loses a provider, refresh `CHATS` from that output. An
+`endpoint` the server does not return falls back to a generic icon, which looks
+broken and is easy to miss in review. The seed script prints the endpoints it
+used, so a stale one is visible immediately.
 
 The capture refuses to save a desktop image with fewer than 10 sidebar
 conversations, so if the account is ever wiped the job fails loudly instead of

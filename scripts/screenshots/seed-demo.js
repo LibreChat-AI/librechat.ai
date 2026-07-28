@@ -42,41 +42,68 @@ const DEMO_ORIGIN =
 const LIBRECHAT_AVATAR = `${DEMO_ORIGIN}/assets/logo.svg`
 
 /**
- * `endpoint` picks the sidebar icon. These names must match endpoints the demo
- * actually has configured in librechat.yaml, otherwise LibreChat falls back to
- * a generic icon and the row looks broken. Check the demo's config and prune
- * this list before running; the script reports which endpoints it used so a
- * wrong one is obvious in the screenshot afterwards.
+ * One conversation per endpoint the demo serves, so the sidebar renders a
+ * column of distinct provider icons. That variety is the whole point of the
+ * hero image.
  *
- * `model` is shown when a conversation is opened, and drives the icon for
- * endpoints that vary by model (openAI's gpt-4o vs o1, for example).
+ * `endpoint` must match a key the server actually returns from /api/endpoints,
+ * otherwise LibreChat falls back to a generic icon and the row looks broken.
+ * This list was taken from a live inventory; the capture script prints the
+ * current one on every run under "demo endpoint inventory", so refresh from
+ * there rather than guessing when the demo's config changes.
+ *
+ * `model` is only shown once a conversation is opened, but keep it real: these
+ * were taken from /api/models alongside the endpoints.
  */
 const CHATS = [
-  { endpoint: 'anthropic', model: 'claude-sonnet-4-5', title: 'Refactor this React hook' },
-  { endpoint: 'openAI', model: 'gpt-4o', title: 'Explaining quantum mechanics' },
-  { endpoint: 'google', model: 'gemini-2.5-pro', title: 'Summarize this paper' },
-  { endpoint: 'anthropic', model: 'claude-opus-4-1', title: 'Plan a trip to Tokyo' },
-  { endpoint: 'openAI', model: 'gpt-4o-mini', title: 'Best apps for learning guitar' },
-  { endpoint: 'google', model: 'gemini-2.5-flash', title: 'Understanding climate data' },
-  { endpoint: 'anthropic', model: 'claude-sonnet-4-5', title: 'Debug a failing CI pipeline' },
-  { endpoint: 'openAI', model: 'gpt-4o', title: 'Ideas for a weekend getaway' },
-  { endpoint: 'google', model: 'gemini-2.5-pro', title: 'Compare vector databases' },
-  { endpoint: 'anthropic', model: 'claude-sonnet-4-5', title: 'Write a SQL migration' },
-  { endpoint: 'openAI', model: 'gpt-4o', title: 'How to fix a flat tire' },
-  { endpoint: 'google', model: 'gemini-2.5-flash', title: 'Beginner guide to gardening' },
-  { endpoint: 'anthropic', model: 'claude-opus-4-1', title: 'Design a REST API' },
-  { endpoint: 'openAI', model: 'gpt-4o', title: 'Improving productivity at work' },
-  { endpoint: 'google', model: 'gemini-2.5-pro', title: 'Troubleshooting Wi-Fi' },
-  { endpoint: 'anthropic', model: 'claude-sonnet-4-5', title: 'Explain Kubernetes operators' },
-  { endpoint: 'openAI', model: 'gpt-4o-mini', title: 'Creative gift ideas' },
-  { endpoint: 'google', model: 'gemini-2.5-flash', title: 'How to start running' },
-  { endpoint: 'anthropic', model: 'claude-sonnet-4-5', title: 'Review my Dockerfile' },
-  { endpoint: 'openAI', model: 'gpt-4o', title: 'Best tools for video editing' },
-  { endpoint: 'google', model: 'gemini-2.5-pro', title: 'Understanding cryptocurrency' },
-  { endpoint: 'anthropic', model: 'claude-sonnet-4-5', title: 'Optimize a slow query' },
-  { endpoint: 'openAI', model: 'gpt-4o', title: 'Home automation ideas' },
-  { endpoint: 'google', model: 'gemini-2.5-flash', title: 'Learning a new language' },
-  { endpoint: 'anthropic', model: 'claude-opus-4-1', title: 'Architecture review' },
+  { endpoint: 'anthropic', model: 'claude-opus-4-7', title: 'Refactor this React hook' },
+  { endpoint: 'openAI', model: 'gpt-5.5', title: 'Explaining quantum mechanics' },
+  { endpoint: 'google', model: 'gemini-3.1-pro-preview', title: 'Summarize this paper' },
+  { endpoint: 'xai', model: 'grok-4.3', title: 'Ideas for a weekend getaway' },
+  { endpoint: 'deepseek', model: 'deepseek-v4-pro', title: 'Optimize a slow query' },
+  { endpoint: 'Mistral', model: 'codestral-2501', title: 'Write a SQL migration' },
+  { endpoint: 'Perplexity', model: 'sonar-pro', title: 'Research the EU AI Act' },
+  { endpoint: 'groq', model: 'groq/compound', title: 'How to start running' },
+  { endpoint: 'cohere', model: 'command-a-plus-05-2026', title: 'Draft a launch announcement' },
+  { endpoint: 'OpenRouter', model: 'openrouter/auto', title: 'Compare vector databases' },
+  { endpoint: 'together.ai', model: 'Qwen/QwQ-32B', title: 'Explain Kubernetes operators' },
+  {
+    endpoint: 'Fireworks',
+    model: 'accounts/fireworks/models/deepseek-v4-pro',
+    title: 'Review my Dockerfile',
+  },
+  { endpoint: 'Nvidia', model: '01-ai/yi-large', title: 'Best tools for video editing' },
+  {
+    endpoint: 'HuggingFace',
+    model: 'MiniMaxAI/MiniMax-M2',
+    title: 'Fine-tuning on a small dataset',
+  },
+  { endpoint: 'SambaNova', model: 'DeepSeek-R1', title: 'Understanding cryptocurrency' },
+  {
+    endpoint: 'Github Models',
+    model: 'Meta-Llama-3.1-405B-Instruct',
+    title: 'Debug a failing CI pipeline',
+  },
+  { endpoint: 'Hyperbolic', model: 'Qwen/QwQ-32B', title: 'Plan a trip to Tokyo' },
+  {
+    endpoint: 'Kluster',
+    model: 'deepseek-ai/DeepSeek-R1-0528',
+    title: 'Beginner guide to gardening',
+  },
+  { endpoint: 'NanoGPT', model: 'Baichuan4-Turbo', title: 'Creative gift ideas' },
+  {
+    endpoint: 'glhf.chat',
+    model: 'hf:Qwen/Qwen2.5-72B-Instruct',
+    title: 'Learning a new language',
+  },
+  { endpoint: 'Unify', model: 'chatgpt-4o-latest@openai', title: 'Troubleshooting Wi-Fi' },
+  { endpoint: 'APIpie', model: 'aion-1-0', title: 'Home automation ideas' },
+  { endpoint: '302AI', model: '4.0Ultra', title: 'Improving productivity at work' },
+  { endpoint: 'anthropic', model: 'claude-sonnet-4-6', title: 'Design a REST API' },
+  { endpoint: 'openAI', model: 'gpt-5.4', title: 'How to fix a flat tire' },
+  { endpoint: 'google', model: 'gemini-3.6-flash', title: 'Understanding climate data' },
+  { endpoint: 'anthropic', model: 'claude-opus-4-6', title: 'Architecture review' },
+  { endpoint: 'openAI', model: 'gpt-5.5-pro', title: 'Best apps for learning guitar' },
 ]
 
 /** The pinned conversation, shot as the hero when a conversation is captured. */
