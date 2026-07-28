@@ -283,6 +283,12 @@ async function captureVariant(
       // then the app is up and the dialog is either present or never coming.
       await page.waitForSelector(SELECTORS.message, { timeout: MESSAGE_TIMEOUT })
       await acceptTermsIfPresent(page, variant.name)
+      // Park the pointer and drop focus. Otherwise whatever was last clicked
+      // keeps its focus ring and whatever the pointer rests over keeps its
+      // hover toolbar, which differs between variants and lands on the
+      // landing page as a stray highlight.
+      await page.mouse.move(0, 0)
+      await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
       await page.addStyleTag({ content: DISABLE_MOTION_CSS })
       await page.evaluate((zoom) => {
         document.documentElement.style.setProperty('zoom', String(zoom))
