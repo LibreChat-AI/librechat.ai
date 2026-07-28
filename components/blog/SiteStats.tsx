@@ -1,3 +1,5 @@
+import { connection } from 'next/server'
+
 import { cn } from '@/lib/utils'
 
 /**
@@ -13,10 +15,9 @@ import { cn } from '@/lib/utils'
  * No secret is ever shipped to the client: the fetch runs on the server and only
  * the rendered numbers reach the browser.
  *
- * The fallback path deliberately performs no fetch, which means it registers no
- * revalidation of its own. The blog post route sets `revalidate` for that reason
- * (see app/blog/[slug]/page.tsx) so a key added after the build still takes
- * effect on the next regeneration instead of being stuck on the snapshot.
+ * `connection()` keeps the environment lookup out of prerendering. Without it,
+ * a build that cannot see the runtime-only key permanently bakes the snapshot
+ * into the generated page and ISR only regenerates that same fallback.
  */
 
 type Stat = { label: string; value: string }
@@ -37,8 +38,14 @@ const SNAPSHOT: Stats = {
 const compact = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 })
 
 async function getLiveStats(): Promise<Stats | null> {
+  // Environment variables are read after a request arrives, not during build.
+  await connection()
+
   const key = process.env.PLAUSIBLE_STATS_API_KEY
-  if (!key) return null
+  if (!key) {
+    console.warn('[SiteStats] PLAUSIBLE_STATS_API_KEY is not configured at runtime')
+    return null
+  }
 
   const siteId = process.env.PLAUSIBLE_SITE_ID ?? 'librechat.ai'
   const baseUrl = process.env.PLAUSIBLE_BASE_URL ?? 'https://plausible.librechat.ai'
@@ -60,10 +67,16 @@ async function getLiveStats(): Promise<Stats | null> {
       next: { revalidate: 3600 },
     })
 
-    if (!res.ok) return null
+    if (!res.ok) {
+      console.warn(`[SiteStats] Plausible Stats API returned HTTP ${res.status}`)
+      return null
+    }
     const data = (await res.json()) as { results?: { metrics?: number[] }[] }
     const metrics = data.results?.[0]?.metrics
-    if (!metrics || metrics.length < 3) return null
+    if (!metrics || metrics.length < 3) {
+      console.warn('[SiteStats] Plausible Stats API returned an unexpected response')
+      return null
+    }
 
     const [visitors, pageviews, visits] = metrics
     return {
@@ -75,8 +88,9 @@ async function getLiveStats(): Promise<Stats | null> {
         { label: 'Visits', value: compact.format(visits) },
       ],
     }
-  } catch {
+  } catch (error) {
     // Network error, timeout, bad JSON — fall back to the snapshot.
+    console.warn('[SiteStats] Plausible Stats API request failed', error)
     return null
   }
 }
