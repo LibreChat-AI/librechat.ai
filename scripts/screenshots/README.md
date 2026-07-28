@@ -31,12 +31,35 @@ against the demo's current UI.
 The GitHub workflow runs in the `Production` Environment, so define these
 secrets/variables there.
 
-| Name                   | Where                              | Purpose                                 |
-| ---------------------- | ---------------------------------- | --------------------------------------- |
-| `DEMO_EMAIL`           | secret / `.env.local`              | demo account login                      |
-| `DEMO_PASSWORD`        | secret / `.env.local`              | demo account password                   |
-| `DEMO_CONVERSATION_ID` | secret / `.env.local`              | hero conversation id                    |
-| `DEMO_BASE_URL`        | variable / `.env.local` (optional) | defaults to `https://chat.librechat.ai` |
+| Name                   | Where                              | Purpose                                    |
+| ---------------------- | ---------------------------------- | ------------------------------------------ |
+| `DEMO_EMAIL`           | secret / `.env.local`              | demo account login                         |
+| `DEMO_PASSWORD`        | secret / `.env.local`              | demo account password                      |
+| `DEMO_CONVERSATION_ID` | secret / `.env.local`              | hero conversation id                       |
+| `DEMO_BASE_URL`        | variable / `.env.local` (optional) | defaults to `https://chat.librechat.ai`    |
+| `DEMO_BYPASS_TOKEN`    | secret (required in CI)            | value of the Cloudflare WAF skip header    |
+| `DEMO_BYPASS_HEADER`   | variable (optional)                | header name, default `x-screenshot-bypass` |
+
+### Cloudflare WAF skip rule (required for CI)
+
+Cloudflare serves `chat.librechat.ai` a **managed challenge** on `/api/*` for
+GitHub Actions egress. A page navigation survives it, but the SPA fetches
+`/api/config` over XHR and an XHR cannot solve a JS challenge, so the app
+renders "There was an internal server error" and there is nothing to capture.
+Confirmed from a runner: `cf-mitigated: challenge`, `server: cloudflare`, body
+`Just a moment...`, and no `via: 1.1 Caddy`, so the origin never saw the
+request. The same requests from a residential IP return 200.
+
+No change to this repo can solve that. On the Cloudflare zone for
+`chat.librechat.ai`, add a WAF custom rule:
+
+- **If** `http.request.headers["x-screenshot-bypass"][0] eq "<secret>"`
+- **Then** Skip → Managed Challenge / remaining custom rules
+- Place it **above** the rule issuing the challenge.
+
+Then store `<secret>` as the `DEMO_BYPASS_TOKEN` secret on the `Production`
+environment. Until that exists the job fails and uploads the diagnostics that
+prove why. Rotate the token by editing the rule and the secret together.
 
 ### Run locally
 
@@ -64,9 +87,9 @@ identical rather than failing loudly.
 ### Debugging a failed run
 
 The demo is a SPA that only renders the login form after `GET /api/config`
-succeeds. If that request is blocked (a CDN bot rule rejecting the runner's egress
-IP is the usual cause), the page loads instantly and then no form ever appears —
-which shows up as a selector timeout that says nothing about the real cause.
+succeeds. If that request is blocked, the page loads instantly and then no form
+ever appears, which surfaces as a selector timeout that says nothing about the
+real cause.
 
 For every failed attempt the script writes to `screenshot-diagnostics/`:
 
@@ -76,10 +99,16 @@ For every failed attempt the script writes to `screenshot-diagnostics/`:
 | `<label>-attempt-<n>.html` | the served DOM                                              |
 | `<label>-attempt-<n>.txt`  | URL, title, visible text, `/api/*` statuses, console errors |
 
-It also prints that report to stderr and, when a critical API request failed,
-appends the reason to the thrown error. The workflow uploads the directory as a
+The `.txt` also carries a **who rejected the boot-blocking request** section with
+the headers and body of the first rejected `/api/config`. Read it first: `via:
+1.1 Caddy` means the demo's own origin answered and the limit lives in
+LibreChat's config, while `cf-ray` plus `cf-mitigated` and no `via` means
+Cloudflare generated it and the fix belongs in the zone's WAF rules.
+
+The report is printed to stderr too, and when a boot-blocking request failed the
+reason is appended to the thrown error. The workflow uploads the directory as a
 `screenshot-diagnostics` artifact on failure.
 
 The script sends a normal desktop user agent rather than Playwright's default
-`HeadlessChrome` token, since the latter is what gets `/api/config` rejected from
-CI egress IPs.
+`HeadlessChrome` token. That is hygiene only — a CI run with a clean user agent
+still gets challenged, so the user agent is not what triggers the block.

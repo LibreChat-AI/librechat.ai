@@ -16,6 +16,20 @@ const PASSWORD = process.env.DEMO_PASSWORD
 const CONVERSATION_ID = process.env.DEMO_CONVERSATION_ID
 const baseURL = screenshotBaseURL(process.env.DEMO_BASE_URL)
 
+/**
+ * Cloudflare serves the demo a managed challenge (`cf-mitigated: challenge`) on
+ * `/api/*` from CI egress. A page navigation can survive that, but the SPA's
+ * XHR for `/api/config` cannot solve a JS challenge, so the app renders an
+ * error and no UI is ever captured.
+ *
+ * The only fix is a WAF skip rule on chat.librechat.ai matching a header the
+ * public does not send. Set DEMO_BYPASS_TOKEN once that rule exists; until then
+ * this is inert and the job fails with the diagnostics that prove why.
+ */
+const BYPASS_HEADER = process.env.DEMO_BYPASS_HEADER?.trim() || 'x-screenshot-bypass'
+const BYPASS_TOKEN = process.env.DEMO_BYPASS_TOKEN?.trim()
+const extraHTTPHeaders = BYPASS_TOKEN ? { [BYPASS_HEADER]: BYPASS_TOKEN } : undefined
+
 if (!EMAIL || !PASSWORD || !CONVERSATION_ID) {
   console.error('Missing required env: DEMO_EMAIL, DEMO_PASSWORD, DEMO_CONVERSATION_ID')
   process.exit(1)
@@ -201,7 +215,7 @@ async function openAppPage(page: Page, url: string, label: string) {
 }
 
 async function login(browser: Browser, userAgent: string, attempt: number) {
-  const context = await browser.newContext({ userAgent })
+  const context = await browser.newContext({ userAgent, extraHTTPHeaders })
   try {
     const page = await context.newPage()
     const probe = attachProbe(page)
@@ -242,6 +256,7 @@ async function captureVariant(
   const context = await browser.newContext({
     storageState,
     userAgent,
+    extraHTTPHeaders,
     viewport: variant.viewport,
     deviceScaleFactor: variant.deviceScaleFactor,
     isMobile: variant.device === 'mobile',
@@ -306,6 +321,12 @@ async function main() {
   try {
     const userAgent = await desktopUserAgent(browser)
     console.log(`using user agent: ${userAgent}`)
+    // Log presence only; the value is a secret.
+    console.log(
+      BYPASS_TOKEN
+        ? `sending CDN bypass header "${BYPASS_HEADER}"`
+        : 'no DEMO_BYPASS_TOKEN set — a CDN challenge on /api/* will fail this run',
+    )
     const storageState = await withRetry('login', (attempt) => login(browser, userAgent, attempt))
     for (const variant of VARIANTS) {
       await withRetry(variant.name, (attempt) =>
