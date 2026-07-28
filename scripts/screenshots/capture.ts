@@ -98,6 +98,17 @@ interface Probe {
   failedRequests: string[]
   criticalApi: string[]
   blockedResponses: Promise<string>[]
+  /** Bodies of the app's own authenticated inventory calls, if it made them. */
+  inventory: {
+    endpoints: Promise<unknown> | null
+    models: Promise<unknown> | null
+  }
+}
+
+/** Matched on the app's own requests to harvest the endpoint inventory. */
+const INVENTORY_API = {
+  endpoints: /\/api\/endpoints(\?|$)/,
+  models: /\/api\/models(\?|$)/,
 }
 
 /**
@@ -139,7 +150,17 @@ function attachProbe(page: Page): Probe {
     failedRequests: [],
     criticalApi: [],
     blockedResponses: [],
+    inventory: { endpoints: null, models: null },
   }
+  page.on('response', (response) => {
+    if (!response.ok()) return
+    const url = response.url()
+    if (INVENTORY_API.endpoints.test(url)) {
+      probe.inventory.endpoints ??= response.json().catch(() => null)
+    } else if (INVENTORY_API.models.test(url)) {
+      probe.inventory.models ??= response.json().catch(() => null)
+    }
+  })
   page.on('console', (msg) => {
     if (msg.type() === 'error') probe.consoleErrors.push(msg.text().slice(0, 300))
   })
@@ -203,9 +224,16 @@ async function dumpDiagnostics(page: Page, probe: Probe, label: string, attempt:
  * it, so a future failure is readable straight from the job log.
  */
 function explainFailure(probe: Probe, fallback: string): string {
-  // The SPA retries the request, so dedupe to keep the message readable.
+  // Only real HTTP rejections count. The SPA cancels in-flight requests when it
+  // navigates, which surfaces as `net::ERR_ABORTED /api/config` on a perfectly
+  // healthy run and otherwise blames the CDN for unrelated failures.
+  // Dedupe too, since the SPA retries.
   const blocked = [
-    ...new Set(probe.failedRequests.filter((entry) => BOOT_BLOCKING_API.test(entry))),
+    ...new Set(
+      probe.failedRequests.filter(
+        (entry) => entry.startsWith('HTTP ') && BOOT_BLOCKING_API.test(entry),
+      ),
+    ),
   ]
   if (blocked.length > 0) {
     return `${fallback}\nCause: the demo did not serve its startup config (${blocked.join('; ')}), so the app rendered an error instead of the UI. See the "who rejected the boot-blocking request" section of the diagnostics for whether the edge or the origin answered.`
@@ -271,21 +299,21 @@ async function signIn(page: Page) {
  * them. Printed once per run, and never fatal, since it is only reference
  * output.
  */
-async function logEndpointInventory(page: Page) {
-  const inventory = await page
-    .evaluate(async () => {
-      const get = async (path: string) => {
-        const res = await fetch(path, { credentials: 'include' })
-        return res.ok ? await res.json() : { __error: res.status }
-      }
-      return { endpoints: await get('/api/endpoints'), models: await get('/api/models') }
-    })
-    .catch((err) => ({ endpoints: { __error: String(err) }, models: {} }))
-
-  const endpoints = (inventory.endpoints ?? {}) as Record<string, Record<string, unknown>>
-  const models = (inventory.models ?? {}) as Record<string, string[]>
-  if (endpoints.__error) {
-    console.warn(`endpoint inventory unavailable: ${JSON.stringify(endpoints.__error)}`)
+async function logEndpointInventory(probe: Probe) {
+  // Read the app's own responses rather than issuing our own requests. These
+  // routes need the Bearer token that LibreChat's client holds in memory, so
+  // neither page.request (cookies only) nor a raw fetch in the page would be
+  // authenticated. Reusing what the app already fetched sidesteps that, and
+  // avoids page.evaluate entirely: tsx compiles this file with esbuild's
+  // keepNames, which injects a `__name` helper that does not exist in the
+  // browser realm, so evaluated closures throw on arrival.
+  const endpoints = (await probe.inventory.endpoints) as Record<
+    string,
+    Record<string, unknown>
+  > | null
+  const models = ((await probe.inventory.models) ?? {}) as Record<string, string[]>
+  if (!endpoints) {
+    console.warn('endpoint inventory unavailable: the app did not fetch /api/endpoints')
     return
   }
 
@@ -356,7 +384,7 @@ async function captureVariant(
       await acceptTermsIfPresent(page, variant.name)
       if (!inventoryLogged) {
         inventoryLogged = true
-        await logEndpointInventory(page)
+        await logEndpointInventory(probe)
       }
       await assertSidebarPopulated(page, variant)
       // Park the pointer and drop focus. Otherwise whatever was last clicked
