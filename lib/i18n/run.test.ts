@@ -688,6 +688,66 @@ describe('runTranslation', () => {
     expect(await readdir(content)).not.toContain('index.de.mdx')
   })
 
+  it('does not let a block give-up suppress the inline translation of the same text', async () => {
+    // Block and inline use different prompts and different validators, so a string
+    // the model mangles as a block may translate perfectly as a title or label.
+    // A give-up shared across both would strand the inline use in English forever.
+    const shared = 'Shared.'
+    const model: TranslateModel = {
+      generate: async ({ system, prompt }) => {
+        const text = prompt.split(/Translate the following[^\n]*:\n/).pop() ?? ''
+        if (text !== shared) return text
+        // Valid as an inline string, structurally broken as a block.
+        return system.includes('short inline string') ? 'Geteilt.' : 'Geteilt.\n\n```\nx\n```'
+      },
+    }
+    await writeFile(join(content, 'index.mdx'), `---\ntitle: Page\n---\n\n${shared}\n`)
+    await writeFile(join(content, 'meta.json'), JSON.stringify({ title: shared, pages: ['index'] }))
+
+    // Drive the block to a give-up on its own first, so the ordering is fixed.
+    await runTranslation({
+      contentDir: content,
+      cacheDir: cache,
+      locales: ['de'],
+      model,
+      only: 'index.mdx',
+    })
+    const blocked = await readFile(join(content, 'index.de.mdx'), 'utf8')
+    expect(blocked).toContain(shared)
+
+    const stats = await runTranslation({
+      contentDir: content,
+      cacheDir: cache,
+      locales: ['de'],
+      model,
+    })
+    expect(stats.skipped).toEqual([])
+    // The inline occurrence must still have been attempted, and it succeeds.
+    const meta = JSON.parse(await readFile(join(content, 'meta.de.json'), 'utf8'))
+    expect(meta.title).toBe('Geteilt.')
+  })
+
+  it('never deletes a locale file during a dry run', async () => {
+    // Dry runs suppress every other write, orphan cleanup, and cache save, so
+    // previewing a quarantined page must not remove generated docs.
+    const opts = {
+      contentDir: content,
+      cacheDir: cache,
+      locales: ['de'],
+      model: breaksFileViaTitle('Hello'),
+    }
+    for (let run = 1; run <= 3; run++) await runTranslation(opts)
+    // The deletion from those failing runs may never have been pushed.
+    await writeFile(join(content, 'index.de.mdx'), `---\ntitle: Veraltet\n---\n\nAlt.\n`)
+
+    const dry = await runTranslation({ ...opts, dryRun: true })
+    // Still reported — a preview should say the page is quarantined — but the
+    // generated file must survive untouched.
+    expect(dry.quarantined.some((q) => q.includes('index.mdx'))).toBe(true)
+    expect(await readdir(content)).toContain('index.de.mdx')
+    expect(await readFile(join(content, 'index.de.mdx'), 'utf8')).toContain('Veraltet')
+  })
+
   it('reports how many file translations were attempted', async () => {
     const stats = await runTranslation({
       contentDir: content,

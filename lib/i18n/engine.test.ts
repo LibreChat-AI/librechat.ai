@@ -4,6 +4,7 @@ import {
   buildSystemPrompt,
   stripWrappingFence,
   outputTokenBudget,
+  assertNotTruncated,
   type TranslateModel,
 } from './engine'
 
@@ -51,7 +52,21 @@ describe('engine', () => {
     // which inflates the credit hold on every call regardless of block size.
     expect(outputTokenBudget('Hi')).toBe(512)
     expect(outputTokenBudget('x'.repeat(600))).toBe(1800)
-    expect(outputTokenBudget('x'.repeat(100_000))).toBe(8192)
+    expect(outputTokenBudget('x'.repeat(100_000))).toBe(16384)
+  })
+
+  it('outputTokenBudget covers the largest segment in the real corpus', () => {
+    // content/docs tops out around 15k characters in one translatable segment,
+    // which needs roughly 6k output tokens in the worst-case target language. If
+    // the ceiling ever drops below that, those blocks truncate on every attempt.
+    expect(outputTokenBudget('x'.repeat(15_000))).toBeGreaterThanOrEqual(8000)
+  })
+
+  it('rejects a response cut off at the token budget', () => {
+    // Truncated output frequently still passes the structural validator, so without
+    // this it would be cached and published as a complete translation.
+    expect(() => assertNotTruncated('length', 512)).toThrow(/truncated/i)
+    expect(() => assertNotTruncated('stop', 512)).not.toThrow()
   })
 
   it('translate caps the output budget for the block it sends', async () => {

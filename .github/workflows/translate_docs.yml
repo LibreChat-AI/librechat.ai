@@ -110,7 +110,12 @@ jobs:
             [ "$name" = "state.json" ] && continue
             target="content/.i18n-cache/$name"
             if [ -f "$target" ]; then
-              jq -s '.[0] * .[1]' "$target" "$src" > "$target.merged"
+              # `.[1] * .[0]` — the restored cache ($target) wins collisions, not the
+              # branch snapshot. jq's `*` gives the right operand precedence, which
+              # would let an older branch value overwrite a newer cached one: a stale
+              # filefail counter replacing the current one buys another paid pass over
+              # a page that should already have quarantined.
+              jq -s '.[1] * .[0]' "$target" "$src" > "$target.merged"
               mv "$target.merged" "$target"
             else
               cp "$src" "$target"
@@ -150,9 +155,21 @@ jobs:
       - name: Check for pending work
         id: check
         run: |
+          # Source files only. The generated `*.<locale>.mdx` and `meta.<locale>.json`
+          # live in the same tree, so hashing the tree object itself would change
+          # every time the translation branch is merged into main — an output-only
+          # push that this workflow deliberately does not trigger on, yet which would
+          # cost the next sweep a full 13-locale pass. Same locale patterns as the
+          # `on.push.paths` exclusions above and LOCALE_RE in lib/i18n/run.ts.
           fingerprint=$(
             {
-              git rev-parse "origin/main:content/docs"
+              # ls-tree separates the path with a TAB, so the meta pattern must anchor
+              # on whitespace as well as `/` — otherwise the generated meta.<locale>
+              # files at the root of content/docs slip through and the fingerprint
+              # moves on every publish anyway.
+              git ls-tree -r "origin/main:content/docs" |
+                grep -vE '\.[a-z]{2}(-[A-Z]{2})?\.mdx$' |
+                grep -vE '(^|[/[:space:]])meta\.[a-z]{2}(-[A-Z]{2})?\.json$'
               git rev-parse "origin/main:lib/i18n"
               git rev-parse "origin/main:scripts/translate.ts"
             } | sha256sum | cut -d' ' -f1

@@ -70,8 +70,14 @@ const BLOCK_VALIDATION_ATTEMPTS = Number(process.env.TRANSLATE_BLOCK_VALIDATION_
  * single run forever: the fallback returns the source text but caches nothing, so
  * the next run misses again. Across 13 locales and a half-hourly schedule that was
  * the bulk of the pipeline's spend while `translated=0`.
+ *
+ * Scoped by `kind`: the same source string can appear both as a Markdown block and
+ * as an inline title or label, and the two use different prompts and different
+ * validators. A block that keeps failing must not stop the inline occurrence from
+ * ever being attempted, since that one may well succeed.
  */
-const giveUpKey = (hash: string): string => `giveup:${VALIDATOR_VERSION}:${hash}`
+const giveUpKey = (hash: string, kind: 'block' | 'inline'): string =>
+  `giveup:${VALIDATOR_VERSION}:${kind}:${hash}`
 const isGiveUpKey = (key: string): boolean => key.startsWith('giveup:')
 
 /**
@@ -172,7 +178,7 @@ export async function runTranslation(opts: RunOptions): Promise<RunStats> {
       context?: string,
     ): Promise<string> => {
       const hash = hashText(text)
-      const giveUp = giveUpKey(hash)
+      const giveUp = giveUpKey(hash, kind)
       // Mark both keys used on every encounter, cache hit or not, so prune() keeps
       // the give-up marker for a block that is still present in the docs.
       tm.markUsed(hash)
@@ -278,7 +284,13 @@ export async function runTranslation(opts: RunOptions): Promise<RunStats> {
             // that exhausted its retries), so the checkout can carry a translation
             // that predates the current source. Quarantine is not counted as pending
             // work, so nothing else would ever come back to clean it up.
-            await unlink(join(opts.contentDir, localePath(rel, locale, '.mdx'))).catch(() => {})
+            //
+            // Never during a dry run: every other write, orphan cleanup, and cache
+            // save is suppressed there, so previewing a quarantined page must not
+            // delete generated docs from the worktree.
+            if (!opts.dryRun) {
+              await unlink(join(opts.contentDir, localePath(rel, locale, '.mdx'))).catch(() => {})
+            }
             stats.quarantined.push(
               `${rel} [${locale}]: left in English after ${failures} validation failures (edit the page, bump VALIDATOR_VERSION, or run with --force to retry)`,
             )
