@@ -298,7 +298,6 @@ export const vi: UIStrings = {
       resources: 'Tài nguyên',
       documentation: 'Tài liệu',
       blog: 'Blog',
-      newsletter: 'Bản tin',
       legal: 'Pháp lý',
     },
     items: {
@@ -314,8 +313,6 @@ export const vi: UIStrings = {
       remoteInstall: 'Cài đặt từ xa',
       blog: 'Blog',
       blogAuthors: 'Tác giả blog',
-      subscribe: 'Đăng ký',
-      unsubscribe: 'Hủy đăng ký',
       termsOfService: 'Điều khoản dịch vụ',
       privacyPolicy: 'Chính sách bảo mật',
       cookiePolicy: 'Chính sách cookie',

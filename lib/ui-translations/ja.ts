@@ -305,7 +305,6 @@ export const ja: UIStrings = {
       resources: 'リソース',
       documentation: 'ドキュメント',
       blog: 'ブログ',
-      newsletter: 'ニュースレター',
       legal: '法的事項',
     },
     items: {
@@ -321,8 +320,6 @@ export const ja: UIStrings = {
       remoteInstall: 'リモートインストール',
       blog: 'ブログ',
       blogAuthors: 'ブログ著者',
-      subscribe: '購読する',
-      unsubscribe: '購読を解除',
       termsOfService: '利用規約',
       privacyPolicy: 'プライバシーポリシー',
       cookiePolicy: 'Cookie ポリシー',

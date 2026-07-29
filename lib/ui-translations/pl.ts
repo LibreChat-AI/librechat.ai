@@ -305,7 +305,6 @@ export const pl: UIStrings = {
       resources: 'Zasoby',
       documentation: 'Dokumentacja',
       blog: 'Blog',
-      newsletter: 'Newsletter',
       legal: 'Informacje prawne',
     },
     items: {
@@ -321,8 +320,6 @@ export const pl: UIStrings = {
       remoteInstall: 'Instalacja zdalna',
       blog: 'Blog',
       blogAuthors: 'Autorzy bloga',
-      subscribe: 'Subskrybuj',
-      unsubscribe: 'Anuluj subskrypcję',
       termsOfService: 'Warunki korzystania',
       privacyPolicy: 'Polityka prywatności',
       cookiePolicy: 'Polityka plików cookie',

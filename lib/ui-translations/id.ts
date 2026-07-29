@@ -300,7 +300,6 @@ export const id: UIStrings = {
       resources: 'Sumber daya',
       documentation: 'Dokumentasi',
       blog: 'Blog',
-      newsletter: 'Newsletter',
       legal: 'Legal',
     },
     items: {
@@ -316,8 +315,6 @@ export const id: UIStrings = {
       remoteInstall: 'Instal remote',
       blog: 'Blog',
       blogAuthors: 'Penulis blog',
-      subscribe: 'Berlangganan',
-      unsubscribe: 'Berhenti berlangganan',
       termsOfService: 'Ketentuan layanan',
       privacyPolicy: 'Kebijakan privasi',
       cookiePolicy: 'Kebijakan cookie',

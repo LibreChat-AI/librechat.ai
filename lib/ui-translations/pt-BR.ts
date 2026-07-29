@@ -306,7 +306,6 @@ export const ptBR: UIStrings = {
       resources: 'Recursos',
       documentation: 'Documentação',
       blog: 'Blog',
-      newsletter: 'Newsletter',
       legal: 'Legal',
     },
     items: {
@@ -322,8 +321,6 @@ export const ptBR: UIStrings = {
       remoteInstall: 'Instalação remota',
       blog: 'Blog',
       blogAuthors: 'Autores do blog',
-      subscribe: 'Inscrever-se',
-      unsubscribe: 'Cancelar inscrição',
       termsOfService: 'Termos de serviço',
       privacyPolicy: 'Política de privacidade',
       cookiePolicy: 'Política de cookies',

@@ -303,7 +303,6 @@ export const nl: UIStrings = {
       resources: 'Bronnen',
       documentation: 'Documentatie',
       blog: 'Blog',
-      newsletter: 'Nieuwsbrief',
       legal: 'Juridisch',
     },
     items: {
@@ -319,8 +318,6 @@ export const nl: UIStrings = {
       remoteInstall: 'Remote installatie',
       blog: 'Blog',
       blogAuthors: 'Blogauteurs',
-      subscribe: 'Abonneren',
-      unsubscribe: 'Afmelden',
       termsOfService: 'Servicevoorwaarden',
       privacyPolicy: 'Privacybeleid',
       cookiePolicy: 'Cookiebeleid',

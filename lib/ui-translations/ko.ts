@@ -292,7 +292,6 @@ export const ko: UIStrings = {
       resources: '리소스',
       documentation: '문서',
       blog: '블로그',
-      newsletter: '뉴스레터',
       legal: '법적 고지',
     },
     items: {
@@ -308,8 +307,6 @@ export const ko: UIStrings = {
       remoteInstall: '원격 설치',
       blog: '블로그',
       blogAuthors: '블로그 작성자',
-      subscribe: '구독',
-      unsubscribe: '구독 취소',
       termsOfService: '서비스 약관',
       privacyPolicy: '개인정보 처리방침',
       cookiePolicy: '쿠키 정책',
