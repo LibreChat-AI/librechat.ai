@@ -56,10 +56,11 @@ function normalizeCwvEndpoint(endpoint: string) {
 }
 
 export default function RootLayout({ children }: { children: ReactNode }) {
-  // Sanitize Scarf pixel ID: only allow alphanumeric chars, underscores, and hyphens
-  // to prevent XSS via dangerouslySetInnerHTML injection if the env var is compromised.
-  const rawScarfId = process.env.NEXT_PUBLIC_SCARF_PIXEL_ID ?? ''
-  const scarfPixelId = /^[\w-]+$/.test(rawScarfId) ? rawScarfId : ''
+  // Sanitize the Reo.dev client ID: only allow alphanumeric chars, underscores,
+  // and hyphens to prevent XSS via dangerouslySetInnerHTML injection if the env
+  // var is compromised. Unset, which is the default, emits no script at all.
+  const rawReoClientId = process.env.NEXT_PUBLIC_REO_CLIENT_ID ?? ''
+  const reoClientId = /^[\w-]+$/.test(rawReoClientId) ? rawReoClientId : ''
   const askAIEnabled = Boolean(process.env.OPENROUTER_API_KEY)
   const plausibleEnabled = process.env.NODE_ENV === 'production'
 
@@ -128,28 +129,31 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             sampleRate={cwvSampleRate}
           />
         )}
-        {scarfPixelId && (
+        {/* Developer-intent analytics by Reo.dev, replacing the retired Scarf
+            pixel. Reo's loader appends its own tag and calls Reo.init() from the
+            onload handler, so the snippet stays inline instead of moving to
+            next/script's src + onLoad, which would turn this server component
+            into a client one. No manual re-ping on navigation, unlike the Scarf
+            pixel: that was a single image request, while reo.js instruments
+            history itself. Reo does set first-party cookies, which /privacy and
+            /cookie do not yet describe — see the PR for the follow-up. */}
+        {reoClientId && (
           <Script
-            id="scarf-pixel"
+            id="reo-init"
             strategy="afterInteractive"
             dangerouslySetInnerHTML={{
               __html: `
               (function () {
-                var PIXEL_ID = '${scarfPixelId}';
-                function sendScarfPing() {
-                  var img = new Image();
-                  img.referrerPolicy = 'no-referrer-when-downgrade';
-                  img.src = 'https://static.scarf.sh/a.png?x-pxid=' + PIXEL_ID;
-                }
-                var originalPushState = history.pushState;
-                history.pushState = function () {
-                  originalPushState.apply(this, arguments);
-                  window.dispatchEvent(new Event('scarf:locationchange'));
+                var CLIENT_ID = '${reoClientId}';
+                var script = document.createElement('script');
+                script.src = 'https://static.reo.dev/' + CLIENT_ID + '/reo.js';
+                script.defer = true;
+                script.onload = function () {
+                  if (window.Reo && typeof window.Reo.init === 'function') {
+                    window.Reo.init({ clientID: CLIENT_ID });
+                  }
                 };
-                window.addEventListener('hashchange', sendScarfPing);
-                window.addEventListener('popstate', sendScarfPing);
-                window.addEventListener('scarf:locationchange', sendScarfPing);
-                sendScarfPing();
+                document.head.appendChild(script);
               })();
             `,
             }}
