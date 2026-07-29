@@ -6,6 +6,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
+import { canonicalSameOriginPath } from '@/lib/safe-docs-path'
 
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false)
@@ -33,29 +34,41 @@ function CopyButton({ text }: { text: string }) {
   )
 }
 
+const LINK_CLASS =
+  'font-medium text-fd-primary underline underline-offset-2 hover:text-fd-primary/80'
+
 export function ChatMarkdown({ children }: { children: string }) {
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
       components={{
         a: ({ href, children: c }) => {
-          if (href?.startsWith('/')) {
+          // A same-origin path renders as an in-app <Link>, using the
+          // canonicalized value rather than the raw href.
+          const internal = canonicalSameOriginPath(href)
+          if (internal !== null) {
             return (
-              <Link
-                href={href}
-                className="font-medium text-fd-primary underline underline-offset-2 hover:text-fd-primary/80"
-              >
+              <Link href={internal} className={LINK_CLASS}>
                 {c}
               </Link>
             )
           }
+
+          // In-page anchors and mail links are inert and worth keeping live.
+          if (href && (href.startsWith('#') || /^mailto:/i.test(href))) {
+            return (
+              <a href={href} className={LINK_CLASS}>
+                {c}
+              </a>
+            )
+          }
+
+          // Anything else that is not http(s) — javascript:, data:, relative
+          // paths the model invented — degrades to plain text.
+          if (!href || !/^https?:\/\//i.test(href)) return <span>{c}</span>
+
           return (
-            <a
-              href={href}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="font-medium text-fd-primary underline underline-offset-2 hover:text-fd-primary/80"
-            >
+            <a href={href} target="_blank" rel="noopener noreferrer" className={LINK_CLASS}>
               {c}
             </a>
           )

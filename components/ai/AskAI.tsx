@@ -25,8 +25,9 @@ import {
 import Link from 'next/link'
 import { useRouter, usePathname } from 'next/navigation'
 import { cn } from '@/lib/utils'
+import { canonicalDocsPath } from '@/lib/safe-docs-path'
 import { ChatMarkdown } from './markdown'
-import { saveMessages, loadMessages, clearMessages } from './chat-store'
+import { saveMessages, loadMessages, clearMessages, sanitizeMessages } from './chat-store'
 import startersMap from '@/public/starters.json'
 
 /* -------------------------------------------------------------------------- */
@@ -53,9 +54,10 @@ function extractDocRefs(text: string): { title: string; url: string }[] {
   const regex = /\[([^\]]+)\]\((\/docs\/[^)]+)\)/g
   let match
   while ((match = regex.exec(text)) !== null) {
-    if (!seen.has(match[2])) {
-      seen.add(match[2])
-      refs.push({ title: match[1], url: match[2] })
+    const url = canonicalDocsPath(match[2])
+    if (url && !seen.has(url)) {
+      seen.add(url)
+      refs.push({ title: match[1], url })
     }
   }
   return refs
@@ -88,9 +90,12 @@ function getStartersForPage(pathname: string): string[] {
 /* -------------------------------------------------------------------------- */
 
 function DocRef({ url, title }: { url: string; title: string }) {
+  const href = canonicalDocsPath(url)
+  if (!href) return null
+
   return (
     <Link
-      href={url}
+      href={href}
       className="inline-flex items-center gap-1 rounded-full border border-fd-border bg-fd-secondary/50 px-2.5 py-1 text-xs font-medium text-fd-foreground transition-colors hover:bg-fd-accent"
     >
       <LCIcon className="size-3" />
@@ -131,7 +136,11 @@ function MessageFeedback({ messageId: _messageId }: { messageId: string }) {
 
 function SourcesCollapsible({ sources }: { sources: { title: string; url: string }[] }) {
   const [open, setOpen] = useState(false)
-  if (sources.length === 0) return null
+  const safeSources = sources.flatMap((source) => {
+    const url = canonicalDocsPath(source.url)
+    return url ? [{ ...source, url }] : []
+  })
+  if (safeSources.length === 0) return null
   return (
     <div className="mt-1.5">
       <button
@@ -139,11 +148,11 @@ function SourcesCollapsible({ sources }: { sources: { title: string; url: string
         className="flex items-center gap-1 text-[10px] text-fd-muted-foreground transition-colors hover:text-fd-foreground"
       >
         <ChevronDown className={cn('size-3 transition-transform', open && 'rotate-180')} />
-        {sources.length} source{sources.length > 1 ? 's' : ''}
+        {safeSources.length} source{safeSources.length > 1 ? 's' : ''}
       </button>
       {open && (
         <div className="mt-1 flex flex-col gap-1">
-          {sources.map((s) => (
+          {safeSources.map((s) => (
             <Link
               key={s.url}
               href={s.url}
@@ -340,13 +349,10 @@ export function AskAI() {
       for (const part of m.parts ?? []) {
         if (part.type === 'tool-navigate' && 'state' in part && part.state === 'output-available') {
           const result = part.output as { action?: string; url?: string } | undefined
-          if (
-            result?.action === 'navigate' &&
-            result.url?.startsWith('/docs/') &&
-            !result.url.includes('..')
-          ) {
+          const target = result?.action === 'navigate' ? canonicalDocsPath(result.url) : null
+          if (target) {
             navigatedRef.current.add(m.id)
-            router.push(result.url)
+            router.push(target)
           }
         }
       }
@@ -428,20 +434,13 @@ export function AskAI() {
 
       // Validate structure: must be a non-empty array of user/assistant messages
       if (!Array.isArray(shared) || shared.length === 0) return
-      const validated = shared.filter(
-        (m: unknown): m is { role: string; parts: { type: string; text: string }[] } =>
-          typeof m === 'object' &&
-          m !== null &&
-          'role' in m &&
-          (m.role === 'user' || m.role === 'assistant'),
-      )
+      const validated = sanitizeMessages(shared)
       if (validated.length === 0) return
 
       setMessages(
         validated.map((m, i) => ({
+          ...m,
           id: `shared-${i}`,
-          role: m.role as 'user' | 'assistant',
-          parts: m.parts ?? [],
         })) as Parameters<typeof setMessages>[0] extends (infer U)[] ? U[] : never,
       )
       setOpen(true)
@@ -673,21 +672,20 @@ export function AskAI() {
                               ) {
                                 const res = (part as { output?: { url?: string; title?: string } })
                                   .output
-                                if (res?.url) {
+                                const href = canonicalDocsPath(res?.url)
+                                if (href) {
                                   return (
                                     <Link
                                       key={i}
-                                      href={res.url}
+                                      href={href}
                                       className="mb-2 flex items-center gap-2 rounded-lg border border-fd-border bg-fd-secondary/50 p-2.5 text-xs transition-colors hover:bg-fd-accent"
                                     >
                                       <ExternalLink className="size-3.5 shrink-0 text-fd-primary" />
                                       <div className="min-w-0">
                                         <p className="font-medium text-fd-foreground">
-                                          {res.title ?? 'Opening page…'}
+                                          {res?.title ?? 'Opening page…'}
                                         </p>
-                                        <p className="truncate text-fd-muted-foreground">
-                                          {res.url}
-                                        </p>
+                                        <p className="truncate text-fd-muted-foreground">{href}</p>
                                       </div>
                                     </Link>
                                   )

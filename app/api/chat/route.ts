@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { docsSource } from '@/lib/source'
 import { i18n } from '@/lib/i18n'
 import { checkRateLimit } from '@/lib/ratelimit'
+import { canonicalDocsPath } from '@/lib/safe-docs-path'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
@@ -191,10 +192,19 @@ const navigateTool = tool({
   description:
     'Navigate the user directly to a specific documentation page. Use this when the user clearly wants to go to a page, not when they are asking a question about the content. Always search first to find the correct URL.',
   inputSchema: z.object({
-    url: z.string().describe('The docs URL to navigate to'),
+    // Canonicalized same-origin /docs path only — rejects protocol-relative,
+    // encoded-separator traversal, control-char, and scheme escapes. The
+    // transform means `execute` receives the canonical form, never the raw
+    // model output. A rejection surfaces to the model as a tool-error part and
+    // it gets another step to correct itself; the stream is unaffected.
+    url: z
+      .string()
+      .describe('The relative docs URL to navigate to')
+      .transform(canonicalDocsPath)
+      .refine((value) => value !== null, 'must be a relative /docs path'),
     title: z.string().describe('The page title to show in the navigation message'),
   }),
-  execute: async ({ url, title }: { url: string; title: string }) => {
+  execute: async ({ url, title }: { url: string | null; title: string }) => {
     return { action: 'navigate', url, title }
   },
 })
@@ -220,9 +230,9 @@ export async function POST(req: Request) {
   const { messages } = body as { messages: unknown[] }
   const mode = req.headers.get('x-chat-mode') as 'search' | 'page' | null
   const rawPageUrl = req.headers.get('x-chat-page')
-  // Validate page URL: must be a relative docs path, no traversal
-  const pageUrl =
-    rawPageUrl && rawPageUrl.startsWith('/docs/') && !rawPageUrl.includes('..') ? rawPageUrl : null
+  // Canonicalized same-origin /docs path only — same allowlist as the navigate
+  // tool, so this header cannot reach getPageContent as anything else.
+  const pageUrl = canonicalDocsPath(rawPageUrl)
 
   if (!process.env.OPENROUTER_API_KEY) {
     return new Response(JSON.stringify({ error: 'OPENROUTER_API_KEY is not configured' }), {

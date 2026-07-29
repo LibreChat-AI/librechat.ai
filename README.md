@@ -97,6 +97,26 @@ Open [http://localhost:3333](http://localhost:3333) to view the site.
 
 > Environment variables are optional for local docs work. You only need to fill in `.env.local` to exercise features like Ask AI or rate limiting. Always run `pnpm build` before opening a PR to catch build errors early.
 
+### Deploying behind a proxy
+
+Ask AI's rate limiter needs a client IP it can trust. Client-supplied headers
+(`x-forwarded-for`, `x-real-ip`, `cf-connecting-ip`) are forgeable by anyone who
+can reach the origin directly, so they are ignored by default — one spoofed
+header per request would otherwise defeat per-client limiting entirely.
+
+Set **one** of the following in the production environment:
+
+| Deployment                                       | Variable                                      | Trusted header           |
+| ------------------------------------------------ | --------------------------------------------- | ------------------------ |
+| Behind Cloudflare, origin not directly reachable | `TRUST_CF_CONNECTING_IP=true`                 | `cf-connecting-ip`       |
+| Vercel                                           | _(nothing — `VERCEL=1` is set automatically)_ | `x-vercel-forwarded-for` |
+
+With neither set, the app still rate limits, but every visitor shares a single
+100 req/60s bucket instead of getting their own — enough to blunt abuse, and
+enough to 429 real users on a busy day. The server logs a warning once per
+process when it falls back to that mode. Leave `TRUST_CF_CONNECTING_IP` unset on
+preview or platform hostnames that bypass the proxy.
+
 ## Project Structure
 
 ```

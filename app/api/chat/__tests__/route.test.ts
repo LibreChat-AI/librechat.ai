@@ -154,4 +154,60 @@ describe('POST /api/chat', () => {
       }),
     )
   })
+
+  it('rejects an encoded-separator x-chat-page and falls back to search mode', async () => {
+    await POST(
+      chatRequest([{ role: 'user', content: 'Show me docs' }], {
+        'x-chat-mode': 'page',
+        'x-chat-page': '/docs/..%2fsecrets',
+      }),
+    )
+
+    expect(mockStreamText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tools: expect.objectContaining({ search: expect.any(Object) }),
+      }),
+    )
+  })
+
+  describe('navigate tool input schema', () => {
+    async function navigateSchema() {
+      await POST(chatRequest([{ role: 'user', content: 'take me to the docker guide' }]))
+      const { tools } = mockStreamText.mock.calls[0][0] as {
+        tools: { navigate: { inputSchema: { safeParse: (v: unknown) => SafeParseResult } } }
+      }
+      return tools.navigate.inputSchema
+    }
+
+    interface SafeParseResult {
+      success: boolean
+      data?: { url: string | null; title: string }
+    }
+
+    it('canonicalizes the url the model supplies', async () => {
+      const schema = await navigateSchema()
+
+      expect(schema.safeParse({ url: '/docs/local/docker', title: 'Docker' }).data?.url).toBe(
+        '/docs/local/docker',
+      )
+      expect(schema.safeParse({ url: '/./docs/local/docker', title: 'Docker' }).data?.url).toBe(
+        '/docs/local/docker',
+      )
+    })
+
+    it('rejects urls that escape the docs allowlist', async () => {
+      const schema = await navigateSchema()
+
+      for (const url of [
+        '//evil.com',
+        'https://evil.com/docs',
+        'javascript:alert(1)',
+        '/privacy',
+        '/docs/../privacy',
+        '/docs/..%2fprivacy',
+      ]) {
+        expect(schema.safeParse({ url, title: 'x' }).success, url).toBe(false)
+      }
+    })
+  })
 })

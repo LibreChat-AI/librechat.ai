@@ -47,20 +47,20 @@ export function createRateLimiter(maxRequests: number, windowMs: number) {
 }
 
 /**
- * Extract client IP from request headers.
- * Checks x-forwarded-for, x-real-ip, and cf-connecting-ip.
- * Returns 'unknown' as a fallback so rate limiting still applies.
+ * Extract a rate-limit key from request client IP headers.
+ *
+ * `cf-connecting-ip` is only trusted when TRUST_CF_CONNECTING_IP=true (every
+ * request is guaranteed to arrive through Cloudflare). Vercel overwrites
+ * x-vercel-forwarded-for with its authenticated client address. On any other
+ * directly reachable origin, client-IP headers are requester-controlled, so
+ * return null and let callers skip per-client limiting.
  */
-export function getClientIp(request: Request): string {
-  const forwarded = request.headers.get('x-forwarded-for')
-  if (forwarded) {
-    const first = forwarded.split(',')[0]?.trim()
-    if (first) return first
+export function getClientIp(request: Request): string | null {
+  if (process.env.TRUST_CF_CONNECTING_IP === 'true') {
+    return request.headers.get('cf-connecting-ip')?.trim() || null
   }
-
-  return (
-    request.headers.get('x-real-ip')?.trim() ??
-    request.headers.get('cf-connecting-ip')?.trim() ??
-    'unknown'
-  )
+  if (process.env.VERCEL === '1') {
+    return request.headers.get('x-vercel-forwarded-for')?.trim() || null
+  }
+  return null
 }
