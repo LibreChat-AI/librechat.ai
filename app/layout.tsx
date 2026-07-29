@@ -7,6 +7,7 @@ import { Banner } from 'fumadocs-ui/components/banner'
 import { Provider } from '@/components/provider'
 import { AskAILoader } from '@/components/ai/AskAILoader'
 import { CoreWebVitalsMonitor } from '@/components/analytics/CoreWebVitalsMonitor'
+import { ReoAnalyticsConsent } from '@/components/analytics/ReoAnalyticsConsent'
 import { ogImageUrl } from '@/lib/og'
 import './global.css'
 
@@ -56,9 +57,8 @@ function normalizeCwvEndpoint(endpoint: string) {
 }
 
 export default function RootLayout({ children }: { children: ReactNode }) {
-  // Sanitize the Reo.dev client ID: only allow alphanumeric chars, underscores,
-  // and hyphens to prevent XSS via dangerouslySetInnerHTML injection if the env
-  // var is compromised. Unset, which is the default, emits no script at all.
+  // Restrict the Reo.dev client ID to its documented identifier characters
+  // before the client component interpolates it into the script URL.
   const rawReoClientId = process.env.NEXT_PUBLIC_REO_CLIENT_ID ?? ''
   const reoClientId = /^[\w-]+$/.test(rawReoClientId) ? rawReoClientId : ''
   const askAIEnabled = Boolean(process.env.OPENROUTER_API_KEY)
@@ -129,36 +129,10 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             sampleRate={cwvSampleRate}
           />
         )}
-        {/* Developer-intent analytics by Reo.dev, replacing the retired Scarf
-            pixel. Reo's loader appends its own tag and calls Reo.init() from the
-            onload handler, so the snippet stays inline instead of moving to
-            next/script's src + onLoad, which would turn this server component
-            into a client one. No manual re-ping on navigation, unlike the Scarf
-            pixel: that was a single image request, while reo.js instruments
-            history itself. Reo does set first-party cookies, which /privacy and
-            /cookie do not yet describe — see the PR for the follow-up. */}
-        {reoClientId && (
-          <Script
-            id="reo-init"
-            strategy="afterInteractive"
-            dangerouslySetInnerHTML={{
-              __html: `
-              (function () {
-                var CLIENT_ID = '${reoClientId}';
-                var script = document.createElement('script');
-                script.src = 'https://static.reo.dev/' + CLIENT_ID + '/reo.js';
-                script.defer = true;
-                script.onload = function () {
-                  if (window.Reo && typeof window.Reo.init === 'function') {
-                    window.Reo.init({ clientID: CLIENT_ID });
-                  }
-                };
-                document.head.appendChild(script);
-              })();
-            `,
-            }}
-          />
-        )}
+        {/* Reo.dev is loaded client-side only after explicit performance
+            analytics consent. The consent component also provides withdrawal
+            controls and clears Reo's first-party cookies on withdrawal. */}
+        {reoClientId && <ReoAnalyticsConsent clientId={reoClientId} />}
       </body>
     </html>
   )

@@ -26,18 +26,18 @@ export default function PrivacyPolicyPage() {
             <h1 className="text-3xl font-bold tracking-tight text-foreground sm:text-4xl">
               Privacy Policy
             </h1>
-            <p className="mt-4 text-sm text-muted-foreground">Last updated: April 26, 2026</p>
+            <p className="mt-4 text-sm text-muted-foreground">Last updated: July 29, 2026</p>
           </header>
 
           <h2>1. Overview</h2>
           <p>
             This Privacy Policy describes how the LibreChat documentation website (
             <Link href="https://librechat.ai">librechat.ai</Link>, the &ldquo;Site&rdquo;) handles
-            information about its visitors. We have designed the Site to operate without setting
-            cookies, without storing directly identifying visitor profiles, and without sharing
-            visitor information with third-party advertising networks. The limited information we
-            process is used solely to understand aggregate site usage and to maintain performance
-            and reliability.
+            information about its visitors. We use privacy-preserving, cookieless tools for
+            aggregate analytics and performance monitoring. With your express consent, we may also
+            load Reo.dev performance analytics, which uses first-party cookies to understand how
+            developers use the website and documentation. We do not use advertising cookies or track
+            your activity across unrelated websites.
           </p>
           <p>
             This policy applies to the documentation website only. It does not apply to the
@@ -60,9 +60,9 @@ export default function PrivacyPolicyPage() {
 
           <h2>3. Information We Collect Automatically</h2>
           <p>
-            When you visit the Site, our self-hosted analytics and performance-monitoring tools
-            collect a small set of technical signals. None of these signals contain your name, email
-            address, account identifier, or any other directly identifying information.
+            When you visit the Site, our analytics and performance-monitoring tools may collect a
+            limited set of technical signals. The specific collection depends on your optional
+            analytics consent.
           </p>
 
           <h3>3.1 Aggregate Usage Analytics &mdash; Plausible Analytics</h3>
@@ -158,14 +158,30 @@ export default function PrivacyPolicyPage() {
             </li>
           </ul>
 
-          <h3>3.3 Open-Source Telemetry &mdash; Scarf Pixel (optional)</h3>
+          <h3>3.3 Developer-Intent Analytics &mdash; Reo.dev (optional)</h3>
           <p>
-            On certain pages, we may load a single transparent pixel from{' '}
-            <Link href="https://about.scarf.sh/privacy">Scarf</Link> (<code>static.scarf.sh</code>)
-            so that the LibreChat project can count anonymous package and documentation pulls. Scarf
-            does not set cookies, does not use <code>localStorage</code>, and provides aggregate
-            counts to the project maintainers. The Scarf pixel is conditionally enabled and is not
-            used to identify individual visitors.
+            If you accept performance analytics, the Site loads Reo.dev JavaScript from{' '}
+            <code>static.reo.dev</code>. Reo.dev receives page views and technical-content
+            interactions, together with technical signals such as your browser information, IP
+            address, referring URL, and Reo.dev identifiers. Reo.dev uses these signals to associate
+            activity across visits, analyze developer interest, and provide LibreChat with company
+            and developer-intent insights.
+          </p>
+          <p>
+            Reo.dev sets first-party identifiers with a maximum documented lifetime of 300 days. The
+            script does not load unless you consent, and rejecting optional analytics does not
+            affect the Site. You can withdraw consent at any time using the{' '}
+            <strong>Cookie preferences</strong> button. Details about the cookies and controls are
+            available in our <Link href="/cookie">Cookie Policy</Link>.
+          </p>
+          <p>
+            Reo.dev acts as a service provider processing this information for LibreChat. Its
+            broader service may enrich technical activity with company or professional information
+            from customers, integrations, licensed vendors, and public sources. See the{' '}
+            <Link href="https://www.reo.dev/customer-privacy-policy">
+              Reo.dev customer privacy notice
+            </Link>{' '}
+            for details and Reo.dev&apos;s data-subject contact information.
           </p>
 
           <h3>3.4 Server Logs</h3>
@@ -178,14 +194,13 @@ export default function PrivacyPolicyPage() {
           </p>
 
           <h2>4. Information We Do Not Collect</h2>
-          <p>The Site does not collect, request, or store:</p>
+          <p>The Site does not directly request or store:</p>
           <ul>
-            <li>Your name, email address, telephone number, or postal address.</li>
             <li>Account credentials (the Site has no user accounts and no login).</li>
             <li>Payment information.</li>
-            <li>Precise geolocation, behavioral profiles, or biometric data.</li>
+            <li>Precise GPS location or biometric data.</li>
             <li>The contents of any conversation, message, file, or document.</li>
-            <li>Information about your activity on other websites.</li>
+            <li>Information about the contents of your activity on unrelated websites.</li>
           </ul>
 
           <h2>5. Why We Process This Information &mdash; Lawful Basis</h2>
@@ -202,12 +217,16 @@ export default function PrivacyPolicyPage() {
               determined that this processing does not override your fundamental rights and
               freedoms.
             </li>
+            <li>
+              <strong>Consent</strong> (Article 6(1)(a)) for Reo.dev performance analytics and its
+              first-party identifiers. You may decline or withdraw that consent without affecting
+              access to the Site.
+            </li>
           </ul>
           <p>
             We do not rely on consent for the cookieless analytics described above because they do
-            not use cookies or equivalent identifiers. To the extent any transient technical signals
-            are treated as personal data under applicable law, we rely on the legitimate interests
-            described above.
+            not use cookies or equivalent persistent identifiers. Reo.dev is kept separate and does
+            not load before your optional analytics choice is granted.
           </p>
 
           <h2>6. How Long We Keep Information</h2>
@@ -223,6 +242,12 @@ export default function PrivacyPolicyPage() {
               not linked to any persistent identifier.
             </li>
             <li>
+              <strong>Reo.dev analytics</strong>: Reo.dev identifiers may remain on your device for
+              up to 300 days unless you withdraw consent or clear Site data. Server-side information
+              is retained according to LibreChat&apos;s service configuration and Reo.dev&apos;s
+              contractual and legal retention requirements.
+            </li>
+            <li>
               <strong>Operational server logs</strong>: retained for the minimum period required for
               security and reliability operations, after which they are automatically rotated and
               deleted.
@@ -231,11 +256,10 @@ export default function PrivacyPolicyPage() {
 
           <h2>7. International Data Transfers</h2>
           <p>
-            Our analytics ingestion endpoints are hosted on infrastructure controlled by the project
-            maintainers. Where data is transferred outside the European Economic Area or the United
-            Kingdom, the transfer is supported by appropriate safeguards (such as the European
-            Commission&apos;s Standard Contractual Clauses) and the data does not include directly
-            identifying information.
+            Our self-hosted analytics ingestion endpoints are controlled by the project maintainers.
+            Reo.dev states that user information is stored on servers in the United States. Where
+            applicable, international transfers must be supported by legally recognized safeguards
+            and the rights described below remain available.
           </p>
 
           <h2>8. Sub-Processors and Third Parties</h2>
@@ -253,14 +277,15 @@ export default function PrivacyPolicyPage() {
               maintainers, when performance monitoring is enabled.
             </li>
             <li>
-              <strong>Scarf</strong> (
-              <Link href="https://about.scarf.sh/privacy">privacy notice</Link>) for anonymous
-              package and documentation download counts, when enabled.
+              <strong>Reo.dev</strong> (
+              <Link href="https://www.reo.dev/customer-privacy-policy">privacy notice</Link>) for
+              consent-based website and documentation analytics, when enabled.
             </li>
           </ul>
           <p>
-            We do not sell, rent, or otherwise share visitor information with advertising networks,
-            data brokers, or marketing partners.
+            We do not sell personal information or use Reo.dev for cross-context behavioral
+            advertising. Reo.dev processes consented analytics information to provide its
+            developer-intent service to LibreChat.
           </p>
 
           <h2>9. Your Rights</h2>
@@ -292,39 +317,41 @@ export default function PrivacyPolicyPage() {
             </li>
           </ul>
           <p>
-            Because we do not collect identifying information, we typically cannot locate records
-            specific to an individual. If you believe we hold personal data about you and would like
-            to exercise any of these rights, please contact us at{' '}
+            Cookieless aggregate records generally cannot be linked back to an individual. Reo.dev
+            records may use persistent identifiers and may be associated with company or
+            professional information. If you would like to exercise your rights, contact us at{' '}
             <Link href="mailto:contact@librechat.ai">contact@librechat.ai</Link> with enough detail
-            for us to investigate. We do not sell personal information and do not engage in
-            cross-context behavioral advertising.
+            for us to investigate. You may also contact Reo.dev at{' '}
+            <Link href="mailto:dataprivacy@reo.dev">dataprivacy@reo.dev</Link>.
           </p>
 
           <h2>10. Browser Controls and Opt-Out</h2>
-          <p>
-            Although our analytics do not rely on cookies or persistent identifiers, you can further
-            limit data collection at any time by:
-          </p>
+          <p>You can limit analytics collection at any time by:</p>
           <ul>
             <li>
               Enabling <strong>Do Not Track</strong> or <strong>Global Privacy Control</strong> in
-              your browser; we will continue to honor these signals where practical.
+              your browser. On a first visit, either signal is treated as a rejection of optional
+              Reo.dev analytics.
+            </li>
+            <li>
+              Opening <strong>Cookie preferences</strong> to reject or withdraw consent for Reo.dev.
             </li>
             <li>
               Using a content blocker, browser rule, or privacy-focused extension to block requests
               to the first-party analytics paths <code>librechat.ai/js/</code> and{' '}
-              <code>librechat.ai/api/e</code> &mdash; as well as the performance ingestion endpoint.
+              <code>librechat.ai/api/e</code>, the performance ingestion endpoint,{' '}
+              <code>static.reo.dev</code>, or <code>api.reo.dev</code>.
             </li>
             <li>Disabling JavaScript for this Site, in which case no analytics will be sent.</li>
           </ul>
 
           <h2>11. Local Browser Storage</h2>
           <p>
-            The Site itself may store small amounts of non-identifying information in your
-            browser&apos;s <code>localStorage</code> for usability purposes &mdash; for example,
-            your light/dark theme preference and the open/closed state of navigation sections. This
-            information stays in your browser, is not transmitted to our servers, and can be cleared
-            at any time through your browser&apos;s site-data controls.
+            The Site stores small amounts of information in your browser for usability purposes,
+            including theme and navigation preferences, an explicit language choice, and your
+            optional-analytics consent choice. Preference values stay on your device and can be
+            cleared through your browser&apos;s site-data controls. See the{' '}
+            <Link href="/cookie">Cookie Policy</Link> for names and durations.
           </p>
 
           <h2>12. Children&apos;s Privacy</h2>
