@@ -142,20 +142,40 @@ print(`user: ${DEMO_EMAIL} -> ${userId}`)
 print(`database: ${db.getName()}`)
 
 function removeSeeded() {
-  const convos = db.conversations.find({ user: userId, tags: SEED_TAG }, { conversationId: 1 })
-  const ids = convos.map((c) => c.conversationId)
+  // toArray() is required. In mongosh a cursor's .map() returns another lazy
+  // cursor, where the legacy mongo shell returned an array. Without it
+  // `ids.length` is undefined, so the empty-batch guard never fires and the
+  // $in below is handed a cursor, which throws "Cannot convert circular
+  // structure to BSON" before any command reaches the server.
+  const ids = db.conversations
+    .find({ user: userId, tags: SEED_TAG }, { conversationId: 1 })
+    .toArray()
+    .map((c) => c.conversationId)
+
+  if (dryRun) {
+    print(
+      ids.length === 0
+        ? 'nothing previously seeded'
+        : `would remove ${ids.length} seeded conversations and their messages`,
+    )
+    return
+  }
+
   if (ids.length === 0) {
     print('nothing previously seeded')
-    return
+  } else {
+    const messages = db.messages.deleteMany({ user: userId, conversationId: { $in: ids } })
+    const removed = db.conversations.deleteMany({ user: userId, tags: SEED_TAG })
+    print(`removed ${removed.deletedCount} conversations, ${messages.deletedCount} messages`)
   }
-  if (dryRun) {
-    print(`would remove ${ids.length} seeded conversations and their messages`)
-    return
+
+  // Outside the guard above: the agent outlives its conversations, so CLEAN
+  // has to remove it even when there is nothing tagged left. Scoped by author
+  // as well as id, because this runs against the live public instance.
+  const agents = db.agents.deleteMany({ id: AGENT_ID, author: user._id })
+  if (agents.deletedCount > 0) {
+    print(`removed ${agents.deletedCount} agent`)
   }
-  const messages = db.messages.deleteMany({ user: userId, conversationId: { $in: ids } })
-  const removed = db.conversations.deleteMany({ user: userId, tags: SEED_TAG })
-  db.agents.deleteMany({ id: AGENT_ID })
-  print(`removed ${removed.deletedCount} conversations, ${messages.deletedCount} messages, agent`)
 }
 
 if (clean) {

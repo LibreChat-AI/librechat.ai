@@ -44,6 +44,14 @@ models under `--- demo endpoint inventory ---` in the job log. If the demo's
 broken and is easy to miss in review. The seed script prints the endpoints it
 used, so a stale one is visible immediately.
 
+`seed-demo.test.ts` runs the script against a stub that models **mongosh**
+cursor semantics rather than the legacy shell's. That distinction is not
+academic: a cursor's `.map()` stays lazy and returns another cursor, so code
+that treats the result as an array reads `undefined` for `.length` and throws
+`Cannot convert circular structure to BSON` when the value reaches a query.
+An earlier stub returned a plain array and hid exactly that bug. Keep the stub
+faithful to mongosh, or the tests will pass while the script cannot run.
+
 The capture refuses to save a desktop image with fewer than 10 sidebar
 conversations, so if the account is ever wiped the job fails loudly instead of
 shipping a thin hero image. Re-run the seed if that happens.
