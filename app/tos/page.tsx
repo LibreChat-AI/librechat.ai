@@ -26,7 +26,7 @@ export default function TermsOfServicePage() {
             <h1 className="text-3xl font-bold tracking-tight text-foreground sm:text-4xl">
               Terms of Service
             </h1>
-            <p className="mt-4 text-sm text-muted-foreground">Last updated: April 26, 2026</p>
+            <p className="mt-4 text-sm text-muted-foreground">Last updated: July 29, 2026</p>
           </header>
 
           <h2>1. Agreement</h2>
@@ -154,10 +154,10 @@ export default function TermsOfServicePage() {
           <p>
             Your privacy is governed by our <Link href="/privacy">Privacy Policy</Link> and{' '}
             <Link href="/cookie">Cookie Policy</Link>, which are incorporated into these Terms by
-            reference. In summary, the Site does not set cookies, does not collect personal data for
-            marketing, and uses only privacy-preserving, self-hosted analytics and performance
-            measurements that cannot identify you. By using the Site you acknowledge the data
-            handling described in those policies.
+            reference. The Site uses privacy-preserving, self-hosted analytics and, only with your
+            affirmative consent, may use Reo.dev first-party cookies for website and documentation
+            performance analytics. You can reject or later withdraw optional analytics without
+            losing access to the Site.
           </p>
 
           <h2>8. Third-Party Services and Links</h2>
