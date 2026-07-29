@@ -14,6 +14,7 @@ import './global.css'
 const DEFAULT_CWV_ENDPOINT = ''
 const DEFAULT_CWV_PROJECT_ID = '64ddab45-756f-474b-a8c9-266d264c93d8'
 const DEFAULT_CWV_SAMPLE_RATE = 0.5
+const DEFAULT_REO_CLIENT_ID = '38b2e79cdb32fa7'
 
 export const metadata: Metadata = {
   title: {
@@ -59,7 +60,7 @@ function normalizeCwvEndpoint(endpoint: string) {
 export default function RootLayout({ children }: { children: ReactNode }) {
   // Restrict the Reo.dev client ID to its documented identifier characters
   // before the client component interpolates it into the script URL.
-  const rawReoClientId = process.env.NEXT_PUBLIC_REO_CLIENT_ID ?? ''
+  const rawReoClientId = process.env.NEXT_PUBLIC_REO_CLIENT_ID ?? DEFAULT_REO_CLIENT_ID
   const reoClientId = /^[\w-]+$/.test(rawReoClientId) ? rawReoClientId : ''
   const askAIEnabled = Boolean(process.env.OPENROUTER_API_KEY)
   const plausibleEnabled = process.env.NODE_ENV === 'production'
