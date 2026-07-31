@@ -25,6 +25,7 @@ import { readFile, writeFile, readdir } from 'node:fs/promises'
 import { join, relative } from 'node:path'
 import { createHash } from 'node:crypto'
 import { TARGET_LOCALES } from '../lib/i18n/config'
+import { OPENROUTER_APP_HEADERS } from '../lib/openrouter-attribution'
 
 // Skip machine-generated translations (foo.<locale>.mdx); only English sources
 // are starter inputs. Derived from the i18n config so adding a locale stays a
@@ -178,6 +179,7 @@ Respond with ONLY valid JSON. No markdown fences, no explanation.
     headers: {
       Authorization: `Bearer ${API_KEY}`,
       'Content-Type': 'application/json',
+      ...OPENROUTER_APP_HEADERS,
     },
     body: JSON.stringify({
       model: MODEL,
