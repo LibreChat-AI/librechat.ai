@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { docsSource } from '@/lib/source'
 import { i18n } from '@/lib/i18n'
 import { checkRateLimit } from '@/lib/ratelimit'
+import { OPENROUTER_APP_HEADERS } from '@/lib/openrouter-attribution'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
@@ -135,13 +136,7 @@ function searchDocs(docs: SearchDoc[], query: string, limit: number): SearchDoc[
 
 const openrouter = createOpenRouter({
   apiKey: process.env.OPENROUTER_API_KEY,
-  // OpenRouter app-attribution headers: HTTP-Referer (site URL) and X-Title
-  // (app name) attribute this traffic to LibreChat on openrouter.ai's app
-  // rankings. https://openrouter.ai/docs/api-reference/overview#headers
-  headers: {
-    'HTTP-Referer': 'https://www.librechat.ai',
-    'X-Title': 'LibreChat',
-  },
+  headers: OPENROUTER_APP_HEADERS,
 })
 
 const systemPrompt = `You are the LibreChat docs assistant. You help users find answers in the LibreChat documentation.

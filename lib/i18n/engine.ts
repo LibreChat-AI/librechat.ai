@@ -1,5 +1,6 @@
 import { generateText } from 'ai'
 import { createOpenRouter } from '@openrouter/ai-sdk-provider'
+import { OPENROUTER_APP_HEADERS } from '../openrouter-attribution'
 import { GLOSSARY, TRANSLATE_MODEL, TRANSLATE_PROVIDER, TRANSLATE_SERVICE_TIER } from './config'
 import { LOCALE_NAMES } from '../i18n'
 import { withRetry } from './retry'
@@ -60,13 +61,7 @@ export function assertNotTruncated(finishReason: string, maxOutputTokens?: numbe
 export function createOpenRouterModel(): TranslateModel {
   const openrouter = createOpenRouter({
     apiKey: process.env.OPENROUTER_API_KEY,
-    // OpenRouter app-attribution headers: HTTP-Referer (site URL) and X-Title
-    // (app name) credit this traffic to LibreChat on openrouter.ai's app
-    // rankings. https://openrouter.ai/docs/api-reference/overview#headers
-    headers: {
-      'HTTP-Referer': 'https://www.librechat.ai',
-      'X-Title': 'LibreChat',
-    },
+    headers: OPENROUTER_APP_HEADERS,
   })
   // Pin the provider via OpenRouter's routing preferences; `service_tier` is not a
   // typed setting, so pass it through `extraBody` (merged verbatim into the request
