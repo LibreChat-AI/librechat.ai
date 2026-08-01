@@ -41,6 +41,41 @@ For more info see:
   ]}
 />
 
+### HTTP Server Timeouts
+
+These optional values configure the Node.js HTTP server. Leave them unset to retain Node's defaults. A value of `0` disables that timeout.
+
+<OptionTable
+  options={[
+    [
+      'HTTP_KEEP_ALIVE_TIMEOUT_MS',
+      'integer',
+      'Idle keep-alive timeout in milliseconds. Set this above the load balancer idle timeout to avoid reused connections racing server closure. Node default: 5000.',
+      '# HTTP_KEEP_ALIVE_TIMEOUT_MS=70000',
+    ],
+    [
+      'HTTP_KEEP_ALIVE_TIMEOUT_BUFFER_MS',
+      'integer',
+      'Additional socket timeout buffer in milliseconds. Node default: 1000.',
+      '# HTTP_KEEP_ALIVE_TIMEOUT_BUFFER_MS=5000',
+    ],
+    [
+      'HTTP_HEADERS_TIMEOUT_MS',
+      'integer',
+      'Time allowed to receive complete request headers. Node default: 60000.',
+      '# HTTP_HEADERS_TIMEOUT_MS=80000',
+    ],
+    [
+      'HTTP_REQUEST_TIMEOUT_MS',
+      'integer',
+      'Time allowed to receive the complete request. Node default: 300000.',
+      '# HTTP_REQUEST_TIMEOUT_MS=300000',
+    ],
+  ]}
+/>
+
+Values must be non-negative safe integers; invalid values are ignored. When both header and request timeouts are enabled, LibreChat clamps the header timeout to the request timeout if it is higher. Node checks header and request expiry on a 30-second connection sweep, so values below `30000` are not enforced at exact millisecond precision. Bun currently accepts these settings but does not enforce them; LibreChat logs a warning when the API server runs under Bun.
+
 ### Trust proxy
 
 Use the address that is at most n number of hops away from the Express application.
@@ -231,14 +266,11 @@ If you are using an online database, the URI format is `mongodb+srv://<username>
   ]}
 />
 
-Alternatively you can use `documentDb` that emulates `mongoDb` but it:
+Amazon DocumentDB 5.0+ instance-based clusters are a supported target. DocumentDB requires `retryWrites=false` and TLS with the AWS CA bundle; elastic clusters are unsupported because they do not provide unique indexes. A typical URI has this form:
 
-- does not support `retryWrites` - use `retryWrites=false`
-- requires TLS connection, hence use parameters `tls=true` to enable TLS and `tlsCAFile=/path-to-ca/bundle.pem` to point to the AWS provided CA bundle file
+`mongodb://username:password@cluster:27017/librechat?tls=true&tlsCAFile=/path-to-ca/global-bundle.pem&replicaSet=rs0&readPreference=secondaryPreferred&retryWrites=false`
 
-The URI for `documentDb` will look like:
-
-- `mongodb+srv://username:password@domain/dbname?retryWrites=false&tls=true&tlsCAFile=/path-to-ca/bundle.pem`
+DocumentDB 4.0 can run with reduced partial-unique-index enforcement. See [Amazon DocumentDB Compatibility](/docs/user_guides/mongodb#amazon-documentdb-compatibility) for the supported target and caveats.
 
 See also:
 
@@ -389,13 +421,16 @@ Note: `DEBUG_CONSOLE` is not recommended, as the outputs can be quite verbose, a
 
 ### Langfuse Tracing and Tenant Fanout
 
-Use the standard Langfuse variables for one central observability project. The optional fanout deployment can additionally route tenant traces, media, and feedback scores to tenant-specific Langfuse projects. See [Langfuse Tracing](/docs/configuration/langfuse) for setup and architecture.
+Use the standard Langfuse variables for one central observability project. The optional fanout deployment can additionally route tenant traces, media, and feedback scores to tenant-specific Langfuse projects. See [Langfuse Tracing](/docs/configuration/langfuse) for setup, in-app connection management, and architecture.
 
 <OptionTable
   options={[
     ['LANGFUSE_PUBLIC_KEY', 'string', 'Public key for the central Langfuse project.', '# LANGFUSE_PUBLIC_KEY='],
     ['LANGFUSE_SECRET_KEY', 'string', 'Secret key for the central Langfuse project.', '# LANGFUSE_SECRET_KEY='],
     ['LANGFUSE_BASE_URL', 'string', 'Base URL for central tracing and feedback scores.', '# LANGFUSE_BASE_URL=https://cloud.langfuse.com'],
+    ['LANGFUSE_PROJECT_ID', 'string', 'Stable central Langfuse project ID. When omitted, LibreChat discovers and caches it in the background for feedback routing.', '# LANGFUSE_PROJECT_ID='],
+    ['LANGFUSE_TRACING_ENABLED', 'boolean', 'Set to false to disable Langfuse traces and feedback scores. Default: true.', '# LANGFUSE_TRACING_ENABLED=true'],
+    ['LANGFUSE_SAMPLE_RATE', 'number', 'Deterministic trace-level sample rate from 0 to 1. Sampled-out traces do not receive feedback scores. Default: 1.', '# LANGFUSE_SAMPLE_RATE=1'],
     ['LANGFUSE_FANOUT_ENABLED', 'boolean', 'Enable routing through the optional fanout gateway.', '# LANGFUSE_FANOUT_ENABLED=false'],
     ['LANGFUSE_FANOUT_COLLECTOR_URL', 'string', 'Gateway URL used by the LibreChat API.', '# LANGFUSE_FANOUT_COLLECTOR_URL=http://langfuse-fanout-collector:4318'],
     ['LANGFUSE_FANOUT_LISTEN_ADDR', 'string', 'Gateway HTTP listen address. Default: :4318.', '# LANGFUSE_FANOUT_LISTEN_ADDR=:4318'],
@@ -424,6 +459,8 @@ Use the standard Langfuse variables for one central observability project. The o
     ['LANGFUSE_FANOUT_METADATA_CARDINALITY_LIMIT', 'number', 'Collector metadata cardinality limit.', '# LANGFUSE_FANOUT_METADATA_CARDINALITY_LIMIT=1000'],
   ]}
 />
+
+In a single-tenant deployment without complete `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` environment credentials, an authorized administrator can configure one encrypted connection under **Settings → Langfuse**. Complete environment credentials take precedence and hide that setting. Fanout deployments use the same setting for the tenant connection when fanout and tenant export are enabled.
 
 ### OpenTelemetry Tracing
 
@@ -1808,6 +1845,27 @@ LibreChat applies separate IP-based limits to requesting an email and submitting
       'integer',
       'In minutes, determines the window of time for `MESSAGE_USER_MAX` messages.',
       'MESSAGE_USER_WINDOW=1',
+    ],
+  ]}
+/>
+
+##### Queued Attachment TTL Limiter:
+
+The `/files/usage` endpoint renews a bounded TTL hold for attachments waiting in queued Agent messages. It has a separate per-user limiter so metadata renewals do not consume the upload quota.
+
+<OptionTable
+  options={[
+    [
+      'FILE_USAGE_USER_MAX',
+      'integer',
+      'Maximum queued-attachment TTL renewal requests per user and window. Default: 120.',
+      '# FILE_USAGE_USER_MAX=120',
+    ],
+    [
+      'FILE_USAGE_USER_WINDOW',
+      'integer',
+      'Window in minutes for FILE_USAGE_USER_MAX. Default: 15.',
+      '# FILE_USAGE_USER_WINDOW=15',
     ],
   ]}
 />
@@ -3269,6 +3327,12 @@ For detailed configuration and examples, see: **[Redis Configuration Guide](/doc
       '# USE_REDIS_STREAMS=true',
     ],
     [
+      'GENERATION_PROTOCOL_VERSION',
+      'integer',
+      'Generation stream protocol (1 or 2). Redis-backed deployments default to rolling-upgrade-safe v1 until explicitly cut over; in-memory streams default to v2.',
+      '# GENERATION_PROTOCOL_VERSION=2',
+    ],
+    [
       'REDIS_URI',
       'string',
       'Redis connection URI. For single instance: `redis://host:port`. For cluster: comma-separated URIs.',
@@ -3370,6 +3434,7 @@ For detailed configuration and examples, see: **[Redis Configuration Guide](/doc
 Notes:
 
 - When `USE_REDIS=true`, you must provide `REDIS_URI` or the application will throw an error.
+- For Redis-backed generation streams, first deploy the v2-capable release to every replica with `GENERATION_PROTOCOL_VERSION` unset (or `1`). After old active generations drain, set it to `2` in a second rollout. Do not roll back to a pre-v2 image while v2 generations remain active. See [Generation Protocol Rollout](/docs/configuration/redis#generation-protocol-rollout).
 - For Redis Cluster mode, provide multiple URIs: `redis://node1:7001,redis://node2:7002,redis://node3:7003` (cluster mode is auto-detected).
 - For single-endpoint managed Redis services that shard keys internally, keep `USE_REDIS_CLUSTER=false` and set `REDIS_CLUSTER_SAFE_DELETE=true` if cache clears fail with `CROSSSLOT` errors.
 - Use `rediss://` protocol for TLS connections and set `REDIS_CA` if your CA is not publicly trusted.

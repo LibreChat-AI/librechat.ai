@@ -16,7 +16,24 @@ Before you begin, ensure you have:
 
 ## Setup
 
-Add the following Langfuse-related environment variables to your `.env` file in your LibreChat installation directory:
+Choose either an in-app connection or environment-managed credentials for a single-tenant deployment. Complete environment credentials take precedence.
+
+### In-App Connection
+
+An authorized administrator can open **Settings → Langfuse**, choose an approved destination, enter the project's public and secret keys, and select **Save & enable**. LibreChat verifies both keys before saving, records the verified project ID, encrypts the secret key at rest, and returns only a masked preview on later reads. A saved connection can be enabled, disabled, retested, or replaced without exposing its secret.
+
+The setting requires both `access:admin` and `manage:configs:langfuse` (or the corresponding broad/admin permissions). It is available when tracing is enabled and:
+
+- A single-tenant deployment does not have both `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY`.
+- A fanout deployment has an enabled collector and tenant export is not disabled by the emergency switch.
+
+Do not place a plaintext `langfuse.secretKey` directly in `librechat.yaml`; the runtime accepts the encrypted value produced by an authorized config write. Use the Settings page for the normal connection workflow.
+
+The saved connection belongs to the base configuration. Role, group, and user configuration overrides cannot replace or remove the `langfuse` section.
+
+### Environment-Managed Connection
+
+Add the following values to your `.env` file when deployment operators should own the central connection:
 
 <OptionTable
   options={[
@@ -28,6 +45,24 @@ Add the following Langfuse-related environment variables to your `.env` file in 
       'The Langfuse API base URL.',
       'LANGFUSE_BASE_URL=https://cloud.langfuse.com',
     ],
+    [
+      'LANGFUSE_PROJECT_ID',
+      'string',
+      'Optional stable project ID. When omitted, LibreChat discovers and caches it in the background for feedback routing.',
+      'LANGFUSE_PROJECT_ID=',
+    ],
+    [
+      'LANGFUSE_TRACING_ENABLED',
+      'boolean',
+      'Set to false to disable Langfuse traces and feedback scores. Default: true.',
+      'LANGFUSE_TRACING_ENABLED=true',
+    ],
+    [
+      'LANGFUSE_SAMPLE_RATE',
+      'number',
+      'Deterministic trace-level sample rate from 0 to 1. Default: 1.',
+      'LANGFUSE_SAMPLE_RATE=1',
+    ],
   ]}
 />
 
@@ -37,6 +72,8 @@ Add the following Langfuse-related environment variables to your `.env` file in 
 # Langfuse Configuration
 LANGFUSE_PUBLIC_KEY=pk-lf-***
 LANGFUSE_SECRET_KEY=sk-lf-***
+# LANGFUSE_PROJECT_ID=project-id
+# LANGFUSE_SAMPLE_RATE=1
 
 # 🇪🇺 EU Data Region
 LANGFUSE_BASE_URL=https://cloud.langfuse.com
@@ -50,6 +87,8 @@ LANGFUSE_BASE_URL=https://cloud.langfuse.com
   `http://localhost:3000` for local development).
 </Callout>
 
+When both environment keys are present, LibreChat uses them for the central project and hides **Settings → Langfuse**. `LANGFUSE_TRACING_ENABLED=false` or `LANGFUSE_SAMPLE_RATE=0` disables both traces and feedback scores. Fractional sampling makes one deterministic decision per trace; sampled-out traces do not receive later feedback scores.
+
 ## Tenant Fanout (Optional)
 
 Langfuse fanout lets a multi-tenant LibreChat deployment export each eligible trace and its media to both a central Langfuse project and a tenant-specific project. The feature is opt-in and adds a gateway plus an internal OpenTelemetry collector; normal single-project tracing above is unchanged when fanout is not deployed.
@@ -57,7 +96,7 @@ Langfuse fanout lets a multi-tenant LibreChat deployment export each eligible tr
 Fanout uses two configuration layers:
 
 - Deployment environment variables define the central project, gateway, and allowed tenant destinations at startup.
-- Tenant app configuration supplies that tenant's public key, encrypted secret key, and one allowed destination. Keys can be changed at runtime without restarting the gateway.
+- **Settings → Langfuse** supplies the tenant's enabled state, public key, encrypted secret key, verified project ID, and one allowed destination. Keys can be changed at runtime without restarting the gateway.
 
 The included Compose override supports the `eu`, `us`, and `jp` Langfuse Cloud destinations:
 
@@ -160,19 +199,9 @@ Scale fanout manually with `langfuseFanout.replicaCount`; the chart does not cre
 
 Additional deployment overrides include `langfuseFanout.service` for the Service type, port, and annotations; `resources`, `podAnnotations`, and `podLabels` for the gateway Pod; and `otelCollector.image` and `otelCollector.resources` for the sidecar. If you change `langfuseFanout.traceCollectorUrl` or `otelCollector.receiverEndpoint`, keep both values pointed at the same internal collector listener.
 
-Tenant configuration uses the following shape. Prefer an administrator-facing config interface so `secretKey` is encrypted at write time; `displaySecretKey` is generated for redacted display and should not be supplied directly.
+The stored top-level `langfuse` object contains `enabled`, `publicKey`, encrypted `secretKey`, verified `projectId`, server-generated `secretKeyPreview`, and `destination`. Treat it as API-managed configuration: do not submit preview fields or encrypted payloads back as secrets. The earlier `displaySecretKey` and nested `fanout.enabled` fields are no longer used.
 
-```yaml filename="Tenant app configuration"
-langfuse:
-  enabled: true
-  publicKey: 'pk-lf-tenant'
-  secretKey: 'sk-lf-tenant'
-  destination: 'us'
-  fanout:
-    enabled: true
-```
-
-Tenant export occurs only when fanout is enabled, both tenant keys are present, and `destination` matches an allowed startup destination. Other traces can still flow to the central project. Set `LANGFUSE_FANOUT_TENANT_EXPORT_DISABLED=true` as an emergency switch to stop tenant trace and feedback-score export while retaining central export.
+Tenant export occurs only when fanout and the collector URL are enabled, the saved connection is enabled with valid keys, and `destination` matches an allowed startup destination. Other traces can still flow to the central project. Set `LANGFUSE_FANOUT_TENANT_EXPORT_DISABLED=true` as an emergency switch to stop tenant trace and feedback-score export while retaining central export; this also hides the in-app connection setting until tenant export is restored.
 
 Trace and media traffic goes through the fanout gateway. Feedback scores are sent directly from LibreChat: central scores use `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, and `LANGFUSE_BASE_URL`, while tenant scores use tenant app configuration.
 
