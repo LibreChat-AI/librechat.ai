@@ -1,7 +1,7 @@
 /**
  * Seeds the demo account with the sidebar content the landing-page hero shots
  * need: a spread of conversations across providers so the sidebar shows a
- * column of different provider icons, plus a LibreChat agent.
+ * column of different provider icons.
  *
  * Runs under mongosh so this repo needs no database dependency:
  *
@@ -32,6 +32,13 @@ function uuid() {
 }
 
 const SEED_TAG = 'docs-hero-seed'
+/**
+ * The demo hosts its own "LibreChat" agent and that is the one the hero shot is
+ * branded with. This script deliberately does not create an agent: an earlier
+ * version did, and /api/agents never returned it, so it was invisible in the
+ * app while still being a second agent by that name in the database. The
+ * pinned conversation below points at this id only to carry an icon.
+ */
 const AGENT_ID = 'agent_docs_hero_librechat'
 // Served by the demo itself; www.librechat.ai/assets/logo.svg is a 404.
 // Override with DEMO_ORIGIN if the demo is hosted elsewhere.
@@ -109,6 +116,7 @@ const CHATS = [
 /** The pinned conversation, shot as the hero when a conversation is captured. */
 const PINNED = {
   title: 'Getting started with LibreChat',
+  model: 'claude-opus-4-7',
   turns: [
     {
       user: 'What can I do with LibreChat?',
@@ -191,31 +199,6 @@ removeSeeded()
 // Agent
 // ---------------------------------------------------------------------------
 
-const agent = {
-  id: AGENT_ID,
-  name: 'LibreChat',
-  description: 'The default LibreChat agent',
-  instructions: 'You are a helpful assistant for the LibreChat demo.',
-  avatar: { filepath: LIBRECHAT_AVATAR, source: 'url' },
-  provider: 'anthropic',
-  model: 'claude-sonnet-4-5',
-  model_parameters: {},
-  tools: [],
-  author: user._id,
-  authorName: user.name || 'LibreChat',
-  category: 'general',
-  conversation_starters: [],
-  versions: [],
-  projectIds: [],
-}
-
-if (dryRun) {
-  print(`would upsert agent ${AGENT_ID} ("LibreChat")`)
-} else {
-  db.agents.updateOne({ id: AGENT_ID }, { $set: agent }, { upsert: true })
-  print(`agent: ${AGENT_ID} ("LibreChat")`)
-}
-
 // ---------------------------------------------------------------------------
 // Conversations
 // ---------------------------------------------------------------------------
@@ -294,7 +277,7 @@ const messages = []
 
 // The pinned hero conversation, on the LibreChat agent.
 const pinnedConvo = buildConversation(
-  { title: PINNED.title, endpoint: 'agents', model: agent.model },
+  { title: PINNED.title, endpoint: 'agents', model: PINNED.model },
   -1,
   { pinned: true, agent_id: AGENT_ID, iconURL: LIBRECHAT_AVATAR },
 )
@@ -302,7 +285,7 @@ pinnedConvo.createdAt = now
 pinnedConvo.updatedAt = now
 conversations.push(pinnedConvo)
 messages.push(
-  ...buildMessages(pinnedConvo.conversationId, PINNED.turns, 'agents', agent.model, now),
+  ...buildMessages(pinnedConvo.conversationId, PINNED.turns, 'agents', PINNED.model, now),
 )
 
 for (const [index, spec] of CHATS.entries()) {

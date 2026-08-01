@@ -23,9 +23,13 @@ const baseURL = screenshotBaseURL(process.env.DEMO_BASE_URL)
  * LibreChat reads `agent_id` from the query string (client/src/hooks/Input/
  * useQueryParams.ts), so this needs no clicking through the picker.
  */
-const AGENT_ID = process.env.DEMO_AGENT_ID?.trim() || 'agent_docs_hero_librechat'
+const AGENT_ID = process.env.DEMO_AGENT_ID?.trim() || ''
 
-/** The branding the shot must end up showing. */
+/**
+ * The agent is resolved by this name when DEMO_AGENT_ID is unset, so a rebuilt
+ * agent with a new id keeps working. Agent ids are opaque and easy to leave
+ * stale; the name is what anyone looking at the image would recognise.
+ */
 const AGENT_NAME = process.env.DEMO_AGENT_NAME?.trim() || 'LibreChat'
 
 // Do not add custom headers to the browser context. Playwright applies
@@ -68,6 +72,9 @@ const MIN_SIDEBAR_CHATS = 10
 /** The inventory is the same for every variant; one report per run is enough. */
 let inventoryLogged = false
 
+/** Resolved once from the first variant and reused, since it cannot change. */
+let resolvedAgentId: string | null = null
+
 /**
  * Presents as an ordinary desktop browser rather than advertising
  * `HeadlessChrome`. This is hygiene, not a fix: a CI run with this user agent
@@ -94,6 +101,7 @@ const READY_STATE_TIMEOUT = 15_000
 const LOGIN_FORM_TIMEOUT = 45_000
 const APP_READY_TIMEOUT = 45_000
 const TERMS_TIMEOUT = 8_000
+const AGENT_SELECT_TIMEOUT = 20_000
 const RETRY_BACKOFF_MS = 10_000
 
 /** Recorded in diagnostics to show what the app managed to fetch. */
@@ -364,6 +372,36 @@ async function logEndpointInventory(probe: Probe) {
   console.log('--- end inventory ---')
 }
 
+/** Reads the agent list out of whichever shape the API returned. */
+function agentList(body: unknown): Record<string, unknown>[] {
+  if (Array.isArray(body)) return body as Record<string, unknown>[]
+  const data = (body as { data?: unknown } | null)?.data
+  return Array.isArray(data) ? (data as Record<string, unknown>[]) : []
+}
+
+/**
+ * Finds the agent to brand the shot with, by name, from the list the app
+ * already fetched. DEMO_AGENT_ID short-circuits this when a specific one is
+ * wanted.
+ */
+async function resolveAgentId(probe: Probe): Promise<string> {
+  if (AGENT_ID) return AGENT_ID
+  if (resolvedAgentId) return resolvedAgentId
+
+  const agents = agentList(await probe.inventory.agents)
+  const match = agents.find((agent) => agent.name === AGENT_NAME)
+  if (!match?.id) {
+    const names = agents.map((agent) => JSON.stringify(agent.name)).join(', ') || '(none)'
+    throw new Error(
+      `No agent named ${JSON.stringify(AGENT_NAME)} on the demo. Available: ${names}. ` +
+        'Set DEMO_AGENT_ID or DEMO_AGENT_NAME to match one that exists.',
+    )
+  }
+  resolvedAgentId = String(match.id)
+  console.log(`resolved agent ${JSON.stringify(AGENT_NAME)} -> ${resolvedAgentId}`)
+  return resolvedAgentId
+}
+
 /**
  * Confirms the agent actually got selected.
  *
@@ -375,10 +413,17 @@ async function logEndpointInventory(probe: Probe) {
  * ship one.
  */
 async function assertAgentSelected(page: Page, variant: Variant) {
-  const placeholder = await page
-    .locator(SELECTORS.composer)
-    .getAttribute('placeholder', { timeout: APP_READY_TIMEOUT })
-    .catch(() => null)
+  const composer = page.locator(SELECTORS.composer)
+  const deadline = Date.now() + AGENT_SELECT_TIMEOUT
+  let placeholder: string | null = null
+  // Poll: the placeholder is rewritten a beat after the agent applies, so a
+  // single read can catch the pre-selection value and fail a healthy run.
+  do {
+    placeholder = await composer.getAttribute('placeholder').catch(() => null)
+    if (placeholder?.includes(AGENT_NAME)) break
+    await page.waitForTimeout(250)
+  } while (Date.now() < deadline)
+
   if (!placeholder?.includes(AGENT_NAME)) {
     throw new Error(
       `Composer reads ${JSON.stringify(placeholder)}, expected it to mention ${JSON.stringify(AGENT_NAME)}. ` +
@@ -430,10 +475,10 @@ async function captureVariant(
       // Shoot the new-chat screen rather than a conversation: it shows the
       // logo, the composer and the full sidebar, and it is the only frame that
       // fits a mobile viewport without cutting the interface in half.
-      const target = new URL(`${baseURL}/c/new`)
-      target.searchParams.set('endpoint', 'agents')
-      target.searchParams.set('agent_id', AGENT_ID)
-      await openAppPage(page, target.toString(), variant.name)
+      // Load once bare. The agent has to be named in the URL to be selected,
+      // but its id is only knowable from the list the app fetches after it
+      // boots, so the first load is what makes that list available.
+      await openAppPage(page, `${baseURL}/c/new`, variant.name)
       // A bounce back to /login means the session did not survive the
       // navigation; fail here rather than shooting the login screen.
       if (new URL(page.url()).pathname.startsWith('/login')) {
@@ -447,6 +492,12 @@ async function captureVariant(
         inventoryLogged = true
         await logEndpointInventory(probe)
       }
+
+      const target = new URL(`${baseURL}/c/new`)
+      target.searchParams.set('endpoint', 'agents')
+      target.searchParams.set('agent_id', await resolveAgentId(probe))
+      await openAppPage(page, target.toString(), `${variant.name} (agent)`)
+      await page.waitForSelector(SELECTORS.composer, { timeout: APP_READY_TIMEOUT })
       await assertAgentSelected(page, variant)
       await assertSidebarPopulated(page, variant)
       // Park the pointer and drop focus. Otherwise whatever was last clicked

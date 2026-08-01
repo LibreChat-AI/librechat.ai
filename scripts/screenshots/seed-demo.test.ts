@@ -189,12 +189,11 @@ describe('seed-demo', () => {
     expect(dates.every((d, i) => i === 0 || dates[i - 1] > d)).toBe(true)
   })
 
-  it('creates the LibreChat agent with an avatar served by the demo', () => {
-    const [agent] = run().agents
-    expect(agent.name).toBe('LibreChat')
-    expect((agent.avatar as { filepath: string }).filepath).toMatch(
-      /^https:\/\/chat\.librechat\.ai\/.+\.svg$/,
-    )
+  it('creates no agent, since the demo hosts its own', () => {
+    // A previous version upserted one. /api/agents never returned it, so it
+    // was invisible in the app while still being a second "LibreChat" agent in
+    // the database, and the capture would have branded the shot with it.
+    expect(run().agents).toEqual([])
   })
 
   it('writes nothing in dry-run mode', () => {
