@@ -14,6 +14,20 @@ const EMAIL = process.env.DEMO_EMAIL
 const PASSWORD = process.env.DEMO_PASSWORD
 const baseURL = screenshotBaseURL(process.env.DEMO_BASE_URL)
 
+/**
+ * The agent to open the new-chat screen with. Selecting it is what puts the
+ * LibreChat logo and wordmark in the middle of the shot and "Message LibreChat"
+ * in the composer; without it the screen is branded with whatever model the
+ * demo defaults to, which is not what belongs on the landing page.
+ *
+ * LibreChat reads `agent_id` from the query string (client/src/hooks/Input/
+ * useQueryParams.ts), so this needs no clicking through the picker.
+ */
+const AGENT_ID = process.env.DEMO_AGENT_ID?.trim() || 'agent_docs_hero_librechat'
+
+/** The branding the shot must end up showing. */
+const AGENT_NAME = process.env.DEMO_AGENT_NAME?.trim() || 'LibreChat'
+
 // Do not add custom headers to the browser context. Playwright applies
 // extraHTTPHeaders to every request including cross-origin ones, which turns
 // them into preflighted CORS requests; third parties reject the unknown header
@@ -102,6 +116,7 @@ interface Probe {
   inventory: {
     endpoints: Promise<unknown> | null
     models: Promise<unknown> | null
+    agents: Promise<unknown> | null
   }
 }
 
@@ -109,6 +124,7 @@ interface Probe {
 const INVENTORY_API = {
   endpoints: /\/api\/endpoints(\?|$)/,
   models: /\/api\/models(\?|$)/,
+  agents: /\/api\/agents(\?|$)/,
 }
 
 /**
@@ -150,7 +166,7 @@ function attachProbe(page: Page): Probe {
     failedRequests: [],
     criticalApi: [],
     blockedResponses: [],
-    inventory: { endpoints: null, models: null },
+    inventory: { endpoints: null, models: null, agents: null },
   }
   page.on('response', (response) => {
     if (!response.ok()) return
@@ -159,6 +175,8 @@ function attachProbe(page: Page): Probe {
       probe.inventory.endpoints ??= response.json().catch(() => null)
     } else if (INVENTORY_API.models.test(url)) {
       probe.inventory.models ??= response.json().catch(() => null)
+    } else if (INVENTORY_API.agents.test(url)) {
+      probe.inventory.agents ??= response.json().catch(() => null)
     }
   })
   page.on('console', (msg) => {
@@ -328,7 +346,47 @@ async function logEndpointInventory(probe: Probe) {
       `  ${name}${type}${icon} models=${available.length}${sample ? ` [${sample}${available.length > 4 ? ', …' : ''}]` : ''}`,
     )
   }
+
+  // Agents are what the hero shot is branded with, so their ids matter as much
+  // as the endpoint names; DEMO_AGENT_ID has to name one that exists.
+  const agentsBody = (await probe.inventory.agents) as { data?: unknown[] } | unknown[] | null
+  const agents = Array.isArray(agentsBody) ? agentsBody : (agentsBody?.data ?? [])
+  console.log(`  agents available: ${agents.length}`)
+  for (const entry of agents as Record<string, unknown>[]) {
+    const avatar = entry.avatar as { filepath?: string } | string | null | undefined
+    const avatarPath = typeof avatar === 'string' ? avatar : avatar?.filepath
+    console.log(
+      `    ${String(entry.id)} name=${JSON.stringify(entry.name)}` +
+        ` tools=${Array.isArray(entry.tools) ? entry.tools.length : 0}` +
+        `${avatarPath ? ` avatar=${avatarPath}` : ' avatar=none'}`,
+    )
+  }
   console.log('--- end inventory ---')
+}
+
+/**
+ * Confirms the agent actually got selected.
+ *
+ * The composer placeholder tracks the active endpoint, so it reads "Message
+ * LibreChat" once the agent is applied and "Message GPT-5.5" (or whatever the
+ * demo defaults to) when it is not. Selection happens via a query parameter
+ * the app may silently ignore if the id no longer exists, and a shot branded
+ * with a third-party model is worse than no shot at all, so fail rather than
+ * ship one.
+ */
+async function assertAgentSelected(page: Page, variant: Variant) {
+  const placeholder = await page
+    .locator(SELECTORS.composer)
+    .getAttribute('placeholder', { timeout: APP_READY_TIMEOUT })
+    .catch(() => null)
+  if (!placeholder?.includes(AGENT_NAME)) {
+    throw new Error(
+      `Composer reads ${JSON.stringify(placeholder)}, expected it to mention ${JSON.stringify(AGENT_NAME)}. ` +
+        `The "${AGENT_ID}" agent was not selected, so the shot would carry the wrong branding. ` +
+        'Check DEMO_AGENT_ID against the agents the demo actually has.',
+    )
+  }
+  console.log(`${variant.name}: agent "${AGENT_NAME}" selected`)
 }
 
 /**
@@ -372,7 +430,10 @@ async function captureVariant(
       // Shoot the new-chat screen rather than a conversation: it shows the
       // logo, the composer and the full sidebar, and it is the only frame that
       // fits a mobile viewport without cutting the interface in half.
-      await openAppPage(page, `${baseURL}/c/new`, variant.name)
+      const target = new URL(`${baseURL}/c/new`)
+      target.searchParams.set('endpoint', 'agents')
+      target.searchParams.set('agent_id', AGENT_ID)
+      await openAppPage(page, target.toString(), variant.name)
       // A bounce back to /login means the session did not survive the
       // navigation; fail here rather than shooting the login screen.
       if (new URL(page.url()).pathname.startsWith('/login')) {
@@ -386,6 +447,7 @@ async function captureVariant(
         inventoryLogged = true
         await logEndpointInventory(probe)
       }
+      await assertAgentSelected(page, variant)
       await assertSidebarPopulated(page, variant)
       // Park the pointer and drop focus. Otherwise whatever was last clicked
       // keeps its focus ring and whatever the pointer rests over keeps its
