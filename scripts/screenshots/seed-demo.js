@@ -19,7 +19,7 @@
  * messages collection rather than generated.
  */
 
-/* global db, DEMO_EMAIL, DEMO_BASE_URL, DRY_RUN, CLEAN, print, quit */
+/* global db, DEMO_EMAIL, DEMO_BASE_URL, DEMO_AGENT_ID, DRY_RUN, CLEAN, print, quit */
 
 /**
  * LibreChat stores conversationId and messageId as canonical UUID strings.
@@ -34,12 +34,22 @@ function uuid() {
 const SEED_TAG = 'docs-hero-seed'
 /**
  * The demo hosts its own "LibreChat" agent and that is the one the hero shot is
- * branded with. This script deliberately does not create an agent: an earlier
- * version did, and /api/agents never returned it, so it was invisible in the
- * app while still being a second agent by that name in the database. The
- * pinned conversation below points at this id only to carry an icon.
+ * branded with. This script deliberately does not create one: an earlier
+ * version did, /api/agents never returned it, and it sat in the database as a
+ * second agent by that name until it was deleted by hand.
+ *
+ * The pinned conversation below references this id, so it must name an agent
+ * that exists or opening that conversation resolves to nothing. Override with
+ * DEMO_AGENT_ID if the demo's agent is ever rebuilt; the capture script prints
+ * the current id each run under "resolved agent".
  */
-const AGENT_ID = 'agent_docs_hero_librechat'
+const AGENT_ID =
+  typeof DEMO_AGENT_ID === 'undefined' || !DEMO_AGENT_ID
+    ? 'agent_-Wbi4T2131zvNwm7cTU6Y'
+    : String(DEMO_AGENT_ID)
+
+/** Left behind by the version of this script that created its own agent. */
+const RETIRED_AGENT_ID = 'agent_docs_hero_librechat'
 // Served by the demo itself; www.librechat.ai/assets/logo.svg is a 404.
 // Override with DEMO_ORIGIN if the demo is hosted elsewhere.
 const DEMO_ORIGIN =
@@ -180,7 +190,9 @@ function removeSeeded() {
   // Outside the guard above: the agent outlives its conversations, so CLEAN
   // has to remove it even when there is nothing tagged left. Scoped by author
   // as well as id, because this runs against the live public instance.
-  const agents = db.agents.deleteMany({ id: AGENT_ID, author: user._id })
+  // Only ever the retired one. AGENT_ID now names the demo's own agent, which
+  // this script does not own and must never delete.
+  const agents = db.agents.deleteMany({ id: RETIRED_AGENT_ID, author: user._id })
   if (agents.deletedCount > 0) {
     print(`removed ${agents.deletedCount} agent`)
   }

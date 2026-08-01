@@ -204,6 +204,23 @@ describe('seed-demo', () => {
     expect(result.deletes).toEqual([])
   })
 
+  it('points the pinned conversation at an agent that exists', () => {
+    // It referenced an agent this script used to create and no longer does,
+    // which left the conversation resolving to nothing when opened.
+    const pinned = run().conversations.find((c) => c.pinned)!
+    expect(pinned.agent_id).not.toBe('agent_docs_hero_librechat')
+    expect(String(pinned.agent_id)).toMatch(/^agent_/)
+  })
+
+  it("never deletes the demo's own agent, only the retired one", () => {
+    const result = run({ vars: { CLEAN: 'true' } })
+    const agentDeletes = result.deletes.filter((d) => d.collection === 'agents')
+    expect(agentDeletes.length).toBeGreaterThan(0)
+    for (const del of agentDeletes) {
+      expect(del.filter.id).toBe('agent_docs_hero_librechat')
+    }
+  })
+
   it('removes the agent on clean even when no conversations remain', () => {
     // The agent outlives its conversations, so a clean that returned early on
     // an empty batch would strand it and CLEAN could never undo a seed.
