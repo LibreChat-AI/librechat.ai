@@ -46,6 +46,14 @@ describe('screenshot config', () => {
     expect(themeBootstrap('dark')).toContain(THEME_STORAGE_KEY)
   })
 
+  // Pinned to the literal, not to the constant: asserting against the constant
+  // passes for any value, which is how this silently drifted to a key LibreChat
+  // never reads (leaving both variants on the app's 'system' default).
+  it('writes the theme to the key LibreChat actually reads', () => {
+    expect(THEME_STORAGE_KEY).toBe('color-theme')
+    expect(themeBootstrap('dark')).toContain('"color-theme"')
+  })
+
   it('keeps every output path inside the image directory', () => {
     for (const v of VARIANTS) {
       expect(outputPath(v).startsWith(IMG_DIR)).toBe(true)

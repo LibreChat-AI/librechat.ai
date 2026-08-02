@@ -1,8 +1,10 @@
 import { resolve } from 'node:path'
 
 export const BASE_URL = 'https://chat.librechat.ai'
-export const ZOOM = 1.1
-export const THEME_STORAGE_KEY = 'theme'
+// LibreChat persists the theme under this key (client/index.html reads it in an
+// inline script before the bundle boots, and packages/client ThemeProvider uses
+// the same key). Writing any other key leaves the app on its 'system' default.
+export const THEME_STORAGE_KEY = 'color-theme'
 export const IMG_DIR = resolve(process.cwd(), 'components/home/img')
 
 export type Theme = 'light' | 'dark'
@@ -67,9 +69,11 @@ export function screenshotBaseURL(value: string | undefined): string {
 
 /**
  * Returns a JS snippet (string) to run as a Playwright init script, forcing the
- * LibreChat theme before app code reads it. THEME_STORAGE_KEY is the best-known
- * default; verify it against the live demo in Task 2 and adjust if needed.
+ * LibreChat theme before app code reads it.
  */
 export function themeBootstrap(theme: Theme): string {
   return `try{localStorage.setItem(${JSON.stringify(THEME_STORAGE_KEY)}, ${JSON.stringify(theme)})}catch(e){}`
 }
+
+/** Where failure diagnostics are written so CI can upload them as an artifact. */
+export const DIAGNOSTICS_DIR = resolve(process.cwd(), 'screenshot-diagnostics')
