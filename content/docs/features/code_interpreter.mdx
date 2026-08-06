@@ -52,6 +52,24 @@ Programmatic Tool Calling lets LibreChat Agents route selected MCP tools through
 
 The sandbox still does not receive general network access. Tool calls are brokered through the Code Interpreter Tool Call Server and LibreChat's registered tool map, so only tools available to the agent can be called.
 
+### Background Code Execution
+
+Background execution lets an Agent dispatch long-running code or shell work, continue the conversation, and retrieve the result later through `check_background_task`. In LibreChat chat, when the work finishes, stdout and generated files appear on the original code call. Generated files are persisted for subsequent turns even if the Agent has not polled the task yet.
+
+This feature is opt-in at the deployment level. Add `run_in_background` alongside `execute_code` in the [Agents endpoint capabilities](/docs/configuration/librechat_yaml/object_structure/agents#capabilities), then enable Code Interpreter on the agent. Code execution and shell calls become background-eligible automatically; turn off **Background execution** in the Code Interpreter tool settings when an agent should opt out. The model still decides per call whether to dispatch eligible work in the background.
+
+Background task state is process-local and does not survive an app restart or move between replicas. Background dispatch also does not extend the Code Interpreter service's execution limit; the deployment's normal server-side timeout still applies.
+
+### Stateful Code Sessions
+
+Stateful code sessions let a LibreChat Agent reuse one Code Interpreter sandbox workspace per conversation. Files, installed packages, and working state usually carry over between executions, making iterative analysis and multi-step file generation more efficient.
+
+<Callout type="warning" title="Highly experimental">
+  Stateful Code Sessions are in an early experimentation phase. Their behavior, configuration, persistence characteristics, and underlying integration may change substantially. Do not treat the current implementation as a stable production contract.
+</Callout>
+
+This feature is opt-in. Enable `execute_code` and `stateful_code_sessions` in the [Agents endpoint capabilities](/docs/configuration/librechat_yaml/object_structure/agents#capabilities), enable Code Interpreter on the agent, then turn on **Stateful code sessions** in its Advanced settings. The workspace may reset at any time. Save important outputs under `/mnt/data`, and do not otherwise rely on session state as durable storage.
+
 ## Using the API
 
 ### In LibreChat
@@ -63,6 +81,10 @@ The API has first-class support in LibreChat through these main methods:
 2. **Manual Execution**: Use the "Run Code" button in code blocks within the chat interface, as shown here:
 
 3. **[Programmatic Tool Calling](/docs/features/agents#programmatic-tool-calling)**: Enable the `programmatic_tools` capability and mark selected MCP tools as Programmatic so agents can orchestrate those tools from sandboxed code.
+
+4. **[Background Tool Calls](/docs/features/agents#background-tool-calls)**: Let an agent dispatch eligible code in the background and continue while it runs.
+
+5. **[Stateful Code Sessions](/docs/features/agents#stateful-code-sessions)**: Experimentally reuse a per-conversation workspace across an agent's code executions.
 
 ![Code Interpreter in LibreChat](/images/agents/run_code.png)
 
@@ -97,11 +119,18 @@ Set the `LIBRECHAT_CODE_BASEURL` environment variable to point LibreChat at your
 - Upload input files
 - Download generated outputs
 - Preview generated Office, CSV, text, and PDF-like artifacts inline when LibreChat can safely extract/render them
+- Display PNG, JPEG, GIF, and WebP images returned by an Agent's `read_file` tool as viewable artifacts
 - List available files
 - Delete unnecessary files
 - Manage file sessions
 
 Generated artifact previews are intentionally size-bounded. Set `FILE_PREVIEW_MAX_EXTRACT_BYTES` in LibreChat's `.env` to change the source-file size limit for inline preview extraction; larger files remain available for download.
+
+Sandbox images returned through `read_file` have a 1 MiB inline limit. Larger images remain in the sandbox for processing with `bash_tool`. `LIBRECHAT_CODE_IMAGE_CHUNK_BYTES` controls only the transport chunk size used while reading eligible images; it does not raise the inline limit.
+
+<Callout type="warning" title="Upgrade check for legacy code outputs">
+  Deployments that regenerated the same Code Interpreter filename before the unique output-file index was added may have duplicate MongoDB records that prevent the index from building. Preview the repair with `npm run migrate:code-file-duplicates:dry-run`, then apply it with `npm run migrate:code-file-duplicates`. The migration keeps the newest canonical filename, renames older records with numeric suffixes, and builds the unique index after a successful run.
+</Callout>
 
 ### Limitations
 - Code cannot access the network

@@ -26,12 +26,33 @@
 
 ---
 
+## What's New in LibreChat v0.8.8-rc1
+
+- **Agent run control:** Interrupt or steer an Agent mid-run, queue follow-up messages, and reclaim, edit, or escalate pending steers.
+- **Human-in-the-loop Agents:** Agents stream question progress, ask users for input, request tool approval, pause durably, and resume after a decision.
+- **Unified Agent Builder:** A redesigned Tools marketplace brings together Skills, MCP, Code Interpreter, orchestration, Programmatic Tool Calling, model-spec controls, and per-tool background and intent settings.
+- **Readable Agent activity:** Generated activity-group headers and live tool intent labels make long reasoning and tool runs easier to scan.
+- **Code Interpreter workflows:** Code and shell tools can run in the background, sandbox images return as viewable artifacts, and highly experimental stateful sessions can reuse prewarmed conversation workspaces.
+- **Memory, context, and identity:** Agents can manage memory with optional per-agent isolation, expose support contacts safely, and show a more faithful Context Usage gauge.
+- **Sharing and files:** Continue shared conversations as personal copies, upload `.eml` files, keep long uploads alive, and download original Office files from artifact previews.
+- **Models and reasoning:** Added GPT-5.6 with Responses API reasoning controls, Claude Opus 5 and Sonnet 5, Gemini 3.6 Flash, and Gemini 3.5 Flash-Lite.
+- **Langfuse observability:** Configure encrypted Langfuse connections in-app, optionally fan out traces by tenant, and suppress central export per run.
+- **Administration and security:** Delegate individual config sections, encrypt registered secrets and custom endpoint keys, audit terms acceptance, and control model visibility.
+- **Navigation and responsiveness:** A dock-style message rail, warmer conversation switches, virtualized search, and faster Agent startup keep large workspaces responsive.
+- **Streaming and tool reliability:** Adaptive provider stream smoothing, optional Redis delta batching, Agent stream circuit breakers, and cross-replica MCP OAuth readiness improve long-running tool workflows.
+- **Deployment and reliability:** Added configurable HTTP timeouts, Amazon DocumentDB 5.0+ support, low-noise Redis and browser observability, and a rolling-upgrade-safe generation protocol.
+
+Read the [full v0.8.8-rc1 changelog](https://www.librechat.ai/changelog/v0.8.8-rc1).
+
+---
+
 This repository powers **[www.librechat.ai](https://www.librechat.ai)**: the docs, guides, blog, and changelog for LibreChat. It is a [Next.js](https://nextjs.org) application built on [Fumadocs](https://fumadocs.dev), with content authored in MDX.
 
 > Looking for the LibreChat app itself? It lives at **[danny-avila/LibreChat](https://github.com/danny-avila/LibreChat)**. Open code and product issues there, and documentation issues here.
 
 ## Table of Contents
 
+- [What's New in LibreChat v0.8.8-rc1](#whats-new-in-librechat-v088-rc1)
 - [Features](#features)
 - [Tech Stack](#tech-stack)
 - [Getting Started](#getting-started)

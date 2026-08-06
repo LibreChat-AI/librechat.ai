@@ -15,6 +15,8 @@ This guide covers how to configure Redis for caching and session storage in Libr
 - [Performance Tuning](#performance-tuning)
 - [Configuration Examples](#configuration-examples)
 - [Resumable Streams](#resumable-streams)
+- [Generation Protocol Rollout](#generation-protocol-rollout)
+- [Stream Delta Coalescing](#stream-delta-coalescing)
 
 ## Basic Setup
 
@@ -322,6 +324,42 @@ REDIS_URI=redis://127.0.0.1:6379
 # Optional: explicitly control resumable streams behavior
 # USE_REDIS_STREAMS=true  # Enabled by default when USE_REDIS=true
 ```
+
+### Generation Protocol Rollout
+
+The v2 generation protocol adds the durable queue, interrupt, pause/resume, and recovery guarantees used by current Agent runs. Redis-backed deployments intentionally remain on protocol v1 when `GENERATION_PROTOCOL_VERSION` is unset so replicas running different LibreChat versions can coexist during a rolling upgrade.
+
+Use a two-stage rollout:
+
+1. Deploy the v2-capable LibreChat image to **every** replica with `GENERATION_PROTOCOL_VERSION` unset or set to `1`.
+2. Wait for active generations owned by the previous image to finish or drain.
+3. Set `GENERATION_PROTOCOL_VERSION=2` and roll out the same image again.
+
+```bash filename=".env"
+USE_REDIS=true
+USE_REDIS_STREAMS=true
+GENERATION_PROTOCOL_VERSION=2
+```
+
+<Callout type="warning" title="Rolling deployment safety">
+  Do not enable protocol v2 until every replica supports it. After v2 generations begin, do not roll back to a pre-v2 LibreChat image until those generations have drained; older replicas cannot safely operate on their Redis state.
+</Callout>
+
+In-memory generation streams do not share state across replicas and use protocol v2 by default, so they do not require this cutover.
+
+### Stream Delta Coalescing
+
+Redis-backed streams can batch delta publications to reduce Redis scripts, round trips, and CPU at high token rates:
+
+```bash filename=".env"
+STREAM_DELTA_COALESCE_MS=25
+```
+
+The setting is off when unset or set to `0`, `25` milliseconds is recommended, and values above `1000` are capped. Batching can add up to one configured window of delivery latency.
+
+<Callout type="warning" title="Rolling deployment safety">
+  Enable coalescing only after every LibreChat replica supports batch frames. Older subscribers drop coalesced frames.
+</Callout>
 
 ### Key Benefits (for Horizontal Scaling)
 

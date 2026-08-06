@@ -24,11 +24,21 @@ The creation form includes:
 - **Instructions**: System instructions that define your agent's behavior
 - **Model**: Select from available providers and models
 
+The **Tools** and **Skills** controls open searchable libraries for built-in capabilities, tools, MCP servers, Actions, and Skills. Select an item to configure it, then save the agent.
+
 **Existing agents can be selected from the top dropdown of the Side Panel.**
 
 - **Also by mention with "@" in the chat input.**
 
 ![Agents - Mention](/images/agents/mention.png)
+
+### Tool Library
+
+The Agent Builder keeps enabled items in separate **Tools** and **Skills** sections. Open **Add tools** to search the complete catalog or filter it by **Official**, **Tools**, **MCP**, or **Actions**. **Made by you** collects MCP servers and Actions you created, while **Favorites** keeps starred items available across agents. Each user can save up to 100 tool-library favorites.
+
+Select an item to configure it without leaving the builder. The **Create new** menu appears only when the user has permission to create MCP servers or Actions. Removing a file-backed capability such as File Search, File Context, or Code Interpreter opens its file manager when attached files still need to be reviewed.
+
+Skills use their own picker and can be selected individually or enabled as the complete accessible catalog. See [Skills](/docs/features/skills#agent-scope).
 
 ### Model Configuration
 
@@ -38,6 +48,10 @@ The model parameters interface allows fine-tuning of your agent's responses:
 - Max context tokens
 - Max output tokens
 - Additional provider-specific settings
+
+### Version History
+
+Users with edit access can open **Version History** from the Agent Builder to inspect saved configurations in a timeline. Each entry shows when it was saved and summarizes its tools and capabilities. Restoring an earlier entry requires confirmation and replaces the current agent configuration with that saved state.
 
 ## Agent Capabilities
 
@@ -54,6 +68,16 @@ When enabled, the Code Interpreter capability allows your agent to:
 - Handle file uploads and downloads seamlessly
 - [More info about the Code Interpreter API](/docs/features/code_interpreter)
   - **Powered by the open-source [code-interpreter](https://github.com/ClickHouse/code-interpreter) service (self-hosted)**
+
+#### Stateful Code Sessions
+
+Stateful code sessions let an agent reuse one sandbox workspace per conversation. Files, installed packages, and working state usually carry over between code executions, which is useful for iterative analysis and multi-step file work.
+
+<Callout type="warning" title="Highly experimental">
+  Stateful Code Sessions are in an early experimentation phase. Their behavior, configuration, persistence characteristics, and underlying integration may change substantially. Do not treat the current implementation as a stable production contract.
+</Callout>
+
+This feature is opt-in. An administrator must add `stateful_code_sessions` to the [agent capabilities](/docs/configuration/librechat_yaml/object_structure/agents#capabilities), Code Interpreter must be enabled on the agent, and **Stateful code sessions** must be turned on under the agent's Advanced settings. The workspace may reset at any time. Save important outputs under `/mnt/data`, and do not otherwise rely on session state as durable storage.
 
 ### File Search
 
@@ -91,8 +115,8 @@ For more information, see documentation on [MCP](/docs/features/mcp).
 1. Configure MCP servers in your `librechat.yaml` file
 2. Restart LibreChat to initialize the connections
 3. Create or edit an agent
-4. Click the "Add Tools" button in the Agent Builder panel to open the Tools Dialog shown below
-5. Select the MCP server(s) you want to add - each server appears as a single entry
+4. Open **Add tools** in the Agent Builder and select **MCP**
+5. Select the MCP server(s) you want to add; each server appears as a single entry
 6. Save your changes to the agent
 
 In this example, we've added the **[Spotify MCP server](https://github.com/LibreChat-AI/spotify-mcp)** to an agent.
@@ -107,6 +131,8 @@ Once an MCP server is added to an agent, you can fine-tune which specific tools 
 - Check/uncheck individual tools as needed
 - For example, the Spotify MCP server provides ~20 tools (search, playback control, playlist management, etc.)
 - This granular control lets you limit agents to only the tools they need
+
+If an Agent explicitly selects MCP tools but none can be resolved when a run starts, LibreChat stops the run with connection and access guidance instead of silently continuing without them. Reconnect or authenticate the server, verify tool access, and retry the run.
 
 ![Agents - MCP Tools](/images/agents/mcp_agent_tools.png)
 
@@ -135,6 +161,18 @@ This is especially useful when an agent has access to many MCP servers with doze
 
 **Note:** The `deferred_tools` capability is enabled by default. It can be toggled via the [`librechat.yaml` agents configuration](/docs/configuration/librechat_yaml/object_structure/agents#capabilities).
 
+### Activity Groups
+
+Activity groups collapse each contiguous block of Agent reasoning and tool calls under a generated one-line header, making long runs easier to scan. Administrators enable them with `activityLabel` and can use a faster model, another configured endpoint, a custom prompt, and per-run limits. Header generation is a separate model call whose tokens and cost are recorded. See [Agent Activity Groups](/docs/configuration/librechat_yaml/object_structure/shared_endpoint_settings#agent-activity-groups).
+
+### Tool Intent Labels
+
+Tool intent labels replace generic live tool statuses with a short description written by the model for that specific call. Administrators must add the opt-in `tool_intents` [agent capability](/docs/configuration/librechat_yaml/object_structure/agents#capabilities). Native tools use labels automatically; in the Agent Builder, expand an MCP server and turn on **Intent label** for individual tools or the full server.
+
+For model specs, [`describeIntent`](/docs/configuration/librechat_yaml/object_structure/model_specs#describeintent) can enable every eligible tool or select resolved tool IDs. Intent fields add to the tool schema sent to the model, so selective enablement can reduce schema-token overhead.
+
+Intent labels do not apply to programmatic-only MCP tools because calls made inside sandbox code do not render individual tool cards.
+
 ### Programmatic Tool Calling
 
 Programmatic Tool Calling (PTC) lets agents execute selected MCP tools from inside the [Code Interpreter](/docs/features/code_interpreter) sandbox instead of calling each tool directly from the model. The model receives a Code Interpreter-backed orchestration tool, writes sandboxed code that calls generated tool functions, and can use loops, conditionals, retries, and result processing before returning an answer.
@@ -149,11 +187,40 @@ This is useful for multi-step tool workflows such as querying several resources,
 
 **Note:** `programmatic_tools` is opt-in and is not included in the default agents capability list. PTC also requires a Code Interpreter deployment with the Tool Call Server component. Only tools registered for the agent can be called from the sandbox; unregistered tool calls are rejected.
 
+### Background Tool Calls
+
+Background tool calls let an agent start a long-running eligible MCP or Code Interpreter tool, keep working, and poll for the result later. The initial call returns immediately with a task reference; the agent retrieves status and results through `check_background_task`.
+
+To use this feature, an administrator must add the opt-in `run_in_background` [agent capability](/docs/configuration/librechat_yaml/object_structure/agents#capabilities). Then configure the eligible tools in the Agent Builder:
+
+- **Code Interpreter:** Enable Code Interpreter on the agent. Code execution and shell commands become background-eligible by default; turn off **Background execution** in its tool settings to opt out.
+- **MCP:** Open an MCP server and mark individual tools, or the full server, as **Background**.
+
+These settings allow background execution but do not force it. The model decides per call whether to run an eligible tool in the background.
+
+In LibreChat chat, when background code finishes, its stdout and generated files appear on the original code call rather than the later poll. Generated files are also persisted for subsequent turns.
+
+Background task state is currently process-local. Results can be collected in a later turn on the same server process, but they do not survive a restart and are not shared across replicas.
+
+### Ask User and Tool Approval
+
+The **Ask User** tool lets an agent pause a run to request missing information, present choices, or confirm how to proceed. While the model prepares the call, LibreChat streams the question into a progress card; the interactive prompt replaces it when ready. After the user answers, the same run resumes with the response. Add **Ask User** from the Tools marketplace; administrators can remove the default `ask_user_question` capability to hide it.
+
+One Ask User call accepts a question up to 2,000 characters, optional supporting context up to 4,000 characters, and up to 12 choices. Choice labels are limited to 280 characters, choice values to 500 characters, and the submitted answer to 16,000 characters.
+
+Administrators can also require review before matching tool calls run. Depending on the tool, users can approve, reject, edit arguments, or respond directly. Paused runs are checkpointed so they can resume after the decision, including on another replica when the default MongoDB checkpointer is used. Tool approval is disabled by default; see [`toolApproval` and `checkpointer`](/docs/configuration/librechat_yaml/object_structure/agents#toolapproval).
+
 ### Skills
 
 Skills let agents load reusable instructions from `SKILL.md` definitions. They can be selected manually from chat with `$`, automatically discovered by the model through the skill catalog, or always applied on every turn.
 
 For authoring, invocation, and access control details, see [Skills](/docs/features/skills).
+
+### Memory
+
+The **Memory** tool lets an agent save, update, or delete structured user memories when the user explicitly asks it to remember or forget something. Memory must be configured for the deployment, allowed by the user's role and personalization settings, and enabled on the agent.
+
+By default, an agent uses the user's shared personal memory pool. Turn on **Keep memories separate for this agent** to give it a private per-user, per-agent partition. The isolated agent will not see existing shared memories or memories created by other isolated agents. Users can filter the Memory panel by personal or agent-specific memories. See [User Memory](/docs/features/memory#agent-memory).
 
 ### Artifacts
 
@@ -164,14 +231,15 @@ The Artifacts capability enables your agent to generate and display interactive 
 - Configure artifact-specific instructions at the agent level
 - [More info about Artifacts](/docs/features/artifacts)
 
-When enabled, additional instructions specific to the use of artifacts are added by default. Options include:
+When enabled, choose one of three instruction modes:
 
-- **Enable shadcn/ui instructions**: Adds instructions for using shadcn/ui components (a collection of re-usable components built using Radix UI and Tailwind CSS)
-- **Custom Prompt Mode**: When enabled, the default artifacts system prompt will not be included, allowing you to provide your own custom instructions
+- **Normal**: Adds the standard artifact instructions for React, HTML, SVG, Markdown, and Mermaid.
+- **shadcn/ui**: Adds the standard instructions plus guidance for building interfaces with the shadcn/ui component library.
+- **Custom**: Keeps artifact rendering enabled but injects no built-in artifact instructions, giving the agent's own instructions full control.
 
 Configuring artifacts at the agent level is the preferred approach, as it allows for more granular control compared to the legacy app-wide configuration.
 
-If you enable Custom Prompt Mode, you should include at minimum the basic artifact format in your instructions.
+If you select **Custom**, include at minimum the basic artifact format in your instructions.
 
 Here's a simple example of the minimum instructions needed:
 
@@ -198,10 +266,10 @@ For the type attribute, use one of:
 
 Agents can also be enhanced with various built-in tools:
 
-- **[OpenAI Image Tools](/docs/features/image_gen#1--openai-image-tools-recommended)**: Image generation & editing using **[GPT-Image-1](https://platform.openai.com/docs/models/gpt-image-1)**
+- **[OpenAI Image Tools](/docs/features/image_gen#openai-image-tools)**: Image generation & editing using **[GPT-Image-1](https://platform.openai.com/docs/models/gpt-image-1)**
 - **[Gemini Image Tools](/docs/configuration/tools/gemini_image_gen)**: Image generation and image-context editing using Gemini image models
-- **[DALL-E-3](/docs/features/image_gen#3--dalle-legacy)**: Image generation from text descriptions
-- **[Stable Diffusion](/docs/features/image_gen#4--stable-diffusion-local)** / **[Flux](/docs/features/image_gen#5--flux)**: Text-to-image generation
+- **[DALL-E-3](/docs/features/image_gen#dalle-legacy)**: Image generation from text descriptions
+- **[Stable Diffusion](/docs/features/image_gen#stable-diffusion-local)** / **[Flux](/docs/features/image_gen#flux)**: Text-to-image generation
 - **[Wolfram](/docs/configuration/tools/wolfram)**: Computational and mathematical capabilities
 - **[OpenWeather](/docs/configuration/tools/openweather)**: Weather data retrieval
 - **[Google Search](/docs/configuration/tools/google_search)**: Access to web search functionality
@@ -242,6 +310,12 @@ With the Actions capability, you can dynamically create tools from [OpenAPI spec
   If using an OpenAI model supporting it, this will automatically generate function calls with 'strict' mode enabled.
   - Strict mode supports only a partial subset of json. Read https://platform.openai.com/docs/guides/structured-outputs for details.
 
+### Handoffs
+
+Handoffs let a primary agent transfer a conversation to a specialist agent with the relevant context. In **Advanced settings**, open the orchestration section and add up to 10 handoff agents. Each configured handoff creates a transfer tool that the model can choose dynamically when the specialist's expertise is needed.
+
+For each handoff, you can add a description that helps the model choose the right specialist. You can also provide passthrough instructions describing what content the primary agent should generate for the specialist and optionally rename the content parameter from its default, `instructions`. Handoffs are always available in the Agent Builder; unlike Agent Chain and Subagents, they do not require an endpoint capability to be enabled.
+
 ### Agent Chain
 
 The Agent Chain capability enables a Mixture-of-Agents (MoA) approach, allowing you to create a sequence of agents that work together:
@@ -277,6 +351,8 @@ Advanced settings for your agent (found in the Advanced view of the Agent form) 
 This setting allows you to limit the number of steps an agent can take in a "run," which refers to the agent loop before a final response is given.
 
 If left unconfigured, the default is 25 steps, but you can adjust this to suit your needs. For admins, you can set a global default as well as a global maximum in the [`librechat.yaml`](/docs/configuration/librechat_yaml/object_structure/agents#recursionlimit) file.
+
+Administrators can also bound streamed tool-call arguments and model delta events with [Agent stream circuit breakers](/docs/configuration/librechat_yaml/object_structure/agents#stream-circuit-breakers).
 
 A "step" refers to either an AI API request or a round of tool usage (1 or many tools, depending on how many tool calls the LLM provides from a single request).
 
@@ -351,6 +427,8 @@ The original author and administrators always retain full control regardless of 
 3. Search for users, groups, or roles in the people picker and assign each a role
 4. Optionally toggle **Public** to make the agent visible to everyone on the instance (requires the `SHARE_PUBLIC` feature permission)
 
+Agent cards and landing views show the configured support contact. When none is set, LibreChat can fall back to the first resolvable owner's display name, but does not expose the owner's email address unless it was configured explicitly as the support contact.
+
 For full details on principals, permission bits, and how ACLs compose with role-based feature permissions, see [Access Control](/docs/features/access_control).
 
 ### Administrator Controls
@@ -383,6 +461,23 @@ Individual users can:
 - Make agents visible to everyone on the instance (if `SHARE_PUBLIC` is enabled)
 - Grant each recipient a different access level (Viewer / Editor / Owner)
 - Re-share or revoke access at any time from the share dialog
+
+## Steering and Queued Messages
+
+While an Agent is responding, you can send another message in either of two ways:
+
+- **Steer** inserts the message into the current run at its next tool or agent step, so the agent can adjust its work before finishing.
+- **Queue** holds the message and sends it as a normal follow-up turn after the current response completes.
+
+**Interrupt & steer** stops generation at the next provider-safe boundary, keeps the partial response, inserts the message, and resumes the same assistant response. Use the dedicated composer control, choose it from the send-button menu, or press `Command/Ctrl + Shift + .`. The action falls back to ordinary steering when the deployment cannot interrupt the active provider stream.
+
+Under **Settings → Chat**, **While generating, Enter will** chooses the default action. The send-button menu can override that choice for an individual message, and **Steering interrupts generation** controls whether ordinary steering also requests an interrupt.
+
+Pending steers appear above the composer until the server inserts them into the run. Once acknowledged, their menu can reclaim the message for editing, convert it into a queued follow-up, or cancel it and restore its text and attachments to the composer. LibreChat avoids overwriting a newer draft; if the composer is no longer available, it preserves the reclaimed message in the queue instead. A failed steer remains available to retry, edit, queue, or remove.
+
+Queued follow-ups can be sent immediately, converted into a steer while the run is still active, escalated to **Interrupt & steer now**, edited, or removed. In-flight steers offer the same escalation when they are still waiting for a tool boundary. Removing a queued message restores it to an empty composer when possible. One active run accepts up to 10 pending steers; each steer can include up to 10 files and is limited by [`STEER_MAX_LENGTH`](/docs/configuration/dotenv#agent-conversation-controls).
+
+Redis-backed multi-replica deployments must complete the [generation protocol v2 rollout](/docs/configuration/redis#generation-protocol-rollout) before relying on interrupt and recovery behavior across replicas.
 
 ### Notes
 

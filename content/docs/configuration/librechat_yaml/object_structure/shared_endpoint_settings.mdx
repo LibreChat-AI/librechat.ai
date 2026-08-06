@@ -56,6 +56,13 @@ endpoints:
   azureAssistants:
     streamRate: 30
 
+  agents:
+    activityLabel: true
+    activityEndpoint: 'openAI'
+    activityModel: 'gpt-4.1-nano'
+    activityMaxPerRun: 20
+    activityCharLimit: 600
+
   # Global configuration using 'all' - this applies shared settings across endpoints.
   # Most defined values override endpoint defaults; headers are merged and endpoint values win on collisions.
   all:
@@ -72,7 +79,7 @@ endpoints:
       {convo}
 ```
 
-> **Important:** When using the `all` configuration, most shared properties you define apply across endpoints. In the example above, the `all` configuration would apply `titleConvo`, `titleModel`, and `titlePrompt` to all endpoints, while individual `streamRate` settings would be preserved since it's not defined in `all`. `headers` are merged separately: values from `endpoints.all.headers` apply globally, and endpoint-level headers win on key collisions.
+> **Important:** When using the `all` configuration, most shared properties you define apply across endpoints. In the example above, the `all` configuration would apply `titleConvo`, `titleModel`, and `titlePrompt` to all endpoints, while individual `streamRate` settings would be preserved since it's not defined in `all`. `headers` are merged separately: values from `endpoints.all.headers` apply globally, and endpoint-level headers win on key collisions. Activity settings resolve field by field in the same order, so an unrelated `all` setting does not hide an endpoint's activity configuration.
 
 ## streamRate
 
@@ -89,9 +96,11 @@ endpoints:
   ]}
 />
 
-**Default:** 1
+**Default:** Provider-dependent. Provider clients from `@librechat/agents` use adaptive smoothing with a 25 ms target; legacy and direct stream handlers can retain their own defaults.
 
-> Allows for streaming data at the fastest rate possible while allowing the system to wait for the next tick
+Adaptive smoothing emits the first text token without delay, increases chunk size when a stream falls behind, and preserves tool-call and metadata ordering. A configured `streamRate` sets the target cadence where the endpoint integration forwards it.
+
+For custom endpoints, the endpoint value is preserved when `endpoints.all` exists without `streamRate`. An `endpoints.all.streamRate` value overrides the custom endpoint value, including an explicit `0`; `streamRate: 0` disables adaptive smoothing for custom endpoints.
 
 ## titleConvo
 
@@ -300,6 +309,63 @@ endpoints:
     # Will use anthropic's configuration for title generation
 ```
 
+## Agent Activity Groups
+
+Activity groups make long Agent runs easier to scan by collapsing each contiguous block of reasoning and tool calls under a generated one-line header. Header generation runs outside the main model-response path, but it is still a model call and its usage is recorded and billed.
+
+<OptionTable
+  options={[
+    [
+      'activityLabel',
+      'Boolean',
+      'Enables generated activity-group headers for Agent runs using this endpoint.',
+      'false',
+    ],
+    [
+      'activityModel',
+      'String',
+      'Model used to generate headers. Falls back to titleModel, then the Agent run model. Use current_model to select the run model explicitly.',
+      '',
+    ],
+    [
+      'activityEndpoint',
+      'String',
+      'Endpoint whose credentials are used for header generation. Defaults to the Agent model provider.',
+      '',
+    ],
+    [
+      'activityPrompt',
+      'String',
+      'Overrides the prompt used to generate the one-line header.',
+      '',
+    ],
+    [
+      'activityMaxPerRun',
+      'Positive integer',
+      'Maximum generated activity headers per response, limiting additional model calls.',
+      '20',
+    ],
+    [
+      'activityCharLimit',
+      'Positive integer',
+      'Maximum characters from each tool input or output entry included in the header prompt.',
+      '600',
+    ],
+  ]}
+/>
+
+```yaml filename="endpoints / agents / activity groups"
+endpoints:
+  agents:
+    activityLabel: true
+    activityEndpoint: 'openAI'
+    activityModel: 'gpt-4.1-nano'
+    activityMaxPerRun: 20
+    activityCharLimit: 600
+```
+
+You can also set these fields under `endpoints.all` or a backing provider/custom endpoint. Values resolve independently, with the first defined value winning in this order: `endpoints.all`, the public `agents` endpoint, then the backing provider or custom endpoint. If `activityEndpoint` is unknown, LibreChat logs a warning and uses the Agent's provider instead.
+
 ## maxToolResultChars
 
 **Key:**
@@ -362,6 +428,7 @@ endpoints:
 **Notes:**
 
 - Values support `${ENV_VAR}`, `{{LIBRECHAT_USER_*}}`, and request-body placeholders such as `{{LIBRECHAT_BODY_CONVERSATIONID}}`.
+- At the final outbound resolution step, recognized user, request-body, and OpenID placeholders without a value become empty strings instead of being forwarded as template text. Unknown placeholder names remain unchanged so configuration typos are visible.
 - Endpoint-level headers override `endpoints.all.headers` on key collisions.
 - Provider-managed auth and required beta/protocol headers remain authoritative. Anthropic beta values are merged so custom beta flags do not clobber required provider flags.
 - Headers are also forwarded for supported provider model-list requests.
@@ -375,7 +442,7 @@ endpoints:
 - When using the `all` configuration, it will override the corresponding settings in ALL individual endpoints
 - The `all` key does not accept `baseURL`
 - Settings not defined in `all` will preserve their individual endpoint values
-- For `streamRate`: Recommended values are between 25-40 for a smooth streaming experience
+- For `streamRate`: Values between 25-40 are recommended where endpoint-specific smoothing is desired
 - Using a higher stream rate is a must when serving the app to many users at scale
 
 **Example of Override Behavior:**
