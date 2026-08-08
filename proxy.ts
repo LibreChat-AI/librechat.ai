@@ -21,6 +21,13 @@ function isMarkdownPreferred(request: NextRequest): boolean {
   return accept.includes('text/markdown')
 }
 
+function rewriteToMarkdown(request: NextRequest, destination: string): NextResponse {
+  const response = NextResponse.rewrite(new URL(destination, request.nextUrl))
+  response.headers.set('Cache-Control', 'private, no-store')
+  response.headers.set('Vary', 'Accept')
+  return response
+}
+
 /**
  * The reader's preferred site language: an explicit choice (the LOCALE_COOKIE
  * set by the language switcher) wins; otherwise the best `Accept-Language`
@@ -65,10 +72,15 @@ export default function proxy(request: NextRequest, event: NextFetchEvent) {
   // it, otherwise the route handler gets a slug that still ends in .md and 404s.
   if (pathname.endsWith('.md') || pathname.endsWith('.mdx')) return NextResponse.next()
 
-  // Serve raw markdown for content-negotiated requests (LLM/agent tooling).
-  if (isMarkdownPreferred(request) && pathname.startsWith('/docs')) {
+  // Serve curated Markdown for content-negotiated homepage requests.
+  if (isMarkdownPreferred(request) && pathname === '/') {
+    return rewriteToMarkdown(request, '/llms.txt')
+  }
+
+  // Serve raw Markdown for content-negotiated docs requests (LLM/agent tooling).
+  if (isMarkdownPreferred(request) && (pathname === '/docs' || pathname.startsWith('/docs/'))) {
     const rest = pathname.slice('/docs'.length)
-    return NextResponse.rewrite(new URL(`/llms.mdx/docs${rest}`, request.nextUrl))
+    return rewriteToMarkdown(request, `/llms.mdx/docs${rest}`)
   }
 
   // Browser-language auto-detection, scoped to the prefix-less home page. A
@@ -93,7 +105,7 @@ export default function proxy(request: NextRequest, event: NextFetchEvent) {
       response = NextResponse.redirect(url, 307)
     }
     response.headers.set('Cache-Control', 'private, no-store')
-    response.headers.set('Vary', 'Cookie, Accept-Language')
+    response.headers.set('Vary', 'Accept, Cookie, Accept-Language')
     return response
   }
 
@@ -101,7 +113,9 @@ export default function proxy(request: NextRequest, event: NextFetchEvent) {
   // same public pathname on the server and client so Fumadocs pathname-based
   // state (breadcrumbs and active sidebar items) hydrates deterministically.
   if (pathname === '/docs' || pathname.startsWith('/docs/')) {
-    return NextResponse.next()
+    const response = NextResponse.next()
+    response.headers.set('Vary', 'Accept')
+    return response
   }
 
   // Localized docs keep their visible locale prefix. The middleware also
