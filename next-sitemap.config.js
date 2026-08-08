@@ -2,6 +2,13 @@
 module.exports = {
   siteUrl: 'https://www.librechat.ai',
   generateRobotsTxt: true,
+  robotsTxtOptions: {
+    transformRobotsTxt: async (_, robotsTxt) =>
+      robotsTxt.replace(
+        'User-agent: *',
+        'User-agent: *\nContent-Signal: ai-train=no, search=yes, ai-input=no',
+      ),
+  },
   changefreq: 'weekly',
   priority: 0.7,
   exclude: ['*/_meta'],
