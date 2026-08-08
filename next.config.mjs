@@ -143,6 +143,20 @@ const cdnRulesFor = (source, cache) => [
   },
 ]
 
+const MARKDOWN_NEGOTIATED_PATHS = [
+  '/docs/:path*',
+  // Localized docs need the same cache partitioning and edge-cache policy as English.
+  '/(zh|es|fr|de|ja|pt-BR|it|nl|pl|vi|ko|id|tr)/docs/:path*',
+]
+
+// Middleware response headers are replaced when the App Router emits its RSC
+// Vary value. Configure Accept at the route layer so Next appends its own
+// variants instead of dropping the content-negotiation cache key.
+const markdownNegotiatedVaryHeaders = MARKDOWN_NEGOTIATED_PATHS.map((source) => ({
+  source,
+  headers: [{ key: 'Vary', value: 'Accept' }],
+}))
+
 // The narrower live-data rules come last so their Cache-Control overrides the
 // shared value on the paths they match.
 const cdnCacheHeaders = [
@@ -308,6 +322,7 @@ const config = {
           },
         ],
       },
+      ...markdownNegotiatedVaryHeaders,
       ...cdnCacheHeaders,
     ]
   },

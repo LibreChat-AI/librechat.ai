@@ -25,4 +25,14 @@ test.describe('Markdown content negotiation', () => {
     expect(response.headers().vary).toContain('Accept')
     await expect(response.text()).resolves.toContain('# LibreChat')
   })
+
+  test('varies cached docs HTML on the Accept header', async ({ request }) => {
+    const response = await request.get('/docs', {
+      headers: { Accept: 'text/html' },
+    })
+
+    expect(response.ok()).toBe(true)
+    expect(response.headers()['content-type']).toContain('text/html')
+    expect(response.headers().vary).toContain('Accept')
+  })
 })
