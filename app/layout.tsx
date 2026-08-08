@@ -8,6 +8,7 @@ import { Provider } from '@/components/provider'
 import { AskAILoader } from '@/components/ai/AskAILoader'
 import { CoreWebVitalsMonitor } from '@/components/analytics/CoreWebVitalsMonitor'
 import { ReoAnalyticsConsent } from '@/components/analytics/ReoAnalyticsConsent'
+import { WebMCPRegistration } from '@/components/WebMCPRegistration'
 import { ogImageUrl } from '@/lib/og'
 import './global.css'
 
@@ -100,6 +101,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           </a>
         </Banner>
         <Provider>{children}</Provider>
+        <WebMCPRegistration />
         {askAIEnabled && <AskAILoader />}
         {plausibleEnabled && (
           <>

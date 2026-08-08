@@ -2,10 +2,8 @@
 
 import { useI18n } from 'fumadocs-ui/contexts/i18n'
 import { useDocsSearch } from 'fumadocs-core/search/client'
-import { oramaStaticClient } from 'fumadocs-core/search/client/orama-static'
-import { create, type AnyOrama } from '@orama/orama'
 import { i18n } from '@/lib/i18n'
-import { SEARCH_LANGUAGE_BY_LOCALE } from '@/lib/search-languages'
+import { createDocsSearchClient } from '@/lib/search-client'
 import {
   SearchDialog,
   SearchDialogClose,
@@ -35,38 +33,6 @@ import {
  * 'english'), so a custom one is required here.
  */
 
-async function initOrama(locale?: string): Promise<AnyOrama> {
-  // These locales need custom tokenizers. Load them lazily so they only reach
-  // readers who actually search those locales.
-  if (locale === 'zh') {
-    const { createTokenizer } = await import('@orama/tokenizers/mandarin')
-    return create({ schema: { _: 'string' }, components: { tokenizer: createTokenizer() } })
-  }
-  if (locale === 'ja') {
-    const { createTokenizer } = await import('@orama/tokenizers/japanese')
-    return create({ schema: { _: 'string' }, components: { tokenizer: createTokenizer() } })
-  }
-  if (locale === 'ko') {
-    const { createKoreanTokenizer } = await import('@/lib/unicode-tokenizer')
-    return create({ schema: { _: 'string' }, components: { tokenizer: createKoreanTokenizer() } })
-  }
-  if (locale === 'pl') {
-    const { createPolishTokenizer } = await import('@/lib/unicode-tokenizer')
-    return create({ schema: { _: 'string' }, components: { tokenizer: createPolishTokenizer() } })
-  }
-  if (locale === 'vi') {
-    const { createVietnameseTokenizer } = await import('@/lib/unicode-tokenizer')
-    return create({
-      schema: { _: 'string' },
-      components: { tokenizer: createVietnameseTokenizer() },
-    })
-  }
-  return create({
-    schema: { _: 'string' },
-    language: SEARCH_LANGUAGE_BY_LOCALE[locale ?? 'en'] ?? 'english',
-  })
-}
-
 export default function StaticSearchDialog(props: SharedProps) {
   const { locale } = useI18n()
   const lang = locale ?? i18n.defaultLanguage
@@ -74,7 +40,7 @@ export default function StaticSearchDialog(props: SharedProps) {
   // re-queries via the client's `deps` ([tag, locale]), and the downloaded index
   // is cached module-side keyed by URL, so this stays cheap across renders.
   // `from` is the per-locale endpoint so we only download this reader's language.
-  const client = oramaStaticClient({ from: `/api/search/${lang}`, initOrama, locale: lang })
+  const client = createDocsSearchClient(lang)
   const { search, setSearch, query } = useDocsSearch({ client })
 
   return (
