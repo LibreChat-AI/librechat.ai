@@ -1,4 +1,5 @@
-import { getOrderedDocsPages, getLLMText, MARKDOWN_RESPONSE_HEADERS } from '@/lib/get-llm-text'
+import { getOrderedDocsPages, getLLMText } from '@/lib/get-llm-text'
+import { MARKDOWN_RESPONSE_HEADERS } from '@/lib/markdown-response'
 
 export const revalidate = false
 

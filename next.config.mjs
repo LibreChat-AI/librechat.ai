@@ -112,6 +112,13 @@ const SHARED_CDN_CACHE = 'public, s-maxage=86400, stale-while-revalidate=604800'
 const LIVE_DATA_CDN_CACHE = 'public, s-maxage=3600, stale-while-revalidate=86400'
 const LIVE_DATA_PATHS = ['/blog/2026-07-26_clickhouse-analytics']
 
+const AGENT_DISCOVERY_LINKS = [
+  '</.well-known/api-catalog>; rel="api-catalog"; type="application/linkset+json"',
+  '</openapi.json>; rel="service-desc"; type="application/vnd.oai.openapi+json;version=3.1"',
+  '</docs>; rel="service-doc"; type="text/html"',
+  '</llms.txt>; rel="describedby"; type="text/markdown"',
+].join(', ')
+
 /**
  * Cache rules for one source: the document response stays shared-cacheable at
  * the given TTL, while the two variants that share its cache key — the RSC
@@ -135,6 +142,20 @@ const cdnRulesFor = (source, cache) => [
     headers: [{ key: 'Cache-Control', value: 'private, no-store' }],
   },
 ]
+
+const MARKDOWN_NEGOTIATED_PATHS = [
+  '/docs/:path*',
+  // Localized docs need the same cache partitioning and edge-cache policy as English.
+  '/(zh|es|fr|de|ja|pt-BR|it|nl|pl|vi|ko|id|tr)/docs/:path*',
+]
+
+// Middleware response headers are replaced when the App Router emits its RSC
+// Vary value. Configure Accept at the route layer so Next appends its own
+// variants instead of dropping the content-negotiation cache key.
+const markdownNegotiatedVaryHeaders = MARKDOWN_NEGOTIATED_PATHS.map((source) => ({
+  source,
+  headers: [{ key: 'Vary', value: 'Accept' }],
+}))
 
 // The narrower live-data rules come last so their Cache-Control overrides the
 // shared value on the paths they match.
@@ -166,6 +187,7 @@ const config = {
       './lib/fonts/Geist-SemiBold.ttf',
       './public/librechat.png',
     ],
+    '/mcp': ['./content/docs/**/*.mdx'],
   },
   typescript: {
     ignoreBuildErrors: false,
@@ -291,6 +313,16 @@ const config = {
           },
         ],
       },
+      {
+        source: '/',
+        headers: [
+          {
+            key: 'Link',
+            value: AGENT_DISCOVERY_LINKS,
+          },
+        ],
+      },
+      ...markdownNegotiatedVaryHeaders,
       ...cdnCacheHeaders,
     ]
   },

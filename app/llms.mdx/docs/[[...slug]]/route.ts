@@ -1,4 +1,5 @@
-import { getLLMText, MARKDOWN_RESPONSE_HEADERS } from '@/lib/get-llm-text'
+import { getLLMText } from '@/lib/get-llm-text'
+import { MARKDOWN_RESPONSE_HEADERS } from '@/lib/markdown-response'
 import { docsSource } from '@/lib/source'
 import { i18n } from '@/lib/i18n'
 import { notFound } from 'next/navigation'

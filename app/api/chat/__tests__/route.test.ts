@@ -41,10 +41,12 @@ function chatRequest(messages: unknown[], headers: Record<string, string> = {}):
 
 describe('POST /api/chat', () => {
   const originalApiKey = process.env.OPENROUTER_API_KEY
+  const originalPrivateJwk = process.env.WEB_BOT_AUTH_PRIVATE_JWK
 
   beforeEach(() => {
     vi.clearAllMocks()
     process.env.OPENROUTER_API_KEY = 'test-key'
+    process.env.WEB_BOT_AUTH_PRIVATE_JWK = 'test-private-jwk'
     mockCheckRateLimit.mockResolvedValue({ allowed: true })
     mockConvertToModelMessages.mockResolvedValue([{ role: 'user', content: 'hello' }])
     mockToUIMessageStreamResponse.mockReturnValue(
@@ -60,6 +62,7 @@ describe('POST /api/chat', () => {
 
   afterEach(() => {
     process.env.OPENROUTER_API_KEY = originalApiKey
+    process.env.WEB_BOT_AUTH_PRIVATE_JWK = originalPrivateJwk
   })
 
   it('returns 429 when rate limited', async () => {
@@ -83,6 +86,17 @@ describe('POST /api/chat', () => {
 
     expect(response.status).toBe(503)
     expect(body).toEqual({ error: 'OPENROUTER_API_KEY is not configured' })
+    expect(mockStreamText).not.toHaveBeenCalled()
+  })
+
+  it('returns 503 when WEB_BOT_AUTH_PRIVATE_JWK is not configured', async () => {
+    delete process.env.WEB_BOT_AUTH_PRIVATE_JWK
+
+    const response = await POST(chatRequest([{ role: 'user', content: 'hello' }]))
+    const body = await response.json()
+
+    expect(response.status).toBe(503)
+    expect(body).toEqual({ error: 'WEB_BOT_AUTH_PRIVATE_JWK is not configured' })
     expect(mockStreamText).not.toHaveBeenCalled()
   })
 

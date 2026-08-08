@@ -1,6 +1,19 @@
 import { expect, test } from '@playwright/test'
 
 test.describe('LLM markdown routes', () => {
+  test('advertises agent discovery resources from the homepage', async ({ request }) => {
+    const response = await request.head('/', {
+      headers: { 'Accept-Language': 'en' },
+    })
+
+    expect(response.ok()).toBe(true)
+    const { link } = response.headers()
+    expect(link).toContain('</.well-known/api-catalog>; rel="api-catalog"')
+    expect(link).toContain('</openapi.json>; rel="service-desc"')
+    expect(link).toContain('</docs>; rel="service-doc"')
+    expect(link).toContain('</llms.txt>; rel="describedby"')
+  })
+
   test('serves the curated LLM index as markdown', async ({ request }) => {
     const response = await request.get('/llms.txt')
 
