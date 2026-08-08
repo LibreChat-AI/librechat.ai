@@ -277,13 +277,13 @@ export function registerWebMCPTools(
   signal: AbortSignal,
   contexts: WebMCPContexts = {},
 ): boolean {
-  const navigatorModelContext =
-    contexts.navigatorModelContext ??
-    (typeof navigator === 'undefined' ? undefined : navigator.modelContext)
   const documentModelContext =
     contexts.documentModelContext ??
     (typeof document === 'undefined' ? undefined : document.modelContext)
-  const modelContext = navigatorModelContext ?? documentModelContext
+  const navigatorModelContext =
+    contexts.navigatorModelContext ??
+    (typeof navigator === 'undefined' ? undefined : navigator.modelContext)
+  const modelContext = documentModelContext ?? navigatorModelContext
 
   if (!modelContext) return false
 

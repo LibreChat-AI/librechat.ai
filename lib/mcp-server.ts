@@ -1,17 +1,17 @@
 import { findMcpDocument, getMcpDocuments } from '@/lib/mcp-documents'
 import {
+  MCP_LEGACY_PROTOCOL_VERSIONS,
   MCP_PROTOCOL_VERSION,
   MCP_SERVER_CAPABILITIES,
-  MCP_SERVER_CARD,
   MCP_SERVER_INFO,
   MCP_SUPPORTED_PROTOCOL_VERSIONS,
 } from '@/lib/mcp-server-metadata'
 import { absoluteUrl } from '@/lib/structured-data'
 
 export {
+  MCP_LEGACY_PROTOCOL_VERSIONS,
   MCP_PROTOCOL_VERSION,
   MCP_SERVER_CAPABILITIES,
-  MCP_SERVER_CARD,
   MCP_SERVER_INFO,
   MCP_SUPPORTED_PROTOCOL_VERSIONS,
 }
@@ -92,13 +92,6 @@ const RESOURCES = [
     title: 'LibreChat Documentation Index',
     description: 'An index of every English LibreChat documentation page.',
     mimeType: 'text/markdown',
-  },
-  {
-    uri: 'mcp://server-card.json',
-    name: 'mcp-server-card',
-    title: 'MCP Server Card',
-    description: 'Discovery metadata for this MCP server.',
-    mimeType: 'application/json',
   },
 ] as const
 
@@ -211,18 +204,18 @@ async function searchDocumentation(argumentsValue: unknown) {
   }
 }
 
-async function readDocumentationPage(reference: string) {
+async function readDocumentationPage(reference: string, notFoundCode = -32002) {
   const document = await findMcpDocument(reference)
   if (!document) {
-    throw new McpProtocolError(-32002, 'Resource not found', { uri: reference })
+    throw new McpProtocolError(notFoundCode, 'Resource not found', { uri: reference })
   }
   return document
 }
 
-async function getDocumentationPage(argumentsValue: unknown) {
+async function getDocumentationPage(argumentsValue: unknown, notFoundCode: number) {
   const argumentsObject = asRecord(argumentsValue)
   const reference = requiredString(argumentsObject, 'path')
-  const document = await readDocumentationPage(reference)
+  const document = await readDocumentationPage(reference, notFoundCode)
 
   return {
     content: [{ type: 'text', text: document.markdown }],
@@ -243,7 +236,7 @@ async function renderDocumentationIndex(): Promise<string> {
   return `# LibreChat Documentation Index\n\n${entries.join('\n')}`
 }
 
-async function callTool(params: unknown) {
+async function callTool(params: unknown, notFoundCode: number) {
   const paramsObject = asRecord(params)
   const name = requiredString(paramsObject, 'name', { maxLength: 100 })
   const argumentsValue = paramsObject.arguments ?? {}
@@ -252,13 +245,13 @@ async function callTool(params: unknown) {
     case 'search_documentation':
       return searchDocumentation(argumentsValue)
     case 'get_documentation_page':
-      return getDocumentationPage(argumentsValue)
+      return getDocumentationPage(argumentsValue, notFoundCode)
     default:
       throw new McpProtocolError(-32602, 'Invalid params', { message: `Unknown tool: ${name}` })
   }
 }
 
-async function readResource(params: unknown) {
+async function readResource(params: unknown, notFoundCode: number) {
   const paramsObject = asRecord(params)
   const uri = requiredString(paramsObject, 'uri', { maxLength: 1000 })
 
@@ -267,19 +260,8 @@ async function readResource(params: unknown) {
       contents: [{ uri, mimeType: 'text/markdown', text: await renderDocumentationIndex() }],
     }
   }
-  if (uri === 'mcp://server-card.json') {
-    return {
-      contents: [
-        {
-          uri,
-          mimeType: 'application/json',
-          text: JSON.stringify(MCP_SERVER_CARD, null, 2),
-        },
-      ],
-    }
-  }
   if (uri.startsWith('docs://librechat/')) {
-    const document = await readDocumentationPage(uri)
+    const document = await readDocumentationPage(uri, notFoundCode)
     return { contents: [{ uri, mimeType: 'text/markdown', text: document.markdown }] }
   }
 
@@ -323,11 +305,11 @@ function getPrompt(params: unknown) {
 function initialize(params: unknown) {
   const paramsObject = asRecord(params)
   const requestedVersion = paramsObject.protocolVersion
-  const protocolVersion = MCP_SUPPORTED_PROTOCOL_VERSIONS.includes(
-    requestedVersion as (typeof MCP_SUPPORTED_PROTOCOL_VERSIONS)[number],
+  const protocolVersion = MCP_LEGACY_PROTOCOL_VERSIONS.includes(
+    requestedVersion as (typeof MCP_LEGACY_PROTOCOL_VERSIONS)[number],
   )
     ? requestedVersion
-    : MCP_PROTOCOL_VERSION
+    : MCP_LEGACY_PROTOCOL_VERSIONS[0]
 
   return {
     protocolVersion,
@@ -338,27 +320,90 @@ function initialize(params: unknown) {
   }
 }
 
-export async function handleMcpMethod(method: string, params: unknown): Promise<unknown> {
+const CACHE_TTL_MS = 60 * 60 * 1000
+const CACHEABLE_METHODS = new Set([
+  'server/discover',
+  'tools/list',
+  'prompts/list',
+  'resources/list',
+  'resources/templates/list',
+  'resources/read',
+])
+
+function completeResult(method: string, result: unknown): UnknownRecord {
+  const resultObject = asRecord(result, 'Expected an MCP result object')
+  const existingMeta =
+    typeof resultObject._meta === 'object' && resultObject._meta !== null
+      ? (resultObject._meta as UnknownRecord)
+      : {}
+
+  return {
+    resultType: 'complete',
+    ...resultObject,
+    ...(CACHEABLE_METHODS.has(method)
+      ? { ttlMs: CACHE_TTL_MS, cacheScope: 'public' as const }
+      : {}),
+    _meta: {
+      ...existingMeta,
+      'io.modelcontextprotocol/serverInfo': MCP_SERVER_INFO,
+    },
+  }
+}
+
+export async function handleMcpMethod(
+  method: string,
+  params: unknown,
+  { protocolVersion = MCP_PROTOCOL_VERSION }: { protocolVersion?: string } = {},
+): Promise<unknown> {
+  const modern = protocolVersion === MCP_PROTOCOL_VERSION
+  let result: unknown
+
   switch (method) {
     case 'initialize':
-      return initialize(params)
+      if (modern) {
+        throw new McpProtocolError(-32601, 'Method not found', {
+          method,
+          supported: MCP_SUPPORTED_PROTOCOL_VERSIONS,
+        })
+      }
+      result = initialize(params)
+      break
+    case 'server/discover':
+      if (!modern) throw new McpProtocolError(-32601, 'Method not found', { method })
+      result = {
+        supportedVersions: MCP_SUPPORTED_PROTOCOL_VERSIONS,
+        capabilities: MCP_SERVER_CAPABILITIES,
+        instructions:
+          'Use the tools and resources to answer questions from the official LibreChat documentation.',
+      }
+      break
     case 'ping':
-      return {}
+      result = {}
+      break
     case 'tools/list':
-      return { tools: TOOLS }
+      result = { tools: TOOLS }
+      break
     case 'tools/call':
-      return callTool(params)
+      result = await callTool(params, modern ? -32602 : -32002)
+      break
     case 'resources/list':
-      return { resources: RESOURCES }
+      result = { resources: RESOURCES }
+      break
     case 'resources/templates/list':
-      return { resourceTemplates: RESOURCE_TEMPLATES }
+      result = { resourceTemplates: RESOURCE_TEMPLATES }
+      break
     case 'resources/read':
-      return readResource(params)
+      result = await readResource(params, modern ? -32602 : -32002)
+      break
     case 'prompts/list':
-      return { prompts: PROMPTS }
+      result = { prompts: PROMPTS }
+      break
     case 'prompts/get':
-      return getPrompt(params)
+      result = getPrompt(params)
+      break
     default:
       throw new McpProtocolError(-32601, 'Method not found', { method })
   }
+
+  return modern ? completeResult(method, result) : result
 }

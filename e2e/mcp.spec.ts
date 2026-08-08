@@ -1,9 +1,20 @@
 import { expect, test, type APIRequestContext } from '@playwright/test'
 
-const headers = {
+const MCP_PROTOCOL_VERSION = '2026-07-28'
+const baseHeaders = {
   Accept: 'application/json, text/event-stream',
   'Content-Type': 'application/json',
-  'MCP-Protocol-Version': '2025-06-18',
+  'MCP-Protocol-Version': MCP_PROTOCOL_VERSION,
+}
+
+function nameFor(method: string, params: Record<string, unknown>): string | undefined {
+  if (method === 'resources/read') {
+    return typeof params.uri === 'string' ? params.uri : undefined
+  }
+  if (method === 'tools/call' || method === 'prompts/get') {
+    return typeof params.name === 'string' ? params.name : undefined
+  }
+  return undefined
 }
 
 async function callMcp(
@@ -12,9 +23,26 @@ async function callMcp(
   params: Record<string, unknown> = {},
   id = 1,
 ) {
+  const name = nameFor(method, params)
   const response = await request.post('/mcp', {
-    headers,
-    data: { jsonrpc: '2.0', id, method, params },
+    headers: {
+      ...baseHeaders,
+      'Mcp-Method': method,
+      ...(name ? { 'Mcp-Name': name } : {}),
+    },
+    data: {
+      jsonrpc: '2.0',
+      id,
+      method,
+      params: {
+        ...params,
+        _meta: {
+          'io.modelcontextprotocol/protocolVersion': MCP_PROTOCOL_VERSION,
+          'io.modelcontextprotocol/clientInfo': { name: 'playwright', version: '1.0.0' },
+          'io.modelcontextprotocol/clientCapabilities': {},
+        },
+      },
+    },
     timeout: 60_000,
   })
   expect(response.status()).toBe(200)
@@ -22,23 +50,22 @@ async function callMcp(
 }
 
 test('serves the LibreChat documentation MCP protocol', async ({ request }) => {
-  const initialize = await callMcp(
-    request,
-    'initialize',
-    {
-      protocolVersion: '2025-06-18',
-      capabilities: {},
-      clientInfo: { name: 'playwright', version: '1.0.0' },
-    },
-    1,
-  )
-  expect(initialize.result).toMatchObject({
-    protocolVersion: '2025-06-18',
+  const discovery = await callMcp(request, 'server/discover', {}, 1)
+  expect(discovery.result).toMatchObject({
+    resultType: 'complete',
+    supportedVersions: expect.arrayContaining([MCP_PROTOCOL_VERSION]),
     capabilities: { tools: {}, resources: {}, prompts: {} },
-    serverInfo: { name: 'librechat-docs' },
+    _meta: {
+      'io.modelcontextprotocol/serverInfo': { name: 'librechat-docs' },
+    },
   })
 
   const tools = await callMcp(request, 'tools/list', {}, 2)
+  expect(tools.result).toMatchObject({
+    resultType: 'complete',
+    ttlMs: 3_600_000,
+    cacheScope: 'public',
+  })
   expect(tools.result.tools).toEqual(
     expect.arrayContaining([expect.objectContaining({ name: 'search_documentation' })]),
   )

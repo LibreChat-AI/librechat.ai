@@ -32,27 +32,54 @@ vi.mock('@/lib/mcp-documents', () => ({
 import { GET, POST } from '@/app/mcp/route'
 
 const MCP_URL = 'https://www.librechat.ai/mcp'
+const MCP_PROTOCOL_VERSION = '2026-07-28'
+const CLIENT_METADATA = {
+  'io.modelcontextprotocol/protocolVersion': MCP_PROTOCOL_VERSION,
+  'io.modelcontextprotocol/clientInfo': { name: 'route-test', version: '1.0.0' },
+  'io.modelcontextprotocol/clientCapabilities': {},
+}
 
-function requestBody(body: unknown, headers: Record<string, string> = {}): Request {
+type JsonRpcMessage = {
+  jsonrpc: '2.0'
+  id?: string | number
+  method: string
+  params?: Record<string, unknown>
+}
+
+function mirroredName(message: JsonRpcMessage): string | undefined {
+  if (!['tools/call', 'resources/read', 'prompts/get'].includes(message.method)) return undefined
+  const key = message.method === 'resources/read' ? 'uri' : 'name'
+  const value = message.params?.[key]
+  return typeof value === 'string' ? value : undefined
+}
+
+function requestBody(message: JsonRpcMessage, headers: Record<string, string> = {}): Request {
+  const name = mirroredName(message)
   return new Request(MCP_URL, {
     method: 'POST',
     headers: {
       Accept: 'application/json, text/event-stream',
       'Content-Type': 'application/json',
-      'MCP-Protocol-Version': '2025-06-18',
+      'MCP-Protocol-Version': MCP_PROTOCOL_VERSION,
+      'Mcp-Method': message.method,
+      ...(name ? { 'Mcp-Name': name } : {}),
       ...headers,
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify(message),
   })
 }
 
-async function call(method: string, params: unknown = {}, id = 1) {
+function modernParams(params: Record<string, unknown> = {}) {
+  return { ...params, _meta: CLIENT_METADATA }
+}
+
+async function call(method: string, params: Record<string, unknown> = {}, id = 1) {
   const response = await POST(
     requestBody({
       jsonrpc: '2.0',
       id,
       method,
-      params,
+      params: modernParams(params),
     }),
   )
 
@@ -60,71 +87,85 @@ async function call(method: string, params: unknown = {}, id = 1) {
 }
 
 describe('/mcp Streamable HTTP transport', () => {
-  it('negotiates the MCP lifecycle and declares the advertised capabilities', async () => {
+  it('discovers the current stateless protocol and advertised capabilities', async () => {
+    const { response, body } = await call('server/discover')
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('content-type')).toContain('application/json')
+    expect(response.headers.get('mcp-protocol-version')).toBe(MCP_PROTOCOL_VERSION)
+    expect(response.headers.get('mcp-session-id')).toBeNull()
+    expect(body).toMatchObject({
+      jsonrpc: '2.0',
+      id: 1,
+      result: {
+        resultType: 'complete',
+        supportedVersions: expect.arrayContaining([MCP_PROTOCOL_VERSION, '2025-06-18']),
+        capabilities: {
+          tools: {},
+          resources: {},
+          prompts: {},
+        },
+        _meta: {
+          'io.modelcontextprotocol/serverInfo': {
+            name: 'librechat-docs',
+            version: '1.0.0',
+          },
+        },
+        ttlMs: 3_600_000,
+        cacheScope: 'public',
+      },
+    })
+  })
+
+  it('retains the legacy initialize handshake for older clients', async () => {
     const response = await POST(
-      requestBody(
-        {
+      new Request(MCP_URL, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json, text/event-stream',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
           jsonrpc: '2.0',
           id: 1,
           method: 'initialize',
           params: {
             protocolVersion: '2025-06-18',
             capabilities: {},
-            clientInfo: { name: 'route-test', version: '1.0.0' },
+            clientInfo: { name: 'legacy-route-test', version: '1.0.0' },
           },
-        },
-        { 'MCP-Protocol-Version': '' },
-      ),
+        }),
+      }),
     )
 
     expect(response.status).toBe(200)
-    expect(response.headers.get('content-type')).toContain('application/json')
     expect(response.headers.get('mcp-protocol-version')).toBe('2025-06-18')
-    expect(response.headers.get('mcp-session-id')).toBeNull()
     await expect(response.json()).resolves.toMatchObject({
-      jsonrpc: '2.0',
-      id: 1,
       result: {
         protocolVersion: '2025-06-18',
-        capabilities: {
-          tools: {},
-          resources: {},
-          prompts: {},
-        },
-        serverInfo: {
-          name: 'librechat-docs',
-          version: '1.0.0',
-        },
+        capabilities: { tools: {}, resources: {}, prompts: {} },
+        serverInfo: { name: 'librechat-docs' },
       },
     })
   })
 
-  it('accepts initialized notifications without a response body', async () => {
-    const response = await POST(
-      requestBody({ jsonrpc: '2.0', method: 'notifications/initialized' }),
-    )
-
-    expect(response.status).toBe(202)
-    await expect(response.text()).resolves.toBe('')
-  })
-
-  it('lists tools, resources, and prompts', async () => {
+  it('lists cacheable tools, resources, and prompts without a proposed server card', async () => {
     const tools = await call('tools/list')
     const resources = await call('resources/list')
     const prompts = await call('prompts/list')
 
-    expect(tools.body.result.tools).toEqual(
-      expect.arrayContaining([
+    expect(tools.body.result).toMatchObject({
+      resultType: 'complete',
+      ttlMs: 3_600_000,
+      cacheScope: 'public',
+      tools: expect.arrayContaining([
         expect.objectContaining({ name: 'search_documentation' }),
         expect.objectContaining({ name: 'get_documentation_page' }),
       ]),
-    )
-    expect(resources.body.result.resources).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ uri: 'docs://librechat/index' }),
-        expect.objectContaining({ uri: 'mcp://server-card.json' }),
-      ]),
-    )
+    })
+    expect(resources.body.result.resources).toEqual([
+      expect.objectContaining({ uri: 'docs://librechat/index' }),
+    ])
     expect(prompts.body.result.prompts).toEqual(
       expect.arrayContaining([expect.objectContaining({ name: 'answer_librechat_question' })]),
     )
@@ -136,16 +177,22 @@ describe('/mcp Streamable HTTP transport', () => {
       arguments: { query: 'Streamable HTTP', limit: 3 },
     })
 
+    expect(body.result.resultType).toBe('complete')
     expect(body.result.isError).toBe(false)
     expect(body.result.structuredContent.results.length).toBeGreaterThan(0)
     expect(body.result.content[0].text).toContain('Streamable HTTP')
   })
 
-  it('reads documentation pages as MCP resources', async () => {
+  it('reads documentation pages as cacheable MCP resources', async () => {
     const { body } = await call('resources/read', {
       uri: 'docs://librechat/features/mcp',
     })
 
+    expect(body.result).toMatchObject({
+      resultType: 'complete',
+      ttlMs: 3_600_000,
+      cacheScope: 'public',
+    })
     expect(body.result.contents).toEqual([
       expect.objectContaining({
         uri: 'docs://librechat/features/mcp',
@@ -172,10 +219,54 @@ describe('/mcp Streamable HTTP transport', () => {
     ])
   })
 
-  it('returns protocol errors for unknown methods', async () => {
+  it('rejects modern requests missing the mirrored method header', async () => {
+    const response = await POST(
+      requestBody(
+        { jsonrpc: '2.0', id: 1, method: 'tools/list', params: modernParams() },
+        { 'Mcp-Method': '' },
+      ),
+    )
+
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: -32020, message: expect.stringContaining('Mcp-Method') },
+    })
+  })
+
+  it('rejects mirrored names that disagree with the request body', async () => {
+    const response = await POST(
+      requestBody(
+        {
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'tools/call',
+          params: modernParams({ name: 'search_documentation', arguments: { query: 'MCP' } }),
+        },
+        { 'Mcp-Name': 'get_documentation_page' },
+      ),
+    )
+
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: -32020, message: expect.stringContaining('Mcp-Name') },
+    })
+  })
+
+  it('rejects modern requests missing required per-request metadata', async () => {
+    const response = await POST(
+      requestBody({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }),
+    )
+
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: -32602, message: 'Invalid params' },
+    })
+  })
+
+  it('returns HTTP 404 for methods missing from the current protocol', async () => {
     const { response, body } = await call('unknown/method')
 
-    expect(response.status).toBe(200)
+    expect(response.status).toBe(404)
     expect(body).toMatchObject({
       jsonrpc: '2.0',
       id: 1,
@@ -186,7 +277,7 @@ describe('/mcp Streamable HTTP transport', () => {
   it('rejects cross-origin browser requests', async () => {
     const response = await POST(
       requestBody(
-        { jsonrpc: '2.0', id: 1, method: 'ping', params: {} },
+        { jsonrpc: '2.0', id: 1, method: 'ping', params: modernParams() },
         { Origin: 'https://attacker.example' },
       ),
     )

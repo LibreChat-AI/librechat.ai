@@ -63,7 +63,9 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   // before the client component interpolates it into the script URL.
   const rawReoClientId = process.env.NEXT_PUBLIC_REO_CLIENT_ID ?? DEFAULT_REO_CLIENT_ID
   const reoClientId = /^[\w-]+$/.test(rawReoClientId) ? rawReoClientId : ''
-  const askAIEnabled = Boolean(process.env.OPENROUTER_API_KEY)
+  const askAIEnabled = Boolean(
+    process.env.OPENROUTER_API_KEY && process.env.WEB_BOT_AUTH_PRIVATE_JWK,
+  )
   const plausibleEnabled = process.env.NODE_ENV === 'production'
 
   const cwvProjectId = process.env.NEXT_PUBLIC_CWV_PROJECT_ID?.trim() || DEFAULT_CWV_PROJECT_ID

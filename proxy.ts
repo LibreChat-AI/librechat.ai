@@ -18,7 +18,43 @@ function matchLocale(tag: string, locales: readonly string[]): string | null {
 
 function isMarkdownPreferred(request: NextRequest): boolean {
   const accept = request.headers.get('accept') ?? ''
-  return accept.includes('text/markdown')
+  const ranges = accept.split(',').map((part) => {
+    const [mediaRange = '', ...parameters] = part.split(';')
+    const qualityValue = parameters
+      .map((parameter) => parameter.trim().match(/^q\s*=\s*(.+)$/i)?.[1])
+      .find((value) => value !== undefined)
+    const parsedQuality = qualityValue === undefined ? 1 : Number(qualityValue)
+    const quality =
+      Number.isFinite(parsedQuality) && parsedQuality >= 0 && parsedQuality <= 1 ? parsedQuality : 0
+
+    return { mediaRange: mediaRange.trim().toLowerCase(), quality }
+  })
+
+  const qualityFor = (mediaType: string): number => {
+    const [type] = mediaType.split('/')
+    const matches = ranges
+      .map(({ mediaRange, quality }) => ({
+        quality,
+        specificity: mediaRange === mediaType ? 2 : mediaRange === `${type}/*` ? 1 : 0,
+        matches: mediaRange === mediaType || mediaRange === `${type}/*` || mediaRange === '*/*',
+      }))
+      .filter((candidate) => candidate.matches)
+      .sort((left, right) => right.specificity - left.specificity)
+
+    return matches[0]?.quality ?? 0
+  }
+
+  const markdownQuality = qualityFor('text/markdown')
+  const htmlQuality = qualityFor('text/html')
+  const explicitlyAcceptsMarkdown = ranges.some(
+    ({ mediaRange, quality }) => mediaRange === 'text/markdown' && quality > 0,
+  )
+
+  return (
+    markdownQuality > 0 &&
+    (markdownQuality > htmlQuality ||
+      (markdownQuality === htmlQuality && explicitlyAcceptsMarkdown))
+  )
 }
 
 function rewriteToMarkdown(request: NextRequest, destination: string): NextResponse {

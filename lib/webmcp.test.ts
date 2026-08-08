@@ -122,7 +122,7 @@ describe('WebMCP tools', () => {
 describe('WebMCP registration', () => {
   const tools = createWebMCPTools(createDependencies())
 
-  it('prefers navigator.modelContext and passes the lifecycle signal to each tool', () => {
+  it('prefers document.modelContext and passes the lifecycle signal to each tool', () => {
     const abortedTools: string[] = []
     const navigatorRegister = vi.fn(
       async (tool: WebMCPToolDefinition, options?: { signal?: AbortSignal }) => {
@@ -132,7 +132,11 @@ describe('WebMCP registration', () => {
       },
     )
     const documentRegister = vi.fn(
-      async (_tool: WebMCPToolDefinition, _options?: { signal?: AbortSignal }) => {},
+      async (tool: WebMCPToolDefinition, options?: { signal?: AbortSignal }) => {
+        options?.signal?.addEventListener('abort', () => abortedTools.push(tool.name), {
+          once: true,
+        })
+      },
     )
     const controller = new AbortController()
 
@@ -142,9 +146,9 @@ describe('WebMCP registration', () => {
     })
 
     expect(registered).toBe(true)
-    expect(navigatorRegister).toHaveBeenCalledTimes(tools.length)
-    expect(documentRegister).not.toHaveBeenCalled()
-    for (const call of navigatorRegister.mock.calls) {
+    expect(documentRegister).toHaveBeenCalledTimes(tools.length)
+    expect(navigatorRegister).not.toHaveBeenCalled()
+    for (const call of documentRegister.mock.calls) {
       expect(call[1]?.signal).toBe(controller.signal)
     }
 
@@ -153,16 +157,16 @@ describe('WebMCP registration', () => {
     expect(abortedTools).toEqual(tools.map(({ name }) => name))
   })
 
-  it('falls back to document.modelContext for current Chrome implementations', () => {
-    const documentRegister = vi.fn(
+  it('falls back to navigator.modelContext for older Chrome implementations', () => {
+    const navigatorRegister = vi.fn(
       async (_tool: WebMCPToolDefinition, _options?: { signal?: AbortSignal }) => {},
     )
 
     expect(
       registerWebMCPTools(tools, new AbortController().signal, {
-        documentModelContext: { registerTool: documentRegister },
+        navigatorModelContext: { registerTool: navigatorRegister },
       }),
     ).toBe(true)
-    expect(documentRegister).toHaveBeenCalledTimes(tools.length)
+    expect(navigatorRegister).toHaveBeenCalledTimes(tools.length)
   })
 })

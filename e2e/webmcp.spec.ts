@@ -5,7 +5,7 @@ interface WebMCPTestState {
   abortedTools: string[]
 }
 
-test('registers WebMCP tools on page load through navigator.modelContext', async ({ page }) => {
+test('registers WebMCP tools on page load through document.modelContext', async ({ page }) => {
   await page.addInitScript(() => {
     const state: WebMCPTestState = { tools: [], abortedTools: [] }
     const modelContext: WebMCPModelContext = {
@@ -18,7 +18,7 @@ test('registers WebMCP tools on page load through navigator.modelContext', async
     }
 
     Object.defineProperty(window, '__webMCPTestState', { value: state, configurable: true })
-    Object.defineProperty(navigator, 'modelContext', { value: modelContext, configurable: true })
+    Object.defineProperty(document, 'modelContext', { value: modelContext, configurable: true })
   })
 
   await page.goto('/')

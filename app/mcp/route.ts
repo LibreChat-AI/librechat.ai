@@ -24,6 +24,16 @@ function isValidId(value: unknown): value is JsonRpcId {
   return value === null || typeof value === 'string' || typeof value === 'number'
 }
 
+function decodeMirroredHeader(value: string | null): string | null {
+  if (!value?.startsWith('=?base64?') || !value.endsWith('?=')) return value
+
+  try {
+    return Buffer.from(value.slice('=?base64?'.length, -'?='.length), 'base64').toString('utf8')
+  } catch {
+    return null
+  }
+}
+
 function allowedOrigin(request: Request): string | null {
   const origin = request.headers.get('origin')
   if (!origin) return null
@@ -56,7 +66,10 @@ function responseHeaders(request: Request, protocolVersion = MCP_PROTOCOL_VERSIO
   if (origin) {
     headers.set('Access-Control-Allow-Origin', origin)
     headers.set('Access-Control-Allow-Methods', 'POST, OPTIONS')
-    headers.set('Access-Control-Allow-Headers', 'Content-Type, MCP-Protocol-Version')
+    headers.set(
+      'Access-Control-Allow-Headers',
+      'Content-Type, MCP-Protocol-Version, Mcp-Method, Mcp-Name',
+    )
     headers.set('Access-Control-Expose-Headers', 'MCP-Protocol-Version')
     headers.set('Vary', 'Origin')
   }
@@ -132,10 +145,20 @@ export async function POST(request: Request) {
   }
 
   const accept = request.headers.get('accept')
-  if (accept && !accept.includes('application/json') && !accept.includes('*/*')) {
-    return jsonRpcError(request, null, -32600, 'Accept must include application/json', {
-      status: 406,
-    })
+  if (
+    accept &&
+    (!accept.includes('application/json') || !accept.includes('text/event-stream')) &&
+    !accept.includes('*/*')
+  ) {
+    return jsonRpcError(
+      request,
+      null,
+      -32600,
+      'Accept must include application/json and text/event-stream',
+      {
+        status: 406,
+      },
+    )
   }
 
   const declaredProtocolVersion = request.headers.get('mcp-protocol-version')
@@ -145,9 +168,12 @@ export async function POST(request: Request) {
       declaredProtocolVersion as (typeof MCP_SUPPORTED_PROTOCOL_VERSIONS)[number],
     )
   ) {
-    return jsonRpcError(request, null, -32600, 'Unsupported MCP protocol version', {
+    return jsonRpcError(request, null, -32022, 'Unsupported protocol version', {
       status: 400,
-      data: { supported: MCP_SUPPORTED_PROTOCOL_VERSIONS },
+      data: {
+        supported: MCP_SUPPORTED_PROTOCOL_VERSIONS,
+        requested: declaredProtocolVersion,
+      },
     })
   }
   const requestProtocolVersion = declaredProtocolVersion || DEFAULT_PROTOCOL_VERSION
@@ -208,13 +234,76 @@ export async function POST(request: Request) {
   }
 
   const hasId = Object.hasOwn(message, 'id')
+  const modern = requestProtocolVersion === MCP_PROTOCOL_VERSION
+  const params = isRecord(message.params) ? message.params : null
+
+  if (modern) {
+    const metadata = params && isRecord(params._meta) ? params._meta : null
+    const metadataProtocolVersion = metadata?.['io.modelcontextprotocol/protocolVersion']
+    const clientCapabilities = metadata?.['io.modelcontextprotocol/clientCapabilities']
+
+    if (typeof metadataProtocolVersion !== 'string' || !isRecord(clientCapabilities)) {
+      return jsonRpcError(
+        request,
+        isValidId(message.id) ? message.id : null,
+        -32602,
+        'Invalid params',
+        {
+          status: 400,
+          protocolVersion: requestProtocolVersion,
+          data: {
+            message:
+              'Modern MCP requests require protocolVersion and clientCapabilities in params._meta',
+          },
+        },
+      )
+    }
+
+    if (metadataProtocolVersion !== requestProtocolVersion) {
+      return jsonRpcError(
+        request,
+        isValidId(message.id) ? message.id : null,
+        -32020,
+        'Header mismatch: MCP-Protocol-Version does not match params._meta',
+        { status: 400, protocolVersion: requestProtocolVersion },
+      )
+    }
+
+    const mirroredMethod = request.headers.get('mcp-method')
+    if (mirroredMethod !== message.method) {
+      return jsonRpcError(
+        request,
+        isValidId(message.id) ? message.id : null,
+        -32020,
+        'Header mismatch: Mcp-Method does not match the request method',
+        { status: 400, protocolVersion: requestProtocolVersion },
+      )
+    }
+
+    const nameKey = message.method === 'resources/read' ? 'uri' : 'name'
+    const requiresName = ['tools/call', 'resources/read', 'prompts/get'].includes(message.method)
+    if (requiresName) {
+      const bodyName = params?.[nameKey]
+      const headerName = decodeMirroredHeader(request.headers.get('mcp-name'))
+      if (typeof bodyName !== 'string' || headerName !== bodyName) {
+        return jsonRpcError(
+          request,
+          isValidId(message.id) ? message.id : null,
+          -32020,
+          'Header mismatch: Mcp-Name does not match the request name',
+          { status: 400, protocolVersion: requestProtocolVersion },
+        )
+      }
+    }
+  }
+
   if (!hasId) {
     return new Response(null, {
       status: 202,
       headers: responseHeaders(request, requestProtocolVersion),
     })
   }
-  if (!isValidId(message.id)) {
+  if (!isValidId(message.id) || (modern && message.id === null)) {
     return jsonRpcError(request, null, -32600, 'Invalid Request', {
       status: 400,
       protocolVersion: requestProtocolVersion,
@@ -223,7 +312,9 @@ export async function POST(request: Request) {
 
   const { id } = message
   try {
-    const result = await handleMcpMethod(message.method, message.params ?? {})
+    const result = await handleMcpMethod(message.method, message.params ?? {}, {
+      protocolVersion: requestProtocolVersion,
+    })
     const protocolVersion =
       message.method === 'initialize' &&
       isRecord(result) &&
@@ -241,6 +332,7 @@ export async function POST(request: Request) {
     if (error instanceof McpProtocolError) {
       return jsonRpcError(request, id, error.code, error.message, {
         data: error.data,
+        status: modern && error.code === -32601 ? 404 : 200,
         protocolVersion: requestProtocolVersion,
       })
     }

@@ -74,6 +74,34 @@ describe('proxy routing', () => {
     expect(response.headers.get('vary')).toContain('Accept')
   })
 
+  it('rejects Markdown when its quality value is zero', async () => {
+    const response = await runProxy('/', {
+      accept: 'text/markdown;q=0, text/html;q=1',
+    })
+
+    expect(response.headers.get('x-middleware-next')).toBe('1')
+    expect(response.headers.get('x-middleware-rewrite')).toBeNull()
+  })
+
+  it('keeps HTML when it has a higher quality value than Markdown', async () => {
+    const response = await runProxy('/docs/local/docker', {
+      accept: 'text/markdown;q=0.5, text/html;q=1',
+    })
+
+    expect(response.headers.get('x-middleware-next')).toBe('1')
+    expect(response.headers.get('x-middleware-rewrite')).toBeNull()
+  })
+
+  it('serves Markdown when it has a higher quality value than HTML', async () => {
+    const response = await runProxy('/docs/local/docker', {
+      accept: 'text/html;q=0.5, text/markdown;q=1',
+    })
+
+    expect(response.headers.get('x-middleware-rewrite')).toBe(
+      'https://www.librechat.ai/llms.mdx/docs/local/docker',
+    )
+  })
+
   it('passes browser requests for the explicit English route through unchanged', async () => {
     const response = await runProxy('/docs/local/docker', { accept: 'text/html' })
 
