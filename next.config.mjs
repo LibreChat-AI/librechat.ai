@@ -112,6 +112,13 @@ const SHARED_CDN_CACHE = 'public, s-maxage=86400, stale-while-revalidate=604800'
 const LIVE_DATA_CDN_CACHE = 'public, s-maxage=3600, stale-while-revalidate=86400'
 const LIVE_DATA_PATHS = ['/blog/2026-07-26_clickhouse-analytics']
 
+const AGENT_DISCOVERY_LINKS = [
+  '</.well-known/api-catalog>; rel="api-catalog"; type="application/linkset+json"',
+  '</openapi.json>; rel="service-desc"; type="application/vnd.oai.openapi+json;version=3.1"',
+  '</docs>; rel="service-doc"; type="text/html"',
+  '</llms.txt>; rel="describedby"; type="text/markdown"',
+].join(', ')
+
 /**
  * Cache rules for one source: the document response stays shared-cacheable at
  * the given TTL, while the two variants that share its cache key — the RSC
@@ -288,6 +295,15 @@ const config = {
           {
             key: 'Content-Security-Policy',
             value: cspHeader.replaceAll('\n', ''),
+          },
+        ],
+      },
+      {
+        source: '/',
+        headers: [
+          {
+            key: 'Link',
+            value: AGENT_DISCOVERY_LINKS,
           },
         ],
       },
