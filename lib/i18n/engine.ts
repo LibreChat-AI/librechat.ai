@@ -1,6 +1,7 @@
 import { generateText } from 'ai'
 import { createOpenRouter } from '@openrouter/ai-sdk-provider'
 import { OPENROUTER_APP_HEADERS } from '../openrouter-attribution'
+import { webBotAuthFetch } from '../web-bot-auth'
 import { GLOSSARY, TRANSLATE_MODEL, TRANSLATE_PROVIDER, TRANSLATE_SERVICE_TIER } from './config'
 import { LOCALE_NAMES } from '../i18n'
 import { withRetry } from './retry'
@@ -62,6 +63,7 @@ export function createOpenRouterModel(): TranslateModel {
   const openrouter = createOpenRouter({
     apiKey: process.env.OPENROUTER_API_KEY,
     headers: OPENROUTER_APP_HEADERS,
+    fetch: webBotAuthFetch,
   })
   // Pin the provider via OpenRouter's routing preferences; `service_tier` is not a
   // typed setting, so pass it through `extraBody` (merged verbatim into the request

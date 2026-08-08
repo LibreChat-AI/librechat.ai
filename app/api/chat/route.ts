@@ -5,6 +5,7 @@ import { docsSource } from '@/lib/source'
 import { i18n } from '@/lib/i18n'
 import { checkRateLimit } from '@/lib/ratelimit'
 import { OPENROUTER_APP_HEADERS } from '@/lib/openrouter-attribution'
+import { webBotAuthFetch } from '@/lib/web-bot-auth'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
@@ -137,6 +138,7 @@ function searchDocs(docs: SearchDoc[], query: string, limit: number): SearchDoc[
 const openrouter = createOpenRouter({
   apiKey: process.env.OPENROUTER_API_KEY,
   headers: OPENROUTER_APP_HEADERS,
+  fetch: webBotAuthFetch,
 })
 
 const systemPrompt = `You are the LibreChat docs assistant. You help users find answers in the LibreChat documentation.

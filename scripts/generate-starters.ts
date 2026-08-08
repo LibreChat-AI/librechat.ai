@@ -26,6 +26,7 @@ import { join, relative } from 'node:path'
 import { createHash } from 'node:crypto'
 import { TARGET_LOCALES } from '../lib/i18n/config'
 import { OPENROUTER_APP_HEADERS } from '../lib/openrouter-attribution'
+import { webBotAuthFetch } from '../lib/web-bot-auth'
 
 // Skip machine-generated translations (foo.<locale>.mdx); only English sources
 // are starter inputs. Derived from the i18n config so adding a locale stays a
@@ -174,7 +175,7 @@ Respond with ONLY valid JSON. No markdown fences, no explanation.
   "/docs/path": ["Question 1?", "Question 2?", "Question 3?"]
 }`
 
-  const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+  const res = await webBotAuthFetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${API_KEY}`,
