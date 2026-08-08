@@ -173,6 +173,7 @@ const config = {
       './lib/fonts/Geist-SemiBold.ttf',
       './public/librechat.png',
     ],
+    '/mcp': ['./content/docs/**/*.mdx'],
   },
   typescript: {
     ignoreBuildErrors: false,
