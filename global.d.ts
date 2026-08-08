@@ -2,6 +2,30 @@ interface Window {
   _hsq?: unknown[]
 }
 
+interface WebMCPToolDefinition {
+  name: string
+  title?: string
+  description: string
+  inputSchema: Record<string, unknown>
+  execute: (input: unknown) => unknown | Promise<unknown>
+  annotations?: {
+    readOnlyHint?: boolean
+    untrustedContentHint?: boolean
+  }
+}
+
+interface WebMCPModelContext {
+  registerTool: (tool: WebMCPToolDefinition, options?: { signal?: AbortSignal }) => Promise<void>
+}
+
+interface Navigator {
+  modelContext?: WebMCPModelContext
+}
+
+interface Document {
+  modelContext?: WebMCPModelContext
+}
+
 declare module '@glidejs/glide' {
   interface GlideOptions {
     type?: string

@@ -97,6 +97,18 @@ Open [http://localhost:3333](http://localhost:3333) to view the site.
 
 > Environment variables are optional for local docs work. You only need to fill in `.env.local` to exercise features like Ask AI or rate limiting. Always run `pnpm build` before opening a PR to catch build errors early.
 
+### Web Bot Auth
+
+Generate an Ed25519 signing key, then copy the printed assignment into `.env.local`:
+
+```bash
+pnpm web-bot-auth:keygen
+```
+
+In the production secret manager, store the JSON between the single quotes as the `WEB_BOT_AUTH_PRIVATE_JWK` value.
+
+Set `WEB_BOT_AUTH_AGENT_ORIGIN` when the public site origin is not `https://www.librechat.ai`. The app publishes the corresponding public JWKS at `/.well-known/http-message-signatures-directory` and signs requests from the docs AI agent. The directory returns `503` and agent requests fail closed until the private key is configured, so a deployment cannot advertise an empty key set or silently send unsigned agent traffic.
+
 ## Project Structure
 
 ```
@@ -133,20 +145,21 @@ Only pages listed in the `pages` array appear in the sidebar, in the order given
 
 ## Available Scripts
 
-| Command                | Description                                   |
-| ---------------------- | --------------------------------------------- |
-| `pnpm dev`             | Start the dev server on port 3333             |
-| `pnpm build`           | Production build                              |
-| `pnpm start`           | Start the production server on port 3333      |
-| `pnpm lint`            | Run ESLint (zero warnings allowed)            |
-| `pnpm lint:prettier`   | Check formatting with Prettier                |
-| `pnpm prettier`        | Format the codebase with Prettier             |
-| `pnpm typecheck`       | Generate MDX types and run `tsc --noEmit`     |
-| `pnpm test`            | Run the Vitest suite                          |
-| `pnpm test:watch`      | Run Vitest in watch mode                      |
-| `pnpm analyze`         | Build and analyze the production bundle size  |
-| `pnpm optimize:images` | Optimize images in `public/`                  |
-| `pnpm translate`       | Generate translations from the English source |
+| Command                    | Description                                   |
+| -------------------------- | --------------------------------------------- |
+| `pnpm dev`                 | Start the dev server on port 3333             |
+| `pnpm build`               | Production build                              |
+| `pnpm start`               | Start the production server on port 3333      |
+| `pnpm lint`                | Run ESLint (zero warnings allowed)            |
+| `pnpm lint:prettier`       | Check formatting with Prettier                |
+| `pnpm prettier`            | Format the codebase with Prettier             |
+| `pnpm typecheck`           | Generate MDX types and run `tsc --noEmit`     |
+| `pnpm test`                | Run the Vitest suite                          |
+| `pnpm test:watch`          | Run Vitest in watch mode                      |
+| `pnpm analyze`             | Build and analyze the production bundle size  |
+| `pnpm optimize:images`     | Optimize images in `public/`                  |
+| `pnpm web-bot-auth:keygen` | Generate an Ed25519 Web Bot Auth private JWK  |
+| `pnpm translate`           | Generate translations from the English source |
 
 ## Contributing
 

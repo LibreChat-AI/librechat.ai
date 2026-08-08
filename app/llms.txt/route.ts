@@ -1,4 +1,5 @@
-import { absoluteUrl, MARKDOWN_RESPONSE_HEADERS } from '@/lib/get-llm-text'
+import { MARKDOWN_RESPONSE_HEADERS } from '@/lib/markdown-response'
+import { absoluteUrl } from '@/lib/structured-data'
 
 export const revalidate = false
 
