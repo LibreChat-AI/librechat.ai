@@ -91,28 +91,37 @@ Refer to [Express.js - trust proxy](https://expressjs.com/en/guide/behind-proxie
 
 ### Credentials Configuration
 
-To securely store credentials, you need a fixed key and IV. You can set them here for prod and dev environments.
+LibreChat uses `CREDS_KEY` and `CREDS_IV` to encrypt supported credentials stored in the database. Configure fixed, unique values for production and share the same values across every replica.
 
 <OptionTable
   options={[
     [
       'CREDS_KEY',
       'string',
-      '32-byte key (64 characters in hex) for securely storing credentials. Required for app startup.',
-      'CREDS_KEY=f34be427ebb29de8d88c107a71546019685ed8b241d8f2ed00c3df97ad2566f0',
+      '32-byte key (64 hexadecimal characters) for securely storing credentials.',
+      'CREDS_KEY=',
     ],
     [
       'CREDS_IV',
       'string',
-      '16-byte IV (32 characters in hex) for securely storing credentials. Required for app startup.',
-      'CREDS_IV=e2341419ec3dd3d19b13a1a87fafcbfb',
+      '16-byte IV (32 hexadecimal characters) for securely storing credentials.',
+      'CREDS_IV=',
+    ],
+    [
+      'LIBRECHAT_TEMP_CREDENTIALS_PATH',
+      'string',
+      'Path used to persist automatically generated temporary credentials. Defaults to `.env.temp` in the process working directory.',
+      '# LIBRECHAT_TEMP_CREDENTIALS_PATH=/app/data/.env.temp',
     ],
   ]}
 />
 
-<Callout type="warning" title="Warning">
-  **Warning:** If you don't set `CREDS_KEY` and `CREDS_IV`, the app will crash on startup. - You can
-  use this [Key Generator](/toolkit/creds_generator) to generate them quickly.
+When any of `CREDS_KEY`, `CREDS_IV`, `JWT_SECRET`, or `JWT_REFRESH_SECRET` is blank, LibreChat first reuses a valid value from the temporary credentials file. If none exists, it generates a cryptographically random value and writes the file with owner-only permissions. Explicit environment values always take precedence. LibreChat refuses to use `.env` or `.env.example` as the generated file path, preventing accidental replacement of either configuration file.
+
+The bundled Docker Compose files persist `/app/data/.env.temp` in the `librechat-data` volume, so a single Compose deployment can restart without changing these generated values. If the file cannot be persisted, the values are process-local and sessions or encrypted records may become inaccessible after restart.
+
+<Callout type="warning" title="Set permanent values for production">
+  Temporary generation is a bootstrap convenience, not a credential-rotation system. Before production use, generate permanent values with the [Credentials Generator](/toolkit/creds_generator), store them in your secret manager, and provide the same values to every replica. Changing an established key does not re-encrypt existing records. LibreChat records credential fingerprints in the database and warns when active values drift; do not overwrite that marker instead of performing a controlled migration.
 </Callout>
 
 ### Static File Handling
@@ -300,7 +309,7 @@ To configure LibreChat for local use or custom domain deployment, set the follow
     [
       'ADMIN_PANEL_URL',
       'string',
-      'External admin panel base URL used for admin OAuth/SSO redirects when the admin panel is hosted separately. Do not include a trailing slash.',
+      'External admin panel base URL used for admin OAuth/SSO redirects and the admin-only Settings > General link. Do not include a trailing slash.',
       'ADMIN_PANEL_URL=https://admin.example.com/admin',
     ],
     [
@@ -659,6 +668,29 @@ Deployment Skills are loaded read-only at startup from the filesystem and expose
 />
 
 Restart LibreChat after changing this directory or any files inside it. Deployment-provided Skills take precedence over persisted Skills with the same name.
+
+### Agent Plugins (Experimental)
+
+LibreChat can load experimental Agent Plugins from immediate child directories at startup. A plugin can bundle deployment Skills and MCP servers.
+
+<OptionTable
+  options={[
+    [
+      'DEPLOYMENT_PLUGINS_DIR',
+      'string',
+      'Directory containing Agent Plugin packages. Defaults to `./plugin` at the project root.',
+      '# DEPLOYMENT_PLUGINS_DIR=./plugin',
+    ],
+    [
+      'DEPLOYMENT_PLUGIN_DATA_DIR',
+      'string',
+      'Persistent data root for Agent Plugins. Defaults to `./data/plugins` at the project root.',
+      '# DEPLOYMENT_PLUGIN_DATA_DIR=./data/plugins',
+    ],
+  ]}
+/>
+
+See [Agent Plugins](/docs/features/agent_plugins) for package layout, schema versions, supported components, precedence, and current limitations.
 
 ### Configuration Validation
 
@@ -1349,10 +1381,10 @@ For more info, including pre-made container images for self-hosting with metric 
 
 ## Search (Meilisearch)
 
-Enables search in messages and conversations:
+Search is disabled by default. Enable it only after configuring Meilisearch with a unique master key:
 
 <OptionTable
-  options={[['SEARCH', 'boolean', 'Enables search in messages and conversations.', 'SEARCH=true']]}
+  options={[['SEARCH', 'boolean', 'Enables search in messages and conversations. Default: false.', 'SEARCH=true']]}
 />
 
 > Note: If you're not using docker, it requires the installation of the free self-hosted Meilisearch or a paid remote plan
@@ -1383,7 +1415,7 @@ For the API server to connect to the search server. Replace '0.0.0.0' with 'meil
   ]}
 />
 
-This master key must be at least 16 bytes, composed of valid UTF-8 characters. MeiliSearch will throw an error and refuse to launch if no master key is provided or if it is under 16 bytes. MeiliSearch will suggest a secure autogenerated master key. This is a ready-made secure key for docker-compose, you can replace it with your own.
+This master key must be at least 16 bytes of valid UTF-8. Generate a unique value and give the same key to LibreChat and the Meilisearch service. Search requires both `SEARCH=true` and a configured `MEILI_MASTER_KEY`.
 
 <OptionTable
   options={[
@@ -1391,7 +1423,7 @@ This master key must be at least 16 bytes, composed of valid UTF-8 characters. M
       'MEILI_MASTER_KEY',
       'string',
       'The master key for MeiliSearch.',
-      'MEILI_MASTER_KEY=DrhYf7zENyR6AlUCKmnz0eYASOQdl6zxH7s7MKFSfFCt',
+      'MEILI_MASTER_KEY=',
     ],
   ]}
 />
@@ -2257,8 +2289,7 @@ see: **[Authentication System](/docs/configuration/authentication)**
 
 - JWT Settings:
 
-You should use new secure values. The examples given are 32-byte keys (64 characters in hex).
-Use this replit to generate some quickly: **[JWT Keys](/toolkit/creds_generator)**
+Use unique values of at least 32 bytes. Generate permanent values for production with the [Credentials Generator](/toolkit/creds_generator).
 
 <OptionTable
   options={[
@@ -2266,16 +2297,18 @@ Use this replit to generate some quickly: **[JWT Keys](/toolkit/creds_generator)
       'JWT_SECRET',
       'string (hex)',
       'JWT secret key.',
-      'JWT_SECRET=16f8c0ef4a5d391b26034086c628469d3f9f497f08163ab9b40137092f2909ef',
+      'JWT_SECRET=',
     ],
     [
       'JWT_REFRESH_SECRET',
       'string (hex)',
       'JWT refresh secret key.',
-      'JWT_REFRESH_SECRET=eaa5191f2914e30b9387fd84e254e4ba6fc51b4654968a9b0803b456a54b8418',
+      'JWT_REFRESH_SECRET=',
     ],
   ]}
 />
+
+Blank JWT secrets use the same temporary-credential bootstrap described under [Credentials Configuration](#credentials-configuration). In production and horizontally scaled deployments, set permanent values and share them across replicas so issued sessions remain valid.
 
 ### Social Logins
 
