@@ -9,7 +9,7 @@ test('registers WebMCP tools on page load through document.modelContext', async 
   await page.addInitScript(() => {
     const state: WebMCPTestState = { tools: [], abortedTools: [] }
     const modelContext: WebMCPModelContext = {
-      async registerTool(tool, options) {
+      registerTool(tool, options) {
         state.tools.push(tool)
         options?.signal?.addEventListener('abort', () => state.abortedTools.push(tool.name), {
           once: true,
