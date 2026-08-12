@@ -15,7 +15,10 @@ interface WebMCPToolDefinition {
 }
 
 interface WebMCPModelContext {
-  registerTool: (tool: WebMCPToolDefinition, options?: { signal?: AbortSignal }) => Promise<void>
+  registerTool: (
+    tool: WebMCPToolDefinition,
+    options?: { signal?: AbortSignal },
+  ) => void | Promise<void>
 }
 
 interface Navigator {
