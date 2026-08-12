@@ -288,11 +288,17 @@ export function registerWebMCPTools(
   if (!modelContext) return false
 
   for (const tool of tools) {
-    void modelContext.registerTool(tool, { signal }).catch((error: unknown) => {
+    const reportError = (error: unknown) => {
       if (!signal.aborted) {
         console.error(`[WebMCP] Failed to register ${tool.name}:`, error)
       }
-    })
+    }
+
+    try {
+      void Promise.resolve(modelContext.registerTool(tool, { signal })).catch(reportError)
+    } catch (error) {
+      reportError(error)
+    }
   }
 
   return true

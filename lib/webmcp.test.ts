@@ -169,4 +169,48 @@ describe('WebMCP registration', () => {
     ).toBe(true)
     expect(navigatorRegister).toHaveBeenCalledTimes(tools.length)
   })
+
+  it('supports Chrome implementations whose registerTool returns void', () => {
+    const navigatorRegister = vi.fn(
+      (_tool: WebMCPToolDefinition, _options?: { signal?: AbortSignal }) => {},
+    )
+
+    expect(() =>
+      registerWebMCPTools(tools, new AbortController().signal, {
+        navigatorModelContext: { registerTool: navigatorRegister },
+      }),
+    ).not.toThrow()
+    expect(navigatorRegister).toHaveBeenCalledTimes(tools.length)
+  })
+
+  it('contains synchronous and asynchronous registration failures', async () => {
+    const syncError = new Error('sync failure')
+    const asyncError = new Error('async failure')
+    const registerTool = vi.fn((tool: WebMCPToolDefinition) => {
+      if (tool === tools[0]) throw syncError
+      if (tool === tools[1]) return Promise.reject(asyncError)
+    })
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    try {
+      expect(() =>
+        registerWebMCPTools(tools, new AbortController().signal, {
+          documentModelContext: { registerTool },
+        }),
+      ).not.toThrow()
+      await Promise.resolve()
+
+      expect(registerTool).toHaveBeenCalledTimes(tools.length)
+      expect(consoleError).toHaveBeenCalledWith(
+        `[WebMCP] Failed to register ${tools[0].name}:`,
+        syncError,
+      )
+      expect(consoleError).toHaveBeenCalledWith(
+        `[WebMCP] Failed to register ${tools[1].name}:`,
+        asyncError,
+      )
+    } finally {
+      consoleError.mockRestore()
+    }
+  })
 })
