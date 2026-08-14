@@ -15,6 +15,9 @@ description: LibreChatにおけるキャッシュ、セッションストレー�
 - [パフォーマンスチューニング](#performance-tuning)
 - [設定例](#configuration-examples)
 - [再開可能なストリーム](#resumable-streams)
+- [Generation Protocol Rollout](#generation-protocol-rollout)
+- [ストリームデルタの結合](#stream-delta-coalescing)
+- [MCP Catalog Coordination](#mcp-catalog-coordination)
 
 ## 基本セットアップ [#basic-setup]
 
@@ -322,6 +325,42 @@ REDIS_URI=redis://127.0.0.1:6379
 # USE_REDIS_STREAMS=true  # Enabled by default when USE_REDIS=true
 ```
 
+### Generation Protocol Rollout [#generation-protocol-rollout]
+
+v2生成プロトコルは、現在のAgent実行で使用される永続キュー、中断、一時停止/再開、およびリカバリ保証を追加します。`GENERATION_PROTOCOL_VERSION`が設定されていない場合、Redisベースのデプロイメントは意図的にプロトコルv1のままとなります。これは、ローリングアップグレード中に異なるLibreChatバージョンを実行しているレプリカが共存できるようにするためです。
+
+2段階のロールアウトを使用してください：
+
+1. `GENERATION_PROTOCOL_VERSION` が設定されていない、または `1` に設定されている**すべて**のレプリカに対して、v2 対応の LibreChat イメージをデプロイします。
+2. 前の画像が所有するアクティブな生成が完了するか、ドレインされるのを待機します。
+3. `GENERATION_PROTOCOL_VERSION=2` を設定し、同じイメージを再度ロールアウトしてください。
+
+```bash filename=".env"
+USE_REDIS=true
+USE_REDIS_STREAMS=true
+GENERATION_PROTOCOL_VERSION=2
+```
+
+<Callout type="warning" title="ローリングデプロイの安全性">
+  すべてのレプリカがサポートするまで、プロトコルv2を有効にしないでください。v2の生成が開始された後は、それらの生成が完了（ドレイン）するまで、v2以前のLibreChatイメージにロールバックしないでください。古いレプリカは、Redisの状態を安全に操作できません。
+</Callout>
+
+インメモリ生成ストリームはレプリカ間で状態を共有せず、デフォルトでプロトコルv2を使用するため、この切り替えは必要ありません。
+
+### ストリームデルタの結合 (Stream Delta Coalescing) [#stream-delta-coalescing]
+
+Redisでバックアップされたストリームは、デルタパブリケーションをバッチ処理することで、高いトークンレートにおけるRedisスクリプト、ラウンドトリップ、およびCPU負荷を削減できます。
+
+```bash filename=".env"
+STREAM_DELTA_COALESCE_MS=25
+```
+
+設定が未設定または `0` の場合はオフになります。`25` ミリ秒が推奨され、`1000` を超える値は上限として扱われます。バッチ処理により、設定された配信レイテンシのウィンドウ分だけ遅延が加わる可能性があります。
+
+<Callout type="warning" title="ローリングデプロイの安全性">
+  すべてのLibreChatレプリカがバッチフレームをサポートした後にのみ、コアレッシング（統合）を有効にしてください。古いサブスクライバーは、統合されたフレームをドロップします。
+</Callout>
+
 ### 主な利点（水平スケーリング向け） [#key-benefits-for-horizontal-scaling]
 
 - **インスタンス間での継続性**: ユーザーは1つのサーバーで生成を開始し、別のサーバーで再開することができます
@@ -341,3 +380,9 @@ REDIS_URI=redis://node1:7001,redis://node2:7002,redis://node3:7003
 ```
 
 この機能の詳細については、[Resumable Streams](/docs/features/resumable_streams) を参照してください。
+
+## MCP Catalog Coordination [#mcp-catalog-coordination]
+
+Redisが有効な場合、LibreChatはレプリカ間でアプリケーションレベルのMCPツールカタログを調整します。起動時のパブリケーション、再接続時の同期、および `notifications/tools/list_changed` の更新には世代およびリビジョンマーカーが使用されるため、古いレプリカが新しいカタログを上書きすることはありません。
+
+Redis Clusterのデプロイメントでは、スロットセーフなカタログキーと更新操作が使用されるため、個別のMCP Redis設定は不要です。動的なカタログおよびOAuthの準備状況に関する動作については、[MCP Server Management](/docs/features/mcp#mcp-server-management)を参照してください。

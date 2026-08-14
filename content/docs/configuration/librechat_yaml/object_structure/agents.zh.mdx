@@ -12,17 +12,33 @@ endpoints:
   agents:
     recursionLimit: 50
     maxRecursionLimit: 100
+    maxToolCallArgBytes: 65536
+    maxDeltaEventsPerTurn: 100000
+    maxToolCallArgBytesByTool:
+      create_file: 131072
     disableBuilder: false
     # (optional) Agent Capabilities available to all users. Omit the ones you wish to exclude. Defaults to list below.
-    # Add "programmatic_tools" with "execute_code" to enable Programmatic Tool Calling for MCP tools.
-    # capabilities: ["deferred_tools", "execute_code", "file_search", "web_search", "artifacts", "subagents", "actions", "context", "skills", "tools", "chain", "ocr"]
+    # Opt-in capabilities: "programmatic_tools", "stateful_code_sessions", "run_in_background", and "tool_intents".
+    # capabilities: ["deferred_tools", "execute_code", "file_search", "web_search", "artifacts", "subagents", "actions", "context", "skills", "memory", "ask_user_question", "tools", "chain", "ocr"]
     # (optional) File citation configuration for file_search capability
     maxCitations: 30 # Maximum total citations in responses (1-50)
     maxCitationsPerFile: 7 # Maximum citations from each file (1-10)
     minRelevanceScore: 0.45 # Minimum relevance score threshold (0.0-1.0)
     titleTiming: immediate
+    activityLabel: true
+    activityModel: gpt-4.1-nano
+    activityPhaseLabel: true
+    activityPhaseMaxPerRun: 5
     skills:
       maxCatalogSkills: 20
+    toolApproval:
+      enabled: true
+      mode: default
+      deny: ['mcp:*:delete_*']
+      ask: ['mcp:*:*']
+    checkpointer:
+      type: mongo
+      ttl: 86400
     remoteApi:
       auth:
         oidc:
@@ -77,6 +93,51 @@ maxRecursionLimit: 100
 
 有关代理步骤的更多信息，请参阅 [Max Agent Steps](/docs/features/agents#max-agent-steps)。
 
+## 流式断路器 [#stream-circuit-breakers]
+
+当提供商的流似乎正在产生失控的工具参数或无限的增量事件序列时，这些设置会停止 Agent 的运行。
+
+<OptionTable
+  options={[
+    [
+      'maxToolCallArgBytes',
+      'Number',
+      '单个流式工具调用参数的最大累计字节数。设置为 0 可禁用全局防护。',
+      '65536',
+    ],
+    [
+      'maxDeltaEventsPerTurn',
+      'Number',
+      '单次模型生成轮次的最大流式事件数。设置为 0 或省略此项以禁用此防护。',
+      '0 (disabled)',
+    ],
+    [
+      'maxToolCallArgBytesByTool',
+      'Object',
+      '按面向模型的工具名称键入的每个工具的参数字节覆盖。值为 0 将禁用该工具的防护。',
+      'create_file: 131072',
+    ],
+  ]}
+/>
+
+LibreChat 使用 64 KiB 的全局参数限制，并为 `create_file` 提供了一个 128 KiB 的覆盖值，因为其合法负载通常较大。`maxToolCallArgBytesByTool` 中的条目会覆盖该内置设置。如果触发了任一限制，LibreChat 将中止正在进行的 provider 流并报告超出了哪个限制。
+
+```yaml filename="endpoints / agents / stream circuit breakers"
+maxToolCallArgBytes: 65536
+maxDeltaEventsPerTurn: 100000
+maxToolCallArgBytesByTool:
+  create_file: 262144
+  large_import: 524288
+```
+
+要禁用所有参数大小限制，请将全局限制和内置的 `create_file` 覆盖项均设置为 `0`：
+
+```yaml
+maxToolCallArgBytes: 0
+maxToolCallArgBytesByTool:
+  create_file: 0
+```
+
 ## titleTiming
 
 <OptionTable
@@ -102,6 +163,22 @@ maxRecursionLimit: 100
 ```yaml filename="endpoints / agents / titleTiming"
 titleTiming: immediate
 ```
+
+## activityLabel
+
+设置 `activityLabel: true` 以将每个 Agent 推理和工具调用块归类在一个生成的单行标题下。使用 `activityModel`、`activityEndpoint`、`activityPrompt`、`activityMaxPerRun` 和 `activityCharLimit` 来控制额外的模型调用及其成本。有关完整的字段参考和优先级规则，请参阅 [Agent Activity Groups](/docs/configuration/librechat_yaml/object_structure/shared_endpoint_settings#agent-activity-groups)。
+
+```yaml filename="endpoints / agents / activity groups"
+activityLabel: true
+activityEndpoint: openAI
+activityModel: gpt-4.1-nano
+activityMaxPerRun: 20
+activityCharLimit: 600
+activityPhaseLabel: true
+activityPhaseMaxPerRun: 5
+```
+
+`activityPhaseLabel` 可以独立地在每个包含至少两个逻辑活动的运行阶段周围添加一个折叠的父级摘要。使用 `activityPhaseModel`、`activityPhaseEndpoint`、`activityPhasePrompt` 和 `activityPhaseMaxPerRun` 来调整这些调用；`activityCharLimit` 与子活动标签共享。
 
 ## disableBuilder
 
@@ -162,9 +239,9 @@ allowedProviders:
   ]}
 />
 
-**默认值：** `["deferred_tools", "execute_code", "file_search", "web_search", "artifacts", "subagents", "actions", "context", "skills", "tools", "chain", "ocr"]`
+**默认值：** `["deferred_tools", "execute_code", "file_search", "web_search", "artifacts", "subagents", "actions", "context", "skills", "memory", "ask_user_question", "tools", "chain", "ocr"]`
 
-Programmatic Tool Calling 是可选功能。仅当您的 Code Interpreter 部署包含 Tool Call Server 组件时，才需在 `execute_code` 旁边添加 `programmatic_tools`。
+`programmatic_tools`、`stateful_code_sessions`、`run_in_background` 和 `tool_intents` 为可选功能，必须显式添加。Programmatic tools 和 stateful sessions 还需要 `execute_code` 以及兼容的 Code Interpreter 部署。后台代码执行需要 `run_in_background`、`execute_code` 和 Code Interpreter。
 
 **示例：**
 
@@ -182,12 +259,116 @@ capabilities:
   - 'actions'
   - 'context'
   - 'skills'
+  - 'memory'
+  - 'ask_user_question'
   - 'tools'
   - 'chain'
   - 'ocr'
+  # Optional: reuse one Code Interpreter workspace per conversation.
+  # - 'stateful_code_sessions'
+  # Optional: allow selected eligible MCP and Code Interpreter tools to run as background tasks.
+  # - 'run_in_background'
+  # Optional: show live model-written intent labels for native and selected MCP tools.
+  # - 'tool_intents'
 ```
 
 **注意：** 此字段为可选字段。如果省略，默认行为是包含 default 中列出的所有功能。
+
+## toolApproval
+
+控制 Agent 工具调用的人工审核。此功能默认处于禁用状态。启用后，匹配的调用将暂停，直到用户提交允许的决策（例如批准、拒绝或编辑参数）。
+
+<OptionTable
+  options={[
+    ['enabled', 'Boolean', '启用 Agents endpoint 的工具审批功能。', 'false'],
+    [
+      'mode',
+      'String',
+      '设置未匹配调用的行为：`default` 表示询问，`dontAsk` 表示拒绝，`bypass` 表示除非被拒绝否则批准。',
+      'default',
+    ],
+    ['allow', 'Array of strings', '无需提示即可运行的调用的 Glob 模式。', ''],
+    ['deny', 'Array of strings', '始终拒绝的调用的 Glob 模式。拒绝规则优先。', ''],
+    ['ask', 'Array of strings', '始终需要审核的调用的 Glob 模式。', ''],
+    [
+      'reason',
+      'String',
+      '在批准提示中显示的可选说明。使用 `{tool}` 插入工具名称。',
+      '',
+    ],
+    [
+      'hooks',
+      'Array of objects',
+      '用于上下文感知决策的可信编程策略模块。Hooks 只能收紧静态策略。',
+      '',
+    ],
+  ]}
+/>
+
+模式使用 glob 匹配。MCP 工具可以通过 `mcp:<server>:<tool>` 进行范围限定；例如，`mcp:github:*` 匹配来自 `github` 服务器的所有工具。评估时 `deny` 具有最高优先级，即使在 `bypass` 模式下也是如此。
+
+```yaml filename="endpoints / agents / toolApproval"
+toolApproval:
+  enabled: true
+  mode: default
+  allow:
+    - 'mcp:analytics:read_*'
+  deny:
+    - 'mcp:*:delete_*'
+  ask:
+    - 'mcp:*:*'
+  reason: 'Review {tool} before it runs.'
+```
+
+Hooks 在服务器启动时加载一次，并在 LibreChat 进程中执行。每个条目接受一个 `module`、一个可选的工具名称 `matcher` 正则表达式，以及一个传递给模块构建器的可选 `options` 对象。请仅加载您信任的代码。基于角色或租户的覆盖不会重新加载 hook 模块；请在 hook 内部实现上下文相关的行为。
+
+```yaml filename="endpoints / agents / toolApproval / hooks"
+toolApproval:
+  enabled: true
+  hooks:
+    - module: '@acme/librechat-approval-hook'
+      matcher: '^mcp:production:'
+      options:
+        requireTicket: true
+```
+
+## checkpointer
+
+配置因工具审批或“询问用户”功能而暂停的 Agent 运行的存储。当任一功能需要检查点（checkpointer）且省略此配置块时，LibreChat 将默认使用主 MongoDB 数据库，并设置 24 小时的决策窗口。
+
+<OptionTable
+  options={[
+    [
+      'type',
+      'String',
+      '`mongo` 会在重启和副本间持久化已暂停的运行；`memory` 是进程本地的，仅供开发使用。',
+      'mongo',
+    ],
+    ['ttl', 'Number', '已暂停的运行等待决策的时长（以秒为单位）。', '86400'],
+    [
+      'checkpointCollectionName',
+      'String',
+      '可选的 MongoDB 检查点集合名称覆盖。',
+      'agent_checkpoints',
+    ],
+    [
+      'checkpointWritesCollectionName',
+      'String',
+      '可选的 MongoDB checkpoint-write 集合名称覆盖。',
+      'agent_checkpoint_writes',
+    ],
+  ]}
+/>
+
+```yaml filename="endpoints / agents / checkpointer"
+checkpointer:
+  type: mongo
+  ttl: 86400
+```
+
+仅在单进程开发部署中使用 `type: memory`。存储在内存中的暂停运行无法在重启后或在其他副本上恢复。
+
+当序列化状态超过 8 MiB 时，MongoDB 检查点会记录一条警告，并在超过 15 MiB 时拒绝持久化暂停，从而在 MongoDB 的 16 MiB 文档限制下留出余量。大型内联媒体或工具输出是常见原因；如果运行报告 `CHECKPOINT_TOO_LARGE`，请开始新的对话或减少其上下文。
 
 ## skills
 
@@ -329,6 +510,7 @@ endpoints:
 - **deferred_tools**: 允许智能体在运行时发现延迟加载的 MCP 工具，而不是预先将所有工具加载到上下文中。
 - **programmatic_tools**: 启用在 Agent Builder 中标记为 Programmatic 的 MCP 工具的程序化工具调用（Programmatic Tool Calling）。需要 `execute_code` 以及带有 Tool Call Server 组件的 Code Interpreter 部署。此功能为选择性加入，默认情况下不启用。
 - **execute_code**: 允许智能体执行代码。
+- **stateful_code_sessions**: 允许已选择加入的智能体在每个对话中复用一个 Code Interpreter 工作区。需要 `execute_code`、兼容的 Code Interpreter 部署以及每个智能体的“高级”设置。此功能处于高度实验性阶段，默认不启用，且在实验过程中可能会发生重大变化；请勿将其当前行为或配置视为稳定的生产环境契约。
 - **file_search**: 启用该功能后，Agent 可以搜索并与文件进行交互。启用后，引用行为将由 `maxCitations`、`maxCitationsPerFile` 和 `minRelevanceScore` 设置控制。
 - **web_search**: 为智能体启用网络搜索功能，允许其搜索并从互联网检索信息。
 - **artifacts**: 启用代理以生成交互式工件（React 组件、HTML、Mermaid 图表）。
@@ -336,9 +518,13 @@ endpoints:
 - **actions**: 允许智能体执行预定义的操作。
 - **context**: 启用聊天中的“作为文本上传”功能，以及代理的“文件上下文”功能，允许用户上传文件，并将其内容提取并直接包含在对话中。
 - **skills**: 在侧边栏中启用 Skills，支持手动 `$` 调用、模型调用的 Skills 以及智能体技能白名单。请参阅 [Skills](/docs/features/skills)。
+- **memory**: 当配置了 memory 且用户拥有访问权限时，允许智能体使用 `set_memory` 和 `delete_memory`。默认启用；当 memory 被禁用时，会在运行时移除该功能。
+- **ask_user_question**: 允许智能体暂停并以单个表单形式提出一到四个相关问题，并在获得回答后继续执行。默认启用。
 - **tools**: 授予智能体访问各种工具的权限。
 - **chain**: 启用代理链（Agent Chaining）的 Beta 功能，也称为智能体混合（Mixture-of-Agents，简称 MoA）工作流。
 - **ocr**: 可选功能，用于增强聊天中的“上传为文本”以及智能体的“文件上下文”功能，允许上传文件并使用 OCR 进行处理。**需要配置 OCR 服务。**
+- **run_in_background**：默认使 Code Interpreter 执行和 shell 工具具备后台运行资格，并为 MCP 工具启用按工具的后台运行选择。Agent 可以显式地将 Code Interpreter 排除在后台运行之外。此设置允许后台执行；模型会针对每次调用决定是否使用它。需要 `execute_code` 以及已配置的 Code Interpreter 部署来执行代码。此功能默认不启用。
+- **tool_intents**：为符合条件的工具调用添加实时模型编写的意图标签。原生工具（包括 Code Interpreter 工具）会自动加入；MCP 工具可以在 Agent Builder 中单独或批量启用。Model Specs 使用 `describeIntent`。此功能默认不启用。
 
 通过指定功能，您可以控制用户在与智能体交互时可使用的特性。
 
@@ -359,6 +545,10 @@ endpoints:
       # Optional: enables Programmatic Tool Calling for MCP tools marked Programmatic in the Agent Builder.
       # - 'programmatic_tools'
       - 'execute_code'
+      # Optional: makes Code Interpreter background-eligible and enables selected MCP tools.
+      # - 'run_in_background'
+      # Optional: enables live intent labels for native and selected MCP tools.
+      # - 'tool_intents'
       - 'file_search'
       - 'skills'
       - 'subagents'
@@ -376,6 +566,8 @@ endpoints:
 - 仅包含相关度在 60% 以上的来源
 - LibreChat Agents 可以访问代码执行、文件搜索（带引用）、Skills、Subagents、actions、artifacts、文件上下文、OCR 服务（如果已配置）以及网络搜索功能。
 - 除非你同时添加 `programmatic_tools` 和 `execute_code` 功能，否则 Programmatic Tool Calling 将保持禁用状态。
+- 除非您添加 `run_in_background`，否则后台工具调用将保持禁用状态；此时 Code Interpreter 工具将默认变为可用，而 MCP 工具仍需逐个选择。
+- 除非您添加 `tool_intents`，否则工具意图标签将保持禁用状态；原生工具会自动选择加入，而 MCP 工具仍需要逐个选择。
 
 ## remoteApi
 

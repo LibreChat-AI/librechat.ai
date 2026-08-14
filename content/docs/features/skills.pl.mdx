@@ -33,6 +33,8 @@ endpoints:
       - 'actions'
       - 'context'
       - 'skills'
+      - 'memory'
+      - 'ask_user_question'
       - 'tools'
       - 'chain'
       - 'ocr'
@@ -56,6 +58,8 @@ Umiejętności wdrażania:
 - Użyj `deployment` jako ich źródła
 - Mają pierwszeństwo przed zapisanymi Skills o tej samej nazwie
 - Wymagany jest restart LibreChat po dodaniu, usunięciu lub zmianie plików
+
+Eksperymentalne [Agent Plugins](/docs/features/agent_plugins) mogą również łączyć umiejętności (Skills) wdrożeniowe tylko do odczytu wraz z powiązanymi serwerami MCP. Umiejętność w samodzielnym katalogu wdrożeniowym ma pierwszeństwo przed umiejętnością wtyczki o tej samej nazwie.
 
 ## GitHub Skill Sync [#github-skill-sync]
 
@@ -85,7 +89,11 @@ GitHub Skill Sync:
 - Przechowuje zduplikowane (mirrored) umiejętności (Skills) z `source: "github"`
 - Aktualizuje odzwierciedlone Skills, gdy zmienia się repozytorium nadrzędne
 - Usuwa zduplikowane Skills, które nie istnieją już w skonfigurowanym źródle
+- Publikuje poprawne Skills nawet wtedy, gdy inny Skill w źródle jest nieprawidłowy lub powoduje konflikt
+- Raportuje częściowo udane uruchomienia oraz szczegóły pominiętych Skillów z ograniczeniami do administratorów
 - Obsługuje uruchomienia zaplanowane, przy starcie oraz ręcznie wyzwalane przez administratora
+
+Pominięta Skill zachowuje swoje ostatnie znane poprawne odzwierciedlenie (mirror), jeśli takie istnieje. Błędy dotyczące całego źródła, takie jak uwierzytelnianie, limity szybkości (rate limiting), utrata własności synchronizacji lub nieudane wycofanie zmian (rollback), nadal powodują niepowodzenie całego uruchomienia źródła.
 
 Użyj precyzyjnego osobistego tokenu dostępu (fine-grained personal access token) GitHub z uprawnieniami tylko do odczytu (read-only) dla Contents i Metadata dla wybranego repozytorium. Zobacz [Struktura obiektu synchronizacji umiejętności](/docs/configuration/librechat_yaml/object_structure/skill_sync), aby uzyskać informacje o wszystkich polach, opcjach poświadczeń, zakresach dzierżawy (tenant scoping) oraz punktach końcowych synchronizacji administratora.
 
@@ -148,8 +156,16 @@ Use product terminology consistently.
       'Tymczasowo łączy te narzędzia w zestaw narzędzi agenta, gdy umiejętność jest stosowana ręcznie lub zawsze.',
       'allowed-tools: ["execute_code"]',
     ],
+    [
+      'compatibility',
+      'String',
+      'Opcjonalne uwagi dotyczące kompatybilności, takie jak wymagane narzędzia, usługi lub założenia dotyczące środowiska uruchomieniowego. LibreChat zachowuje te metadane, ale ich nie wymusza.',
+      'compatibility: Requires the GitHub MCP server.',
+    ],
   ]}
 />
+
+Rozpoznane pola frontmatter są sprawdzane pod kątem typu. Nierozpoznane pola są zachowywane jako ograniczone, bezpieczne dla formatu JSON metadane zamiast powodować unieważnienie Skill; głęboko zagnieżdżone lub zbyt duże wartości rozszerzeń są nadal odrzucane.
 
 ## Tryby wywołania [#invocation-modes]
 
@@ -166,14 +182,16 @@ Ręczne wywołanie jest jawną intencją użytkownika. Może ono korzystać z um
 Agenci muszą mieć włączone Skills, zanim będą mogli korzystać z katalogu.
 
 - Jeśli `skills_enabled` ma wartość false lub nie jest ustawione dla zapisanego agenta, umiejętności są dla niego nieaktywne.
-- Jeśli `skills_enabled` ma wartość true i nie ustawiono listy dozwolonych umiejętności (allowlist), agent może korzystać z pełnego aktywnego katalogu widocznego dla użytkownika.
+- Jeśli `skills_enabled` ma wartość true i nie ustawiono listy dozwolonych umiejętności (skill allowlist), agent może korzystać z pełnego aktywnego katalogu widocznego dla użytkownika, w tym z umiejętności dodanych później.
 - Jeśli `skills_enabled` ma wartość true, a `skills` zawiera określone identyfikatory umiejętności, agent zostanie ograniczony do tej listy.
 
 Pozwala to administratorom na globalne udostępnienie funkcji Skills, przy jednoczesnym zachowaniu ukierunkowanego zestawu umiejętności dla każdego agenta.
 
+W kreatorze Agent Builder włącz opcję **Use all skills**, aby korzystać z pełnego katalogu. Wyłączenie tej opcji przywraca wybór umiejętności, który był aktywny przed włączeniem tego przełącznika.
+
 ## Aktywne i udostępnione umiejętności [#active-and-shared-skills]
 
-Użytkownicy mogą włączać lub wyłączać umiejętności. Posiadane umiejętności są domyślnie aktywne. Współdzielone umiejętności korzystają z ustawienia domyślnego skonfigurowanego przez administratora, dopóki użytkownik ich nie nadpisze.
+Użytkownicy mogą włączać lub wyłączać umiejętności. Umiejętności własne i wdrożone są domyślnie aktywne. Udostępnione umiejętności korzystają z domyślnych ustawień skonfigurowanych przez administratora, dopóki użytkownik ich nie zmieni.
 
 Nieaktywne umiejętności są wykluczone z:
 
@@ -189,7 +207,7 @@ Przesłane pakiety umiejętności mogą zawierać pliki obok `SKILL.md`, takie j
 - `scripts/...`
 - `assets/...`
 
-Backend przechowuje te pliki wraz z umiejętnością (skill). Agent może rozpoznawać pliki umiejętności, gdy umiejętność jest aktywna i znajduje się w zakresie.
+Backend przechowuje te pliki wraz z umiejętnością (skill). Agent może rozpoznawać pliki umiejętności, gdy umiejętność jest aktywna i znajduje się w zakresie. Zagnieżdżone pliki zachowują swoje ścieżki względne i są adresowane poprzez przestrzeń nazw `skills/{skillName}/...` widoczną dla modelu. W przeglądarce umiejętności (Skill viewer) względne linki Markdown są rozpoznawane względem bieżącego pliku i otwierają przywołany plik w ramach tej samej umiejętności. Gdy włączony jest Code Interpreter, te same pliki są montowane w `/mnt/data/skills/{skillName}/...`, dzięki czemu operacje powłoki i kodu mogą korzystać z nich bezpośrednio.
 
 <Callout type="note" title="Wskazówka dotycząca tworzenia">
   Utrzymuj `description` konkretnym. Jest to najsilniejszy sygnał dla umiejętności wywoływanych przez model. Krótki lub niejasny opis spowoduje zbyt rzadkie wyzwalanie.

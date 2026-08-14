@@ -17,6 +17,9 @@ Esta guía cubre cómo configurar Redis para el almacenamiento en caché y de se
 - [Ajuste de rendimiento](#performance-tuning)
 - [Ejemplos de configuración](#configuration-examples)
 - [Flujos reanudables](#resumable-streams)
+- [Protocolo de Generación Rollout](#generation-protocol-rollout)
+- [Coalescencia de Delta de Flujo](#stream-delta-coalescing)
+- [Coordinación del catálogo MCP](#mcp-catalog-coordination)
 
 ## Configuración básica [#basic-setup]
 
@@ -324,6 +327,42 @@ REDIS_URI=redis://127.0.0.1:6379
 # USE_REDIS_STREAMS=true  # Enabled by default when USE_REDIS=true
 ```
 
+### Despliegue del Protocolo de Generación [#generation-protocol-rollout]
+
+El protocolo de generación v2 añade la cola duradera, la interrupción, la pausa/reanudación y las garantías de recuperación utilizadas por las ejecuciones actuales de Agentes. Las implementaciones respaldadas por Redis permanecen intencionalmente en el protocolo v1 cuando `GENERATION_PROTOCOL_VERSION` no está configurado, de modo que las réplicas que ejecutan diferentes versiones de LibreChat puedan coexistir durante una actualización gradual.
+
+Utilice un despliegue en dos etapas:
+
+1. Despliegue la imagen de LibreChat compatible con v2 en **cada** réplica con `GENERATION_PROTOCOL_VERSION` sin establecer o configurado en `1`.
+2. Espere a que las generaciones activas propiedad de la imagen anterior finalicen o se agoten.
+3. Establezca `GENERATION_PROTOCOL_VERSION=2` y despliegue la misma imagen nuevamente.
+
+```bash filename=".env"
+USE_REDIS=true
+USE_REDIS_STREAMS=true
+GENERATION_PROTOCOL_VERSION=2
+```
+
+<Callout type="warning" title="Seguridad de despliegue continuo">
+  No habilite el protocolo v2 hasta que todas las réplicas lo admitan. Una vez que comiencen las generaciones v2, no vuelva a una imagen de LibreChat anterior a la v2 hasta que esas generaciones se hayan vaciado; las réplicas más antiguas no pueden operar de forma segura en su estado de Redis.
+</Callout>
+
+Los flujos de generación en memoria no comparten estado entre réplicas y utilizan el protocolo v2 de forma predeterminada, por lo que no requieren esta transición.
+
+### Fusión de Delta de Flujo [#stream-delta-coalescing]
+
+Los streams respaldados por Redis pueden procesar por lotes las publicaciones delta para reducir los scripts de Redis, los viajes de ida y vuelta y el uso de CPU a altas tasas de tokens:
+
+```bash filename=".env"
+STREAM_DELTA_COALESCE_MS=25
+```
+
+El ajuste está desactivado cuando no se establece o se configura en `0`, se recomiendan `25` milisegundos y los valores superiores a `1000` se limitan. El procesamiento por lotes puede añadir hasta una ventana configurada de latencia de entrega.
+
+<Callout type="warning" title="Seguridad de despliegue continuo">
+  Habilite la coalescencia solo después de que cada réplica de LibreChat admita marcos por lotes. Los suscriptores más antiguos descartan los marcos coalescentes.
+</Callout>
+
 ### Beneficios clave (para escalado horizontal) [#key-benefits-for-horizontal-scaling]
 
 - **Continuidad entre instancias**: Los usuarios pueden iniciar una generación en un servidor y reanudarla en otro
@@ -343,3 +382,9 @@ REDIS_URI=redis://node1:7001,redis://node2:7002,redis://node3:7003
 ```
 
 Consulta [Resumable Streams](/docs/features/resumable_streams) para obtener más detalles sobre esta funcionalidad.
+
+## Coordinación del catálogo MCP [#mcp-catalog-coordination]
+
+Cuando Redis está habilitado, LibreChat coordina los catálogos de herramientas MCP a nivel de aplicación entre réplicas. La publicación al inicio, la sincronización de reconexión y las actualizaciones de `notifications/tools/list_changed` utilizan marcadores de generación y revisión para que una réplica obsoleta no pueda sobrescribir un catálogo más reciente.
+
+Las implementaciones de Redis Cluster utilizan claves de catálogo seguras para ranuras (slot-safe) y operaciones de actualización; no se requiere una configuración de MCP Redis por separado. Consulta [MCP Server Management](/docs/features/mcp#mcp-server-management) para conocer el comportamiento del catálogo dinámico y la preparación para OAuth.

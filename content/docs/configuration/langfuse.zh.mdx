@@ -16,7 +16,24 @@ description: 本文档介绍了如何将 Langfuse 追踪集成到 LibreChat 中�
 
 ## 设置 [#setup]
 
-将以下与 Langfuse 相关的环境变量添加到您 LibreChat 安装目录下的 `.env` 文件中：
+对于单租户部署，请选择应用内连接或环境托管凭据。完整的环境凭据具有优先权。
+
+### 应用内连接 [#in-app-connection]
+
+拥有授权的管理员可以打开 **Settings → Langfuse**，选择一个已批准的目标，输入项目的公钥和私钥，然后选择 **Save & enable**。LibreChat 会在保存前验证这两组密钥，记录已验证的项目 ID，对静态存储的私钥进行加密，并在后续读取时仅返回掩码后的预览。已保存的连接可以进行启用、禁用、重新测试或替换，且不会泄露其密钥。
+
+该设置需要 `access:admin` 和 `manage:configs:langfuse`（或相应的广泛/管理员权限）。当启用了追踪功能且满足以下条件时，该设置可用：
+
+- 单租户部署不具备 `LANGFUSE_PUBLIC_KEY` 和 `LANGFUSE_SECRET_KEY`。
+- 扇出 (fanout) 部署已启用收集器，且租户导出功能未被紧急开关禁用。
+
+请勿将明文 `langfuse.secretKey` 直接放入 `librechat.yaml` 中；运行时接受由授权配置写入所生成的加密值。请使用“设置”页面进行正常的连接工作流。
+
+已保存的连接属于基础配置。角色、组和用户配置覆盖无法替换或移除 `langfuse` 部分。
+
+### 环境管理连接 [#environment-managed-connection]
+
+当部署操作员应拥有中心连接时，请将以下值添加到您的 `.env` 文件中：
 
 <OptionTable
   options={[
@@ -28,6 +45,24 @@ description: 本文档介绍了如何将 Langfuse 追踪集成到 LibreChat 中�
       'Langfuse API 基础 URL。',
       'LANGFUSE_BASE_URL=https://cloud.langfuse.com',
     ],
+    [
+      'LANGFUSE_PROJECT_ID',
+      'string',
+      '可选的稳定项目 ID。如果省略，LibreChat 将在后台自动发现并缓存它，以便进行反馈路由。',
+      'LANGFUSE_PROJECT_ID=',
+    ],
+    [
+      'LANGFUSE_TRACING_ENABLED',
+      'boolean',
+      '设置为 false 以禁用 Langfuse 追踪和反馈评分。默认值：true。',
+      'LANGFUSE_TRACING_ENABLED=true',
+    ],
+    [
+      'LANGFUSE_SAMPLE_RATE',
+      'number',
+      '确定性跟踪级别采样率，范围从 0 到 1。默认值：1。',
+      'LANGFUSE_SAMPLE_RATE=1',
+    ],
   ]}
 />
 
@@ -37,6 +72,8 @@ description: 本文档介绍了如何将 Langfuse 追踪集成到 LibreChat 中�
 # Langfuse Configuration
 LANGFUSE_PUBLIC_KEY=pk-lf-***
 LANGFUSE_SECRET_KEY=sk-lf-***
+# LANGFUSE_PROJECT_ID=project-id
+# LANGFUSE_SAMPLE_RATE=1
 
 # 🇪🇺 EU Data Region
 LANGFUSE_BASE_URL=https://cloud.langfuse.com
@@ -48,6 +85,129 @@ LANGFUSE_BASE_URL=https://cloud.langfuse.com
 <Callout type="note" title="自托管 Langfuse">
   对于自托管的 Langfuse 实例，请将 `LANGFUSE_BASE_URL` 设置为您的自定义 URL（例如，本地开发时使用 `http://localhost:3000`）。
 </Callout>
+
+当两个环境变量键同时存在时，LibreChat 会将它们用于中央项目，并隐藏 **Settings → Langfuse**。`LANGFUSE_TRACING_ENABLED=false` 或 `LANGFUSE_SAMPLE_RATE=0` 将同时禁用追踪和反馈评分。分段采样会对每个追踪做出一次确定性决策；被采样排除的追踪将不会接收后续的反馈评分。
+
+## 租户扇出 (可选) [#tenant-fanout-optional]
+
+Langfuse fanout 允许一个多租户的 LibreChat 部署将每个符合条件的追踪（trace）及其媒体导出到中央 Langfuse 项目以及租户特定的项目中。该功能为可选配置，并增加了一个网关和一个内部 OpenTelemetry 收集器；当未部署 fanout 时，上述常规的单项目追踪功能保持不变。
+
+Fanout 使用两个配置层：
+
+- 部署环境变量定义了启动时的核心项目、网关以及允许的租户目标。
+- **Settings → Langfuse** 提供租户的启用状态、公钥、加密后的密钥、已验证的项目 ID 以及一个允许的目标地址。密钥可以在运行时更改，无需重启网关。
+
+随附的 Compose override 支持 `eu`、`us` 和 `jp` Langfuse Cloud 目标：
+
+```sh filename=".env"
+LANGFUSE_BASE_URL=https://cloud.langfuse.com
+LANGFUSE_FANOUT_CENTRAL_BASE_URL=https://cloud.langfuse.com
+LANGFUSE_FANOUT_CENTRAL_AUTH_HEADER="Basic <base64-public-key-colon-secret-key>"
+LANGFUSE_FANOUT_CENTRAL_MEDIA_UPLOAD_DISABLED=false
+LANGFUSE_FANOUT_TENANT_DESTINATIONS="eu=https://cloud.langfuse.com,us=https://us.cloud.langfuse.com,jp=https://jp.cloud.langfuse.com"
+LANGFUSE_FANOUT_TRACE_DESTINATION_KEYS=eu,us,jp
+LANGFUSE_FANOUT_TENANT_EXPORT_DISABLED=false
+```
+
+使用 fanout 覆盖启动常规 Compose 堆栈：
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.langfuse-fanout.yml up -d
+```
+
+该覆盖配置启用了 `LANGFUSE_FANOUT_ENABLED`，将 LibreChat 指向网关，并启动了 collector 和私有 Redis 服务。对于已部署的堆栈，请改为将 `deploy-compose.yml` 与 `deploy-compose.langfuse-fanout.yml` 结合使用。
+
+网关默认监听 `:4318` 端口。自定义部署可以通过 `LANGFUSE_FANOUT_LISTEN_ADDR` 覆盖其绑定地址；随附的 Compose 和 Helm 配置已经路由了标准网关端口。
+
+### Helm 部署 [#helm-deployment]
+
+Compose overrides 会在本地构建网关，但 Kubernetes 需要从镜像仓库获取镜像。在安装 chart 之前，请从 LibreChat 仓库根目录构建并推送网关：
+
+```sh
+docker build \
+  -f otel/langfuse-fanout/Dockerfile \
+  -t registry.example.com/librechat-langfuse-fanout:<tag> .
+docker push registry.example.com/librechat-langfuse-fanout:<tag>
+```
+
+创建一个包含完整 central Langfuse Basic 认证头的 Kubernetes Secret。其值为 `Basic ` 后跟 base64 编码的 `<public-key>:<secret-key>` 凭据：
+
+```sh
+kubectl create secret generic langfuse-central \
+  --from-literal=LANGFUSE_FANOUT_CENTRAL_AUTH_HEADER='Basic <base64-public-key-colon-secret-key>'
+```
+
+在 Helm values 中启用 fanout 部署。此示例使用了捆绑的 Redis chart；使用外部 Redis 服务时，请改为设置 `langfuseFanout.redis.uri`。
+
+```yaml filename="values.yaml"
+redis:
+  enabled: true
+
+langfuseFanout:
+  enabled: true
+  image:
+    repository: registry.example.com/librechat-langfuse-fanout
+    tag: '<tag>'
+    pullPolicy: IfNotPresent
+  central:
+    baseUrl: https://cloud.langfuse.com
+    authHeaderSecret:
+      name: langfuse-central
+      key: LANGFUSE_FANOUT_CENTRAL_AUTH_HEADER
+  metrics:
+    secret:
+      name: librechat-metrics
+      key: METRICS_SECRET
+  tenant:
+    destinations:
+      eu:
+        baseUrl: https://cloud.langfuse.com
+      us:
+        baseUrl: https://us.cloud.langfuse.com
+      jp:
+        baseUrl: https://jp.cloud.langfuse.com
+  upstreamTimeout: 30s
+  publicUrl: ''
+  otelCollector:
+    receiverEndpoint: 127.0.0.1:4319
+  redis:
+    uri: ''
+    username: ''
+    passwordSecret:
+      name: ''
+      key: REDIS_PASSWORD
+    keyPrefix: langfuse-fanout
+  memoryLimitMiB: 256
+  memorySpikeLimitMiB: 64
+  batchTimeout: 1s
+  batchSendSize: 128
+  metadataCardinalityLimit: 1000
+```
+
+metrics Secret 是可选的，但除非 `langfuseFanout.metrics.secret` 提供了 bearer token，否则 `/metrics` 将返回 `401`。当需要进行指标抓取时，请单独创建它：
+
+```sh
+kubectl create secret generic librechat-metrics \
+  --from-literal=METRICS_SECRET='<metrics-bearer-token>'
+```
+
+该 Chart 渲染了一个包含端口 `4318` 上的网关容器和端口 `4319` 上的内部 OpenTelemetry Collector sidecar 的 Deployment；只有网关通过 Service 暴露。它还会将 `LANGFUSE_FANOUT_ENABLED` 和内部的 `LANGFUSE_FANOUT_COLLECTOR_URL` 注入到 LibreChat 中，除非这些键已在 `librechat.configEnv` 中设置。
+
+Redis 存储短期的、一次性的媒体上传计划，以便创建和上传请求可以到达不同的网关副本。对于外部认证的 Redis 服务，请设置 `langfuseFanout.redis.uri`，以及可选的 `username` 和 `passwordSecret`；请勿将凭据包含在 URI 中，因为该 URI 会直接渲染到 Deployment 环境中。如果使用捆绑的 Redis chart 并启用了认证，请提供兼容的密码 Secret 或显式认证的外部 URI。
+
+通过 `langfuseFanout.replicaCount` 手动扩展 fanout；该 chart 不会创建 fanout HPA。存活探针（Liveness probe）和就绪探针（Readiness probe）使用 `/healthz`，并可在 `langfuseFanout.livenessProbe` 和 `langfuseFanout.readinessProbe` 下进行自定义。
+
+其他部署覆盖项包括用于 Service 类型、端口和注解的 `langfuseFanout.service`；用于网关 Pod 的 `resources`、`podAnnotations` 和 `podLabels`；以及用于 Sidecar 的 `otelCollector.image` 和 `otelCollector.resources`。如果您更改了 `langfuseFanout.traceCollectorUrl` 或 `otelCollector.receiverEndpoint`，请确保这两个值均指向同一个内部收集器监听器。
+
+存储的顶层 `langfuse` 对象包含 `enabled`、`publicKey`、加密的 `secretKey`、已验证的 `projectId`、服务器生成的 `secretKeyPreview` 以及 `destination`。请将其视为 API 管理的配置：不要将预览字段或加密负载作为密钥提交回去。早期的 `displaySecretKey` 和嵌套的 `fanout.enabled` 字段已不再使用。
+
+仅当启用了 fanout 和 collector URL、启用了带有有效密钥的已保存连接，且 `destination` 与允许的启动目标匹配时，才会发生租户导出。其他追踪仍可流向中央项目。设置 `LANGFUSE_FANOUT_TENANT_EXPORT_DISABLED=true` 作为紧急开关，以停止租户追踪和反馈评分导出，同时保留中央导出；这也将隐藏应用内的连接设置，直到恢复租户导出为止。
+
+设置 `LANGFUSE_FANOUT_CENTRAL_MEDIA_UPLOAD_DISABLED=true` 以防止 LibreChat SDK 为中央或回退收集器追踪创建媒体上传；租户路由的媒体上传不受影响。此应用端的开关与网关端的 `LANGFUSE_FANOUT_CENTRAL_MEDIA_EXPORT_DISABLED` 不同，后者用于在上传到达网关后阻止中央媒体转发。
+
+追踪和媒体流量通过扇出网关（fanout gateway）。反馈评分直接从 LibreChat 发送：中心评分使用 `LANGFUSE_PUBLIC_KEY`、`LANGFUSE_SECRET_KEY` 和 `LANGFUSE_BASE_URL`，而租户评分则使用租户应用配置。
+
+请参阅 [Langfuse fanout deployment reference](https://github.com/danny-avila/LibreChat/blob/dev/otel/langfuse-fanout/README.md) 以获取有关所有网关变量、自定义目标设置、指标、扩展和 Redis 行为的信息。
 
 ## 重启 LibreChat [#restart-librechat]
 
@@ -65,6 +225,8 @@ docker compose up -d
 ![LibreChat 示例追踪](https://langfuse.com/images/cookbook/integration_librechat/librechat-example-trace.png)
 
 [在 Langfuse UI 中查看追踪的链接](https://cloud.langfuse.com/project/cloramnkj0002jz088vzn1ja4/traces/57b4aa20a258a2e9e2d1ce2e4eacb21c?observation=06f5341a68d723b1&timestamp=2026-02-04T13%3A02%3A54.248Z&traceId=57b4aa20a258a2e9e2d1ce2e4eacb21c)
+
+拥有 `access:admin` 和 `manage:configs:langfuse` 权限的管理员还可以打开对话的 **Context Usage**（上下文使用情况）细分页面，并选择 **View session in Langfuse**（在 Langfuse 中查看会话）。该链接仅在生成完成后，且对话包含至少一个发送至当前启用的应用内 Langfuse 连接的采样追踪（sampled trace）时才会显示。它指向该连接已验证的目标地址和项目；对于环境管理的凭据、已禁用的连接、被采样排除的对话，或没有 Langfuse 配置访问权限的用户，该链接不会显示。
 
 ## 消息反馈评分 [#message-feedback-scores]
 

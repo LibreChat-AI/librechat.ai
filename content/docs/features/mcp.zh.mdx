@@ -61,9 +61,9 @@ mcpServers:
 MCP servers 可以与 LibreChat Agents 无缝集成：
 
 1. 创建或编辑一个 Agent
-2. 点击“Add MCP Server Tools”以从 Agent Builder 面板打开工具对话框
-3. 选择已添加的 MCP 服务器，每个服务器将显示为一个单独的条目
-4. 通过在添加后启用/禁用单个工具，微调您的智能体功能。
+2. 在 Agent Builder 中打开 **Add tools** 并选择 **MCP**
+3. 选择一个 MCP 服务器；每个服务器都显示为一个单独的目录条目
+4. 展开选定的服务器以启用或禁用单个工具
 5. 保存您的智能体
 
 ![Agent Builder 中的 MCP 工具](/images/mcp/mcp_ui_agent.png)
@@ -165,6 +165,8 @@ LibreChat 会确认认证成功，并自动选择 MCP 服务器以供您在对�
 
 在后台，LibreChat 会自动创建一个名为 `MCP_API_KEY` 的 `customUserVars` 条目，并配置相应的标头模板（例如 `Authorization: Bearer {{MCP_API_KEY}}`）。每位用户在配置智能体时，都会通过 MCP 工具选择对话框（MCP Tool Select Dialog）提供他们自己的密钥——这与用于 [YAML 定义的 `customUserVars`](#user-provided-credentials) 的 UI 相同。
 
+当配置了管理员或用户 API key 时，LibreChat 会将服务器视为 API-key 认证，并跳过 OAuth 自动检测。显式的 OAuth 配置仍然具有优先权。如果通过 UI 创建的 API-key 服务器是由旧版本的 LibreChat 保存的，并且仍然卡在 **OAuth Required** 状态，请编辑并保存该服务器一次，以便刷新其存储的连接元数据。
+
 <Callout type="warning">
 出于安全考虑，UI 创建的（源自数据库的）MCP 服务器**仅**能解析 `customUserVars` 占位符 (`{{VAR_NAME}}`)。服务器端环境变量 (`${ENV_VAR}`)、用户个人资料字段 (`{{LIBRECHAT_USER_*}}`) 以及 OIDC 令牌 (`{{LIBRECHAT_OPENID_*}}`) 会被刻意拦截，以防止未经授权访问服务器密钥或其他用户的数据。如需完整的占位符支持，请改在 `librechat.yaml` 中配置服务器。
 </Callout>
@@ -210,6 +212,7 @@ _通过 smithery.ai 安装的 MCP server，现已可在 LibreChat 中使用_
 - [MCP Servers 配置](/docs/configuration/librechat_yaml/object_structure/mcp_servers)
 - [Agent 配置](/docs/configuration/librechat_yaml/object_structure/agents)
 - [高级智能体功能](/docs/features/agents#model-context-protocol-mcp)
+- [Agent Plugins](/docs/features/agent_plugins)，用于将 MCP 服务器与 Skills 进行实验性捆绑部署
 
 ## MCP Server Management [#mcp-server-management]
 
@@ -253,6 +256,16 @@ LibreChat 会在聊天下拉菜单和设置面板中显示动态状态图标，�
 - 配置自定义用户变量，并根据服务器身份验证类型点击 Authenticate/Initialize 按钮
 
   <Video src="/videos/mcp_settings_init.mp4" title="MCP 设置面板初始化" />
+
+初始化失败现在可以区分无法访问的服务器、缺失的 `customUserVars`、必须重新认证的 OAuth 连接以及一般的初始化失败。在重试之前，请使用消息中指出的缺失变量或重新认证操作；对于这些情况，无需再删除并重新添加服务器。
+
+如果一个 Agent 明确需要 MCP 工具，但在运行开始时无法解析任何工具，LibreChat 将会终止运行并提供连接和访问指导，而不是在没有这些工具的情况下静默运行。
+
+发送 `notifications/tools/list_changed` 的 MCP servers 可以在无需重启 LibreChat 的情况下更新其工具目录。LibreChat 会从实时连接中获取当前列表，发布新增的工具，并停止通告服务器已移除的工具。在连接被视为就绪之前，重新连接也会同步目录。
+
+对于可流式传输的 HTTP 服务器，当服务器仍为旧会话保留陈旧的 SSE 流时，重新连接可能会短暂返回 HTTP `409`。LibreChat 会将其视为瞬态错误，自动销毁陈旧会话并重建连接；如果恢复成功，则无需操作员进行任何干预。如果重建后的连接依然失败，LibreChat 将继续抛出底层的连接错误。
+
+LibreChat 通过解析 `Content-Type` 媒体类型来对可流式传输的 HTTP 响应进行分类，而不是通过子字符串匹配。参数无法使非 SSE 响应表现为 `text/event-stream`，因此响应大小错误会继续通过正确的 SSE 或非 SSE 处理路径进行处理。
 
 ### MCP 设置面板可见性 [#mcp-settings-panel-visibility]
 
@@ -302,7 +315,7 @@ mcpServers:
 - `{{LIBRECHAT_USER_USERNAME}}` - 用户名
 - 以及更多（请参阅 [MCP Servers Configuration](/docs/configuration/librechat_yaml/object_structure/mcp_servers#headers) 获取完整列表）
 
-YAML 定义的 MCP 服务器也可以使用 `{{LIBRECHAT_OPENID_*}}`、`{{LIBRECHAT_GRAPH_*}}` 和 `{{LIBRECHAT_BODY_*}}` 占位符。`{{LIBRECHAT_BODY_*}}` 的值是请求作用域的，因此 LibreChat 会为当前运行创建连接，在运行期间的工具调用中复用它们，并在请求结束时进行清理。请求作用域的服务器会被排除在持久化工具缓存之外，以确保请求特定的标头和 URL 不会在当前运行之外被复用。用户、OpenID 和 Graph 占位符是用户作用域的；HTTP 传输会在每次工具调用前刷新其解析后的标头，而无需自行重新连接。
+YAML 定义的 MCP 服务器也可以使用 `{{LIBRECHAT_OPENID_*}}`、`{{LIBRECHAT_GRAPH_*}}` 和 `{{LIBRECHAT_BODY_*}}` 占位符。`{{LIBRECHAT_BODY_*}}` 的值是请求作用域的，因此 LibreChat 会为当前运行创建连接，在运行期间的工具调用中复用这些连接，并在请求结束时进行清理。请求作用域的服务器会被排除在持久化工具缓存之外，以确保请求特定的标头和 URL 不会在当前运行之外被复用。由于它们的工具列表无法在聊天请求存在之前解析，Agent Builder 会为整个服务器公开一个运行时工具选择，并在运行时解析其工具。完成 OAuth 会存储授权信息，但会推迟连接，直到首次运行提供请求上下文为止。用户、OpenID 和 Graph 占位符是用户作用域的；HTTP 传输会在每次工具调用前刷新其解析后的标头，而无需自行重新连接。
 
 ### 服务器指令 [#server-instructions]
 
@@ -322,9 +335,11 @@ mcpServers:
 
 选项：
 
-- `true`：使用服务器提供的指令
+- `true`：在可用时使用服务器通告的指令
 - `false`：禁用指令
-- `string`: 自定义指令（显示在上方）
+- `string`：按原样使用自定义指令（如上所示）
+
+LibreChat 将此配置的声明与检查服务器时获取的指令分离开来。因此，`true` 声明在检查和缓存的注册表重新加载过程中保持启用状态，而自定义字符串则保持权威性。
 
 ### 超时配置 [#timeout-configuration]
 
@@ -400,6 +415,9 @@ LibreChat MCP 服务器支持以下 OAuth 2.0：
 - **Authorization Code Flow with PKCE**：推荐用于实现最高安全性
 - **客户端发现 (Client Discovery)**：在 OAuth 提供商支持时自动进行客户端注册
 - **Refresh Tokens**: 当可用时自动更新令牌
+- **Token endpoint discovery**: 预配置的客户端可以发现提供程序是期望在 POST 正文中提供客户端凭据，还是在 HTTP Basic 授权标头中提供。
+
+在 MCP Builder 中，**Token Exchange Method** 提供 **Auto**、**Default (POST request)** 和 **Basic authorization header**。**Auto** 会将该方法留空，以便 LibreChat 可以使用受信任的提供商元数据，并在提供商未声明方法时回退到 Basic 身份验证。
 
 #### 配置示例 [#configuration-examples]
 
@@ -428,9 +446,9 @@ mcpServers:
 
 1. **初始连接**: LibreChat 尝试连接到 MCP 服务器
 2. **需要身份验证**：如果不存在有效的令牌，您将在该服务器的聊天下拉菜单中看到一个 OAuth 身份验证指示器。
-3. **按钮界面**：点击认证指示器按钮以打开 MCPConfigDialog 并开始 OAuth 流程
-4. **配置对话框 (Config Dialog)**：点击 MCPConfigDialog 中的 Authenticate 按钮，即可在浏览器中打开 OAuth 认证页面。
-5. **浏览器重定向**: LibreChat 会在您的浏览器中打开 OAuth 提供商
+3. **按钮界面**：点击认证指示器以打开 MCP 配置对话框并开始 OAuth 流程
+4. **继续或使用其他设备**：在当前浏览器中继续，复制授权链接，或显示二维码以在其他设备上打开
+5. **浏览器重定向**：使用 OAuth 提供商完成身份验证
 6. **返回处理**: 一旦您完成身份验证，LibreChat 会自动处理 OAuth 回调。
 7. **Token Storage**: LibreChat 安全地存储令牌以供将来使用
 8. **连接已建立**：一旦您完成身份验证，MCP server 将会连接，您就可以在聊天中使用它了
@@ -474,8 +492,14 @@ LibreChat 会智能处理 OAuth 令牌：
 
 - **安全存储**：令牌经过加密并安全存储
 - **自动刷新**：当存在刷新令牌时，LibreChat 会自动更新过期的访问令牌
-- **静默 401 恢复**：如果 OAuth MCP 连接在会话期间收到 401 错误且有可用的刷新令牌，LibreChat 会尝试进行静默刷新，然后再弹出新的身份验证提示。
+- **静默 401 恢复**：如果 MCP OAuth 连接在会话期间收到身份验证拒绝，LibreChat 会为每个用户和服务器协调一次有界的刷新和重连尝试。并发调用者将在 LibreChat 弹出新的身份验证提示之前共享该恢复结果。
 - **会话管理**：在多用户环境中，每个用户维护其各自的 OAuth 会话
+
+存储的 OAuth 客户端和令牌绑定到 MCP 服务器 URL 以及 OAuth 客户端/endpoint 设置。更改这些设置需要用户重新进行身份验证。在编辑保留了存储的 `client_secret` 的 UI 创建的服务器时，如果更改了绑定字段（例如服务器 URL、客户端 ID、授权 URL、令牌 URL 或令牌身份验证方法），则需要重新输入该密钥。
+
+在水平扩展的部署中，OAuth 流程状态和绑定令牌的就绪状态可以在多个 LibreChat pod 之间进行协调。即使回调和状态轮询到达不同的 pod，UI 也仅在 OAuth 后初始化成功后才会将服务器报告为就绪。来自被取代尝试的回调将被拒绝。
+
+当启用 Redis 时，应用层级的 MCP 目录生成和发布修订会在各个副本之间进行协调。Redis Cluster 部署使用槽位安全（slot-safe）的目录键和更新，因此启动同步和 `tools/list_changed` 刷新不需要单节点 Redis 布局。
 
 当用户首次使用启用了 OAuth 的 MCP 服务器时，系统会提示每位用户使用其自己的 OAuth 登录信息进行身份验证。这确保了连接和身份验证详细信息对每位用户都是唯一的，从而在多用户环境中维护了安全性和隐私。
 
@@ -512,8 +536,6 @@ MCP_OAUTH_FLOW_TTL=900000
 3. **监控令牌过期**: 检查日志以查找身份验证问题
 4. **重新认证计划**：部分提供商不支持刷新令牌
 
-**注意**：基于 UI 的 OAuth 配置即将推出，它将直接从 LibreChat 界面简化身份验证流程。
-
 ## Server Transports [#server-transports]
 
 MCP servers 可以配置为使用不同的传输机制：
@@ -522,6 +544,7 @@ MCP servers 可以配置为使用不同的传输机制：
 
 - 适用于本地单用户环境
 - 不适用于远程或云端部署的扩展
+- 捆绑的 MCP SDK 将每个单独的 STDIO 消息限制为 10 MB。如果单个结果超过此大小，传输将会因错误而关闭；此限制与会话或流的总大小无关。
 
 **Server-Sent Events (SSE) 服务器**
 

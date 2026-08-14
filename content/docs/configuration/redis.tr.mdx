@@ -17,6 +17,9 @@ Bu kılavuz, LibreChat içinde önbelleğe alma ve oturum depolama için Redis'i
 - [Performans Ayarı](#performance-tuning)
 - [Yapılandırma Örnekleri](#configuration-examples)
 - [Devam Ettirilebilir Akışlar](#resumable-streams)
+- [Generation Protocol Rollout](#generation-protocol-rollout)
+- [Stream Delta Coalescing](#stream-delta-coalescing)
+- [MCP Katalog Koordinasyonu](#mcp-catalog-coordination)
 
 ## Temel Kurulum [#basic-setup]
 
@@ -324,6 +327,42 @@ REDIS_URI=redis://127.0.0.1:6379
 # USE_REDIS_STREAMS=true  # Enabled by default when USE_REDIS=true
 ```
 
+### Generation Protocol Kullanıma Sunumu [#generation-protocol-rollout]
+
+v2 nesil protokolü, mevcut Agent çalıştırmaları tarafından kullanılan dayanıklı kuyruk, kesinti, duraklatma/devam ettirme ve kurtarma garantilerini ekler. `GENERATION_PROTOCOL_VERSION` ayarlanmadığında Redis destekli dağıtımlar kasıtlı olarak v1 protokolünde kalır; böylece farklı LibreChat sürümlerini çalıştıran replikalar, kademeli bir yükseltme sırasında bir arada bulunabilir.
+
+İki aşamalı bir dağıtım kullanın:
+
+1. v2 uyumlu LibreChat imajını, `GENERATION_PROTOCOL_VERSION` değeri ayarlanmamış veya `1` olarak ayarlanmış **her** replikaya dağıtın.
+2. Önceki görsele ait aktif nesillerin tamamlanmasını veya boşaltılmasını bekleyin.
+3. `GENERATION_PROTOCOL_VERSION=2` değerini ayarlayın ve aynı imajı tekrar dağıtın.
+
+```bash filename=".env"
+USE_REDIS=true
+USE_REDIS_STREAMS=true
+GENERATION_PROTOCOL_VERSION=2
+```
+
+<Callout type="warning" title="Kademeli dağıtım güvenliği">
+  Her replika destekleyene kadar protokol v2'yi etkinleştirmeyin. v2 nesilleri başladıktan sonra, bu nesiller tükenene kadar v2 öncesi bir LibreChat imajına geri dönmeyin; eski replikalar Redis durumları üzerinde güvenli bir şekilde çalışamaz.
+</Callout>
+
+Bellek içi (in-memory) üretim akışları, kopyalar (replicas) arasında durum paylaşmaz ve varsayılan olarak v2 protokolünü kullanır, bu nedenle bu geçişi gerektirmezler.
+
+### Akış Delta Birleştirme (Stream Delta Coalescing) [#stream-delta-coalescing]
+
+Redis destekli akışlar, yüksek token hızlarında Redis betiklerini, gidiş-dönüş sürelerini ve CPU kullanımını azaltmak için delta yayınlarını gruplayabilir:
+
+```bash filename=".env"
+STREAM_DELTA_COALESCE_MS=25
+```
+
+Ayar belirtilmediğinde veya `0` olarak ayarlandığında kapalıdır; `25` milisaniye önerilir ve `1000` üzerindeki değerler sınırlandırılır. Gruplama (batching), yapılandırılmış bir teslimat gecikmesi penceresine kadar ekleme yapabilir.
+
+<Callout type="warning" title="Kademeli dağıtım güvenliği">
+  Birleştirmeyi (coalescing) yalnızca her LibreChat kopyası toplu çerçeveleri (batch frames) destekledikten sonra etkinleştirin. Daha eski aboneler birleştirilmiş çerçeveleri düşürür.
+</Callout>
+
 ### Temel Avantajlar (Yatay Ölçeklendirme için) [#key-benefits-for-horizontal-scaling]
 
 - **Örnekler arası süreklilik**: Kullanıcılar bir sunucuda oluşturma işlemini başlatıp diğerinde devam ettirebilirler
@@ -343,3 +382,9 @@ REDIS_URI=redis://node1:7001,redis://node2:7002,redis://node3:7003
 ```
 
 Bu özellik hakkında daha fazla bilgi için [Resumable Streams](/docs/features/resumable_streams) bölümüne bakın.
+
+## MCP Katalog Koordinasyonu [#mcp-catalog-coordination]
+
+Redis etkinleştirildiğinde, LibreChat uygulama düzeyindeki MCP araç kataloglarını replikalar arasında koordine eder. Başlangıç yayını, yeniden bağlanma senkronizasyonu ve `notifications/tools/list_changed` güncellemeleri, eski bir replikanın daha yeni bir kataloğun üzerine yazmasını önlemek için nesil ve revizyon işaretleyicilerini kullanır.
+
+Redis Cluster dağıtımları, slot-safe katalog anahtarlarını ve güncelleme işlemlerini kullanır; ayrı bir MCP Redis ayarı gerekmez. Dinamik katalog ve OAuth hazırlık davranışı için [MCP Server Management](/docs/features/mcp#mcp-server-management) bölümüne bakın.

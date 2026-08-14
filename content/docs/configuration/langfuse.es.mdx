@@ -18,7 +18,24 @@ Antes de comenzar, asegúrese de tener:
 
 ## Configuración [#setup]
 
-Agregue las siguientes variables de entorno relacionadas con Langfuse a su archivo `.env` en el directorio de instalación de LibreChat:
+Elija una conexión dentro de la aplicación o credenciales gestionadas por el entorno para una implementación de inquilino único. Las credenciales completas del entorno tienen prioridad.
+
+### Conexión en la aplicación [#in-app-connection]
+
+Un administrador autorizado puede abrir **Settings → Langfuse**, elegir un destino aprobado, ingresar las claves pública y secreta del proyecto y seleccionar **Save & enable**. LibreChat verifica ambas claves antes de guardarlas, registra el ID del proyecto verificado, cifra la clave secreta en reposo y devuelve solo una vista previa enmascarada en lecturas posteriores. Una conexión guardada puede habilitarse, deshabilitarse, volver a probarse o reemplazarse sin exponer su secreto.
+
+La configuración requiere tanto `access:admin` como `manage:configs:langfuse` (o los permisos generales/de administrador correspondientes). Está disponible cuando el rastreo (tracing) está habilitado y:
+
+- Una implementación de inquilino único (single-tenant) no tiene tanto `LANGFUSE_PUBLIC_KEY` como `LANGFUSE_SECRET_KEY`.
+- Una implementación fanout tiene un collector habilitado y la exportación de tenant no está deshabilitada por el interruptor de emergencia.
+
+No coloque una `langfuse.secretKey` en texto plano directamente en `librechat.yaml`; el tiempo de ejecución acepta el valor cifrado producido por una escritura de configuración autorizada. Utilice la página de Configuración para el flujo de trabajo de conexión normal.
+
+La conexión guardada pertenece a la configuración base. Las anulaciones de configuración de rol, grupo y usuario no pueden reemplazar ni eliminar la sección `langfuse`.
+
+### Conexión gestionada por el entorno [#environment-managed-connection]
+
+Agregue los siguientes valores a su archivo `.env` cuando los operadores de despliegue deban ser los propietarios de la conexión central:
 
 <OptionTable
   options={[
@@ -30,6 +47,24 @@ Agregue las siguientes variables de entorno relacionadas con Langfuse a su archi
       'La URL base de la API de Langfuse.',
       'LANGFUSE_BASE_URL=https://cloud.langfuse.com',
     ],
+    [
+      'LANGFUSE_PROJECT_ID',
+      'string',
+      'ID de proyecto estable opcional. Cuando se omite, LibreChat lo descubre y almacena en caché en segundo plano para el enrutamiento de comentarios.',
+      'LANGFUSE_PROJECT_ID=',
+    ],
+    [
+      'LANGFUSE_TRACING_ENABLED',
+      'boolean',
+      'Establecer en false para desactivar los seguimientos y las puntuaciones de retroalimentación de Langfuse. Predeterminado: true.',
+      'LANGFUSE_TRACING_ENABLED=true',
+    ],
+    [
+      'LANGFUSE_SAMPLE_RATE',
+      'number',
+      'Tasa de muestreo determinista a nivel de traza de 0 a 1. Predeterminado: 1.',
+      'LANGFUSE_SAMPLE_RATE=1',
+    ],
   ]}
 />
 
@@ -39,6 +74,8 @@ Agregue las siguientes variables de entorno relacionadas con Langfuse a su archi
 # Langfuse Configuration
 LANGFUSE_PUBLIC_KEY=pk-lf-***
 LANGFUSE_SECRET_KEY=sk-lf-***
+# LANGFUSE_PROJECT_ID=project-id
+# LANGFUSE_SAMPLE_RATE=1
 
 # 🇪🇺 EU Data Region
 LANGFUSE_BASE_URL=https://cloud.langfuse.com
@@ -50,6 +87,129 @@ LANGFUSE_BASE_URL=https://cloud.langfuse.com
 <Callout type="note" title="Langfuse autohospedado">
   Para instancias de Langfuse autohospedadas, establezca `LANGFUSE_BASE_URL` en su URL personalizada (por ejemplo, `http://localhost:3000` para desarrollo local).
 </Callout>
+
+Cuando ambas claves de entorno están presentes, LibreChat las utiliza para el proyecto central y oculta **Settings → Langfuse**. `LANGFUSE_TRACING_ENABLED=false` o `LANGFUSE_SAMPLE_RATE=0` desactivan tanto los seguimientos (traces) como las puntuaciones de retroalimentación. El muestreo fraccional toma una decisión determinista por seguimiento; los seguimientos que no son muestreados no reciben puntuaciones de retroalimentación posteriores.
+
+## Tenant Fanout (Opcional) [#tenant-fanout-optional]
+
+El fanout de Langfuse permite que un despliegue multi-inquilino de LibreChat exporte cada traza elegible y sus medios tanto a un proyecto central de Langfuse como a un proyecto específico del inquilino. Esta función es opcional y añade una pasarela además de un recolector interno de OpenTelemetry; el rastreo normal de proyecto único mencionado anteriormente permanece sin cambios cuando el fanout no está desplegado.
+
+Fanout utiliza dos capas de configuración:
+
+- Las variables de entorno de despliegue definen el proyecto central, la puerta de enlace (gateway) y los destinos de inquilino permitidos al inicio.
+- **Settings → Langfuse** proporciona el estado habilitado del inquilino, la clave pública, la clave secreta cifrada, el ID de proyecto verificado y un destino permitido. Las claves pueden cambiarse en tiempo de ejecución sin reiniciar el gateway.
+
+El Compose override incluido es compatible con los destinos de Langfuse Cloud `eu`, `us` y `jp`:
+
+```sh filename=".env"
+LANGFUSE_BASE_URL=https://cloud.langfuse.com
+LANGFUSE_FANOUT_CENTRAL_BASE_URL=https://cloud.langfuse.com
+LANGFUSE_FANOUT_CENTRAL_AUTH_HEADER="Basic <base64-public-key-colon-secret-key>"
+LANGFUSE_FANOUT_CENTRAL_MEDIA_UPLOAD_DISABLED=false
+LANGFUSE_FANOUT_TENANT_DESTINATIONS="eu=https://cloud.langfuse.com,us=https://us.cloud.langfuse.com,jp=https://jp.cloud.langfuse.com"
+LANGFUSE_FANOUT_TRACE_DESTINATION_KEYS=eu,us,jp
+LANGFUSE_FANOUT_TENANT_EXPORT_DISABLED=false
+```
+
+Inicie la pila de Compose regular con la anulación de fanout:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.langfuse-fanout.yml up -d
+```
+
+La anulación habilita `LANGFUSE_FANOUT_ENABLED`, apunta LibreChat a la puerta de enlace (gateway) e inicia los servicios de collector y Redis privado. Para la pila desplegada, combine `deploy-compose.yml` con `deploy-compose.langfuse-fanout.yml` en su lugar.
+
+El gateway escucha en `:4318` de forma predeterminada. Las implementaciones personalizadas pueden anular su dirección de enlace con `LANGFUSE_FANOUT_LISTEN_ADDR`; las configuraciones de Compose y Helm incluidas ya enrutan el puerto estándar del gateway.
+
+### Despliegue con Helm [#helm-deployment]
+
+Las anulaciones de Compose compilan la puerta de enlace (gateway) localmente, pero Kubernetes necesita una imagen disponible desde un registro. Desde la raíz del repositorio de LibreChat, compile y envíe la puerta de enlace antes de instalar el chart:
+
+```sh
+docker build \
+  -f otel/langfuse-fanout/Dockerfile \
+  -t registry.example.com/librechat-langfuse-fanout:<tag> .
+docker push registry.example.com/librechat-langfuse-fanout:<tag>
+```
+
+Cree un Kubernetes Secret que contenga el encabezado de autenticación básica de Langfuse central completo. Su valor es `Basic ` seguido de las credenciales `<public-key>:<secret-key>` codificadas en base64:
+
+```sh
+kubectl create secret generic langfuse-central \
+  --from-literal=LANGFUSE_FANOUT_CENTRAL_AUTH_HEADER='Basic <base64-public-key-colon-secret-key>'
+```
+
+Habilite el despliegue fanout en los valores de Helm. Este ejemplo utiliza el chart de Redis incluido; establezca `langfuseFanout.redis.uri` en su lugar cuando utilice un servicio de Redis externo.
+
+```yaml filename="values.yaml"
+redis:
+  enabled: true
+
+langfuseFanout:
+  enabled: true
+  image:
+    repository: registry.example.com/librechat-langfuse-fanout
+    tag: '<tag>'
+    pullPolicy: IfNotPresent
+  central:
+    baseUrl: https://cloud.langfuse.com
+    authHeaderSecret:
+      name: langfuse-central
+      key: LANGFUSE_FANOUT_CENTRAL_AUTH_HEADER
+  metrics:
+    secret:
+      name: librechat-metrics
+      key: METRICS_SECRET
+  tenant:
+    destinations:
+      eu:
+        baseUrl: https://cloud.langfuse.com
+      us:
+        baseUrl: https://us.cloud.langfuse.com
+      jp:
+        baseUrl: https://jp.cloud.langfuse.com
+  upstreamTimeout: 30s
+  publicUrl: ''
+  otelCollector:
+    receiverEndpoint: 127.0.0.1:4319
+  redis:
+    uri: ''
+    username: ''
+    passwordSecret:
+      name: ''
+      key: REDIS_PASSWORD
+    keyPrefix: langfuse-fanout
+  memoryLimitMiB: 256
+  memorySpikeLimitMiB: 64
+  batchTimeout: 1s
+  batchSendSize: 128
+  metadataCardinalityLimit: 1000
+```
+
+El Secret de metrics es opcional, pero `/metrics` devuelve `401` a menos que `langfuseFanout.metrics.secret` proporcione un token bearer. Créalo por separado cuando se requiera la recopilación de métricas:
+
+```sh
+kubectl create secret generic librechat-metrics \
+  --from-literal=METRICS_SECRET='<metrics-bearer-token>'
+```
+
+El gráfico renderiza un Deployment con un contenedor gateway en el puerto `4318` y un sidecar interno de OpenTelemetry Collector en el puerto `4319`; solo el gateway es expuesto por el Service. También inyecta `LANGFUSE_FANOUT_ENABLED` y la `LANGFUSE_FANOUT_COLLECTOR_URL` interna en LibreChat, a menos que esas claves ya estén configuradas en `librechat.configEnv`.
+
+Redis almacena planes de carga de medios de un solo uso y de corta duración para que las solicitudes de creación y carga puedan llegar a diferentes réplicas de gateway. Para un servicio Redis externo autenticado, configure `langfuseFanout.redis.uri`, y opcionalmente `username` y `passwordSecret`; mantenga las credenciales fuera de la URI, ya que la URI se renderiza directamente en el entorno de Deployment. Con el chart de Redis incluido y la autenticación habilitada, proporcione un Secret de contraseña compatible o una URI externa autenticada explícitamente.
+
+Escale el fanout manualmente con `langfuseFanout.replicaCount`; el chart no crea un HPA para el fanout. Los probes de liveness y readiness utilizan `/healthz` y pueden personalizarse bajo `langfuseFanout.livenessProbe` y `langfuseFanout.readinessProbe`.
+
+Las anulaciones de despliegue adicionales incluyen `langfuseFanout.service` para el tipo de Service, puerto y anotaciones; `resources`, `podAnnotations` y `podLabels` para el Pod de gateway; y `otelCollector.image` y `otelCollector.resources` para el sidecar. Si cambia `langfuseFanout.traceCollectorUrl` o `otelCollector.receiverEndpoint`, mantenga ambos valores apuntando al mismo listener del collector interno.
+
+El objeto `langfuse` de nivel superior almacenado contiene `enabled`, `publicKey`, `secretKey` cifrada, `projectId` verificado, `secretKeyPreview` generado por el servidor y `destination`. Trátelo como una configuración gestionada por la API: no envíe campos de vista previa ni cargas útiles cifradas de vuelta como secretos. Los campos anteriores `displaySecretKey` y el campo anidado `fanout.enabled` ya no se utilizan.
+
+La exportación de inquilinos (tenant export) ocurre solo cuando el fanout y la URL del recopilador están habilitados, la conexión guardada está habilitada con claves válidas y el `destination` coincide con un destino de inicio permitido. Otros seguimientos (traces) aún pueden fluir al proyecto central. Establezca `LANGFUSE_FANOUT_TENANT_EXPORT_DISABLED=true` como un interruptor de emergencia para detener la exportación de seguimientos y puntuaciones de retroalimentación del inquilino mientras se mantiene la exportación central; esto también oculta la configuración de conexión en la aplicación hasta que se restaure la exportación del inquilino.
+
+Establezca `LANGFUSE_FANOUT_CENTRAL_MEDIA_UPLOAD_DISABLED=true` para evitar que el SDK de LibreChat cree cargas de medios para seguimientos de colectores centrales o de respaldo; las cargas de medios enrutadas por inquilino no se ven afectadas. Este interruptor del lado de la aplicación es distinto de `LANGFUSE_FANOUT_CENTRAL_MEDIA_EXPORT_DISABLED` del lado de la puerta de enlace, el cual bloquea el reenvío de medios central después de que una carga llega a la puerta de enlace.
+
+El tráfico de rastreo y multimedia pasa a través del fanout gateway. Las puntuaciones de retroalimentación se envían directamente desde LibreChat: las puntuaciones centrales utilizan `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` y `LANGFUSE_BASE_URL`, mientras que las puntuaciones de los inquilinos utilizan la configuración de la aplicación del inquilino.
+
+Consulta la [referencia de despliegue de fanout de Langfuse](https://github.com/danny-avila/LibreChat/blob/dev/otel/langfuse-fanout/README.md) para conocer todas las variables de gateway, configuración de destinos personalizados, métricas, escalado y comportamiento de Redis.
 
 ## Reiniciar LibreChat [#restart-librechat]
 
@@ -67,6 +227,8 @@ Una vez que LibreChat se reinicie con Langfuse configurado, verá un nuevo segui
 ![Ejemplo de traza de LibreChat](https://langfuse.com/images/cookbook/integration_librechat/librechat-example-trace.png)
 
 [Enlace al seguimiento en la interfaz de usuario de Langfuse](https://cloud.langfuse.com/project/cloramnkj0002jz088vzn1ja4/traces/57b4aa20a258a2e9e2d1ce2e4eacb21c?observation=06f5341a68d723b1&timestamp=2026-02-04T13%3A02%3A54.248Z&traceId=57b4aa20a258a2e9e2d1ce2e4eacb21c)
+
+Los administradores con `access:admin` y `manage:configs:langfuse` también pueden abrir el desglose de **Context Usage** de la conversación y seleccionar **View session in Langfuse**. El enlace aparece solo después de que finaliza la generación y cuando la conversación contiene al menos un seguimiento muestreado enviado a la conexión de Langfuse activa en la aplicación. Este apunta al destino y proyecto verificados de dicha conexión; no se muestra para credenciales gestionadas por el entorno, conexiones deshabilitadas, conversaciones excluidas del muestreo o usuarios sin acceso a la configuración de Langfuse.
 
 ## Puntuaciones de comentarios de mensajes [#message-feedback-scores]
 

@@ -44,7 +44,7 @@ endpoints:
     titleEndpoint: 'anthropic'
 
   google:
-    streamRate: 1
+    streamRate: 25
     titleModel: 'gemini-2.0-flash-lite'
     titlePromptTemplate: "Human: {input}\nAssistant: {output}"
     headers:
@@ -55,6 +55,15 @@ endpoints:
 
   azureAssistants:
     streamRate: 30
+
+  agents:
+    activityLabel: true
+    activityEndpoint: 'openAI'
+    activityModel: 'gpt-4.1-nano'
+    activityMaxPerRun: 20
+    activityCharLimit: 600
+    activityPhaseLabel: true
+    activityPhaseMaxPerRun: 5
 
   # Global configuration using 'all' - this applies shared settings across endpoints.
   # Most defined values override endpoint defaults; headers are merged and endpoint values win on collisions.
@@ -72,7 +81,7 @@ endpoints:
       {convo}
 ```
 
-> **重要:** `all` 設定を使用する場合、定義した共有プロパティのほとんどがすべての endpoint に適用されます。上記の例では、`all` 設定によって `titleConvo`、`titleModel`、および `titlePrompt` がすべての endpoint に適用されますが、`streamRate` は `all` 内で定義されていないため、個別の設定が保持されます。`headers` は個別にマージされます。`endpoints.all.headers` の値はグローバルに適用され、キーが重複した場合は endpoint レベルのヘッダーが優先されます。
+> **重要:** `all` 設定を使用する場合、定義した共有プロパティのほとんどがすべての endpoint に適用されます。上記の例では、`all` 設定によって `titleConvo`、`titleModel`、および `titlePrompt` がすべての endpoint に適用されますが、`streamRate` は `all` 内で定義されていないため、個別の設定が保持されます。`headers` は個別にマージされます。`endpoints.all.headers` の値はグローバルに適用され、キーが重複した場合は endpoint レベルのヘッダーが優先されます。アクティビティ設定は同じ順序でフィールドごとに解決されるため、無関係な `all` 設定が endpoint のアクティビティ設定を隠すことはありません。
 
 ## streamRate
 
@@ -89,9 +98,11 @@ endpoints:
   ]}
 />
 
-**デフォルト:** 1
+**デフォルト:** プロバイダーに依存します。OpenAI、カスタム endpoint、Anthropic、Google、Bedrock、および Agents SDK を利用したストリームは、25 ms をターゲットとした適応型スムージングを使用します。レガシーな Assistants および Ollama ハンドラーは、プロバイダーごとのチャンク動作を保持し、デフォルトは 1 ms です。
 
-> システムが次のティックを待機できるようにしつつ、可能な限り最速のレートでデータをストリーミングできるようにします。
+Adaptive smoothing（適応的スムージング）は、最初のテキストトークンを遅延なく出力し、ストリームが遅延した場合にはチャンクサイズを大きくし、ツール呼び出しとメタデータの順序を保持します。`streamRate` に非負のミリ秒単位のターゲット値を設定してください。`streamRate: 0` に設定すると、上記のSDKベースのプロバイダーにおけるAdaptive smoothingが無効になります。
+
+`endpoints.all` が `streamRate` なしで存在する場合、エンドポイント固有の値は保持されます。`endpoints.all.streamRate` を定義すると、明示的な `0` を含むエンドポイントの値が上書きされます。
 
 ## titleConvo
 
@@ -300,6 +311,99 @@ endpoints:
     # Will use anthropic's configuration for title generation
 ```
 
+## エージェントアクティビティグループ [#agent-activity-groups]
+
+Activity groupsは、連続する推論とツール呼び出しの各ブロックを生成された1行のヘッダーの下に折りたたむことで、長いAgentの実行結果をスキャンしやすくします。ヘッダーの生成はメインのモデル応答パスの外側で実行されますが、これもモデル呼び出しであり、その使用量は記録され、課金対象となります。
+
+親フェーズラベルが有効な場合、短い進捗テキストはアクティブなフェーズ内に留まります。フェーズは実質的な回答テキストの前に閉じられるため、結果は折りたたまれた要約の外側に残り、その後の推論やツール呼び出しのブロックが同じ実行内で別のフェーズを開始できるようになります。LibreChatは、不正な形式や省略されたコンテンツが圧縮された際に保存されたフェーズ境界をリベースし、リロード後もそれらの整合性を維持します。
+
+<OptionTable
+  options={[
+    [
+      'activityLabel',
+      'Boolean',
+      'このendpointを使用したAgent実行時に、生成されたアクティビティグループヘッダーを有効にします。',
+      'false',
+    ],
+    [
+      'activityModel',
+      'String',
+      'ヘッダーの生成に使用されるモデル。titleModel、次にAgentの実行モデルへとフォールバックします。実行モデルを明示的に選択するにはcurrent_modelを使用してください。',
+      '',
+    ],
+    [
+      'activityEndpoint',
+      'String',
+      'ヘッダー生成に使用される認証情報を持つEndpoint。デフォルトはAgentモデルプロバイダーです。',
+      '',
+    ],
+    [
+      'activityPrompt',
+      'String',
+      '1行のヘッダーを生成するために使用されるプロンプトを上書きします。',
+      '',
+    ],
+    [
+      'activityMaxPerRun',
+      'Positive integer',
+      'レスポンスあたりの最大生成アクティビティヘッダー数。追加のモデル呼び出しを制限します。',
+      '20',
+    ],
+    [
+      'activityCharLimit',
+      'Positive integer',
+      'ヘッダープロンプトに含まれる各ツール入力または出力エントリからの最大文字数。',
+      '600',
+    ],
+    [
+      'activityPhaseLabel',
+      'Boolean',
+      '少なくとも2つのアクティビティを含む各実行フェーズに対して、折りたたみ可能な親サマリーを生成します。',
+      'false',
+    ],
+    [
+      'activityPhaseModel',
+      'String',
+      '親フェーズの要約に使用されるモデル。activityModel、titleModel、そしてAgent実行モデルの順にフォールバックします。',
+      '',
+    ],
+    [
+      'activityPhaseEndpoint',
+      'String',
+      'フェーズの要約に使用される認証情報を持つendpoint。activityEndpoint、次にAgentプロバイダーの順にフォールバックします。',
+      '',
+    ],
+    [
+      'activityPhasePrompt',
+      'String',
+      '親フェーズの要約を生成するために使用されるプロンプトを上書きします。',
+      '',
+    ],
+    [
+      'activityPhaseMaxPerRun',
+      'Positive integer',
+      'レスポンスあたりの最大生成親フェーズ要約数。',
+      '5',
+    ],
+  ]}
+/>
+
+```yaml filename="endpoints / agents / activity groups"
+endpoints:
+  agents:
+    activityLabel: true
+    activityEndpoint: 'openAI'
+    activityModel: 'gpt-4.1-nano'
+    activityMaxPerRun: 20
+    activityCharLimit: 600
+    activityPhaseLabel: true
+    activityPhaseMaxPerRun: 5
+```
+
+これらのフィールドは、`endpoints.all` またはバッキングプロバイダー/カスタムエンドポイントの下に設定することもできます。値は個別に解決され、`endpoints.all`、公開されている `agents` エンドポイント、そしてバッキングプロバイダーまたはカスタムエンドポイントの順で、最初に定義された値が優先されます。`activityEndpoint` が不明な場合、LibreChat は警告をログに記録し、代わりにエージェントのプロバイダーを使用します。
+
+親フェーズの要約は、子アクティビティのラベルとは独立しています。`activityPhaseLabel` は `activityLabel` の有無にかかわらず有効にできます。LibreChat は、少なくとも2つの論理的なアクティビティを含むフェーズに対してのみ、フェーズ要約モデルの呼び出しを行います。`activityCharLimit` も、フェーズ要約に使用されるエビデンスを制限します。フェーズモデルの選択は、`activityPhaseModel`、`activityModel`、元の endpoint の `titleModel`、そして現在の実行モデルの順で解決されます。フェーズ endpoint の選択は、`activityPhaseEndpoint`、`activityEndpoint`、そして Agent プロバイダーの順で解決されます。設定されたフェーズ endpoint が不明な場合は警告がログに記録され、Agent プロバイダーにフォールバックします。
+
 ## maxToolResultChars
 
 **キー:**
@@ -362,6 +466,7 @@ endpoints:
 **注記:**
 
 - 値は `${ENV_VAR}`、`{{LIBRECHAT_USER_*}}`、および `{{LIBRECHAT_BODY_CONVERSATIONID}}` のようなリクエストボディのプレースホルダーをサポートしています。
+- 最終的なアウトバウンド解決ステップにおいて、認識されたユーザー、リクエストボディ、およびOpenIDのプレースホルダーで値を持たないものは、テンプレートテキストとして転送されるのではなく、空文字列になります。未知のプレースホルダー名は、設定のタイプミスが確認できるよう、変更されずにそのまま残ります。
 - エンドポイントレベルのヘッダーは、キーが競合した場合に `endpoints.all.headers` を上書きします。
 - プロバイダー管理の認証および必須のベータ/プロトコルヘッダーが優先されます。Anthropicのベータ値はマージされるため、カスタムのベータフラグが必須のプロバイダーフラグを上書きすることはありません。
 - サポートされているプロバイダーのモデル一覧リクエストに対しても、ヘッダーが転送されます。
@@ -375,7 +480,7 @@ endpoints:
 - `all` 設定を使用する場合、すべての個別の endpoint における対応する設定が上書きされます。
 - `all` キーは `baseURL` を受け付けません。
 - `all` で定義されていない設定は、それぞれの endpoint の値を保持します。
-- `streamRate` について: スムーズなストリーミング体験のためには、25〜40の値を推奨します。
+- `streamRate` について: エンドポイント固有の平滑化が必要な場合は、25〜40の値を推奨します。
 - 多くのユーザーに大規模にアプリを提供する場合は、より高いストリームレートを使用することが必須です。
 
 **オーバーライド動作の例:**

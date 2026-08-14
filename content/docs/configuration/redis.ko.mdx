@@ -15,6 +15,9 @@ description: 'LibreChat에서 캐싱, 세션 저장소 및 수평적 확장을 �
 - [성능 튜닝](#performance-tuning)
 - [구성 예시](#configuration-examples)
 - [재개 가능한 스트림](#resumable-streams)
+- [Generation Protocol Rollout](#generation-protocol-rollout)
+- [Stream Delta Coalescing](#stream-delta-coalescing)
+- [MCP Catalog Coordination](#mcp-catalog-coordination)
 
 ## 기본 설정 [#basic-setup]
 
@@ -322,6 +325,42 @@ REDIS_URI=redis://127.0.0.1:6379
 # USE_REDIS_STREAMS=true  # Enabled by default when USE_REDIS=true
 ```
 
+### Generation Protocol 배포 [#generation-protocol-rollout]
+
+v2 생성 프로토콜은 현재 Agent 실행에서 사용되는 내구성 있는 큐(durable queue), 중단(interrupt), 일시 중지/재개(pause/resume), 복구 보장 기능을 추가합니다. Redis 기반 배포는 `GENERATION_PROTOCOL_VERSION`이 설정되지 않은 경우 의도적으로 프로토콜 v1을 유지하므로, 롤링 업그레이드 중에 서로 다른 LibreChat 버전을 실행하는 복제본들이 공존할 수 있습니다.
+
+2단계 롤아웃을 사용하세요:
+
+1. `GENERATION_PROTOCOL_VERSION`이 설정되지 않았거나 `1`로 설정된 **모든** 복제본(replica)에 v2 지원 LibreChat 이미지를 배포하세요.
+2. 이전 이미지에서 소유한 활성 생성 작업이 완료되거나 비워질 때까지 기다리십시오.
+3. `GENERATION_PROTOCOL_VERSION=2`를 설정하고 동일한 이미지를 다시 배포하세요.
+
+```bash filename=".env"
+USE_REDIS=true
+USE_REDIS_STREAMS=true
+GENERATION_PROTOCOL_VERSION=2
+```
+
+<Callout type="warning" title="롤링 배포 안전성">
+  모든 복제본(replica)이 지원할 때까지 프로토콜 v2를 활성화하지 마십시오. v2 세대가 시작된 후에는 해당 세대가 모두 소진될 때까지 v2 이전의 LibreChat 이미지로 롤백하지 마십시오. 이전 버전의 복제본은 Redis 상태에서 안전하게 작동할 수 없습니다.
+</Callout>
+
+인메모리 생성 스트림은 복제본 간에 상태를 공유하지 않으며 기본적으로 프로토콜 v2를 사용하므로, 이 전환이 필요하지 않습니다.
+
+### Stream Delta Coalescing [#stream-delta-coalescing]
+
+Redis 기반 스트림은 델타 게시를 일괄 처리하여 높은 토큰 속도에서 Redis 스크립트, 왕복(round trip) 및 CPU 사용량을 줄일 수 있습니다:
+
+```bash filename=".env"
+STREAM_DELTA_COALESCE_MS=25
+```
+
+설정이 해제되어 있거나 `0`으로 설정된 경우 이 기능은 꺼지며, `25` 밀리초를 권장합니다. `1000`을 초과하는 값은 상한선이 적용됩니다. 일괄 처리는 설정된 전송 지연 시간만큼의 대기 시간을 추가할 수 있습니다.
+
+<Callout type="warning" title="롤링 배포 안전성">
+  모든 LibreChat 복제본이 배치 프레임을 지원한 후에만 병합(coalescing)을 활성화하십시오. 이전 버전의 구독자는 병합된 프레임을 삭제합니다.
+</Callout>
+
 ### 주요 이점 (수평적 확장을 위한) [#key-benefits-for-horizontal-scaling]
 
 - **인스턴스 간 연속성**: 사용자가 한 서버에서 생성을 시작하고 다른 서버에서 이어서 진행할 수 있습니다.
@@ -341,3 +380,9 @@ REDIS_URI=redis://node1:7001,redis://node2:7002,redis://node3:7003
 ```
 
 이 기능에 대한 자세한 내용은 [Resumable Streams](/docs/features/resumable_streams)를 참조하세요.
+
+## MCP Catalog Coordination [#mcp-catalog-coordination]
+
+Redis가 활성화되면 LibreChat은 복제본 간에 애플리케이션 수준의 MCP 도구 카탈로그를 조정합니다. 시작 시 게시, 재연결 동기화 및 `notifications/tools/list_changed` 업데이트는 생성 및 수정 마커를 사용하여 오래된 복제본이 더 최신 카탈로그를 덮어쓰지 않도록 합니다.
+
+Redis Cluster 배포는 슬롯 안전(slot-safe) 카탈로그 키와 업데이트 작업을 사용하므로 별도의 MCP Redis 설정이 필요하지 않습니다. 동적 카탈로그 및 OAuth 준비 상태 동작에 대해서는 [MCP Server Management](/docs/features/mcp#mcp-server-management)를 참조하세요.

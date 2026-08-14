@@ -17,6 +17,9 @@ Ce guide explique comment configurer Redis pour la mise en cache et le stockage 
 - [Optimisation des performances](#performance-tuning)
 - [Exemples de configuration](#configuration-examples)
 - [Flux reprenables](#resumable-streams)
+- [Déploiement du protocole de génération](#generation-protocol-rollout)
+- [Fusion des deltas de flux](#stream-delta-coalescing)
+- [Coordination du catalogue MCP](#mcp-catalog-coordination)
 
 ## Configuration de base [#basic-setup]
 
@@ -324,6 +327,42 @@ REDIS_URI=redis://127.0.0.1:6379
 # USE_REDIS_STREAMS=true  # Enabled by default when USE_REDIS=true
 ```
 
+### Déploiement du protocole de génération [#generation-protocol-rollout]
+
+Le protocole de génération v2 ajoute la file d'attente durable, l'interruption, la pause/reprise et les garanties de récupération utilisées par les exécutions d'Agent actuelles. Les déploiements basés sur Redis restent intentionnellement sur le protocole v1 lorsque `GENERATION_PROTOCOL_VERSION` n'est pas défini, afin que les répliques exécutant différentes versions de LibreChat puissent coexister lors d'une mise à jour progressive.
+
+Utilisez un déploiement en deux étapes :
+
+1. Déployez l'image LibreChat compatible v2 sur **chaque** réplique avec `GENERATION_PROTOCOL_VERSION` non défini ou défini sur `1`.
+2. Attendez que les générations actives appartenant à l'image précédente se terminent ou soient vidées.
+3. Définissez `GENERATION_PROTOCOL_VERSION=2` et déployez à nouveau la même image.
+
+```bash filename=".env"
+USE_REDIS=true
+USE_REDIS_STREAMS=true
+GENERATION_PROTOCOL_VERSION=2
+```
+
+<Callout type="warning" title="Sécurité du déploiement progressif">
+  N'activez pas le protocole v2 tant que chaque réplica ne le prend pas en charge. Une fois que les générations v2 ont commencé, ne revenez pas à une image LibreChat antérieure à la v2 tant que ces générations n'ont pas été purgées ; les réplicas plus anciens ne peuvent pas fonctionner en toute sécurité avec leur état Redis.
+</Callout>
+
+Les flux de génération en mémoire ne partagent pas d'état entre les réplicas et utilisent le protocole v2 par défaut, ils ne nécessitent donc pas cette transition.
+
+### Fusion des deltas de flux (Stream Delta Coalescing) [#stream-delta-coalescing]
+
+Les flux basés sur Redis peuvent regrouper les publications delta pour réduire les scripts Redis, les allers-retours et l'utilisation du CPU lors de taux de jetons élevés :
+
+```bash filename=".env"
+STREAM_DELTA_COALESCE_MS=25
+```
+
+Le paramètre est désactivé lorsqu'il n'est pas défini ou réglé sur `0` ; `25` millisecondes sont recommandées, et les valeurs supérieures à `1000` sont plafonnées. Le traitement par lots peut ajouter jusqu'à une fenêtre de latence de livraison configurée.
+
+<Callout type="warning" title="Sécurité du déploiement progressif">
+  Activez la coalescence uniquement après que chaque réplique LibreChat prenne en charge les trames par lots. Les anciens abonnés abandonnent les trames coalescées.
+</Callout>
+
 ### Avantages clés (pour la mise à l'échelle horizontale) [#key-benefits-for-horizontal-scaling]
 
 - **Continuité inter-instance** : Les utilisateurs peuvent démarrer une génération sur un serveur et la reprendre sur un autre
@@ -343,3 +382,9 @@ REDIS_URI=redis://node1:7001,redis://node2:7002,redis://node3:7003
 ```
 
 Voir [Resumable Streams](/docs/features/resumable_streams) pour plus de détails sur cette fonctionnalité.
+
+## Coordination du catalogue MCP [#mcp-catalog-coordination]
+
+Lorsque Redis est activé, LibreChat coordonne les catalogues d'outils MCP au niveau de l'application entre les répliques. La publication au démarrage, la synchronisation lors de la reconnexion et les mises à jour `notifications/tools/list_changed` utilisent des marqueurs de génération et de révision afin qu'une réplique obsolète ne puisse pas écraser un catalogue plus récent.
+
+Les déploiements de Redis Cluster utilisent des clés de catalogue compatibles avec les slots et des opérations de mise à jour ; aucun paramètre Redis MCP distinct n'est requis. Consultez [Gestion du serveur MCP](/docs/features/mcp#mcp-server-management) pour le comportement dynamique du catalogue et la préparation OAuth.

@@ -1,0 +1,163 @@
+---
+title: Agent-Plugins
+icon: Plug
+description: >-
+  Experimentell Skills, MCP Server und Befehls-Hooks für die Bereitstellung in
+  beim Start geladenen Paketen bündeln.
+---
+
+Agent Plugins ermöglichen es einem Operator, zusammengehörige [Skills](/docs/features/skills), [MCP servers](/docs/features/mcp) und optionale Befehls-Hooks auf dem LibreChat-Dateisystem zu bündeln. LibreChat implementiert das Agent Plugins `1.0.0` Paketformat und lädt beim Start jedes direkte Unterverzeichnis als ein Plugin.
+
+<Callout type="warning" title="Experimentell">
+  Agent Plugins sind experimentell. Das Paketformat, die unterstützten Komponenten, die Konfiguration und das Laufzeitverhalten können sich während der Experimentierphase ändern. Testen Sie Plugins, bevor Sie sie in einer Produktionsumgebung einsetzen.
+</Callout>
+
+## Verzeichnisse konfigurieren [#configure-the-directories]
+
+```bash filename=".env"
+# Defaults to ./plugin relative to the LibreChat project root
+DEPLOYMENT_PLUGINS_DIR=./plugin
+
+# Persistent data allocated separately for each plugin manifest name
+DEPLOYMENT_PLUGIN_DATA_DIR=./data/plugins
+
+# Optional and disabled by default; see Command Hooks below
+DEPLOYMENT_PLUGIN_HOOKS=true
+```
+
+Relative Pfade werden ausgehend vom LibreChat-Projektstammverzeichnis aufgelöst. Wenn das Standardverzeichnis `./plugin` nicht existiert, wird der Start ohne Plugins fortgesetzt. Wenn `DEPLOYMENT_PLUGINS_DIR` explizit festgelegt, aber nicht gelesen werden kann, schlägt der Start fehl, damit ein Bereitstellungsfehler nicht stillschweigend ignoriert wird.
+
+Starten Sie LibreChat neu, nachdem Sie ein Plugin hinzugefügt, entfernt oder geändert haben.
+
+## Paket-Layout [#package-layout]
+
+Jedes unmittelbare untergeordnete Element von `DEPLOYMENT_PLUGINS_DIR` ist ein Plugin-Paket:
+
+```text
+plugin/
+  analytics-tools/
+    plugin.json
+    skills/
+      analyze-events/
+        SKILL.md
+        scripts/
+          analyze.py
+    mcp.json
+    ai.librechat/
+      hooks/
+        hooks.json
+    scripts/
+      guard.sh
+```
+
+`plugin.json` ist erforderlich. `skills/`, `mcp.json` und `ai.librechat/hooks/hooks.json` sind optional und schlagen unabhängig voneinander fehl, sodass eine ungültige Komponente nicht verhindert, dass eine andere gültige Komponente im selben Plugin geladen wird. Ein ungültiges oder fehlendes Manifest führt zur Ablehnung des gesamten Plugins. Diagnosen werden in die LibreChat-Startprotokolle geschrieben.
+
+## Manifest [#manifest]
+
+Das Manifest muss die exakte Agent Plugins `1.0.0` Schema-URL verwenden:
+
+```json filename="plugin.json"
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "analytics-tools",
+  "version": "1.0.0",
+  "description": "Skills and tools for analyzing event data"
+}
+```
+
+Der `name` wird auch für das persistente Datenverzeichnis des Plugins verwendet. Er muss 1-64 Zeichen lang sein, mit einem Kleinbuchstaben oder einer Zahl beginnen und enden, darf nur Kleinbuchstaben, Zahlen, Bindestriche und Punkte enthalten und darf keine aufeinanderfolgenden `--` oder `..` Sequenzen enthalten. Plugin-Namen müssen innerhalb der Bereitstellung eindeutig sein.
+
+## Gebündelte Skills [#bundled-skills]
+
+Legen Sie jede Skill in ein direktes Unterverzeichnis unter `skills/` ab, wobei sich `SKILL.md` im Stammverzeichnis dieses Unterordners befinden muss. LibreChat lädt gültige Einträge als schreibgeschützte Deployment-Skills und wendet die normalen Fähigkeiten- und Zugriffsregeln für Skills an.
+
+Das eigenständige [`DEPLOYMENT_SKILLS_DIR`](/docs/features/skills#deployment-skills) hat Vorrang vor einem Plugin-Skill mit demselben Namen. Innerhalb des Plugin-Verzeichnisses gewinnt das erste Paket, das einen Skill-Namen beansprucht; spätere Konflikte werden mit einer Warnung übersprungen.
+
+## Gebündelte MCP-Server [#bundled-mcp-servers]
+
+Definieren Sie optionale MCP-Server in `mcp.json` mit der exakten `1.0.0` Schema-URL:
+
+```json filename="mcp.json"
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "analytics": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["${PLUGIN_ROOT}/server.js"],
+      "cwd": "${PLUGIN_ROOT}",
+      "env": {
+        "PLUGIN_CACHE": "${PLUGIN_DATA}/cache"
+      }
+    }
+  }
+}
+```
+
+Unterstützte Transports sind `stdio`, `streamable-http` und `sse`. Remote-HTTP-Transports müssen HTTPS verwenden, außer bei Loopback-Zielen. Servernamen müssen die MCP-Tool-Namensnormalisierung von LibreChat unverändert überstehen und dürfen keine reservierten JavaScript-Objektnamen verwenden.
+
+Für `stdio`-Server werden `${PLUGIN_ROOT}` und `${PLUGIN_DATA}` einmalig in `args`, `env` und `cwd` expandiert; beide Werte werden zudem der Umgebung des gestarteten Prozesses hinzugefügt. Die MCP-Konfiguration für Plugins expandiert keine beliebigen Variablen aus der Host-Umgebung von LibreChat. Ein Wert wie `${OPENAI_API_KEY}` bleibt während der Speicherung in der Registry und der Laufzeitinitialisierung ein Literal. Bewahren Sie Anmeldedaten außerhalb von Plugin-Dateien auf und stellen Sie diese über einen speziell dafür vorgesehenen authentifizierten Dienst oder einen anderen bereitstellungsgesteuerten Mechanismus bereit.
+
+Ein in `librechat.yaml` deklarierter MCP Server hat Vorrang vor einem Plugin-Server mit demselben Namen. Doppelte Plugin-Server-Namen werden übersprungen und protokolliert.
+
+## Persistente Plugin-Daten [#persistent-plugin-data]
+
+LibreChat erstellt ein Verzeichnis unter `<DEPLOYMENT_PLUGIN_DATA_DIR>/<plugin-name>` und stellt es `stdio`-Komponenten als `${PLUGIN_DATA}` zur Verfügung. Verwenden Sie es für den persistenten Status, der dem Plugin gehört. Schreiben Sie keinen persistenten Status in `${PLUGIN_ROOT}`, da dies als Paketinhalt behandelt werden sollte.
+
+## Command Hooks [#command-hooks]
+
+Agent Plugins können `command` Hook-Handler an den Lebenszyklus-Grenzen von Agenten ausführen. Die Hook-Ausführung ist standardmäßig deaktiviert. Aktivieren Sie diese explizit und starten Sie LibreChat neu:
+
+```bash filename=".env"
+DEPLOYMENT_PLUGIN_HOOKS=true
+```
+
+Wenn die Variable auf false gesetzt oder nicht definiert ist, ignoriert LibreChat Hook-Dokumente und protokolliert eine Warnung beim Start; die unabhängig gültigen Skills und MCP-Server des Plugins werden weiterhin geladen.
+
+<Callout type="warning" title="Nur vertrauenswürdiger Code">
+  Ein Befehls-Hook führt einen vom Operator installierten Kindprozess auf dem LibreChat API-Host aus. Die eingeschränkte Umgebung reduziert eine versehentliche Offenlegung, ist jedoch keine Sandbox. Aktivieren Sie Hooks nur für Plugin-Pakete, denen Sie im gleichen Maße vertrauen wie dem LibreChat-Code und den `toolApproval`-Hook-Modulen.
+</Callout>
+
+Deklarieren Sie Hooks unter `ai.librechat/hooks/hooks.json`:
+
+```json filename="ai.librechat/hooks/hooks.json"
+{
+  "description": "Reject writes outside the workspace",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/guard.sh",
+            "timeout": 30,
+            "allowedEnvVars": ["WORKSPACE_POLICY"]
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+### Ausführungsvertrag [#execution-contract]
+
+- LibreChat startet den Befehl vom Plugin-Stammverzeichnis aus und sendet ein Claude-kompatibles Event-Payload als JSON über die Standardeingabe.
+- `${PLUGIN_ROOT}`, `${PLUGIN_DATA}` und `${CLAUDE_PLUGIN_ROOT}` werden einmal in `command` und `args` expandiert und stehen auch dem untergeordneten Prozess zur Verfügung.
+- Die untergeordnete Umgebung enthält nur `PATH`, `HOME`, `LANG`, `LC_ALL` und `TZ`, sofern vorhanden, die drei Plugin-Pfadvariablen sowie die Namen, die explizit in `allowedEnvVars` aufgeführt sind.
+- Exit-Code `0` bedeutet Erfolg. In die Standardausgabe geschriebenes JSON kann ereignisgerechte Entscheidungen und begrenzten Kontext zurückgeben; einfacher Text wird nur für `SessionStart` und `UserPromptSubmit` als zusätzlicher Kontext behandelt.
+- Exit-Code `2` blockiert die entsprechende Aktion oder Fortsetzung und verwendet den Standardfehler als Begründung. Andere Exit-Codes ungleich Null werden protokolliert und ansonsten ignoriert.
+- LibreChat beendet den Prozess, wenn der Hook abgebrochen wird oder ein Timeout auftritt. Auf POSIX-Hosts werden Befehle über Bash ausgeführt. Windows-Plugins müssen `commandWindows` bereitstellen oder PowerShell auswählen.
+
+LibreChat übersetzt die gängigen Claude-Tool-Namen `Bash`, `Write`, `Edit`, `Read` und `WebSearch` sowie deren Datei-Argumentnamen in die entsprechenden LibreChat-Tools. Ein Matcher, der mit dem nativen Tool-Namen von LibreChat geschrieben wurde, behält die native Payload-Struktur bei.
+
+Unterstützte Quellereignisse sind `RunStart`, `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PostToolBatch`, `SubagentStart`, `Stop`, `StopFailure`, `PreCompact` und `PostCompact`. Nicht unterstützte Ereignisse oder Deklarationen werden übersprungen und in der Startdiagnose gemeldet. In dieser Version werden nur `command`-Handler ausgeführt; `prompt`-, `http`-, `mcp_tool`- und `agent`-Handler werden weiterhin nicht unterstützt.
+
+`SessionStart` und Handler mit `once: true` werden pro Konversation durch einen begrenzten prozesslokalen Speicher dedupliziert. In einer Bereitstellung mit mehreren Replikaten kann derselbe einmalige Handler auf jedem Prozess einmal ausgeführt werden. Eine `ask`-Entscheidung erfordert den fortsetzbaren Human-Approval-Flow von LibreChat; wenn dieser Flow nicht verfügbar ist, verschärft LibreChat die Entscheidung zu `deny`, anstatt den Lauf ohne Fortsetzungspfad pausiert zu lassen.
+
+## Verwandt [#related]
+
+- [Skills](/docs/features/skills)
+- [Model Context Protocol](/docs/features/mcp)
+- [Agents](/docs/features/agents)

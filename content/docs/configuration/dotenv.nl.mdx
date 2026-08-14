@@ -45,6 +45,41 @@ Voor meer informatie, zie:
   ]}
 />
 
+### HTTP Server Timeouts [#http-server-timeouts]
+
+Deze optionele waarden configureren de Node.js HTTP-server. Laat ze oningesteld om de standaardwaarden van Node te behouden. Een waarde van `0` schakelt die time-out uit.
+
+<OptionTable
+  options={[
+    [
+      'HTTP_KEEP_ALIVE_TIMEOUT_MS',
+      'integer',
+      'Idle keep-alive time-out in milliseconden. Stel dit hoger in dan de idle time-out van de load balancer om te voorkomen dat hergebruikte verbindingen conflicteren met het sluiten van de server. Node standaard: 5000.',
+      '# HTTP_KEEP_ALIVE_TIMEOUT_MS=70000',
+    ],
+    [
+      'HTTP_KEEP_ALIVE_TIMEOUT_BUFFER_MS',
+      'integer',
+      'Extra socket timeout-buffer in milliseconden. Node-standaard: 1000.',
+      '# HTTP_KEEP_ALIVE_TIMEOUT_BUFFER_MS=5000',
+    ],
+    [
+      'HTTP_HEADERS_TIMEOUT_MS',
+      'integer',
+      'Toegestane tijd om volledige aanvraagheaders te ontvangen. Node-standaard: 60000.',
+      '# HTTP_HEADERS_TIMEOUT_MS=80000',
+    ],
+    [
+      'HTTP_REQUEST_TIMEOUT_MS',
+      'integer',
+      'Tijd toegestaan om het volledige verzoek te ontvangen. Node standaard: 300000.',
+      '# HTTP_REQUEST_TIMEOUT_MS=300000',
+    ],
+  ]}
+/>
+
+Waarden moeten niet-negatieve veilige gehele getallen zijn; ongeldige waarden worden genegeerd. Wanneer zowel header- als request-timeouts zijn ingeschakeld, beperkt LibreChat de header-timeout tot de request-timeout als deze hoger is. Node controleert het verlopen van headers en requests tijdens een verbinding-sweep van 30 seconden, dus waarden onder `30000` worden niet met exacte millisecondenprecisie afgedwongen. Bun accepteert deze instellingen momenteel wel, maar dwingt ze niet af; LibreChat logt een waarschuwing wanneer de API-server onder Bun draait.
+
 ### Trust proxy [#trust-proxy]
 
 Gebruik het adres dat zich op maximaal n hops afstand van de Express-applicatie bevindt.
@@ -60,27 +95,37 @@ Raadpleeg [Express.js - trust proxy](https://expressjs.com/en/guide/behind-proxi
 
 ### Credentials Configuratie [#credentials-configuration]
 
-Om inloggegevens veilig op te slaan, heb je een vaste sleutel en IV nodig. Je kunt deze hier instellen voor prod- en dev-omgevingen.
+LibreChat gebruikt `CREDS_KEY` en `CREDS_IV` om ondersteunde inloggegevens die in de database zijn opgeslagen te versleutelen. Configureer vaste, unieke waarden voor productie en deel dezelfde waarden over elke replica.
 
 <OptionTable
   options={[
     [
       'CREDS_KEY',
       'string',
-      '32-byte sleutel (64 tekens in hex) voor het veilig opslaan van inloggegevens. Vereist voor het opstarten van de app.',
-      'CREDS_KEY=f34be427ebb29de8d88c107a71546019685ed8b241d8f2ed00c3df97ad2566f0',
+      '32-byte sleutel (64 hexadecimale tekens) voor het veilig opslaan van inloggegevens.',
+      'CREDS_KEY=',
     ],
     [
       'CREDS_IV',
       'string',
-      '16-byte IV (32 tekens in hex) voor het veilig opslaan van inloggegevens. Vereist voor het opstarten van de app.',
-      'CREDS_IV=e2341419ec3dd3d19b13a1a87fafcbfb',
+      '16-byte IV (32 hexadecimale tekens) voor het veilig opslaan van inloggegevens.',
+      'CREDS_IV=',
+    ],
+    [
+      'LIBRECHAT_TEMP_CREDENTIALS_PATH',
+      'string',
+      'Pad dat wordt gebruikt om automatisch gegenereerde tijdelijke inloggegevens op te slaan. Standaard ingesteld op `.env.temp` in de werkmap van het proces.',
+      '# LIBRECHAT_TEMP_CREDENTIALS_PATH=/app/data/.env.temp',
     ],
   ]}
 />
 
-<Callout type="warning" title="Waarschuwing">
-  **Waarschuwing:** Als je `CREDS_KEY` en `CREDS_IV` niet instelt, zal de app crashen bij het opstarten. - Je kunt deze [Key Generator](/toolkit/creds_generator) gebruiken om ze snel te genereren.
+Wanneer een van de waarden `CREDS_KEY`, `CREDS_IV`, `JWT_SECRET` of `JWT_REFRESH_SECRET` leeg is, hergebruikt LibreChat eerst een geldige waarde uit het tijdelijke referentiebestand. Als er geen bestaat, genereert het een cryptografisch willekeurige waarde en schrijft het bestand met rechten die alleen voor de eigenaar toegankelijk zijn. Expliciete omgevingswaarden krijgen altijd voorrang. LibreChat weigert `.env` of `.env.example` te gebruiken als het gegenereerde bestandspad, om te voorkomen dat een van beide configuratiebestanden per ongeluk wordt overschreven.
+
+De meegeleverde Docker Compose-bestanden behouden `/app/data/.env.temp` in het `librechat-data` volume, zodat een enkele Compose-implementatie opnieuw kan opstarten zonder deze gegenereerde waarden te wijzigen. Als het bestand niet kan worden behouden, zijn de waarden proces-lokaal en kunnen sessies of versleutelde records na een herstart ontoegankelijk worden.
+
+<Callout type="warning" title="Stel permanente waarden in voor productie">
+  Tijdelijke generatie is een bootstrap-gemak, geen systeem voor het roteren van inloggegevens. Genereer vóór productiegebruik permanente waarden met de [Credentials Generator](/toolkit/creds_generator), sla deze op in uw secret manager en verstrek dezelfde waarden aan elke replica. Het wijzigen van een gevestigde sleutel versleutelt bestaande records niet opnieuw. LibreChat registreert vingerafdrukken van inloggegevens in de database en waarschuwt wanneer actieve waarden afwijken; overschrijf die markering niet in plaats van een gecontroleerde migratie uit te voeren.
 </Callout>
 
 ### Statische bestandsafhandeling [#static-file-handling]
@@ -232,14 +277,11 @@ Als je een online database gebruikt, is het URI-formaat `mongodb+srv://<username
   ]}
 />
 
-Als alternatief kun je `documentDb` gebruiken dat `mongoDb` emuleert, maar het:
+Amazon DocumentDB 5.0+ instance-based clusters zijn een ondersteund doel. DocumentDB vereist `retryWrites=false` en TLS met de AWS CA-bundel; elastic clusters worden niet ondersteund omdat deze geen unieke indexen bieden. Een typische URI heeft deze vorm:
 
-- ondersteunt geen `retryWrites` - gebruik `retryWrites=false`
-- vereist een TLS-verbinding, gebruik daarom de parameters `tls=true` om TLS in te schakelen en `tlsCAFile=/path-to-ca/bundle.pem` om naar het door AWS verstrekte CA-bundelbestand te verwijzen
+`mongodb://username:password@cluster:27017/librechat?tls=true&tlsCAFile=/path-to-ca/global-bundle.pem&replicaSet=rs0&readPreference=secondaryPreferred&retryWrites=false`
 
-De URI voor `documentDb` ziet er als volgt uit:
-
-- `mongodb+srv://username:password@domain/dbname?retryWrites=false&tls=true&tlsCAFile=/path-to-ca/bundle.pem`
+DocumentDB 4.0 kan worden uitgevoerd met beperkte handhaving van gedeeltelijke unieke indexen. Zie [Amazon DocumentDB Compatibility](/docs/user_guides/mongodb#amazon-documentdb-compatibility) voor het ondersteunde doel en de kanttekeningen.
 
 Zie ook:
 
@@ -269,7 +311,7 @@ Om LibreChat te configureren voor lokaal gebruik of implementatie op een aangepa
     [
       'ADMIN_PANEL_URL',
       'string',
-      'Basis-URL van het externe admin-paneel die wordt gebruikt voor admin OAuth/SSO-omleidingen wanneer het admin-paneel afzonderlijk wordt gehost. Voeg geen slash toe aan het einde.',
+      'Basis-URL van het externe admin-paneel gebruikt voor admin OAuth/SSO-omleidingen en de link Instellingen > Algemeen die alleen voor admins toegankelijk is. Voeg geen slash aan het einde toe.',
       'ADMIN_PANEL_URL=https://admin.example.com/admin',
     ],
     [
@@ -387,6 +429,50 @@ Let op: `DEBUG_CONSOLE` wordt niet aanbevolen, aangezien de uitvoer behoorlijk u
     ['GID', 'number', 'De groeps-ID.', '# GID=1000'],
   ]}
 />
+
+### Langfuse Tracing en Tenant Fanout [#langfuse-tracing-and-tenant-fanout]
+
+Gebruik de standaard Langfuse-variabelen voor één centraal observability-project. De optionele fanout-implementatie kan aanvullend tenant-traces, media en feedbackscores doorsturen naar tenant-specifieke Langfuse-projecten. Zie [Langfuse Tracing](/docs/configuration/langfuse) voor de installatie, het beheer van in-app verbindingen en de architectuur.
+
+<OptionTable
+  options={[
+    ['LANGFUSE_PUBLIC_KEY', 'string', 'Publieke sleutel voor het centrale Langfuse-project.', '# LANGFUSE_PUBLIC_KEY='],
+    ['LANGFUSE_SECRET_KEY', 'string', 'Geheime sleutel voor het centrale Langfuse-project.', '# LANGFUSE_SECRET_KEY='],
+    ['LANGFUSE_BASE_URL', 'string', 'Basis-URL voor centrale tracering en feedbackscores.', '# LANGFUSE_BASE_URL=https://cloud.langfuse.com'],
+    ['LANGFUSE_PROJECT_ID', 'string', 'Stabiele centrale Langfuse project-ID. Indien weggelaten, ontdekt en cachet LibreChat deze op de achtergrond voor feedback-routing.', '# LANGFUSE_PROJECT_ID='],
+    ['LANGFUSE_TRACING_ENABLED', 'boolean', 'Stel in op false om Langfuse-traces en feedbackscores uit te schakelen. Standaard: true.', '# LANGFUSE_TRACING_ENABLED=true'],
+    ['LANGFUSE_SAMPLE_RATE', 'number', 'Deterministische samplefrequentie op trace-niveau van 0 tot 1. Uitgesamplede traces ontvangen geen feedbackscores. Standaard: 1.', '# LANGFUSE_SAMPLE_RATE=1'],
+    ['LANGFUSE_FANOUT_ENABLED', 'boolean', 'Schakel routering in via de optionele fanout gateway.', '# LANGFUSE_FANOUT_ENABLED=false'],
+    ['LANGFUSE_FANOUT_COLLECTOR_URL', 'string', 'Gateway-URL gebruikt door de LibreChat API.', '# LANGFUSE_FANOUT_COLLECTOR_URL=http://langfuse-fanout-collector:4318'],
+    ['LANGFUSE_FANOUT_CENTRAL_MEDIA_UPLOAD_DISABLED', 'boolean', 'Voorkom dat de LibreChat SDK media-uploads aanmaakt voor centrale of fallback collector-traces. Tenant-gerouteerde media-uploads blijven ongewijzigd.', '# LANGFUSE_FANOUT_CENTRAL_MEDIA_UPLOAD_DISABLED=false'],
+    ['LANGFUSE_FANOUT_LISTEN_ADDR', 'string', 'Gateway HTTP-luisteradres. Standaard: :4318.', '# LANGFUSE_FANOUT_LISTEN_ADDR=:4318'],
+    ['LANGFUSE_FANOUT_TENANT_EXPORT_DISABLED', 'boolean', 'Noodschakelaar die tenant-trace en score-export uitschakelt, terwijl centrale export behouden blijft.', '# LANGFUSE_FANOUT_TENANT_EXPORT_DISABLED=false'],
+    ['LANGFUSE_FANOUT_CENTRAL_BASE_URL', 'string', 'Centrale Langfuse base URL gebruikt door de gateway.', '# LANGFUSE_FANOUT_CENTRAL_BASE_URL=https://cloud.langfuse.com'],
+    ['LANGFUSE_FANOUT_CENTRAL_AUTH_HEADER', 'string', 'Volledige Basic authorization-header voor centrale trace en media-export.', '# LANGFUSE_FANOUT_CENTRAL_AUTH_HEADER=Basic <base64-public-colon-secret>'],
+    ['LANGFUSE_FANOUT_CENTRAL_MEDIA_EXPORT_DISABLED', 'boolean', 'Schakel centrale media-fanout uit zonder centrale traces uit te schakelen.', '# LANGFUSE_FANOUT_CENTRAL_MEDIA_EXPORT_DISABLED=false'],
+    ['LANGFUSE_FANOUT_TENANT_DESTINATIONS', 'string', 'Door komma\'s gescheiden toewijzingen van bestemmingssleutels en basis-URL\'s toegestaan bij het opstarten.', '# LANGFUSE_FANOUT_TENANT_DESTINATIONS=eu=https://cloud.langfuse.com,us=https://us.cloud.langfuse.com'],
+    ['LANGFUSE_FANOUT_TRACE_DESTINATION_KEYS', 'string', 'Bestemmingssleutels ondersteund door de collector-routeringsconfiguratie.', '# LANGFUSE_FANOUT_TRACE_DESTINATION_KEYS=eu,us,jp'],
+    ['LANGFUSE_FANOUT_PUBLIC_URL', 'string', 'Gateway-basis-URL die wordt gebruikt voor het aanmaken van eenmalige media-upload-URL\'s.', '# LANGFUSE_FANOUT_PUBLIC_URL=http://langfuse-fanout-collector:4318'],
+    ['LANGFUSE_FANOUT_TRACE_COLLECTOR_URL', 'string', 'Interne gateway-naar-collector trace endpoint.', '# LANGFUSE_FANOUT_TRACE_COLLECTOR_URL=http://langfuse-fanout-otel:4319'],
+    ['LANGFUSE_FANOUT_REDIS_URI', 'string', 'Redis URI voor eenmalige media-uploadplannen.', '# LANGFUSE_FANOUT_REDIS_URI=redis://langfuse-fanout-redis:6379'],
+    ['LANGFUSE_FANOUT_REDIS_USERNAME', 'string', 'Optionele Redis-gebruikersnaam voor de fanout-gateway.', '# LANGFUSE_FANOUT_REDIS_USERNAME='],
+    ['LANGFUSE_FANOUT_REDIS_PASSWORD', 'string', 'Optioneel Redis-wachtwoord voor de fanout gateway.', '# LANGFUSE_FANOUT_REDIS_PASSWORD='],
+    ['LANGFUSE_FANOUT_REDIS_KEY_PREFIX', 'string', 'Redis-sleutelvoorvoegsel voor fanout-mediaplannen.', '# LANGFUSE_FANOUT_REDIS_KEY_PREFIX=langfuse-fanout'],
+    ['LANGFUSE_FANOUT_OTEL_RECEIVER_ENDPOINT', 'string', 'Bind-adres voor de interne collector-ontvanger.', '# LANGFUSE_FANOUT_OTEL_RECEIVER_ENDPOINT=0.0.0.0:4319'],
+    ['LANGFUSE_FANOUT_TENANT_EU_BASE_URL', 'string', 'Statische EU-bestemmings-URL voor de meegeleverde Compose-collector.', '# LANGFUSE_FANOUT_TENANT_EU_BASE_URL=https://cloud.langfuse.com'],
+    ['LANGFUSE_FANOUT_TENANT_US_BASE_URL', 'string', 'Statische Amerikaanse bestemmings-URL voor de meegeleverde Compose-collector.', '# LANGFUSE_FANOUT_TENANT_US_BASE_URL=https://us.cloud.langfuse.com'],
+    ['LANGFUSE_FANOUT_TENANT_JP_BASE_URL', 'string', 'Statische JP-bestemmings-URL voor de meegeleverde Compose-collector.', '# LANGFUSE_FANOUT_TENANT_JP_BASE_URL=https://jp.cloud.langfuse.com'],
+    ['LANGFUSE_FANOUT_UPSTREAM_TIMEOUT', 'duration', 'Time-out voor gateway-verzoeken naar Langfuse en media-upload-URL\'s.', '# LANGFUSE_FANOUT_UPSTREAM_TIMEOUT=30s'],
+    ['LANGFUSE_FANOUT_METRICS_SECRET', 'string', 'Bearer token vereist om het gateway metrics endpoint te scrapen.', '# LANGFUSE_FANOUT_METRICS_SECRET='],
+    ['LANGFUSE_FANOUT_MEMORY_LIMIT_MIB', 'number', 'Geheugenlimiet voor collector in MiB.', '# LANGFUSE_FANOUT_MEMORY_LIMIT_MIB=256'],
+    ['LANGFUSE_FANOUT_MEMORY_SPIKE_LIMIT_MIB', 'number', 'Toegestane geheugenpiek voor de collector in MiB.', '# LANGFUSE_FANOUT_MEMORY_SPIKE_LIMIT_MIB=64'],
+    ['LANGFUSE_FANOUT_BATCH_TIMEOUT', 'duration', 'Time-out voor het legen van de collector-batch.', '# LANGFUSE_FANOUT_BATCH_TIMEOUT=1s'],
+    ['LANGFUSE_FANOUT_BATCH_SEND_SIZE', 'number', 'Batchgrootte voor verzending door collector.', '# LANGFUSE_FANOUT_BATCH_SEND_SIZE=128'],
+    ['LANGFUSE_FANOUT_METADATA_CARDINALITY_LIMIT', 'number', 'Limiet voor kardinaliteit van collector-metadata.', '# LANGFUSE_FANOUT_METADATA_CARDINALITY_LIMIT=1000'],
+  ]}
+/>
+
+In een single-tenant implementatie zonder volledige `LANGFUSE_PUBLIC_KEY` en `LANGFUSE_SECRET_KEY` omgevingsreferenties, kan een geautoriseerde beheerder één versleutelde verbinding configureren onder **Settings → Langfuse**. Volledige omgevingsreferenties krijgen voorrang en verbergen die instelling. Fanout-implementaties gebruiken dezelfde instelling voor de tenant-verbinding wanneer fanout en tenant-export zijn ingeschakeld.
 
 ### OpenTelemetry Tracing [#opentelemetry-tracing]
 
@@ -548,6 +634,8 @@ LibreChat kan browser Real User Monitoring (RUM) telemetrie publiceren naar Hype
 
 In de `publicToken` modus verstuurt de browser telemetrie rechtstreeks naar `RUM_URL` met `RUM_PUBLIC_TOKEN`. In de `proxy` modus verstuurt de browser telemetrie via LibreChat; de backend valideert de gebruikerssessie, verwijdert app-authenticatieheaders en stuurt de telemetrie door naar `RUM_PROXY_TARGET_URL`. Ongeldige of verlopen sessies worden geweigerd met een `204` respons, zodat fouten in browsertelemetrie geen normale API-authenticatiefouten veroorzaken. Proxy-resultaten worden geteld in `rum_proxy_requests_total` met `endpoint` en `result` labels op het LibreChat API `/metrics` endpoint.
 
+Voor gesamplede paginaladingen zendt LibreChat één `page-load-diagnostics` actie uit wanneer First Contentful Paint wordt waargenomen. Deze bevat attributie van navigatietiming, zoals time to first byte, first-byte-to-FCP tijd, service-worker timing, navigatietype en een genormaliseerde route in plaats van onbewerkte conversation IDs. RUM registreert ook gebeurtenissen voor de vroege paginalevenscyclus, service-worker, herstel van verouderde assets en route-wijzigingen in single-page-apps. Diagnostische gegevens zijn 'best-effort' en vertragen nooit het opstarten of activeren herstelgedrag; vroege gebeurtenissen worden genegeerd wanneer de pagina niet wordt gesampled.
+
 ### Configuratiepad - `librechat.yaml` [#configuration-path---librechatyaml]
 
 Specificeer een alternatieve locatie voor het LibreChat configuratiebestand.
@@ -582,6 +670,35 @@ Deployment Skills worden bij het opstarten alleen-lezen geladen vanuit het besta
 />
 
 Herstart LibreChat nadat je deze map of bestanden daarin hebt gewijzigd. Deployment-provided Skills krijgen voorrang op opgeslagen Skills met dezelfde naam.
+
+### Agent Plugins (Experimenteel) [#agent-plugins-experimental]
+
+LibreChat kan bij het opstarten experimentele Agent Plugins laden vanuit directe submappen. Een plugin kan deployment Skills, MCP servers en optionele command hooks bundelen.
+
+<OptionTable
+  options={[
+    [
+      'DEPLOYMENT_PLUGINS_DIR',
+      'string',
+      'Map met Agent Plugin-pakketten. Standaard `./plugin` in de hoofdmap van het project.',
+      '# DEPLOYMENT_PLUGINS_DIR=./plugin',
+    ],
+    [
+      'DEPLOYMENT_PLUGIN_DATA_DIR',
+      'string',
+      'Persistente gegevensroot voor Agent Plugins. Standaard ingesteld op `./data/plugins` in de projectroot.',
+      '# DEPLOYMENT_PLUGIN_DATA_DIR=./data/plugins',
+    ],
+    [
+      'DEPLOYMENT_PLUGIN_HOOKS',
+      'boolean',
+      'Voert vertrouwde `command`-handlers uit die zijn gedeclareerd in `ai.librechat/hooks/hooks.json`. Standaard uitgeschakeld. Commando\'s worden uitgevoerd als onderliggende processen op de API-host.',
+      '# DEPLOYMENT_PLUGIN_HOOKS=true',
+    ],
+  ]}
+/>
+
+Zie [Agent Plugins](/docs/features/agent_plugins) voor de pakketindeling, schemaversies, ondersteunde componenten, prioriteit en huidige beperkingen.
 
 ### Configuratievalidatie [#configuration-validation]
 
@@ -777,7 +894,7 @@ zie: [Anthropic Endpoint](/docs/configuration/pre_configured_ai/anthropic)
       'ANTHROPIC_MODELS',
       'string',
       'Door komma\'s gescheiden lijst met te gebruiken Anthropic-modellen.',
-      '# ANTHROPIC_MODELS=claude-fable-5,claude-opus-4-8,claude-opus-4-7,claude-sonnet-4-6,claude-opus-4-6,claude-opus-4-20250514,claude-3-7-sonnet-20250219,claude-3-5-sonnet-20241022,claude-3-5-haiku-20241022',
+      '# ANTHROPIC_MODELS=claude-fable-5,claude-opus-5,claude-opus-4-8,claude-opus-4-7,claude-sonnet-5,claude-sonnet-4-6,claude-opus-4-6,claude-opus-4-20250514,claude-3-7-sonnet-20250219,claude-3-5-sonnet-20241022,claude-3-5-haiku-20241022',
     ],
     [
       'ANTHROPIC_REVERSE_PROXY',
@@ -815,8 +932,8 @@ Je kunt ook Anthropic Claude modellen gebruiken via Google Cloud Vertex AI. Voor
     [
       'ANTHROPIC_VERTEX_REGION',
       'string',
-      'De Google Cloud regio voor Vertex AI. Standaard: us-east5.',
-      'ANTHROPIC_VERTEX_REGION=us-east5',
+      'De Google Cloud-locatie voor Vertex AI. Standaard: us-east5. Gebruik global, us of eu voor Opus 4.7+, Opus 5, Sonnet 5 en Fable/Mythos 5.',
+      'ANTHROPIC_VERTEX_REGION=global',
     ],
   ]}
 />
@@ -869,7 +986,7 @@ Zie: [AWS Bedrock Setup](/docs/configuration/pre_configured_ai/bedrock)
       'BEDROCK_AWS_MODELS',
       'string',
       'Door komma\'s gescheiden lijst van Bedrock model-ID\'s. Indien weggelaten, worden alle bekende ondersteunde modellen opgenomen.',
-      '# BEDROCK_AWS_MODELS=anthropic.claude-fable-5,anthropic.claude-opus-4-8,anthropic.claude-opus-4-7,anthropic.claude-sonnet-4-6,meta.llama3-1-8b-instruct-v1:0',
+      '# BEDROCK_AWS_MODELS=global.anthropic.claude-fable-5,global.anthropic.claude-opus-5,global.anthropic.claude-opus-4-8,global.anthropic.claude-opus-4-7,global.anthropic.claude-sonnet-5,global.anthropic.claude-sonnet-4-6,meta.llama3-1-8b-instruct-v1:0',
     ],
   ]}
 />
@@ -930,13 +1047,13 @@ Volg deze instructies om het [Google Endpoint](/docs/configuration/pre_configure
       'GOOGLE_MODELS',
       'string',
       'Beschikbare Gemini API Google-modellen, gescheiden door komma\'s.',
-      'GOOGLE_MODELS=gemini-3.1-pro-preview,gemini-3.1-pro-preview-customtools,gemini-2.5-pro,gemini-2.5-flash,gemini-2.5-flash-lite,gemini-2.0-flash,gemini-2.0-flash-lite',
+      'GOOGLE_MODELS=gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.1-pro-preview,gemini-3.1-pro-preview-customtools,gemini-3.1-flash-lite-preview,gemini-2.5-pro,gemini-2.5-flash,gemini-2.5-flash-lite,gemini-2.0-flash,gemini-2.0-flash-lite',
     ],
     [
       'GOOGLE_MODELS',
       'string',
       'Beschikbare Vertex AI Google-modellen, gescheiden door komma\'s.',
-      'GOOGLE_MODELS=gemini-3.1-pro-preview,gemini-3.1-pro-preview-customtools,gemini-2.5-pro,gemini-2.5-flash,gemini-2.5-flash-lite,gemini-2.0-flash-001,gemini-2.0-flash-lite-001',
+      'GOOGLE_MODELS=gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.1-pro-preview,gemini-3.1-pro-preview-customtools,gemini-3.1-flash-lite-preview,gemini-2.5-pro,gemini-2.5-flash,gemini-2.5-flash-lite,gemini-2.0-flash-001,gemini-2.0-flash-lite-001',
     ],
     [
       'GOOGLE_TITLE_MODEL',
@@ -1175,6 +1292,35 @@ Zie gedetailleerde instructies hier: **[OpenWeather](/docs/configuration/tools/o
   ]}
 />
 
+## Bestandsuploads [#file-uploads]
+
+<OptionTable
+  options={[
+    [
+      'FILE_UPLOAD_SSE_ENABLED',
+      'boolean',
+      'Stream upload-antwoorden met heartbeat-events tijdens langdurige bestandsverwerking. Standaard: false.',
+      '# FILE_UPLOAD_SSE_ENABLED=false',
+    ],
+    [
+      'REMOTE_FILE_FETCH_TIMEOUT_MS',
+      'number',
+      'Time-out in milliseconden voor het downloaden van bestanden op afstand aan de serverzijde. Standaard: 15000.',
+      '# REMOTE_FILE_FETCH_TIMEOUT_MS=15000',
+    ],
+    [
+      'REMOTE_FILE_FETCH_MAX_BYTES',
+      'number',
+      'Maximale grootte in bytes voor server-side remote bestanddownloads. Standaard: 536870912 (512 MiB).',
+      '# REMOTE_FILE_FETCH_MAX_BYTES=536870912',
+    ],
+  ]}
+/>
+
+Met `FILE_UPLOAD_SSE_ENABLED=true` ontvangen clients die `text/event-stream` aanvragen heartbeat-events van één seconde terwijl de uploadverwerking nog bezig is, gevolgd door een `data`- of `error`-event en een afsluitend `close`-event. Clients die geen SSE aanvragen, blijven de normale JSON-respons ontvangen. Dit is nuttig wanneer een reverse proxy anders een inactieve verbinding zou sluiten tijdens langdurige OCR-, parsing- of RAG-taken.
+
+De remote fetch controls zijn van toepassing wanneer LibreChat een HTTP- of HTTPS-bestands-URL opneemt in lokale, Firebase-, Azure- of S3/CloudFront-opslag. LibreChat controleert zowel een gedeclareerde `Content-Length` als de daadwerkelijk gestreamde bytes, dus de limiet is nog steeds van toepassing wanneer de externe server de lengte weglaat of onjuist opgeeft. Deze controles staan los van de limieten per upload in [`fileConfig`](/docs/configuration/librechat_yaml/object_structure/file_config).
+
 ## Code Interpreter [#code-interpreter]
 
 De Code Interpreter API biedt een veilige omgeving voor het uitvoeren van code en het beheren van bestanden. Zie: [Code Interpreter API](/docs/features/code_interpreter)
@@ -1190,8 +1336,26 @@ De Code Interpreter API biedt een veilige omgeving voor het uitvoeren van code e
     [
       'LIBRECHAT_CODE_BASEURL',
       'string',
-      'Aangepaste basis-URL voor de Code Interpreter API (alleen voor Enterprise-abonnementen).',
+      'Basis-URL voor uw Code Interpreter-service.',
       '# LIBRECHAT_CODE_BASEURL=https://your-custom-domain.com',
+    ],
+    [
+      'CODE_SANDBOX_PREWARM',
+      'boolean',
+      'Prewarm stateful per-conversation sandboxes parallel aan modelgeneratie. Zet op false om uit te schakelen. Standaard: true.',
+      '# CODE_SANDBOX_PREWARM=true',
+    ],
+    [
+      'CODE_SANDBOX_COLD_AFTER_MS',
+      'number',
+      'Tijd in milliseconden voordat LibreChat een gevolgde sandbox als inactief beschouwt. Standaard: 2100000 (35 minuten).',
+      '# CODE_SANDBOX_COLD_AFTER_MS=2100000',
+    ],
+    [
+      'LIBRECHAT_CODE_IMAGE_CHUNK_BYTES',
+      'number',
+      'Bytes gelezen per sandbox-image-chunk. Verlaag dit wanneer de runner een kleinere stdout-limiet heeft. Standaard: 32768.',
+      '# LIBRECHAT_CODE_IMAGE_CHUNK_BYTES=32768',
     ],
   ]}
 />
@@ -1217,10 +1381,10 @@ Voor meer informatie, inclusief kant-en-klare container-images voor self-hosting
 
 ## Zoeken (Meilisearch) [#search-meilisearch]
 
-Schakelt zoeken in berichten en gesprekken in:
+Zoeken is standaard uitgeschakeld. Schakel het pas in na het configureren van Meilisearch met een unieke master key:
 
 <OptionTable
-  options={[['SEARCH', 'boolean', 'Schakelt zoeken in berichten en gesprekken in.', 'SEARCH=true']]}
+  options={[['SEARCH', 'boolean', 'Schakelt zoeken in berichten en gesprekken in. Standaard: false.', 'SEARCH=true']]}
 />
 
 > Let op: Als je geen Docker gebruikt, vereist dit de installatie van de gratis self-hosted Meilisearch of een betaald abonnement op afstand.
@@ -1251,7 +1415,7 @@ Voor de API-server om verbinding te maken met de zoekserver. Vervang '0.0.0.0' d
   ]}
 />
 
-Deze master key moet ten minste 16 bytes lang zijn en bestaan uit geldige UTF-8-tekens. MeiliSearch zal een foutmelding geven en weigeren op te starten als er geen master key wordt verstrekt of als deze korter is dan 16 bytes. MeiliSearch zal een veilige, automatisch gegenereerde master key voorstellen. Dit is een kant-en-klare veilige key voor docker-compose; je kunt deze vervangen door je eigen key.
+Deze master key moet minimaal 16 bytes aan geldige UTF-8 bevatten. Genereer een unieke waarde en geef dezelfde key aan LibreChat en de Meilisearch service. Zoeken vereist zowel `SEARCH=true` als een geconfigureerde `MEILI_MASTER_KEY`.
 
 <OptionTable
   options={[
@@ -1259,7 +1423,7 @@ Deze master key moet ten minste 16 bytes lang zijn en bestaan uit geldige UTF-8-
       'MEILI_MASTER_KEY',
       'string',
       'De hoofdsleutel voor MeiliSearch.',
-      'MEILI_MASTER_KEY=DrhYf7zENyR6AlUCKmnz0eYASOQdl6zxH7s7MKFSfFCt',
+      'MEILI_MASTER_KEY=',
     ],
   ]}
 />
@@ -1385,6 +1549,19 @@ Deze sectie bevat de configuratie voor:
 - [Registratie en Social Logins](#registration-and-login)
 - [E-mail wachtwoord opnieuw instellen](#password-reset)
 
+### Agent-gespreksbediening [#agent-conversation-controls]
+
+<OptionTable
+  options={[
+    [
+      'STEER_MAX_LENGTH',
+      'number',
+      'Maximaal aantal toegestane tekens in één mid-run Agent steering-bericht. Standaard: 16000.',
+      '# STEER_MAX_LENGTH=16000',
+    ],
+  ]}
+/>
+
 ### Moderatie [#moderation]
 
 Het Automated Moderation System gebruikt een scoresysteem om gebruikersovertredingen bij te houden. Wanneer gebruikers acties uitvoeren zoals overmatig inloggen, registreren of berichten versturen, verzamelen ze overtredingspunten. Bij het bereiken van een ingestelde drempelwaarde worden de gebruiker en hun IP-adres tijdelijk verbannen. Dit systeem waarborgt de platformbeveiliging door snelle of verdachte activiteiten te monitoren en te bestraffen.
@@ -1469,6 +1646,63 @@ Voorkomt brute-force-aanvallen en spamregistraties door het aantal inlogpogingen
   ]}
 />
 
+#### Wachtwoord opnieuw instellen en rate limiting voor e-mailverificatie [#password-reset-and-email-verification-rate-limiting]
+
+LibreChat past afzonderlijke IP-gebaseerde limieten toe op het aanvragen van een e-mail en het indienen van de token uit die e-mail. Dit voorkomt herhaaldelijk raden van tokens zonder dat implementaties gedwongen worden dezelfde limiet te gebruiken voor e-mailbezorging en tokenvalidatie.
+
+<OptionTable
+  options={[
+    [
+      'RESET_PASSWORD_MAX',
+      'integer',
+      'Maximaal aantal e-mailverzoeken voor wachtwoordherstel per IP binnen RESET_PASSWORD_WINDOW. Standaard: 2.',
+      '# RESET_PASSWORD_MAX=2',
+    ],
+    [
+      'RESET_PASSWORD_WINDOW',
+      'integer',
+      'Venster voor wachtwoordherstel-e-mailverzoek in minuten. Standaard: 2.',
+      '# RESET_PASSWORD_WINDOW=2',
+    ],
+    [
+      'RESET_PASSWORD_SUBMISSION_MAX',
+      'integer',
+      'Maximaal aantal inzendingen van wachtwoordherstel-tokens per IP. Standaard ingesteld op RESET_PASSWORD_MAX, daarna 2.',
+      '# RESET_PASSWORD_SUBMISSION_MAX=2',
+    ],
+    [
+      'RESET_PASSWORD_SUBMISSION_WINDOW',
+      'integer',
+      'Venster voor het indienen van het wachtwoordherstel-token in minuten. Standaard ingesteld op RESET_PASSWORD_WINDOW, daarna 2.',
+      '# RESET_PASSWORD_SUBMISSION_WINDOW=2',
+    ],
+    [
+      'VERIFY_EMAIL_MAX',
+      'integer',
+      'Maximaal aantal verzoeken voor het opnieuw verzenden van verificatie-e-mails per IP binnen VERIFY_EMAIL_WINDOW. Standaard: 2.',
+      '# VERIFY_EMAIL_MAX=2',
+    ],
+    [
+      'VERIFY_EMAIL_WINDOW',
+      'integer',
+      'Venster voor het opnieuw verzenden van verificatie-e-mails in minuten. Standaard: 2.',
+      '# VERIFY_EMAIL_WINDOW=2',
+    ],
+    [
+      'VERIFY_EMAIL_SUBMISSION_MAX',
+      'integer',
+      'Maximaal aantal e-mailverificatietoken-inzendingen per IP. Standaard ingesteld op VERIFY_EMAIL_MAX, daarna 2.',
+      '# VERIFY_EMAIL_SUBMISSION_MAX=2',
+    ],
+    [
+      'VERIFY_EMAIL_SUBMISSION_WINDOW',
+      'integer',
+      'Tijdsvenster voor het indienen van het e-mailverificatietoken in minuten. Standaard ingesteld op VERIFY_EMAIL_WINDOW, daarna 2.',
+      '# VERIFY_EMAIL_SUBMISSION_WINDOW=2',
+    ],
+  ]}
+/>
+
 #### Score voor elke overtreding [#score-for-each-violation]
 
 <OptionTable
@@ -1537,14 +1771,26 @@ Voorkomt brute-force-aanvallen en spamregistraties door het aantal inlogpogingen
     [
       'RESET_PASSWORD_VIOLATION_SCORE',
       'integer',
-      'Score voor schendingen bij het opnieuw instellen van wachtwoorden.',
-      'RESET_PASSWORD_VIOLATION_SCORE=0',
+      'Score voor schendingen bij verzoeken voor wachtwoordherstel via e-mail. Standaard: 1.',
+      '# RESET_PASSWORD_VIOLATION_SCORE=1',
     ],
     [
       'VERIFY_EMAIL_VIOLATION_SCORE',
       'integer',
-      'Score voor schendingen van e-mailverificatie.',
-      'VERIFY_EMAIL_VIOLATION_SCORE=0',
+      'Score voor overtredingen bij het opnieuw verzenden van verificatie-e-mails. Standaard: 1.',
+      '# VERIFY_EMAIL_VIOLATION_SCORE=1',
+    ],
+    [
+      'RESET_PASSWORD_SUBMISSION_VIOLATION_SCORE',
+      'integer',
+      'Score voor schendingen bij het indienen van een password-reset token. Standaard: 1.',
+      '# RESET_PASSWORD_SUBMISSION_VIOLATION_SCORE=1',
+    ],
+    [
+      'VERIFY_EMAIL_SUBMISSION_VIOLATION_SCORE',
+      'integer',
+      'Score voor schendingen bij het indienen van e-mailverificatietokens. Standaard: 1.',
+      '# VERIFY_EMAIL_SUBMISSION_VIOLATION_SCORE=1',
     ],
     [
       'TOOL_CALL_VIOLATION_SCORE',
@@ -1632,6 +1878,27 @@ Voorkomt brute-force-aanvallen en spamregistraties door het aantal inlogpogingen
       'integer',
       'Bepaalt in minuten het tijdsvenster voor `MESSAGE_USER_MAX` berichten.',
       'MESSAGE_USER_WINDOW=1',
+    ],
+  ]}
+/>
+
+##### Queued Attachment TTL Limiter: [#queued-attachment-ttl-limiter]
+
+Het `/files/usage` endpoint vernieuwt een begrensde TTL-reservering voor bijlagen die wachten in berichten van Agenten in de wachtrij. Het heeft een aparte limiet per gebruiker, zodat metadata-vernieuwingen niet ten koste gaan van het uploadquotum.
+
+<OptionTable
+  options={[
+    [
+      'FILE_USAGE_USER_MAX',
+      'integer',
+      'Maximaal aantal vernieuwingsverzoeken voor queued-attachment TTL per gebruiker en venster. Standaard: 120.',
+      '# FILE_USAGE_USER_MAX=120',
+    ],
+    [
+      'FILE_USAGE_USER_WINDOW',
+      'integer',
+      'Tijdsvenster in minuten voor FILE_USAGE_USER_MAX. Standaard: 15.',
+      '# FILE_USAGE_USER_WINDOW=15',
     ],
   ]}
 />
@@ -1937,6 +2204,12 @@ zie: **[Authenticatiesysteem](/docs/configuration/authentication)**
       'ALLOW_EMAIL_LOGIN=true',
     ],
     [
+      'ALLOW_EMAIL_LOGIN_OVERRIDE',
+      'boolean',
+      'Sta directe API-e-mailaanmelding toe terwijl ALLOW_EMAIL_LOGIN=false. Elk gebruik wordt gelogd. Standaard: false.',
+      '# ALLOW_EMAIL_LOGIN_OVERRIDE=false',
+    ],
+    [
       'ALLOW_REGISTRATION',
       'boolean',
       'Schakel e-mailregistratie voor nieuwe gebruikers in of uit.',
@@ -2014,8 +2287,7 @@ zie: **[Authenticatiesysteem](/docs/configuration/authentication)**
 
 - JWT-instellingen:
 
-Je moet nieuwe veilige waarden gebruiken. De gegeven voorbeelden zijn 32-byte sleutels (64 tekens in hex).
-Gebruik deze replit om er snel een paar te genereren: **[JWT Keys](/toolkit/creds_generator)**
+Gebruik unieke waarden van ten minste 32 bytes. Genereer permanente waarden voor productie met de [Credentials Generator](/toolkit/creds_generator).
 
 <OptionTable
   options={[
@@ -2023,16 +2295,18 @@ Gebruik deze replit om er snel een paar te genereren: **[JWT Keys](/toolkit/cred
       'JWT_SECRET',
       'string (hex)',
       'JWT geheime sleutel.',
-      'JWT_SECRET=16f8c0ef4a5d391b26034086c628469d3f9f497f08163ab9b40137092f2909ef',
+      'JWT_SECRET=',
     ],
     [
       'JWT_REFRESH_SECRET',
       'string (hex)',
       'JWT refresh secret key.',
-      'JWT_REFRESH_SECRET=eaa5191f2914e30b9387fd84e254e4ba6fc51b4654968a9b0803b456a54b8418',
+      'JWT_REFRESH_SECRET=',
     ],
   ]}
 />
+
+Lege JWT-geheimen gebruiken dezelfde tijdelijke-referentie bootstrap als beschreven onder [Credentials Configuration](#credentials-configuration). Stel in productieomgevingen en horizontaal geschaalde implementaties permanente waarden in en deel deze tussen replica's, zodat uitgegeven sessies geldig blijven.
 
 ### Sociale logins [#social-logins]
 
@@ -2977,7 +3251,7 @@ Bepaal hoe groot gegenereerde bestanden mogen zijn voordat LibreChat de extracti
     [
       'FILE_PREVIEW_MAX_EXTRACT_BYTES',
       'number',
-      'Maximale bronbestandsgrootte in bytes voor inline voorbeelden van code-execution artefacten. Standaard: 2097152 (2 MiB). Gerenderde HTML-voorbeelden hebben nog steeds een aparte limiet, dus zeer uitgebreide bestanden kunnen het voorbeeld overslaan, zelfs onder deze waarde.',
+      'Maximale bronbestandsgrootte in bytes voor inline previews van code-execution artefacten, inclusief DOCX, XLSX, CSV, PPTX, POTX, tekst- en PDF-achtige bestanden. Standaard: 2097152 (2 MiB). Gerenderde HTML-previews hebben nog steeds een aparte limiet, dus zeer uitgebreide bestanden kunnen de preview overslaan, zelfs onder deze waarde.',
       '# FILE_PREVIEW_MAX_EXTRACT_BYTES=2097152',
     ],
   ]}
@@ -3075,6 +3349,18 @@ Voor gedetailleerde configuratie en voorbeelden, zie: **[Redis Configuration Gui
       '# USE_REDIS_STREAMS=true',
     ],
     [
+      'GENERATION_PROTOCOL_VERSION',
+      'integer',
+      'Generatiestroomprotocol (1 of 2). Redis-gebaseerde implementaties gebruiken standaard v1 voor rolling-upgrade-veiligheid totdat ze expliciet worden overgezet; in-memory streams gebruiken standaard v2.',
+      '# GENERATION_PROTOCOL_VERSION=2',
+    ],
+    [
+      'STREAM_DELTA_COALESCE_MS',
+      'integer',
+      'Groepeer Redis stream delta-publicaties binnen dit aantal milliseconden. Niet ingesteld of 0 schakelt groepering uit; 25 wordt aanbevolen en waarden zijn gemaximeerd op 1000.',
+      '# STREAM_DELTA_COALESCE_MS=25',
+    ],
+    [
       'REDIS_URI',
       'string',
       'Redis-verbindings-URI. Voor een enkele instantie: `redis://host:port`. Voor een cluster: door komma\'s gescheiden URI\'s.',
@@ -3141,6 +3427,30 @@ Voor gedetailleerde configuratie en voorbeelden, zie: **[Redis Configuration Gui
       '# FORCED_IN_MEMORY_CACHE_NAMESPACES=ROLES,MESSAGES',
     ],
     [
+      'AUTH_USER_CACHE_MODE',
+      'string',
+      'Stel exact in op `on` om geauthenticeerde gebruikersdocumenten te cachen tijdens verzoekpieken. Vereist Redis en een door Redis ondersteunde AUTH_USER_DOC-naamruimte. Standaard: off.',
+      '# AUTH_USER_CACHE_MODE=off',
+    ],
+    [
+      'USER_PRINCIPALS_CACHE_TTL_MS',
+      'number',
+      'TTL in milliseconden voor gecachte groepslidmaatschappen die worden gebruikt bij ACL-controles. Stel in op 0 om uit te schakelen. Standaard: 300000.',
+      '# USER_PRINCIPALS_CACHE_TTL_MS=300000',
+    ],
+    [
+      'USER_PRINCIPALS_LOCK_TTL_MS',
+      'number',
+      'Redis lock TTL in milliseconden voor cross-container principal-cache builds. Stel in op 0 om build-locking uit te schakelen. Standaard: 5000.',
+      '# USER_PRINCIPALS_LOCK_TTL_MS=5000',
+    ],
+    [
+      'USER_PRINCIPALS_LOCK_WAIT_MS',
+      'number',
+      'Maximale wachttijd voor een andere container om de principal-cache te vullen voordat de database direct wordt gelezen. Standaard ingesteld op USER_PRINCIPALS_LOCK_TTL_MS.',
+      '# USER_PRINCIPALS_LOCK_WAIT_MS=5000',
+    ],
+    [
       'REDIS_USE_ALTERNATIVE_DNS_LOOKUP',
       'boolean',
       'Schakel alternatieve dnsLookup in voor TLS-verbindingen met AWS Elasticache. Vereist voor Elasticache-clusters met TLS.',
@@ -3152,6 +3462,8 @@ Voor gedetailleerde configuratie en voorbeelden, zie: **[Redis Configuration Gui
 Opmerkingen:
 
 - Wanneer `USE_REDIS=true` is ingesteld, moet je `REDIS_URI` opgeven, anders zal de applicatie een foutmelding geven.
+- Voor generatiestreams die door Redis worden ondersteund, moet u eerst de v2-compatibele release implementeren op elke replica met `GENERATION_PROTOCOL_VERSION` uitgeschakeld (of `1`). Nadat oude actieve generaties zijn voltooid, stelt u deze in op `2` tijdens een tweede uitrol. Rol niet terug naar een pre-v2 image terwijl v2-generaties nog actief zijn. Zie [Generation Protocol Rollout](/docs/configuration/redis#generation-protocol-rollout).
+- Schakel `STREAM_DELTA_COALESCE_MS` pas in nadat elke replica batch-frames ondersteunt. Oudere abonnees laten gecombineerde frames vallen. Zie [Stream Delta Coalescing](/docs/configuration/redis#stream-delta-coalescing).
 - Voor Redis Cluster-modus, geef meerdere URI's op: `redis://node1:7001,redis://node2:7002,redis://node3:7003` (cluster-modus wordt automatisch gedetecteerd).
 - Voor managed Redis-services met één endpoint die keys intern sharden, behoud `USE_REDIS_CLUSTER=false` en stel `REDIS_CLUSTER_SAFE_DELETE=true` in als cache-clears mislukken met `CROSSSLOT` fouten.
 - Gebruik het `rediss://` protocol voor TLS-verbindingen en stel `REDIS_CA` in als uw CA niet publiekelijk wordt vertrouwd.

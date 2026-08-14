@@ -12,17 +12,33 @@ endpoints:
   agents:
     recursionLimit: 50
     maxRecursionLimit: 100
+    maxToolCallArgBytes: 65536
+    maxDeltaEventsPerTurn: 100000
+    maxToolCallArgBytesByTool:
+      create_file: 131072
     disableBuilder: false
     # (optional) Agent Capabilities available to all users. Omit the ones you wish to exclude. Defaults to list below.
-    # Add "programmatic_tools" with "execute_code" to enable Programmatic Tool Calling for MCP tools.
-    # capabilities: ["deferred_tools", "execute_code", "file_search", "web_search", "artifacts", "subagents", "actions", "context", "skills", "tools", "chain", "ocr"]
+    # Opt-in capabilities: "programmatic_tools", "stateful_code_sessions", "run_in_background", and "tool_intents".
+    # capabilities: ["deferred_tools", "execute_code", "file_search", "web_search", "artifacts", "subagents", "actions", "context", "skills", "memory", "ask_user_question", "tools", "chain", "ocr"]
     # (optional) File citation configuration for file_search capability
     maxCitations: 30 # Maximum total citations in responses (1-50)
     maxCitationsPerFile: 7 # Maximum citations from each file (1-10)
     minRelevanceScore: 0.45 # Minimum relevance score threshold (0.0-1.0)
     titleTiming: immediate
+    activityLabel: true
+    activityModel: gpt-4.1-nano
+    activityPhaseLabel: true
+    activityPhaseMaxPerRun: 5
     skills:
       maxCatalogSkills: 20
+    toolApproval:
+      enabled: true
+      mode: default
+      deny: ['mcp:*:delete_*']
+      ask: ['mcp:*:*']
+    checkpointer:
+      type: mongo
+      ttl: 86400
     remoteApi:
       auth:
         oidc:
@@ -77,6 +93,51 @@ maxRecursionLimit: 100
 
 Untuk informasi lebih lanjut mengenai langkah-langkah agen, lihat [Max Agent Steps](/docs/features/agents#max-agent-steps).
 
+## Pemutus arus stream [#stream-circuit-breakers]
+
+Pengaturan ini menghentikan eksekusi Agent ketika aliran (stream) penyedia tampak menghasilkan argumen alat yang tidak terkendali atau urutan peristiwa delta yang tidak terbatas.
+
+<OptionTable
+  options={[
+    [
+      'maxToolCallArgBytes',
+      'Number',
+      'Batas maksimum akumulasi byte untuk argumen satu panggilan tool yang di-stream. Atur ke 0 untuk menonaktifkan pelindung global.',
+      '65536',
+    ],
+    [
+      'maxDeltaEventsPerTurn',
+      'Number',
+      'Jumlah maksimum peristiwa yang dialirkan untuk satu giliran pembuatan model. Atur ke 0 atau abaikan untuk menonaktifkan pelindung ini.',
+      '0 (disabled)',
+    ],
+    [
+      'maxToolCallArgBytesByTool',
+      'Object',
+      'Penggantian byte argumen per-alat yang dikunci berdasarkan nama alat yang menghadap model. Nilai 0 menonaktifkan pelindung untuk alat tersebut.',
+      'create_file: 131072',
+    ],
+  ]}
+/>
+
+LibreChat menggunakan batas argumen global 64 KiB dan menyertakan penggantian (override) 128 KiB untuk `create_file`, yang payload sahnya sering kali lebih besar. Entri dalam `maxToolCallArgBytesByTool` akan menggabungkan penggantian bawaan tersebut. Jika salah satu batasan terlampaui, LibreChat akan membatalkan stream penyedia yang sedang berjalan dan melaporkan batas mana yang terlampaui.
+
+```yaml filename="endpoints / agents / stream circuit breakers"
+maxToolCallArgBytes: 65536
+maxDeltaEventsPerTurn: 100000
+maxToolCallArgBytesByTool:
+  create_file: 262144
+  large_import: 524288
+```
+
+Untuk menonaktifkan setiap penjaga ukuran argumen, atur batas global dan penggantian `create_file` bawaan ke `0`:
+
+```yaml
+maxToolCallArgBytes: 0
+maxToolCallArgBytesByTool:
+  create_file: 0
+```
+
 ## titleTiming
 
 <OptionTable
@@ -102,6 +163,22 @@ Untuk informasi lebih lanjut mengenai langkah-langkah agen, lihat [Max Agent Ste
 ```yaml filename="endpoints / agents / titleTiming"
 titleTiming: immediate
 ```
+
+## activityLabel
+
+Atur `activityLabel: true` untuk mengelompokkan setiap blok penalaran Agen dan panggilan alat di bawah satu header satu baris yang dibuat secara otomatis. Gunakan `activityModel`, `activityEndpoint`, `activityPrompt`, `activityMaxPerRun`, dan `activityCharLimit` untuk mengontrol panggilan model tambahan beserta biayanya. Lihat [Agent Activity Groups](/docs/configuration/librechat_yaml/object_structure/shared_endpoint_settings#agent-activity-groups) untuk referensi bidang lengkap dan aturan prioritas.
+
+```yaml filename="endpoints / agents / activity groups"
+activityLabel: true
+activityEndpoint: openAI
+activityModel: gpt-4.1-nano
+activityMaxPerRun: 20
+activityCharLimit: 600
+activityPhaseLabel: true
+activityPhaseMaxPerRun: 5
+```
+
+`activityPhaseLabel` dapat secara independen menambahkan satu ringkasan induk yang diciutkan di sekitar setiap fase proses yang berisi setidaknya dua aktivitas logis. Gunakan `activityPhaseModel`, `activityPhaseEndpoint`, `activityPhasePrompt`, dan `activityPhaseMaxPerRun` untuk menyesuaikan panggilan tersebut; `activityCharLimit` digunakan bersama dengan label aktivitas anak.
 
 ## disableBuilder
 
@@ -162,9 +239,9 @@ allowedProviders:
   ]}
 />
 
-**Default:** `["deferred_tools", "execute_code", "file_search", "web_search", "artifacts", "subagents", "actions", "context", "skills", "tools", "chain", "ocr"]`
+**Default:** `["deferred_tools", "execute_code", "file_search", "web_search", "artifacts", "subagents", "actions", "context", "skills", "memory", "ask_user_question", "tools", "chain", "ocr"]`
 
-Programmatic Tool Calling bersifat opsional (opt-in). Tambahkan `programmatic_tools` bersama dengan `execute_code` hanya jika penyebaran Code Interpreter Anda menyertakan komponen Tool Call Server.
+`programmatic_tools`, `stateful_code_sessions`, `run_in_background`, dan `tool_intents` bersifat opt-in dan harus ditambahkan secara eksplisit. Programmatic tools dan stateful sessions juga memerlukan `execute_code` dan deployment Code Interpreter yang kompatibel. Eksekusi kode di latar belakang memerlukan `run_in_background`, `execute_code`, dan Code Interpreter.
 
 **Contoh:**
 
@@ -182,12 +259,116 @@ capabilities:
   - 'actions'
   - 'context'
   - 'skills'
+  - 'memory'
+  - 'ask_user_question'
   - 'tools'
   - 'chain'
   - 'ocr'
+  # Optional: reuse one Code Interpreter workspace per conversation.
+  # - 'stateful_code_sessions'
+  # Optional: allow selected eligible MCP and Code Interpreter tools to run as background tasks.
+  # - 'run_in_background'
+  # Optional: show live model-written intent labels for native and selected MCP tools.
+  # - 'tool_intents'
 ```
 
 **Catatan:** Bidang ini bersifat opsional. Jika diabaikan, perilaku defaultnya adalah menyertakan semua kapabilitas yang tercantum dalam default.
+
+## toolApproval
+
+Mengontrol peninjauan manusia untuk pemanggilan alat Agent. Fitur ini dinonaktifkan secara default. Saat diaktifkan, pemanggilan yang cocok akan dijeda hingga pengguna mengirimkan keputusan yang diizinkan, seperti menyetujui, menolak, atau mengedit argumen.
+
+<OptionTable
+  options={[
+    ['enabled', 'Boolean', 'Mengaktifkan persetujuan alat untuk endpoint Agents.', 'false'],
+    [
+      'mode',
+      'String',
+      'Mengatur perilaku panggilan yang tidak cocok: `default` akan bertanya, `dontAsk` akan menolak, dan `bypass` akan menyetujui kecuali jika ditolak.',
+      'default',
+    ],
+    ['allow', 'Array of strings', 'Pola glob untuk panggilan yang dapat dijalankan tanpa meminta konfirmasi.', ''],
+    ['deny', 'Array of strings', 'Pola glob untuk panggilan yang selalu ditolak. Aturan penolakan lebih diutamakan.', ''],
+    ['ask', 'Array of strings', 'Pola glob untuk panggilan yang selalu memerlukan peninjauan.', ''],
+    [
+      'reason',
+      'String',
+      'Penjelasan opsional yang ditampilkan dalam prompt persetujuan. Gunakan `{tool}` untuk menyisipkan nama alat.',
+      '',
+    ],
+    [
+      'hooks',
+      'Array of objects',
+      'Modul kebijakan terprogram tepercaya untuk keputusan yang sadar konteks. Hooks hanya dapat memperketat kebijakan statis.',
+      '',
+    ],
+  ]}
+/>
+
+Pola menggunakan pencocokan glob. Alat MCP dapat dicakup dengan `mcp:<server>:<tool>`; sebagai contoh, `mcp:github:*` mencocokkan setiap alat dari server `github`. Evaluasi memberikan prioritas tertinggi pada `deny`, termasuk dalam mode `bypass`.
+
+```yaml filename="endpoints / agents / toolApproval"
+toolApproval:
+  enabled: true
+  mode: default
+  allow:
+    - 'mcp:analytics:read_*'
+  deny:
+    - 'mcp:*:delete_*'
+  ask:
+    - 'mcp:*:*'
+  reason: 'Review {tool} before it runs.'
+```
+
+Hooks dimuat sekali saat server dimulai dan dieksekusi dalam proses LibreChat. Setiap entri menerima `module`, regex `matcher` nama-alat opsional, dan objek `options` opsional yang diteruskan ke builder modul tersebut. Hanya muat kode yang Anda percayai. Penggantian (override) per-peran atau per-penyewa tidak memuat ulang modul hook; implementasikan perilaku kontekstual di dalam hook tersebut.
+
+```yaml filename="endpoints / agents / toolApproval / hooks"
+toolApproval:
+  enabled: true
+  hooks:
+    - module: '@acme/librechat-approval-hook'
+      matcher: '^mcp:production:'
+      options:
+        requireTicket: true
+```
+
+## checkpointer
+
+Mengonfigurasi penyimpanan untuk eksekusi Agent yang dijeda oleh persetujuan alat (tool approval) atau Ask User. Jika salah satu fitur memerlukan checkpointer dan blok ini dihilangkan, LibreChat akan menggunakan MongoDB utama dengan jendela keputusan 24 jam.
+
+<OptionTable
+  options={[
+    [
+      'type',
+      'String',
+      '`mongo` mempertahankan eksekusi yang dijeda di seluruh proses mulai ulang dan replika; `memory` bersifat lokal terhadap proses dan ditujukan untuk pengembangan.',
+      'mongo',
+    ],
+    ['ttl', 'Number', 'Berapa lama proses yang dijeda menunggu keputusan, dalam detik.', '86400'],
+    [
+      'checkpointCollectionName',
+      'String',
+      'Penggantian nama koleksi checkpoint MongoDB opsional.',
+      'agent_checkpoints',
+    ],
+    [
+      'checkpointWritesCollectionName',
+      'String',
+      'Penggantian nama koleksi checkpoint-write MongoDB opsional.',
+      'agent_checkpoint_writes',
+    ],
+  ]}
+/>
+
+```yaml filename="endpoints / agents / checkpointer"
+checkpointer:
+  type: mongo
+  ttl: 86400
+```
+
+Gunakan `type: memory` hanya untuk deployment pengembangan proses tunggal. Run yang dijeda dan disimpan di dalam memori tidak dapat dilanjutkan setelah restart atau pada replika lain.
+
+Checkpoint MongoDB mencatat peringatan saat status yang diserialisasi melebihi 8 MiB dan menolak jeda persisten di atas 15 MiB, menyisakan ruang di bawah batas dokumen 16 MiB MongoDB. Media yang disisipkan (inlined) atau output alat yang besar adalah penyebab umum; mulailah percakapan baru atau kurangi konteksnya jika sebuah proses melaporkan `CHECKPOINT_TOO_LARGE`.
 
 ## skills
 
@@ -329,6 +510,7 @@ Kolom `capabilities` memungkinkan Anda untuk mengaktifkan atau menonaktifkan fun
 - **deferred_tools**: Memungkinkan agen untuk menemukan MCP tools yang ditangguhkan (deferred) saat runtime alih-alih memuat setiap tool ke dalam konteks di awal.
 - **programmatic_tools**: Mengaktifkan Pemanggilan Alat Programatis (Programmatic Tool Calling) untuk alat MCP yang ditandai sebagai Programmatic di Agent Builder. Memerlukan `execute_code` dan deployment Code Interpreter dengan komponen Tool Call Server. Kemampuan ini bersifat opt-in dan tidak diaktifkan secara default.
 - **execute_code**: Mengizinkan agen untuk mengeksekusi kode.
+- **stateful_code_sessions**: Memungkinkan agen yang memilih untuk ikut serta menggunakan kembali satu ruang kerja Code Interpreter per percakapan. Memerlukan `execute_code`, deployment Code Interpreter yang kompatibel, dan pengaturan Advanced per-agen. Kemampuan ini sangat eksperimental, tidak diaktifkan secara default, dan dapat berubah secara substansial selama eksperimen; jangan anggap perilaku atau konfigurasinya saat ini sebagai kontrak produksi yang stabil.
 - **file_search**: Memungkinkan agen untuk mencari dan berinteraksi dengan file. Saat diaktifkan, perilaku sitasi dikendalikan oleh pengaturan `maxCitations`, `maxCitationsPerFile`, dan `minRelevanceScore`.
 - **web_search**: Mengaktifkan fungsionalitas pencarian web untuk agen, memungkinkan mereka untuk mencari dan mengambil informasi dari internet.
 - **artifacts**: Memungkinkan agen untuk menghasilkan artefak interaktif (komponen React, HTML, diagram Mermaid).
@@ -336,9 +518,13 @@ Kolom `capabilities` memungkinkan Anda untuk mengaktifkan atau menonaktifkan fun
 - **actions**: Mengizinkan agen untuk melakukan tindakan yang telah ditentukan sebelumnya.
 - **context**: Mengaktifkan fungsionalitas "Upload as Text" dalam obrolan, dan "File Context" untuk agen, yang memungkinkan pengguna untuk mengunggah file dan kontennya diekstraksi serta disertakan secara langsung ke dalam percakapan.
 - **skills**: Mengaktifkan Skills di panel samping, pemanggilan manual `$`, skills yang dipanggil model, dan daftar izin (allowlist) skill agen. Lihat [Skills](/docs/features/skills).
+- **memory**: Memungkinkan agen menggunakan `set_memory` dan `delete_memory` saat memory dikonfigurasi dan pengguna memiliki akses. Diaktifkan secara default; dihapus saat runtime ketika memory dinonaktifkan.
+- **ask_user_question**: Memungkinkan agen untuk menjeda guna mengajukan satu hingga empat pertanyaan terkait dalam satu formulir dan melanjutkannya dengan jawaban tersebut. Diaktifkan secara default.
 - **tools**: Memberikan agen akses ke berbagai tools.
 - **chain**: Mengaktifkan fitur Beta untuk perantaian agen (agent chaining), yang juga dikenal sebagai alur kerja Mixture-of-Agents (MoA).
 - **ocr**: Secara opsional meningkatkan fitur "Upload as Text" dalam obrolan, dan "File Context" untuk agen, yang memungkinkan file diunggah dan diproses dengan OCR. **Memerlukan layanan OCR untuk dikonfigurasi.**
+- **run_in_background**: Membuat eksekusi Code Interpreter dan alat shell memenuhi syarat untuk berjalan di latar belakang secara default dan mengaktifkan keikutsertaan latar belakang per-alat untuk alat MCP. Agen dapat secara eksplisit menolak Code Interpreter. Pengaturan ini mengizinkan eksekusi latar belakang; model memutuskan per panggilan apakah akan menggunakannya atau tidak. Memerlukan `execute_code` dan deployment Code Interpreter yang dikonfigurasi untuk kode. Kemampuan ini tidak diaktifkan secara default.
+- **tool_intents**: Menambahkan label intent yang ditulis oleh model secara langsung ke panggilan tool yang memenuhi syarat. Tool bawaan, termasuk tool Code Interpreter, ikut serta secara otomatis; tool MCP dapat diaktifkan satu per satu atau secara massal di Agent Builder. Model specs menggunakan `describeIntent`. Kemampuan ini tidak diaktifkan secara default.
 
 Dengan menentukan kapabilitas, Anda dapat mengontrol fitur yang tersedia bagi pengguna saat berinteraksi dengan agen.
 
@@ -359,6 +545,10 @@ endpoints:
       # Optional: enables Programmatic Tool Calling for MCP tools marked Programmatic in the Agent Builder.
       # - 'programmatic_tools'
       - 'execute_code'
+      # Optional: makes Code Interpreter background-eligible and enables selected MCP tools.
+      # - 'run_in_background'
+      # Optional: enables live intent labels for native and selected MCP tools.
+      # - 'tool_intents'
       - 'file_search'
       - 'skills'
       - 'subagents'
@@ -376,6 +566,8 @@ Dalam contoh ini:
 - Hanya sumber dengan relevansi 60%+ yang disertakan
 - Agen LibreChat memiliki akses ke eksekusi kode, pencarian file (dengan sitasi), Skills, Subagents, actions, artifacts, konteks file, layanan ocr jika dikonfigurasi, dan kemampuan pencarian web.
 - Programmatic Tool Calling tetap dinonaktifkan kecuali Anda menambahkan kapabilitas `programmatic_tools` bersama dengan `execute_code`
+- Pemanggilan alat latar belakang tetap dinonaktifkan kecuali Anda menambahkan `run_in_background`; alat Code Interpreter kemudian akan memenuhi syarat secara default, sementara alat MCP masih memerlukan pemilihan per-alat.
+- Label intent alat tetap dinonaktifkan kecuali Anda menambahkan `tool_intents`; alat bawaan kemudian akan ikut serta secara otomatis, sementara alat MCP masih memerlukan pemilihan per alat.
 
 ## remoteApi
 

@@ -17,6 +17,9 @@ Panduan ini membahas cara mengonfigurasi Redis untuk caching dan penyimpanan ses
 - [Penyesuaian Performa](#performance-tuning)
 - [Contoh Konfigurasi](#configuration-examples)
 - [Resumable Streams](#resumable-streams)
+- [Peluncuran Protokol Generasi](#generation-protocol-rollout)
+- [Stream Delta Coalescing](#stream-delta-coalescing)
+- [Koordinasi Katalog MCP](#mcp-catalog-coordination)
 
 ## Pengaturan Dasar [#basic-setup]
 
@@ -324,6 +327,42 @@ REDIS_URI=redis://127.0.0.1:6379
 # USE_REDIS_STREAMS=true  # Enabled by default when USE_REDIS=true
 ```
 
+### Peluncuran Protokol Generasi [#generation-protocol-rollout]
+
+Protokol generasi v2 menambahkan antrean persisten, interupsi, jeda/lanjutkan, dan jaminan pemulihan yang digunakan oleh proses Agent saat ini. Deployment yang didukung Redis sengaja tetap menggunakan protokol v1 saat `GENERATION_PROTOCOL_VERSION` tidak diatur agar replika yang menjalankan versi LibreChat berbeda dapat hidup berdampingan selama peningkatan bertahap (rolling upgrade).
+
+Gunakan peluncuran dua tahap:
+
+1. Deploy image LibreChat yang mendukung v2 ke **setiap** replika dengan `GENERATION_PROTOCOL_VERSION` yang tidak disetel atau disetel ke `1`.
+2. Tunggu hingga generasi aktif yang dimiliki oleh gambar sebelumnya selesai atau dikosongkan.
+3. Atur `GENERATION_PROTOCOL_VERSION=2` dan luncurkan kembali image yang sama.
+
+```bash filename=".env"
+USE_REDIS=true
+USE_REDIS_STREAMS=true
+GENERATION_PROTOCOL_VERSION=2
+```
+
+<Callout type="warning" title="Keamanan deployment bergulir">
+  Jangan aktifkan protokol v2 sampai setiap replika mendukungnya. Setelah generasi v2 dimulai, jangan lakukan *rollback* ke *image* LibreChat pra-v2 sampai generasi tersebut habis; replika yang lebih lama tidak dapat beroperasi dengan aman pada *state* Redis mereka.
+</Callout>
+
+Aliran pembuatan dalam memori (in-memory generation streams) tidak membagikan status di seluruh replika dan menggunakan protokol v2 secara default, sehingga tidak memerlukan peralihan ini.
+
+### Penggabungan Delta Stream [#stream-delta-coalescing]
+
+Stream yang didukung Redis dapat melakukan batch pada publikasi delta untuk mengurangi skrip Redis, round trip, dan CPU pada tingkat token yang tinggi:
+
+```bash filename=".env"
+STREAM_DELTA_COALESCE_MS=25
+```
+
+Pengaturan ini nonaktif jika tidak diatur atau diatur ke `0`, `25` milidetik adalah nilai yang disarankan, dan nilai di atas `1000` akan dibatasi. Batching dapat menambah latensi pengiriman hingga satu jendela yang dikonfigurasi.
+
+<Callout type="warning" title="Keamanan deployment bergulir">
+  Aktifkan coalescing hanya setelah setiap replika LibreChat mendukung batch frames. Subscriber versi lama akan membuang frame yang digabungkan (coalesced).
+</Callout>
+
 ### Manfaat Utama (untuk Penskalaan Horizontal) [#key-benefits-for-horizontal-scaling]
 
 - **Cross-instance continuity**: Pengguna dapat memulai pembuatan di satu server dan melanjutkannya di server lain
@@ -343,3 +382,9 @@ REDIS_URI=redis://node1:7001,redis://node2:7002,redis://node3:7003
 ```
 
 Lihat [Resumable Streams](/docs/features/resumable_streams) untuk detail lebih lanjut mengenai fitur ini.
+
+## Koordinasi Katalog MCP [#mcp-catalog-coordination]
+
+Saat Redis diaktifkan, LibreChat mengoordinasikan katalog alat MCP tingkat aplikasi di seluruh replika. Publikasi saat startup, sinkronisasi penyambungan kembali, dan pembaruan `notifications/tools/list_changed` menggunakan penanda generasi dan revisi sehingga replika yang kedaluwarsa tidak dapat menimpa katalog yang lebih baru.
+
+Penyebaran Redis Cluster menggunakan kunci katalog yang aman terhadap slot (slot-safe) dan operasi pembaruan; tidak diperlukan pengaturan MCP Redis terpisah. Lihat [MCP Server Management](/docs/features/mcp#mcp-server-management) untuk perilaku katalog dinamis dan kesiapan OAuth.

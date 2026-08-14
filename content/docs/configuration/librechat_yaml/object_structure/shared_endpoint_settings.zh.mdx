@@ -44,7 +44,7 @@ endpoints:
     titleEndpoint: 'anthropic'
 
   google:
-    streamRate: 1
+    streamRate: 25
     titleModel: 'gemini-2.0-flash-lite'
     titlePromptTemplate: "Human: {input}\nAssistant: {output}"
     headers:
@@ -55,6 +55,15 @@ endpoints:
 
   azureAssistants:
     streamRate: 30
+
+  agents:
+    activityLabel: true
+    activityEndpoint: 'openAI'
+    activityModel: 'gpt-4.1-nano'
+    activityMaxPerRun: 20
+    activityCharLimit: 600
+    activityPhaseLabel: true
+    activityPhaseMaxPerRun: 5
 
   # Global configuration using 'all' - this applies shared settings across endpoints.
   # Most defined values override endpoint defaults; headers are merged and endpoint values win on collisions.
@@ -72,7 +81,7 @@ endpoints:
       {convo}
 ```
 
-> **重要提示：** 当使用 `all` 配置时，您定义的大多数共享属性将应用于所有 endpoint。在上面的示例中，`all` 配置会将 `titleConvo`、`titleModel` 和 `titlePrompt` 应用于所有 endpoint，而各个 endpoint 的 `streamRate` 设置将被保留，因为它们未在 `all` 中定义。`headers` 会被单独合并：来自 `endpoints.all.headers` 的值将全局应用，且在键冲突时，endpoint 级别的 header 优先级更高。
+> **重要提示：** 当使用 `all` 配置时，您定义的大多数共享属性将应用于所有 endpoint。在上面的示例中，`all` 配置会将 `titleConvo`、`titleModel` 和 `titlePrompt` 应用于所有 endpoint，而各个 endpoint 的 `streamRate` 设置将被保留，因为它们未在 `all` 中定义。`headers` 会被单独合并：来自 `endpoints.all.headers` 的值将全局应用，且在键冲突时，endpoint 级别的 header 优先级更高。Activity 设置会按相同顺序逐字段解析，因此不相关的 `all` 设置不会覆盖 endpoint 的 activity 配置。
 
 ## streamRate
 
@@ -89,9 +98,11 @@ endpoints:
   ]}
 />
 
-**默认值：** 1
+**默认值：** 取决于提供商。OpenAI、自定义 endpoint、Anthropic、Google、Bedrock 以及由 Agents SDK 支持的流式传输使用目标为 25 毫秒的自适应平滑处理。旧版 Assistants 和 Ollama 处理程序保留其各自的每块（per-provider-chunk）行为，默认值为 1 毫秒。
 
-> 允许以最快速度流式传输数据，同时允许系统等待下一个时钟周期
+自适应平滑（Adaptive smoothing）可在无延迟的情况下输出第一个文本 token，在流式传输滞后时增加分块大小，并保留工具调用和元数据的顺序。将 `streamRate` 设置为非负的毫秒目标值；`streamRate: 0` 将禁用上述 SDK 支持的提供商的自适应平滑功能。
+
+当 `endpoints.all` 存在且没有 `streamRate` 时，特定 endpoint 的值会被保留。定义 `endpoints.all.streamRate` 会覆盖 endpoint 的值，包括显式的 `0`。
 
 ## titleConvo
 
@@ -300,6 +311,99 @@ endpoints:
     # Will use anthropic's configuration for title generation
 ```
 
+## 智能体活动组 [#agent-activity-groups]
+
+活动组（Activity groups）通过将每个连续的推理和工具调用块折叠在生成的单行标题下，使长 Agent 运行更易于浏览。标题生成在主模型响应路径之外运行，但它仍然是一个模型调用，其使用量会被记录并计费。
+
+启用父阶段标签后，简短的进度文本将保留在当前活跃阶段内。一个阶段会在实质性回答文本之前关闭，因此结果会保留在折叠的摘要之外，而后续的推理或工具调用块可以在同一运行中开启另一个阶段。当格式错误或省略的内容被压缩时，LibreChat 还会重新调整保存的阶段边界，从而在重新加载后保持其对齐状态。
+
+<OptionTable
+  options={[
+    [
+      'activityLabel',
+      'Boolean',
+      '为使用此 endpoint 的 Agent 运行启用生成的活动组标题。',
+      'false',
+    ],
+    [
+      'activityModel',
+      'String',
+      '用于生成标题的模型。如果未设置，将回退到 titleModel，然后是 Agent 运行模型。使用 current_model 可显式选择运行模型。',
+      '',
+    ],
+    [
+      'activityEndpoint',
+      'String',
+      '用于生成请求头的 endpoint。默认为 Agent 模型提供商。',
+      '',
+    ],
+    [
+      'activityPrompt',
+      'String',
+      '覆盖用于生成单行标题的提示词。',
+      '',
+    ],
+    [
+      'activityMaxPerRun',
+      'Positive integer',
+      '每个响应允许的最大生成活动标头数，用于限制额外的模型调用。',
+      '20',
+    ],
+    [
+      'activityCharLimit',
+      'Positive integer',
+      '包含在头部提示词中的每个工具输入或输出条目的最大字符数。',
+      '600',
+    ],
+    [
+      'activityPhaseLabel',
+      'Boolean',
+      '为每个包含至少两个活动的运行阶段生成一个折叠的父级摘要。',
+      'false',
+    ],
+    [
+      'activityPhaseModel',
+      'String',
+      '用于父阶段摘要的模型。如果未设置，将回退至 activityModel、titleModel，最后是 Agent 运行模型。',
+      '',
+    ],
+    [
+      'activityPhaseEndpoint',
+      'String',
+      '用于阶段摘要的凭据所属的 endpoint。将回退至 activityEndpoint，然后是 Agent 提供程序。',
+      '',
+    ],
+    [
+      'activityPhasePrompt',
+      'String',
+      '覆盖用于生成父阶段摘要的提示词。',
+      '',
+    ],
+    [
+      'activityPhaseMaxPerRun',
+      'Positive integer',
+      '每次响应生成的最大父阶段摘要数。',
+      '5',
+    ],
+  ]}
+/>
+
+```yaml filename="endpoints / agents / activity groups"
+endpoints:
+  agents:
+    activityLabel: true
+    activityEndpoint: 'openAI'
+    activityModel: 'gpt-4.1-nano'
+    activityMaxPerRun: 20
+    activityCharLimit: 600
+    activityPhaseLabel: true
+    activityPhaseMaxPerRun: 5
+```
+
+您也可以在 `endpoints.all` 或后端提供商/自定义 endpoint 下设置这些字段。值会独立解析，并按以下顺序优先采用第一个定义的值：`endpoints.all`、公共 `agents` endpoint，然后是后端提供商或自定义 endpoint。如果 `activityEndpoint` 未知，LibreChat 将记录一条警告并改用 Agent 的提供商。
+
+父级阶段摘要独立于子级活动标签：`activityPhaseLabel` 可以在启用或不启用 `activityLabel` 的情况下启用。LibreChat 仅针对包含至少两个逻辑活动的阶段消耗一次阶段摘要模型调用。`activityCharLimit` 也限制了用于阶段摘要的证据。阶段模型选择通过 `activityPhaseModel`、`activityModel`、原始 endpoint 的 `titleModel`，然后是当前运行模型来解析；阶段 endpoint 选择通过 `activityPhaseEndpoint`、`activityEndpoint`，然后是 Agent 提供程序来解析。如果配置了未知的阶段 endpoint，系统会记录警告并回退到 Agent 提供程序。
+
 ## maxToolResultChars
 
 **密钥：**
@@ -362,6 +466,7 @@ endpoints:
 **注意：**
 
 - 值支持 `${ENV_VAR}`、`{{LIBRECHAT_USER_*}}` 以及请求体占位符，例如 `{{LIBRECHAT_BODY_CONVERSATIONID}}`。
+- 在最终的出站解析步骤中，已识别的 user、request-body 和 OpenID 占位符如果未提供值，将变为空字符串，而不是作为模板文本转发。未知的占位符名称将保持不变，以便能够发现配置中的拼写错误。
 - Endpoint 级别的 headers 会在键冲突时覆盖 `endpoints.all.headers`。
 - 由提供商管理的身份验证以及必需的 beta/protocol 标头仍然具有权威性。Anthropic beta 值会进行合并，因此自定义 beta 标志不会覆盖必需的提供商标志。
 - 对于受支持的提供商模型列表请求，请求头也会被转发。
@@ -375,7 +480,7 @@ endpoints:
 - 当使用 `all` 配置时，它将覆盖所有独立 endpoint 中的相应设置。
 - `all` 键不支持 `baseURL`
 - 未在 `all` 中定义的设置将保留其各自 endpoint 的值
-- 对于 `streamRate`：建议取值范围在 25-40 之间，以获得流畅的流式传输体验
+- 对于 `streamRate`：如果需要针对特定 endpoint 进行平滑处理，建议设置在 25-40 之间的值。
 - 当在大规模环境下为众多用户提供服务时，必须使用更高的流式传输速率。
 
 **覆盖行为示例：**

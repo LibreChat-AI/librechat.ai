@@ -2,19 +2,68 @@
 title: Metriche
 icon: BarChart3
 description: >-
-  Questo documento spiega come aggiungere un esportatore di metriche per
-  Prometheus a LibreChat.
+  Monitora LibreChat con le sue metriche Prometheus integrate e l'esportatore
+  opzionale di metriche del database.
 ---
 
-### Generale [#general]
+## Generale [#general]
 
 ![Utenti attivi in LibreChat](/images/metrics/librechat-metrics-active-users.png)
 
-Puoi utilizzare Prometheus o qualsiasi altro strumento di monitoraggio compatibile con OpenMetrics per ottenere metriche sull'utilizzo attivo di LibreChat.
-Ciò include informazioni tecniche come l'utilizzo dei token,
-ma anche informazioni sugli utenti finali come il numero di utenti totali o attivi.
+LibreChat fornisce due superfici di metriche compatibili con Prometheus. L'endpoint `/metrics` integrato nell'API riporta il comportamento operativo, come l'attività di Redis e i risultati del proxy di telemetria del browser. L'esportatore di database opzionale riporta i dati di utilizzo archiviati in MongoDB, inclusi i totali dei token e il conteggio degli utenti attivi.
 
-LibreChat espone anche metriche Prometheus integrate dal server API all'indirizzo `/metrics` quando `METRICS_SECRET` è configurato. Eseguine lo scraping con `Authorization: Bearer <METRICS_SECRET>`. I risultati del proxy RUM del browser vengono riportati come `rum_proxy_requests_total{endpoint,result}`, dove `endpoint` è `traces`, `logs` o `unknown`, e `result` può essere `success`, `auth_drop`, `auth_error`, `bad_request`, `not_configured`, `collector_4xx`, `collector_5xx`, `collector_error` o `collector_timeout`.
+## Metriche API integrate [#built-in-api-metrics]
+
+LibreChat espone le metriche di Prometheus dal server API all'indirizzo `/metrics`. Imposta `METRICS_SECRET` ed esegui lo scraping dell'endpoint con `Authorization: Bearer <METRICS_SECRET>`. L'endpoint restituisce `401` quando il secret non è impostato, l'header è mancante o il token non corrisponde.
+
+```yaml filename="prometheus.yml"
+scrape_configs:
+  - job_name: librechat-api
+    scheme: https
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials: your-metrics-secret
+    static_configs:
+      - targets: ['librechat.example.com']
+```
+
+### Metriche di avvio dell'agente [#agent-startup-metrics]
+
+Le richieste iniziali di chat dell'Agent emettono due metriche di avvio:
+
+- `agent_startup_milestone_duration_seconds{milestone}` misura la latenza cumulativa dall'ingresso della richiesta a ogni milestone di avvio.
+- `agent_startups_total{result}` conta i tentativi di avvio in base al risultato del terminale.
+
+I Milestones coprono l'ammissione della richiesta, la creazione e il riconoscimento del job, il caricamento della conversazione e della cronologia, l'inizializzazione del client e dell'esecuzione, l'avvio dello stream e il primo evento di risposta o contenuto in coda. I risultati distinguono tra contenuto in coda, completamento senza un delta di contenuto, deduplicazione, rifiuto, pausa, sostituzione, interruzione ed errore.
+
+Quando il [tracciamento OpenTelemetry del backend](/docs/configuration/dotenv#opentelemetry-tracing) è abilitato, lo span `librechat.agent.startup` riporta le stesse tappe fondamentali come eventi. Include la durata totale dell'avvio, il conteggio delle tappe, il risultato finale e l'ID del flusso di generazione quando ne viene assegnato uno.
+
+### Metriche Redis [#redis-metrics]
+
+Le cache e i servizi basati su Redis emettono due metriche di operazione logica:
+
+- `redis_operations_total{client,use_case,operation,status}` conta le operazioni.
+- `redis_operation_duration_seconds{client,use_case,operation,status}` misura la latenza.
+
+`client` è `keyv` o `ioredis`, e `status` è `success` o `error`. Le etichette `use_case` delimitate identificano operazioni come cache, sessioni, limiti di frequenza, concorrenza, principal ACL, processi di stream riprendibili e pub/sub, scansioni del registro MCP ed elezione del leader. Queste metriche conteggiano le operazioni logiche di LibreChat piuttosto che ogni singolo round trip interno di Redis. I ping del ciclo di vita della connessione e la manutenzione globale sono esclusi, e la cancellazione di un namespace viene conteggiata come un'unica operazione logica.
+
+Quando il [backend OpenTelemetry tracing](/docs/configuration/dotenv#opentelemetry-tracing) è abilitato, ogni span HTTP riassume anche il suo lavoro su Redis con:
+
+- `librechat.redis.calls`
+- `librechat.redis.duration_ms`
+- `librechat.redis.errors`
+- `librechat.redis.max_call_ms`
+- `librechat.redis.operations`
+- `librechat.redis.use_cases`
+
+I dieci casi d'uso con la durata totale più elevata ricevono anche gli attributi `calls`, `duration_ms`, `errors` e `max_call_ms` sotto `librechat.redis.<use_case>.*`. Questo riepilogo a livello di richiesta non richiede span Redis a livello di comando; abilita `OTEL_IOREDIS_TRACING_ENABLED` solo quando sono necessari span per i singoli comandi.
+
+### Metriche Proxy RUM del Browser [#browser-rum-proxy-metrics]
+
+I risultati del proxy RUM del browser vengono riportati come `rum_proxy_requests_total{endpoint,result}`. `endpoint` può essere `traces`, `logs` o `unknown`; `result` può essere `success`, `auth_drop`, `auth_error`, `bad_request`, `not_configured`, `collector_4xx`, `collector_5xx`, `collector_error` o `collector_timeout`.
+
+## Esportatore di metriche del database [#database-metrics-exporter]
 
 L'exporter delle metriche è disponibile su [virtUOS/librechat_exporter](https://github.com/virtUOS/librechat_exporter).
 Si tratta di uno strumento separato che si distribuisce insieme a LibreChat.

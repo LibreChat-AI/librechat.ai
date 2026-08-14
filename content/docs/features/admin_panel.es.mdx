@@ -136,18 +136,18 @@ bun dev                 # http://localhost:3000
 
 | Variable | Required | Default | Description |
 | ------------------------------- | --------------------- | --------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `SESSION_SECRET` | **Sí** en producción | Alternativa hardcoded para desarrollo al ejecutar `bun dev`; **sin valor predeterminado** en la imagen de Docker | Clave de cifrado de sesión. Debe tener al menos 32 caracteres. |
-| `VITE_API_BASE_URL` | **Sí** en Docker | `http://localhost:3080` (solo desarrollo local) | URL del servidor de la API de LibreChat visible para el navegador, utilizada para redirecciones OAuth. |
+| `SESSION_SECRET` | **Sí** en producción | Alternativa de desarrollo codificada al ejecutar `bun dev`; **sin valor predeterminado** en la imagen de Docker | Clave de cifrado de sesión. Debe tener al menos 32 caracteres. |
+| `VITE_API_BASE_URL` | **Sí** en Docker | `http://localhost:3080` (solo desarrollo local) | URL del servidor de la API de LibreChat orientada al navegador, utilizada para redirecciones OAuth. |
 | `API_SERVER_URL` | No | Utiliza `VITE_API_BASE_URL` como alternativa | URL del lado del servidor para las llamadas a la API de LibreChat. Útil cuando el servidor del panel de administración accede a LibreChat a través de una URL diferente a la del navegador (ej. servicio interno de Kubernetes frente a nombre de host público). |
 | `PORT` | No | `3000` | Puerto en el que escucha el panel de administración. |
-| `ADMIN_PANEL_SESSION_SECRET` | **Sí** en producción | Utiliza `CREDS_KEY` como alternativa en los stacks de Docker de LibreChat incluidos | Variable del lado de LibreChat asignada al `SESSION_SECRET` del panel de administración para el servicio del panel de administración incluido. Genere un valor único de al menos 32 caracteres para producción. |
+| `ADMIN_PANEL_SESSION_SECRET` | **Sí** | _sin definir_ | Variable del lado de LibreChat asignada al `SESSION_SECRET` del panel de administración para el servicio del panel de administración incluido. Genere un valor único de al menos 32 caracteres antes de iniciar el panel. |
 | `ADMIN_PANEL_PORT` | No | `3000` | Puerto del host expuesto por el servicio del panel de administración incluido en el `docker-compose.yml` predeterminado. |
 | `ADMIN_SSO_ONLY` | No | `false` | Oculta el formulario de correo electrónico/contraseña, forzando el inicio de sesión solo mediante SSO. |
 | `ADMIN_SESSION_IDLE_TIMEOUT_MS` | No | `1800000` (30 min) | Tiempo de espera de inactividad de la sesión en milisegundos. |
 | `SESSION_COOKIE_SECURE` | No | `true` en producción | Define si la cookie de sesión requiere HTTPS. |
 | `ADMIN_PANEL_METRICS_SECRET` | No | _sin definir_ | Token de portador (Bearer token) requerido para extraer datos del endpoint de Prometheus `/metrics`. El endpoint devuelve `401` cuando no está definido o no coincide. |
 
-En las pilas de Docker incluidas en LibreChat, el panel de administración se ejecuta como un servicio `admin-panel`. El `docker-compose.yml` predeterminado lo expone en `ADMIN_PANEL_PORT`; `deploy-compose.yml` lo enruta a través de nginx en `http://admin.localhost` y establece `ADMIN_PANEL_URL` para el servicio de API.
+En las pilas de Docker incluidas en LibreChat, el panel de administración se ejecuta como un servicio `admin-panel`. El `docker-compose.yml` predeterminado lo expone en `ADMIN_PANEL_PORT`; `deploy-compose.yml` lo enruta a través de nginx en `http://admin.localhost` y establece `ADMIN_PANEL_URL` para el servicio de API. El panel se niega a iniciarse hasta que se configure `ADMIN_PANEL_SESSION_SECRET`.
 
 ### URL de redirección de LibreChat [#librechat-redirect-url]
 
@@ -156,6 +156,8 @@ Cuando el panel de administración se aloja en una URL separada de LibreChat, co
 ```bash filename=".env"
 ADMIN_PANEL_URL=https://admin.example.com/admin
 ```
+
+Cuando se configura, LibreChat también muestra un enlace al **Admin Panel** a los administradores en **Settings -> General**. Los usuarios que no son administradores no ven el enlace.
 
 Para despliegues con Helm, configure `librechat.adminPanelUrl` en su archivo values. El chart lo renderiza como `ADMIN_PANEL_URL` para el flujo de OAuth de administración de LibreChat:
 
@@ -192,6 +194,8 @@ El acceso de administrador es verificado en el lado del servidor por LibreChat p
 
 Las sesiones están basadas en cookies, cifradas con `SESSION_SECRET` y expiran por inactividad según `ADMIN_SESSION_IDLE_TIMEOUT_MS`.
 
+Google admin SSO solicita acceso sin conexión y consentimiento para que el panel pueda actualizar un token de administrador de LibreChat caducado sin forzar un nuevo inicio de sesión inmediato. Configure tanto `GOOGLE_CLIENT_ID` como `GOOGLE_CLIENT_SECRET`, y registre `${DOMAIN_SERVER}/api/admin/oauth/google/callback` en Google. Cada actualización vuelve a verificar la identidad del proveedor de la cuenta, el estado de baneo, el dominio de correo electrónico permitido, el inquilino y el acceso de administrador actual; perder el acceso finaliza la sesión de administrador.
+
 ## Gestión de configuración [#configuration-management]
 
 El panel renderiza la configuración de LibreChat como un formulario dinámico basado en el esquema de configuración. Esto tiene dos propiedades útiles:
@@ -204,6 +208,18 @@ Esta es la superficie detrás del [sistema de anulación de configuración por p
 - Asignar a un grupo "Research" un `recursionLimit` más alto y endpoints adicionales
 - Permitir que un rol "FinanceAdmins" gestione servidores MCP mientras que los usuarios regulares solo puedan usarlos
 - Limitar los permisos de `interface` más estrictos a los grupos de contratistas externos
+
+### Delegación con alcance de sección [#section-scoped-delegation]
+
+Los permisos de configuración pueden ser amplios (`read:configs`, `manage:configs`) o limitados a una sección de nivel superior (`read:configs:<section>`, `manage:configs:<section>`). Un lector con alcance de sección recibe una respuesta de configuración filtrada que contiene solo las secciones autorizadas en lugar de que se le deniegue la solicitud completa. Los permisos de gestión a nivel de sección implican acceso de lectura a la misma sección; el acceso de gestión amplio implica un acceso de lectura amplio.
+
+Los ejemplos incluyen `read:configs:interface`, `manage:configs:endpoints` y `manage:configs:langfuse`. Los usuarios delegados aún necesitan `access:admin` para ingresar a la interfaz de administración. Cada mutación de creación, parche, eliminación lógica (tombstone) o eliminación del perfil base `__base__` requiere `manage:configs` con permisos amplios; la gestión con alcance de sección se aplica a las anulaciones de roles, grupos y usuarios.
+
+### Secretos almacenados [#stored-secrets]
+
+Cuando los campos secretos registrados se escriben a través de la API de configuración de administrador, LibreChat cifra los valores literales en reposo y devuelve solo vistas previas enmascaradas generadas por el servidor. Actualmente, esto cubre Langfuse, OCR, speech, web-search, Assistants, Azure Assistants y cada `endpoints.custom[].apiKey`. Omitir un secreto durante una edición posterior conserva el valor almacenado.
+
+Las referencias de entorno compatibles siguen siendo referencias legibles para los campos que las permiten. Las claves de API de endpoint personalizados también conservan los valores `${ENV_VAR}` y `user_provided` en lugar de cifrarlos. El manejo de secretos se basa en el registro: los valores arbitrarios en mapas genéricos, como encabezados personalizados o la configuración de MCP, no se cifran automáticamente, por lo que se debe seguir utilizando referencias de entorno o el mecanismo de credenciales dedicado de la función en esos casos.
 
 ## Relacionado [#related]
 

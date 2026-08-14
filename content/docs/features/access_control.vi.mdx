@@ -148,18 +148,21 @@ Các khả năng chính bao gồm:
 
 | Khả năng | Mục đích |
 | ------------------------------------ | --------------------------------------------- |
-| `access:admin`                       | Truy cập bảng điều khiển quản trị |
+| `access:admin`                       | Truy cập bảng quản trị |
 | `read:users` / `manage:users`        | Xem / sửa đổi tài khoản người dùng |
 | `read:groups` / `manage:groups`      | Xem / sửa đổi nhóm |
 | `read:roles` / `manage:roles`        | Xem / sửa đổi vai trò tùy chỉnh |
-| `read:configs` / `manage:configs`    | Xem / sửa đổi cấu hình hệ thống |
-| `assign:configs:{user\|group\|role}` | Gán hồ sơ ghi đè cấu hình cho các đối tượng |
-| `read:usage`                         | Xem mức sử dụng nền tảng và dữ liệu đo lường từ xa |
+| `read:configs` / `manage:configs`    | Xem / sửa đổi toàn bộ cấu hình hệ thống |
+| `read:configs:<section>` / `manage:configs:<section>` | Xem / sửa đổi một phần cấu hình cấp cao nhất |
+| `assign:configs:{user\|group\|role}` | Gán hồ sơ ghi đè cấu hình cho các đối tượng (principals) |
+| `read:usage`                         | Xem mức sử dụng nền tảng và đo lường từ xa |
 | `read:agents` / `manage:agents`      | Xem / kiểm duyệt mọi agent trên instance |
 | `read:prompts` / `manage:prompts`    | Xem / kiểm duyệt mọi prompt |
 | `manage:mcpservers`                  | Quản lý các MCP server trên toàn hệ thống |
 
-Các khả năng quản lý (manage capabilities) bao gồm cả khả năng đọc (read capability) tương ứng của chúng (ví dụ: sở hữu `manage:users` sẽ tự động cấp quyền `read:users`). Người dùng có `SystemRoles.ADMIN` mặc định sở hữu tất cả các khả năng; các quyền được cấp cho phép bạn **ủy quyền** một tập hợp con các quyền quản trị cho các chủ thể không phải quản trị viên mà không cần biến họ thành quản trị viên toàn quyền.
+Các quyền quản lý (manage) bao hàm các quyền đọc (read) tương ứng (ví dụ: sở hữu `manage:users` sẽ tự động cấp quyền `read:users`). Điều này cũng áp dụng cho các phần cấu hình: `manage:configs:endpoints` thỏa mãn `read:configs:endpoints`. Người dùng chỉ có quyền truy cập cấu hình theo phạm vi phần sẽ nhận được phản hồi cấu hình quản trị đã được lọc theo các phần mà họ có thể đọc; người dùng không có quyền đọc cấu hình sẽ nhận được mã lỗi `403`.
+
+Người dùng `SystemRoles.ADMIN` mặc định sở hữu tất cả các quyền hạn; các quyền cấp phép (grants) cho phép bạn **ủy quyền** một tập hợp con các quyền quản trị cho các chủ thể không phải quản trị viên mà không cần biến họ thành quản trị viên toàn quyền. Việc truy cập vào giao diện quản trị (admin UI) vẫn yêu cầu quyền `access:admin`.
 
 Các quyền hệ thống được cấp và thu hồi thông qua bảng điều khiển quản trị.
 
@@ -177,6 +180,21 @@ Một nhóm là một tập hợp người dùng được đặt tên. LibreChat
 - **Các nhóm Entra ID (Azure AD)**: được đồng bộ hóa từ Microsoft Graph khi người dùng đăng nhập qua Azure OIDC với [token reuse](/docs/configuration/authentication/OAuth2-OIDC/token-reuse) được bật. Mỗi nhóm được đồng bộ hóa sẽ lưu trữ Entra Object ID của nó dưới dạng `idOnTheSource`, giúp LibreChat luôn đồng bộ với tư cách thành viên của tenant.
 
 Các nhóm có thể xuất hiện trong bất kỳ ACL nào, trong tìm kiếm `peoplePicker` và là mục tiêu chính cho các ghi đè cấu hình hoặc cấp quyền hệ thống. Một tài nguyên duy nhất được chia sẻ với một nhóm 500 người chỉ là một mục nhập ACL (không phải 500) và các thay đổi về tư cách thành viên trong Entra sẽ tự động được cập nhật vào lần đăng nhập tiếp theo.
+
+### Tinh chỉnh bộ nhớ đệm Principal ACL [#acl-principal-cache-tuning]
+
+LibreChat lưu bộ nhớ đệm các ID nhóm được sử dụng để phân giải các thực thể ACL của người dùng trong năm phút theo mặc định. Bộ nhớ đệm này được giới hạn theo đối tượng thuê (tenant) và danh tính thành viên, và các thay đổi về tư cách thành viên nhóm sẽ làm mất hiệu lực của các mục bị ảnh hưởng. Nó không lưu bộ nhớ đệm vai trò của người dùng hoặc việc tra cứu `idOnTheSource`, vì vậy các giá trị đó vẫn tiếp tục được phân giải từ người dùng yêu cầu hiện tại hoặc cơ sở dữ liệu.
+
+```bash filename=".env"
+# Group-membership cache lifetime; 0 disables the cache
+USER_PRINCIPALS_CACHE_TTL_MS=300000
+
+# Redis-backed deployments only: deduplicate cold cache builds across replicas
+USER_PRINCIPALS_LOCK_TTL_MS=5000
+USER_PRINCIPALS_LOCK_WAIT_MS=5000
+```
+
+Khi bộ nhớ đệm chính được hỗ trợ bởi Redis, các thiết lập khóa sẽ ngăn chặn nhiều bản sao (replica) cùng lúc xây dựng lại một mục nhập lạnh (cold entry). Hãy đặt `USER_PRINCIPALS_LOCK_TTL_MS=0` để chỉ vô hiệu hóa việc khóa xây dựng; lưu trữ bộ nhớ đệm chia sẻ và vô hiệu hóa liên tiến trình vẫn sẽ hoạt động. Các lỗi bộ nhớ đệm và lỗi khóa sẽ quay trở lại sử dụng cơ sở dữ liệu và không chặn các kiểm tra quyền truy cập.
 
 ### Vai trò [#roles]
 

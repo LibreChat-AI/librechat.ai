@@ -12,17 +12,33 @@ endpoints:
   agents:
     recursionLimit: 50
     maxRecursionLimit: 100
+    maxToolCallArgBytes: 65536
+    maxDeltaEventsPerTurn: 100000
+    maxToolCallArgBytesByTool:
+      create_file: 131072
     disableBuilder: false
     # (optional) Agent Capabilities available to all users. Omit the ones you wish to exclude. Defaults to list below.
-    # Add "programmatic_tools" with "execute_code" to enable Programmatic Tool Calling for MCP tools.
-    # capabilities: ["deferred_tools", "execute_code", "file_search", "web_search", "artifacts", "subagents", "actions", "context", "skills", "tools", "chain", "ocr"]
+    # Opt-in capabilities: "programmatic_tools", "stateful_code_sessions", "run_in_background", and "tool_intents".
+    # capabilities: ["deferred_tools", "execute_code", "file_search", "web_search", "artifacts", "subagents", "actions", "context", "skills", "memory", "ask_user_question", "tools", "chain", "ocr"]
     # (optional) File citation configuration for file_search capability
     maxCitations: 30 # Maximum total citations in responses (1-50)
     maxCitationsPerFile: 7 # Maximum citations from each file (1-10)
     minRelevanceScore: 0.45 # Minimum relevance score threshold (0.0-1.0)
     titleTiming: immediate
+    activityLabel: true
+    activityModel: gpt-4.1-nano
+    activityPhaseLabel: true
+    activityPhaseMaxPerRun: 5
     skills:
       maxCatalogSkills: 20
+    toolApproval:
+      enabled: true
+      mode: default
+      deny: ['mcp:*:delete_*']
+      ask: ['mcp:*:*']
+    checkpointer:
+      type: mongo
+      ttl: 86400
     remoteApi:
       auth:
         oidc:
@@ -77,6 +93,51 @@ maxRecursionLimit: 100
 
 Ajan adımları hakkında daha fazla bilgi için [Max Agent Steps](/docs/features/agents#max-agent-steps) bölümüne bakın.
 
+## Akış devre kesicileri [#stream-circuit-breakers]
+
+Bu ayarlar, bir sağlayıcı akışı kontrolden çıkmış araç argümanları veya sınırsız bir delta olayları dizisi üretiyor gibi göründüğünde bir Agent çalışmasını durdurur.
+
+<OptionTable
+  options={[
+    [
+      'maxToolCallArgBytes',
+      'Number',
+      'Bir akışlı araç çağrısının argümanları için maksimum kümülatif bayt sayısı. Genel korumayı devre dışı bırakmak için 0 olarak ayarlayın.',
+      '65536',
+    ],
+    [
+      'maxDeltaEventsPerTurn',
+      'Number',
+      'Bir model oluşturma turu için maksimum akış etkinliği. Bu korumayı devre dışı bırakmak için 0 olarak ayarlayın veya boş bırakın.',
+      '0 (disabled)',
+    ],
+    [
+      'maxToolCallArgBytesByTool',
+      'Object',
+      'Modelin gördüğü araç adına göre anahtarlanmış araç bazlı argüman bayt geçersiz kılmaları. 0 değeri, o araç için korumayı devre dışı bırakır.',
+      'create_file: 131072',
+    ],
+  ]}
+/>
+
+LibreChat, 64 KiB'lık bir genel argüman sınırı kullanır ve `create_file` için 128 KiB'lık bir geçersiz kılma (override) ile gelir; çünkü bu işlevin meşru yükleri genellikle daha büyüktür. `maxToolCallArgBytesByTool` içindeki girdiler, bu yerleşik geçersiz kılma ile birleşir. Korumalardan herhangi biri tetiklenirse, LibreChat devam eden sağlayıcı akışını durdurur ve hangi sınırın aşıldığını bildirir.
+
+```yaml filename="endpoints / agents / stream circuit breakers"
+maxToolCallArgBytes: 65536
+maxDeltaEventsPerTurn: 100000
+maxToolCallArgBytesByTool:
+  create_file: 262144
+  large_import: 524288
+```
+
+Her bir argüman boyutu korumasını devre dışı bırakmak için hem genel sınırı hem de gönderilen `create_file` geçersiz kılmasını `0` olarak ayarlayın:
+
+```yaml
+maxToolCallArgBytes: 0
+maxToolCallArgBytesByTool:
+  create_file: 0
+```
+
 ## titleTiming
 
 <OptionTable
@@ -102,6 +163,22 @@ Ajan adımları hakkında daha fazla bilgi için [Max Agent Steps](/docs/feature
 ```yaml filename="endpoints / agents / titleTiming"
 titleTiming: immediate
 ```
+
+## activityLabel
+
+Her bir Ajan muhakemesi ve araç çağrısı bloğunu oluşturulan tek satırlık bir başlık altında gruplamak için `activityLabel: true` olarak ayarlayın. Ek model çağrısını ve maliyetini kontrol etmek için `activityModel`, `activityEndpoint`, `activityPrompt`, `activityMaxPerRun` ve `activityCharLimit` seçeneklerini kullanın. Tam alan referansı ve öncelik kuralları için [Agent Activity Groups](/docs/configuration/librechat_yaml/object_structure/shared_endpoint_settings#agent-activity-groups) bölümüne bakın.
+
+```yaml filename="endpoints / agents / activity groups"
+activityLabel: true
+activityEndpoint: openAI
+activityModel: gpt-4.1-nano
+activityMaxPerRun: 20
+activityCharLimit: 600
+activityPhaseLabel: true
+activityPhaseMaxPerRun: 5
+```
+
+`activityPhaseLabel`, en az iki mantıksal etkinlik içeren her bir çalıştırma aşamasının etrafına bağımsız olarak bir daraltılmış üst özet ekleyebilir. Bu çağrıları ayarlamak için `activityPhaseModel`, `activityPhaseEndpoint`, `activityPhasePrompt` ve `activityPhaseMaxPerRun` kullanın; `activityCharLimit` alt etkinlik etiketleriyle paylaşılır.
 
 ## disableBuilder
 
@@ -162,9 +239,9 @@ allowedProviders:
   ]}
 />
 
-**Varsayılan:** `["deferred_tools", "execute_code", "file_search", "web_search", "artifacts", "subagents", "actions", "context", "skills", "tools", "chain", "ocr"]`
+**Varsayılan:** `["deferred_tools", "execute_code", "file_search", "web_search", "artifacts", "subagents", "actions", "context", "skills", "memory", "ask_user_question", "tools", "chain", "ocr"]`
 
-Programmatic Tool Calling isteğe bağlıdır. `programmatic_tools` ifadesini, yalnızca Code Interpreter dağıtımınız Tool Call Server bileşenini içerdiğinde `execute_code` ile birlikte ekleyin.
+`programmatic_tools`, `stateful_code_sessions`, `run_in_background` ve `tool_intents` isteğe bağlıdır ve açıkça eklenmeleri gerekir. Programmatic tools ve stateful sessions ayrıca `execute_code` ve uyumlu bir Code Interpreter dağıtımı gerektirir. Background code execution ise `run_in_background`, `execute_code` ve Code Interpreter gerektirir.
 
 **Örnek:**
 
@@ -182,12 +259,116 @@ capabilities:
   - 'actions'
   - 'context'
   - 'skills'
+  - 'memory'
+  - 'ask_user_question'
   - 'tools'
   - 'chain'
   - 'ocr'
+  # Optional: reuse one Code Interpreter workspace per conversation.
+  # - 'stateful_code_sessions'
+  # Optional: allow selected eligible MCP and Code Interpreter tools to run as background tasks.
+  # - 'run_in_background'
+  # Optional: show live model-written intent labels for native and selected MCP tools.
+  # - 'tool_intents'
 ```
 
 **Not:** Bu alan isteğe bağlıdır. Atlanırsa, varsayılan davranış, varsayılan değerde listelenen tüm yetenekleri dahil etmektir.
+
+## toolApproval
+
+Ajan araç çağrıları için insan denetimini kontrol eder. Bu özellik varsayılan olarak devre dışıdır. Etkinleştirildiğinde, eşleşen çağrılar kullanıcı onaylama, reddetme veya argümanları düzenleme gibi izin verilen bir karar gönderene kadar duraklatılır.
+
+<OptionTable
+  options={[
+    ['enabled', 'Boolean', 'Agents endpoint için araç onayını etkinleştirir.', 'false'],
+    [
+      'mode',
+      'String',
+      'Eşleşmeyen çağrı davranışını ayarlar: `default` sorar, `dontAsk` reddeder ve `bypass` reddedilmediği sürece onaylar.',
+      'default',
+    ],
+    ['allow', 'Array of strings', 'İstem gerektirmeden çalışabilen çağrılar için glob desenleri.', ''],
+    ['deny', 'Array of strings', 'Her zaman reddedilen çağrılar için glob desenleri. Reddetme kuralları önceliklidir.', ''],
+    ['ask', 'Array of strings', 'Her zaman inceleme gerektiren çağrılar için glob desenleri.', ''],
+    [
+      'reason',
+      'String',
+      'Onay isteminde gösterilen isteğe bağlı açıklama. Araç adını eklemek için `{tool}` kullanın.',
+      '',
+    ],
+    [
+      'hooks',
+      'Array of objects',
+      'Bağlam farkındalıklı kararlar için güvenilir programatik ilke modülleri. Hook\'lar yalnızca statik ilkeyi sıkılaştırabilir.',
+      '',
+    ],
+  ]}
+/>
+
+Desenler glob eşleştirmesi kullanır. MCP araçları `mcp:<server>:<tool>` ile kapsamlandırılabilir; örneğin, `mcp:github:*` ifadesi `github` sunucusundaki her araçla eşleşir. Değerlendirme, `bypass` modu da dahil olmak üzere `deny` seçeneğine en yüksek önceliği verir.
+
+```yaml filename="endpoints / agents / toolApproval"
+toolApproval:
+  enabled: true
+  mode: default
+  allow:
+    - 'mcp:analytics:read_*'
+  deny:
+    - 'mcp:*:delete_*'
+  ask:
+    - 'mcp:*:*'
+  reason: 'Review {tool} before it runs.'
+```
+
+Hooks, sunucu başlatıldığında bir kez yüklenir ve LibreChat sürecinde çalıştırılır. Her girdi bir `module`, isteğe bağlı bir araç adı `matcher` regex'i ve modülün oluşturucusuna iletilen isteğe bağlı bir `options` nesnesi kabul eder. Yalnızca güvendiğiniz kodları yükleyin. Role veya kiracı bazlı geçersiz kılmalar (overrides) hook modüllerini yeniden yüklemez; bağlamsal davranışı hook içinde uygulayın.
+
+```yaml filename="endpoints / agents / toolApproval / hooks"
+toolApproval:
+  enabled: true
+  hooks:
+    - module: '@acme/librechat-approval-hook'
+      matcher: '^mcp:production:'
+      options:
+        requireTicket: true
+```
+
+## checkpointer
+
+Araç onayı veya Kullanıcıya Sor özelliği tarafından duraklatılan Agent çalıştırmaları için depolamayı yapılandırır. Her iki özellik de bir checkpointer gerektirdiğinde ve bu blok atlandığında, LibreChat 24 saatlik bir karar penceresi ile birincil MongoDB'yi kullanır.
+
+<OptionTable
+  options={[
+    [
+      'type',
+      'String',
+      '`mongo` duraklatılmış çalıştırmaları yeniden başlatmalar ve replikalar arasında kalıcı hale getirir; `memory` ise süreç yerelidir ve geliştirme amaçlıdır.',
+      'mongo',
+    ],
+    ['ttl', 'Number', 'Duraklatılmış bir çalışmanın karar için bekleyeceği süre (saniye cinsinden).', '86400'],
+    [
+      'checkpointCollectionName',
+      'String',
+      'İsteğe bağlı MongoDB kontrol noktası koleksiyon adı geçersiz kılma.',
+      'agent_checkpoints',
+    ],
+    [
+      'checkpointWritesCollectionName',
+      'String',
+      'İsteğe bağlı MongoDB kontrol noktası yazma koleksiyonu adı geçersiz kılma.',
+      'agent_checkpoint_writes',
+    ],
+  ]}
+/>
+
+```yaml filename="endpoints / agents / checkpointer"
+checkpointer:
+  type: mongo
+  ttl: 86400
+```
+
+`type: memory` değerini yalnızca tek süreçli geliştirme dağıtımları için kullanın. Bellekte depolanan duraklatılmış bir çalışma, yeniden başlatma sonrasında veya başka bir replika üzerinde devam ettirilemez.
+
+MongoDB kontrol noktaları, serileştirilmiş durum 8 MiB'ı aştığında bir uyarı günlüğe kaydeder ve 15 MiB üzerindeki kalıcı duraklamaları reddederek MongoDB'nin 16 MiB belge sınırının altında bir boşluk bırakır. Büyük satır içi medya veya araç çıktıları bunun yaygın nedenleridir; bir çalışma `CHECKPOINT_TOO_LARGE` hatası verirse yeni bir konuşma başlatın veya bağlamı azaltın.
 
 ## skills
 
@@ -329,6 +510,7 @@ Alaka düzeyine bakılmaksızın tüm kaynaklar dahil olmak üzere, kapsamlı ar
 - **deferred_tools**: Temsilcilerin, her aracı önceden bağlama yüklemek yerine çalışma zamanında ertelenmiş MCP araçlarını keşfetmesine olanak tanır.
 - **programmatic_tools**: Agent Builder'da Programmatic olarak işaretlenmiş MCP araçları için Programmatic Tool Calling özelliğini etkinleştirir. `execute_code` ve Tool Call Server bileşenine sahip bir Code Interpreter dağıtımı gerektirir. Bu yetenek isteğe bağlıdır (opt-in) ve varsayılan olarak etkin değildir.
 - **execute_code**: Ajanın kod çalıştırmasına izin verir.
+- **stateful_code_sessions**: Katılım sağlayan ajanların, konuşma başına bir Code Interpreter çalışma alanını yeniden kullanmasına olanak tanır. `execute_code`, uyumlu bir Code Interpreter dağıtımı ve ajan bazlı Gelişmiş ayarını gerektirir. Bu yetenek oldukça deneyseldir, varsayılan olarak etkin değildir ve deneme sürecinde önemli ölçüde değişebilir; mevcut davranışını veya yapılandırmasını kararlı bir üretim sözleşmesi olarak değerlendirmeyin.
 - **file_search**: Ajanın dosyaları aramasını ve dosyalarla etkileşime girmesini sağlar. Etkinleştirildiğinde, alıntı davranışı `maxCitations`, `maxCitationsPerFile` ve `minRelevanceScore` ayarlarıyla kontrol edilir.
 - **web_search**: Temsilciler için web arama işlevini etkinleştirir, internetten bilgi aramalarına ve almalarına olanak tanır.
 - **artifacts**: Ajanın etkileşimli artifact'ler (React bileşenleri, HTML, Mermaid diyagramları) oluşturmasını sağlar.
@@ -336,9 +518,13 @@ Alaka düzeyine bakılmaksızın tüm kaynaklar dahil olmak üzere, kapsamlı ar
 - **actions**: Ajanın önceden tanımlanmış eylemleri gerçekleştirmesine izin verir.
 - **context**: Sohbet içinde "Metin Olarak Yükle" işlevini ve aracılar için "Dosya Bağlamı" özelliğini etkinleştirir; bu, kullanıcıların dosya yüklemesine ve içeriklerinin ayıklanarak doğrudan konuşmaya dahil edilmesine olanak tanır.
 - **skills**: Yan panelde Skills özelliğini, manuel `$` çağrısını, model tarafından çağrılan skills özelliklerini ve aracı skill izin listelerini etkinleştirir. Bkz. [Skills](/docs/features/skills).
+- **memory**: Bellek yapılandırıldığında ve kullanıcının erişimi olduğunda, aracıların `set_memory` ve `delete_memory` kullanmasına olanak tanır. Varsayılan olarak etkindir; bellek devre dışı bırakıldığında çalışma zamanında kaldırılır.
+- **ask_user_question**: Temsilcilerin tek bir formda bir ila dört arası ilgili soru sormak için duraklamasına ve yanıtlarla devam etmesine olanak tanır. Varsayılan olarak etkindir.
 - **tools**: Ajanın çeşitli araçlara erişimini sağlar.
 - **chain**: Ajan zincirleme (Mixture-of-Agents (MoA) iş akışları olarak da bilinir) için Beta özelliğini etkinleştirir.
 - **ocr**: Sohbet içinde "Metin Olarak Yükle" özelliğini ve aracılar için "Dosya Bağlamı"nı isteğe bağlı olarak geliştirir; dosyaların yüklenmesine ve OCR ile işlenmesine olanak tanır. **Bir OCR hizmetinin yapılandırılmasını gerektirir.**
+- **run_in_background**: Code Interpreter yürütme ve shell araçlarını varsayılan olarak arka planda çalışmaya uygun hale getirir ve MCP araçları için araç bazında arka plan katılımını etkinleştirir. Bir ajan, Code Interpreter'ı açıkça devre dışı bırakabilir. Bu ayar arka planda yürütmeye izin verir; model, her çağrıda bunu kullanıp kullanmayacağına karar verir. `execute_code` ve kod için yapılandırılmış bir Code Interpreter dağıtımı gerektirir. Bu yetenek varsayılan olarak etkin değildir.
+- **tool_intents**: Uygun araç çağrılarına canlı model yazımı niyet etiketleri ekler. Kod Yorumlayıcı araçları dahil olmak üzere yerel araçlar otomatik olarak dahil olur; MCP araçları, Agent Builder içinde tek tek veya toplu olarak etkinleştirilebilir. Model specs, `describeIntent` kullanır. Bu özellik varsayılan olarak etkin değildir.
 
 Yetenekleri belirterek, kullanıcıların temsilcilerle etkileşim kurarken erişebilecekleri özellikleri kontrol edebilirsiniz.
 
@@ -359,6 +545,10 @@ endpoints:
       # Optional: enables Programmatic Tool Calling for MCP tools marked Programmatic in the Agent Builder.
       # - 'programmatic_tools'
       - 'execute_code'
+      # Optional: makes Code Interpreter background-eligible and enables selected MCP tools.
+      # - 'run_in_background'
+      # Optional: enables live intent labels for native and selected MCP tools.
+      # - 'tool_intents'
       - 'file_search'
       - 'skills'
       - 'subagents'
@@ -376,6 +566,8 @@ Bu örnekte:
 - Yalnızca %60 ve üzeri uygunluğa sahip kaynaklar dahil edilir
 - LibreChat Ajanları; kod yürütme, dosya arama (alıntılarla birlikte), Yetenekler (Skills), Alt ajanlar (Subagents), eylemler (actions), yapıtlar (artifacts), dosya bağlamı, yapılandırılmışsa OCR hizmetleri ve web arama yeteneklerine erişebilir.
 - `execute_code` ile birlikte `programmatic_tools` yeteneğini eklemediğiniz sürece Programmatic Tool Calling devre dışı kalmaya devam eder.
+- Arka plan araç çağrıları, `run_in_background` eklemediğiniz sürece devre dışı kalmaya devam eder; Code Interpreter araçları varsayılan olarak uygun hale gelirken, MCP araçları hala araç bazında seçim gerektirir.
+- `tool_intents` eklemediğiniz sürece araç amacı etiketleri devre dışı kalır; yerel araçlar otomatik olarak dahil olurken, MCP araçları hala araç bazında seçim gerektirir.
 
 ## remoteApi
 

@@ -39,6 +39,8 @@ LibreChat의 Code Interpreter API는 간단한 API 인터페이스를 통해 코
 - 안전한 파일 관리
 - 세션 기반 파일 구성
 
+LibreChat은 에이전트 실행 전에 참조된 대화 파일을 현재 Code Interpreter 환경으로 복원합니다. 필요한 모든 Code Interpreter 파일 복구에 실패하면, 실행은 모델 호출 전에 중단되며, 오래된 참조로 계속 진행하는 대신 사용자에게 파일을 다시 첨부하도록 요청합니다.
+
 ### 보안 및 편의성 [#security--convenience]
 
 - 안전한 샌드박스 실행 환경
@@ -52,6 +54,24 @@ Programmatic Tool Calling을 사용하면 LibreChat 에이전트가 선택된 MC
 
 샌드박스는 여전히 일반적인 네트워크 액세스를 수신하지 않습니다. 도구 호출은 Code Interpreter Tool Call Server와 LibreChat에 등록된 도구 맵을 통해 중개되므로, 에이전트가 사용할 수 있는 도구만 호출할 수 있습니다.
 
+### Background Code Execution [#background-code-execution]
+
+백그라운드 실행을 통해 에이전트는 오래 걸리는 코드나 셸 작업을 전달하고, 대화를 계속하며, 나중에 `check_background_task`를 통해 결과를 검색할 수 있습니다. LibreChat 채팅에서 작업이 완료되면, 표준 출력(stdout)과 생성된 파일이 원래 코드 호출 위치에 나타납니다. 생성된 파일은 에이전트가 아직 작업을 폴링하지 않았더라도 이후 턴을 위해 유지됩니다.
+
+이 기능은 배포 수준에서 선택적으로 사용할 수 있습니다. [Agents endpoint capabilities](/docs/configuration/librechat_yaml/object_structure/agents#capabilities)의 `execute_code`와 함께 `run_in_background`를 추가한 다음, 에이전트에서 Code Interpreter를 활성화하세요. 코드 실행 및 셸 호출은 자동으로 백그라운드 실행 대상이 됩니다. 에이전트가 이를 사용하지 않도록 하려면 Code Interpreter 도구 설정에서 **Background execution**을 끄십시오. 모델은 여전히 호출 시마다 적격한 작업을 백그라운드에서 처리할지 여부를 결정합니다.
+
+백그라운드 작업 상태는 프로세스 로컬이며, 앱 재시작이나 복제본 간 이동 시 유지되지 않습니다. 또한 백그라운드 디스패치는 Code Interpreter 서비스의 실행 제한을 연장하지 않으며, 배포의 일반적인 서버 측 타임아웃이 그대로 적용됩니다.
+
+### 상태 유지 코드 세션 (Stateful Code Sessions) [#stateful-code-sessions]
+
+Stateful code sessions을 사용하면 LibreChat Agent가 대화당 하나의 Code Interpreter 샌드박스 작업 공간을 재사용할 수 있습니다. 파일, 설치된 패키지 및 작업 상태가 일반적으로 실행 간에 유지되므로 반복적인 분석과 다단계 파일 생성이 더욱 효율적으로 이루어집니다.
+
+<Callout type="warning" title="매우 실험적인 기능">
+  Stateful Code Sessions는 초기 실험 단계에 있습니다. 해당 기능의 동작, 구성, 지속성 특성 및 기반 통합은 크게 변경될 수 있습니다. 현재 구현을 안정적인 프로덕션 계약으로 간주하지 마십시오.
+</Callout>
+
+이 기능은 선택 사항입니다. [Agents endpoint capabilities](/docs/configuration/librechat_yaml/object_structure/agents#capabilities)에서 `execute_code` 및 `stateful_code_sessions`를 활성화하고, 에이전트에서 Code Interpreter를 활성화한 다음, 고급 설정에서 **Stateful code sessions**를 켜십시오. 작업 공간은 언제든지 초기화될 수 있습니다. 중요한 출력물은 `/mnt/data` 아래에 저장하고, 그 외의 경우에는 세션 상태를 영구 저장소로 의존하지 마십시오.
+
 ## API 사용하기 [#using-the-api]
 
 ### LibreChat에서 [#in-librechat]
@@ -63,6 +83,10 @@ LibreChat은 다음의 주요 방법을 통해 API를 일급 지원합니다:
 2. **수동 실행**: 아래와 같이 채팅 인터페이스 내 코드 블록에 있는 "Run Code" 버튼을 사용하세요:
 
 3. **[Programmatic Tool Calling](/docs/features/agents#programmatic-tool-calling)**: `programmatic_tools` 기능을 활성화하고 선택한 MCP 도구를 Programmatic으로 표시하여 에이전트가 샌드박스 환경의 코드에서 해당 도구를 오케스트레이션할 수 있도록 합니다.
+
+4. **[Background Tool Calls](/docs/features/agents#background-tool-calls)**: 에이전트가 적격한 코드를 백그라운드에서 실행하도록 지시하고, 코드가 실행되는 동안 계속 작업을 진행할 수 있게 합니다.
+
+5. **[Stateful Code Sessions](/docs/features/agents#stateful-code-sessions)**: 실험적으로 에이전트의 코드 실행 전반에 걸쳐 대화별 작업 공간을 재사용합니다.
 
 ![LibreChat의 코드 인터프리터](/images/agents/run_code.png)
 
@@ -96,12 +120,19 @@ Code Interpreter API는 간단한 API 키 인증을 사용하여 모든 애플�
 
 - 입력 파일 업로드
 - 생성된 출력물 다운로드
-- LibreChat이 Office, CSV, 텍스트 및 PDF와 유사한 아티팩트를 안전하게 추출/렌더링할 수 있을 때 인라인으로 미리 보기 생성
+- LibreChat이 안전하게 추출/렌더링할 수 있는 경우, PowerPoint `.pptx` 프레젠테이션 및 `.potx` 템플릿을 포함한 Office 파일, 그리고 CSV, 텍스트 및 PDF와 유사한 아티팩트를 인라인으로 미리보기합니다.
+- Agent의 `read_file` 도구에 의해 반환된 PNG, JPEG, GIF 및 WebP 이미지를 볼 수 있는 아티팩트로 표시합니다.
 - 사용 가능한 파일 목록
 - 불필요한 파일 삭제
 - 파일 세션 관리
 
-생성된 아티팩트 미리보기는 의도적으로 크기가 제한되어 있습니다. 인라인 미리보기 추출을 위한 소스 파일 크기 제한을 변경하려면 LibreChat의 `.env` 파일에서 `FILE_PREVIEW_MAX_EXTRACT_BYTES`를 설정하세요. 더 큰 파일은 계속해서 다운로드할 수 있습니다.
+생성된 아티팩트 미리보기는 의도적으로 크기가 제한되어 있습니다. 인라인 미리보기 추출을 위한 소스 파일 크기 제한을 변경하려면 LibreChat의 `.env`에서 [`FILE_PREVIEW_MAX_EXTRACT_BYTES`](/docs/configuration/dotenv#inline-file-previews)를 설정하세요. 더 큰 파일은 계속해서 다운로드할 수 있습니다.
+
+`read_file`을 통해 반환되는 샌드박스 이미지는 1 MiB의 인라인 제한이 있습니다. 더 큰 이미지는 `bash_tool`을 통한 처리를 위해 샌드박스 내에 유지됩니다. `LIBRECHAT_CODE_IMAGE_CHUNK_BYTES`는 적격 이미지를 읽는 동안 사용되는 전송 청크 크기만 제어하며, 인라인 제한을 높이지는 않습니다.
+
+<Callout type="warning" title="레거시 코드 출력에 대한 업그레이드 확인">
+  고유한 출력 파일 인덱스가 추가되기 전에 동일한 Code Interpreter 파일 이름을 재생성했던 배포의 경우, 인덱스 생성을 방해하는 중복된 MongoDB 레코드가 있을 수 있습니다. `npm run migrate:code-file-duplicates:dry-run`으로 복구 작업을 미리 확인한 다음, `npm run migrate:code-file-duplicates`를 사용하여 적용하십시오. 이 마이그레이션은 가장 최신의 표준 파일 이름을 유지하고, 이전 레코드의 이름을 숫자 접미사를 붙여 변경하며, 성공적으로 실행된 후 고유 인덱스를 생성합니다.
+</Callout>
 
 ### 제한 사항 [#limitations]
 - 코드는 네트워크에 액세스할 수 없습니다

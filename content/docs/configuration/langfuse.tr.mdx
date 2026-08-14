@@ -18,7 +18,24 @@ Başlamadan önce şunlara sahip olduğunuzdan emin olun:
 
 ## Kurulum [#setup]
 
-LibreChat kurulum dizininizdeki `.env` dosyasına aşağıdaki Langfuse ile ilgili ortam değişkenlerini ekleyin:
+Tek kiracılı bir dağıtım için uygulama içi bağlantıyı veya ortam tarafından yönetilen kimlik bilgilerini seçin. Tamamlanmış ortam kimlik bilgileri önceliğe sahiptir.
+
+### Uygulama İçi Bağlantı [#in-app-connection]
+
+Yetkili bir yönetici **Ayarlar → Langfuse** kısmını açabilir, onaylanmış bir hedef seçebilir, projenin genel (public) ve gizli (secret) anahtarlarını girebilir ve **Kaydet ve etkinleştir** seçeneğine tıklayabilir. LibreChat, kaydetmeden önce her iki anahtarı da doğrular, doğrulanmış proje kimliğini kaydeder, gizli anahtarı bekleme durumundayken (at rest) şifreler ve sonraki okumalarda yalnızca maskelenmiş bir önizleme döndürür. Kaydedilmiş bir bağlantı, gizli anahtarı açığa çıkarmadan etkinleştirilebilir, devre dışı bırakılabilir, yeniden test edilebilir veya değiştirilebilir.
+
+Bu ayar hem `access:admin` hem de `manage:configs:langfuse` (veya karşılık gelen geniş/yönetici izinlerini) gerektirir. İzleme (tracing) etkinleştirildiğinde ve aşağıdaki durumlarda kullanılabilir:
+
+- Tek kiracılı (single-tenant) bir dağıtımda hem `LANGFUSE_PUBLIC_KEY` hem de `LANGFUSE_SECRET_KEY` bulunmaz.
+- Bir fanout dağıtımında toplayıcı (collector) etkindir ve kiracı dışa aktarımı (tenant export) acil durum anahtarı tarafından devre dışı bırakılmamıştır.
+
+Düz metin halindeki bir `langfuse.secretKey` değerini doğrudan `librechat.yaml` içine yerleştirmeyin; çalışma zamanı, yetkili bir yapılandırma yazma işlemi tarafından üretilen şifrelenmiş değeri kabul eder. Normal bağlantı iş akışı için Ayarlar sayfasını kullanın.
+
+Kaydedilen bağlantı temel yapılandırmaya aittir. Rol, grup ve kullanıcı yapılandırması geçersiz kılmaları `langfuse` bölümünü değiştiremez veya kaldıramaz.
+
+### Ortam Tarafından Yönetilen Bağlantı [#environment-managed-connection]
+
+Dağıtım operatörlerinin merkezi bağlantıya sahip olması gerektiğinde aşağıdaki değerleri `.env` dosyanıza ekleyin:
 
 <OptionTable
   options={[
@@ -30,6 +47,24 @@ LibreChat kurulum dizininizdeki `.env` dosyasına aşağıdaki Langfuse ile ilgi
       'Langfuse API temel URL\'si.',
       'LANGFUSE_BASE_URL=https://cloud.langfuse.com',
     ],
+    [
+      'LANGFUSE_PROJECT_ID',
+      'string',
+      'İsteğe bağlı kararlı proje kimliği. Belirtilmediğinde, LibreChat bunu arka planda keşfeder ve geri bildirim yönlendirmesi için önbelleğe alır.',
+      'LANGFUSE_PROJECT_ID=',
+    ],
+    [
+      'LANGFUSE_TRACING_ENABLED',
+      'boolean',
+      'Langfuse izlemelerini ve geri bildirim puanlarını devre dışı bırakmak için false olarak ayarlayın. Varsayılan: true.',
+      'LANGFUSE_TRACING_ENABLED=true',
+    ],
+    [
+      'LANGFUSE_SAMPLE_RATE',
+      'number',
+      '0 ile 1 arasında deterministik izleme düzeyi örnekleme oranı. Varsayılan: 1.',
+      'LANGFUSE_SAMPLE_RATE=1',
+    ],
   ]}
 />
 
@@ -39,6 +74,8 @@ LibreChat kurulum dizininizdeki `.env` dosyasına aşağıdaki Langfuse ile ilgi
 # Langfuse Configuration
 LANGFUSE_PUBLIC_KEY=pk-lf-***
 LANGFUSE_SECRET_KEY=sk-lf-***
+# LANGFUSE_PROJECT_ID=project-id
+# LANGFUSE_SAMPLE_RATE=1
 
 # 🇪🇺 EU Data Region
 LANGFUSE_BASE_URL=https://cloud.langfuse.com
@@ -50,6 +87,129 @@ LANGFUSE_BASE_URL=https://cloud.langfuse.com
 <Callout type="note" title="Kendi Sunucunuzda Barındırılan Langfuse">
   Kendi kendine barındırılan Langfuse örnekleri için `LANGFUSE_BASE_URL` değerini özel URL'nize ayarlayın (örneğin, yerel geliştirme için `http://localhost:3000`).
 </Callout>
+
+Her iki ortam anahtarı da mevcut olduğunda, LibreChat bunları merkezi proje için kullanır ve **Settings → Langfuse** kısmını gizler. `LANGFUSE_TRACING_ENABLED=false` veya `LANGFUSE_SAMPLE_RATE=0` ayarları hem izlemeleri (traces) hem de geri bildirim puanlarını devre dışı bırakır. Kesirli örnekleme, izleme başına deterministik bir karar verir; örnekleme dışı bırakılan izlemeler daha sonra geri bildirim puanı almaz.
+
+## Tenant Fanout (İsteğe bağlı) [#tenant-fanout-optional]
+
+Langfuse fanout, çok kiracılı bir LibreChat dağıtımının her uygun izlemeyi (trace) ve medyasını hem merkezi bir Langfuse projesine hem de kiracıya özel bir projeye aktarmasına olanak tanır. Bu özellik isteğe bağlıdır ve bir ağ geçidi ile dahili bir OpenTelemetry toplayıcısı ekler; fanout dağıtılmadığında yukarıdaki normal tek projeli izleme değişmeden kalır.
+
+Fanout iki yapılandırma katmanı kullanır:
+
+- Dağıtım ortam değişkenleri, başlangıçta merkezi projeyi, ağ geçidini ve izin verilen kiracı hedeflerini tanımlar.
+- **Ayarlar → Langfuse**, kiracının etkin durumunu, genel anahtarını, şifrelenmiş gizli anahtarını, doğrulanmış proje kimliğini ve izin verilen bir hedefi sağlar. Anahtarlar, ağ geçidini yeniden başlatmaya gerek kalmadan çalışma zamanında değiştirilebilir.
+
+Dahil edilen Compose geçersiz kılması (override), `eu`, `us` ve `jp` Langfuse Cloud hedeflerini destekler:
+
+```sh filename=".env"
+LANGFUSE_BASE_URL=https://cloud.langfuse.com
+LANGFUSE_FANOUT_CENTRAL_BASE_URL=https://cloud.langfuse.com
+LANGFUSE_FANOUT_CENTRAL_AUTH_HEADER="Basic <base64-public-key-colon-secret-key>"
+LANGFUSE_FANOUT_CENTRAL_MEDIA_UPLOAD_DISABLED=false
+LANGFUSE_FANOUT_TENANT_DESTINATIONS="eu=https://cloud.langfuse.com,us=https://us.cloud.langfuse.com,jp=https://jp.cloud.langfuse.com"
+LANGFUSE_FANOUT_TRACE_DESTINATION_KEYS=eu,us,jp
+LANGFUSE_FANOUT_TENANT_EXPORT_DISABLED=false
+```
+
+Fanout geçersiz kılma (override) ile normal Compose yığınını başlatın:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.langfuse-fanout.yml up -d
+```
+
+Bu geçersiz kılma (override) `LANGFUSE_FANOUT_ENABLED` değerini etkinleştirir, LibreChat'i ağ geçidine (gateway) yönlendirir ve collector ile özel Redis servislerini başlatır. Dağıtılmış yığın (stack) için bunun yerine `deploy-compose.yml` dosyasını `deploy-compose.langfuse-fanout.yml` ile birleştirin.
+
+Ağ geçidi varsayılan olarak `:4318` portunu dinler. Özel dağıtımlar, `LANGFUSE_FANOUT_LISTEN_ADDR` ile bağlama adresini geçersiz kılabilir; dahil edilen Compose ve Helm yapılandırmaları standart ağ geçidi portunu zaten yönlendirmektedir.
+
+### Helm Dağıtımı [#helm-deployment]
+
+Compose geçersiz kılmaları (overrides) ağ geçidini yerel olarak oluşturur, ancak Kubernetes'in bir kayıt defterinden erişilebilir bir imaja ihtiyacı vardır. LibreChat deposunun kök dizininden, chart'ı yüklemeden önce ağ geçidini oluşturun ve gönderin:
+
+```sh
+docker build \
+  -f otel/langfuse-fanout/Dockerfile \
+  -t registry.example.com/librechat-langfuse-fanout:<tag> .
+docker push registry.example.com/librechat-langfuse-fanout:<tag>
+```
+
+Tam merkezi Langfuse Basic auth başlığını içeren bir Kubernetes Secret oluşturun. Değeri, `Basic ` ifadesini takiben base64 ile kodlanmış `<public-key>:<secret-key>` kimlik bilgilerinden oluşmalıdır:
+
+```sh
+kubectl create secret generic langfuse-central \
+  --from-literal=LANGFUSE_FANOUT_CENTRAL_AUTH_HEADER='Basic <base64-public-key-colon-secret-key>'
+```
+
+Helm değerlerinde fanout dağıtımını etkinleştirin. Bu örnek, paketlenmiş Redis chart'ını kullanır; harici bir Redis hizmeti kullanırken bunun yerine `langfuseFanout.redis.uri` değerini ayarlayın.
+
+```yaml filename="values.yaml"
+redis:
+  enabled: true
+
+langfuseFanout:
+  enabled: true
+  image:
+    repository: registry.example.com/librechat-langfuse-fanout
+    tag: '<tag>'
+    pullPolicy: IfNotPresent
+  central:
+    baseUrl: https://cloud.langfuse.com
+    authHeaderSecret:
+      name: langfuse-central
+      key: LANGFUSE_FANOUT_CENTRAL_AUTH_HEADER
+  metrics:
+    secret:
+      name: librechat-metrics
+      key: METRICS_SECRET
+  tenant:
+    destinations:
+      eu:
+        baseUrl: https://cloud.langfuse.com
+      us:
+        baseUrl: https://us.cloud.langfuse.com
+      jp:
+        baseUrl: https://jp.cloud.langfuse.com
+  upstreamTimeout: 30s
+  publicUrl: ''
+  otelCollector:
+    receiverEndpoint: 127.0.0.1:4319
+  redis:
+    uri: ''
+    username: ''
+    passwordSecret:
+      name: ''
+      key: REDIS_PASSWORD
+    keyPrefix: langfuse-fanout
+  memoryLimitMiB: 256
+  memorySpikeLimitMiB: 64
+  batchTimeout: 1s
+  batchSendSize: 128
+  metadataCardinalityLimit: 1000
+```
+
+Metrics Secret isteğe bağlıdır, ancak `langfuseFanout.metrics.secret` bir bearer token sağlamadığı sürece `/metrics` uç noktası `401` hatası döndürür. Metrik kazıma (scraping) gerektiğinde bunu ayrı olarak oluşturun:
+
+```sh
+kubectl create secret generic librechat-metrics \
+  --from-literal=METRICS_SECRET='<metrics-bearer-token>'
+```
+
+Grafik, `4318` numaralı bağlantı noktasında bir ağ geçidi (gateway) kapsayıcısı ve `4319` numaralı bağlantı noktasında dahili bir OpenTelemetry Collector sidecar içeren bir Deployment oluşturur; Service tarafından yalnızca ağ geçidi dışa aktarılır. Ayrıca, bu anahtarlar `librechat.configEnv` içinde zaten ayarlanmamışsa, `LANGFUSE_FANOUT_ENABLED` ve dahili `LANGFUSE_FANOUT_COLLECTOR_URL` değerlerini LibreChat içine enjekte eder.
+
+Redis, kısa ömürlü ve tek seferlik medya yükleme planlarını depolar; böylece oluşturma ve yükleme istekleri farklı gateway replikalarına ulaşabilir. Harici ve kimlik doğrulaması gerektiren bir Redis hizmeti için `langfuseFanout.redis.uri` değerini, isteğe bağlı olarak `username` ve `passwordSecret` alanlarını ayarlayın; kimlik bilgilerini URI içinde tutmayın çünkü URI doğrudan Deployment ortamına işlenir. Birlikte gelen Redis chart'ı ve kimlik doğrulaması etkinleştirilmiş durumdayken, uyumlu bir parola Secret'ı veya açıkça kimlik doğrulaması yapılmış harici bir URI sağlayın.
+
+Fanout ölçeklendirmesini `langfuseFanout.replicaCount` ile manuel olarak yapın; chart bir fanout HPA oluşturmaz. Liveness ve readiness probları `/healthz` kullanır ve `langfuseFanout.livenessProbe` ile `langfuseFanout.readinessProbe` altında özelleştirilebilir.
+
+Ek dağıtım geçersiz kılmaları, Service türü, bağlantı noktası ve ek açıklamalar için `langfuseFanout.service` değerini; ağ geçidi Pod'u için `resources`, `podAnnotations` ve `podLabels` değerlerini; ve sidecar için `otelCollector.image` ve `otelCollector.resources` değerlerini içerir. `langfuseFanout.traceCollectorUrl` veya `otelCollector.receiverEndpoint` değerlerini değiştirirseniz, her iki değerin de aynı dahili toplayıcı dinleyicisini işaret ettiğinden emin olun.
+
+Depolanan üst düzey `langfuse` nesnesi; `enabled`, `publicKey`, şifrelenmiş `secretKey`, doğrulanmış `projectId`, sunucu tarafından oluşturulan `secretKeyPreview` ve `destination` alanlarını içerir. Bunu API tarafından yönetilen bir yapılandırma olarak ele alın: önizleme alanlarını veya şifrelenmiş yükleri gizli anahtar (secret) olarak geri göndermeyin. Daha önceki `displaySecretKey` ve iç içe geçmiş `fanout.enabled` alanları artık kullanılmamaktadır.
+
+Kiracı dışa aktarımı (tenant export) yalnızca fanout ve toplayıcı URL'si etkinleştirildiğinde, kaydedilen bağlantı geçerli anahtarlarla etkinleştirildiğinde ve `destination` izin verilen bir başlangıç hedefiyle eşleştiğinde gerçekleşir. Diğer izlemeler (traces) merkezi projeye akmaya devam edebilir. Kiracı izleme ve geri bildirim puanı dışa aktarımını durdururken merkezi dışa aktarımı korumak için acil durum anahtarı olarak `LANGFUSE_FANOUT_TENANT_EXPORT_DISABLED=true` ayarını kullanın; bu aynı zamanda kiracı dışa aktarımı geri yüklenene kadar uygulama içi bağlantı ayarını gizler.
+
+LibreChat SDK'sının merkezi veya yedek toplayıcı izlemeleri için medya yüklemeleri oluşturmasını engellemek üzere `LANGFUSE_FANOUT_CENTRAL_MEDIA_UPLOAD_DISABLED=true` ayarını yapın; kiracı yönlendirmeli medya yüklemeleri bundan etkilenmez. Bu uygulama tarafı anahtarı, bir yükleme ağ geçidine ulaştıktan sonra merkezi medya iletimini engelleyen ağ geçidi tarafındaki `LANGFUSE_FANOUT_CENTRAL_MEDIA_EXPORT_DISABLED` ayarından farklıdır.
+
+İzleme ve medya trafiği fanout ağ geçidi üzerinden geçer. Geri bildirim puanları doğrudan LibreChat'ten gönderilir: merkezi puanlar `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` ve `LANGFUSE_BASE_URL` kullanırken, kiracı puanları kiracı uygulama yapılandırmasını kullanır.
+
+Tüm ağ geçidi değişkenleri, özel hedef kurulumu, metrikler, ölçeklendirme ve Redis davranışı için [Langfuse fanout deployment reference](https://github.com/danny-avila/LibreChat/blob/dev/otel/langfuse-fanout/README.md) bölümüne bakın.
 
 ## LibreChat'i Yeniden Başlatın [#restart-librechat]
 
@@ -67,6 +227,8 @@ LibreChat, Langfuse yapılandırılmış şekilde yeniden başlatıldığında, 
 ![LibreChat örnek izlemesi](https://langfuse.com/images/cookbook/integration_librechat/librechat-example-trace.png)
 
 [Langfuse arayüzündeki izleme bağlantısı](https://cloud.langfuse.com/project/cloramnkj0002jz088vzn1ja4/traces/57b4aa20a258a2e9e2d1ce2e4eacb21c?observation=06f5341a68d723b1&timestamp=2026-02-04T13%3A02%3A54.248Z&traceId=57b4aa20a258a2e9e2d1ce2e4eacb21c)
+
+`access:admin` ve `manage:configs:langfuse` yetkilerine sahip yöneticiler, konuşmanın **Context Usage** (Bağlam Kullanımı) dökümünü açabilir ve **View session in Langfuse** (Oturumu Langfuse'da görüntüle) seçeneğini belirleyebilirler. Bağlantı, yalnızca üretim tamamlandıktan sonra ve konuşma, etkin uygulama içi Langfuse bağlantısına gönderilmiş en az bir örneklenmiş iz (sampled trace) içerdiğinde görünür. Bu bağlantı, ilgili bağlantının doğrulanmış hedefine ve projesine yönlendirir; ortam tarafından yönetilen kimlik bilgileri, devre dışı bırakılmış bağlantılar, örnekleme dışı bırakılmış konuşmalar veya Langfuse yapılandırma erişimi olmayan kullanıcılar için gösterilmez.
 
 ## Mesaj Geri Bildirim Puanları [#message-feedback-scores]
 

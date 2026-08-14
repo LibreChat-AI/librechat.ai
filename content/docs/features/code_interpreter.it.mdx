@@ -41,6 +41,8 @@ Esegui codice in molteplici linguaggi di programmazione:
 - Gestione sicura dei file
 - Organizzazione dei file basata sulla sessione
 
+LibreChat ripristina i file di conversazione referenziati nell'ambiente Code Interpreter corrente prima dell'esecuzione di un Agent. Se il ripristino di tutti i file Code Interpreter richiesti fallisce, l'esecuzione si interrompe prima dell'invocazione del modello e richiede all'utente di riallegare i file invece di continuare con riferimenti non aggiornati.
+
 ### Sicurezza e Comodità [#security--convenience]
 
 - Ambiente di esecuzione sandbox sicuro
@@ -54,6 +56,24 @@ Il Programmatic Tool Calling consente agli Agenti LibreChat di instradare gli st
 
 Il sandbox non riceve ancora l'accesso alla rete generale. Le chiamate agli strumenti vengono gestite tramite il Code Interpreter Tool Call Server e la mappa degli strumenti registrati di LibreChat, pertanto possono essere chiamati solo gli strumenti disponibili per l'agente.
 
+### Esecuzione di codice in background [#background-code-execution]
+
+L'esecuzione in background consente a un Agent di inviare codice a lunga esecuzione o operazioni shell, continuare la conversazione e recuperare il risultato in un secondo momento tramite `check_background_task`. Nella chat di LibreChat, quando il lavoro termina, lo stdout e i file generati appaiono nella chiamata al codice originale. I file generati vengono conservati per i turni successivi, anche se l'Agent non ha ancora eseguito il polling dell'attività.
+
+Questa funzionalità è facoltativa a livello di deployment. Aggiungi `run_in_background` insieme a `execute_code` nelle [funzionalità dell'endpoint Agents](/docs/configuration/librechat_yaml/object_structure/agents#capabilities), quindi abilita Code Interpreter sull'agente. L'esecuzione del codice e le chiamate alla shell diventano automaticamente idonee per l'esecuzione in background; disattiva **Background execution** nelle impostazioni dello strumento Code Interpreter quando un agente deve rinunciare a questa opzione. Il modello decide comunque per ogni chiamata se inviare il lavoro idoneo in background.
+
+Lo stato delle attività in background è locale al processo e non sopravvive a un riavvio dell'applicazione o allo spostamento tra repliche. L'invio in background non estende inoltre il limite di esecuzione del servizio Code Interpreter; rimane applicabile il normale timeout lato server della distribuzione.
+
+### Sessioni di codice stateful [#stateful-code-sessions]
+
+Le sessioni di codice stateful consentono a un agente LibreChat di riutilizzare un singolo ambiente sandbox di Code Interpreter per conversazione. File, pacchetti installati e stato di lavoro vengono solitamente mantenuti tra le esecuzioni, rendendo l'analisi iterativa e la generazione di file in più passaggi più efficienti.
+
+<Callout type="warning" title="Altamente sperimentale">
+  Le Stateful Code Sessions sono in una fase di sperimentazione iniziale. Il loro comportamento, la configurazione, le caratteristiche di persistenza e l'integrazione sottostante potrebbero cambiare sostanzialmente. Non considerare l'attuale implementazione come un contratto di produzione stabile.
+</Callout>
+
+Questa funzionalità è facoltativa. Abilita `execute_code` e `stateful_code_sessions` nelle [funzionalità dell'endpoint Agents](/docs/configuration/librechat_yaml/object_structure/agents#capabilities), abilita Code Interpreter sull'agente, quindi attiva **Stateful code sessions** nelle sue impostazioni avanzate. L'area di lavoro potrebbe essere ripristinata in qualsiasi momento. Salva gli output importanti in `/mnt/data` e non fare affidamento sullo stato della sessione come archivio permanente.
+
 ## Utilizzo dell'API [#using-the-api]
 
 ### In LibreChat [#in-librechat]
@@ -65,6 +85,10 @@ L'API ha un supporto di prima classe in LibreChat attraverso questi metodi princ
 2. **Esecuzione manuale**: Utilizza il pulsante "Run Code" nei blocchi di codice all'interno dell'interfaccia di chat, come mostrato qui:
 
 3. **[Programmatic Tool Calling](/docs/features/agents#programmatic-tool-calling)**: Abilita la funzionalità `programmatic_tools` e contrassegna gli strumenti MCP selezionati come Programmatic in modo che gli agenti possano orchestrare tali strumenti da codice in sandbox.
+
+4. **[Background Tool Calls](/docs/features/agents#background-tool-calls)**: Consenti a un agente di inviare codice idoneo in background e di continuare mentre viene eseguito.
+
+5. **[Stateful Code Sessions](/docs/features/agents#stateful-code-sessions)**: Riutilizza in via sperimentale un workspace per conversazione durante le esecuzioni di codice di un agente.
 
 ![Code Interpreter in LibreChat](/images/agents/run_code.png)
 
@@ -98,12 +122,19 @@ Imposta la variabile d'ambiente `LIBRECHAT_CODE_BASEURL` per puntare LibreChat a
 
 - Caricamento file di input
 - Scarica gli output generati
-- Visualizza in anteprima artefatti Office, CSV, testo e simili a PDF inline quando LibreChat può estrarli/renderizzarli in sicurezza
+- Visualizza in anteprima i file Office generati, inclusi le presentazioni PowerPoint `.pptx` e i modelli `.potx`, oltre a CSV, testo e artefatti simili a PDF inline quando LibreChat è in grado di estrarli/renderizzarli in sicurezza
+- Visualizza immagini PNG, JPEG, GIF e WebP restituite dallo strumento `read_file` di un Agent come artefatti visualizzabili
 - Elenca i file disponibili
 - Elimina i file non necessari
 - Gestisci le sessioni dei file
 
-Le anteprime degli artefatti generati hanno dimensioni limitate intenzionalmente. Imposta `FILE_PREVIEW_MAX_EXTRACT_BYTES` nel file `.env` di LibreChat per modificare il limite di dimensione del file sorgente per l'estrazione dell'anteprima in linea; i file più grandi rimarranno disponibili per il download.
+Le anteprime degli artefatti generati sono intenzionalmente limitate nelle dimensioni. Imposta [`FILE_PREVIEW_MAX_EXTRACT_BYTES`](/docs/configuration/dotenv#inline-file-previews) nel file `.env` di LibreChat per modificare il limite di dimensione del file sorgente per l'estrazione dell'anteprima in linea; i file più grandi rimarranno disponibili per il download.
+
+Le immagini della Sandbox restituite tramite `read_file` hanno un limite inline di 1 MiB. Le immagini più grandi rimangono nella sandbox per l'elaborazione con `bash_tool`. `LIBRECHAT_CODE_IMAGE_CHUNK_BYTES` controlla solo la dimensione del chunk di trasporto utilizzato durante la lettura delle immagini idonee; non aumenta il limite inline.
+
+<Callout type="warning" title="Controllo aggiornamento per output di codice legacy">
+  Le distribuzioni che hanno rigenerato lo stesso nome file di Code Interpreter prima dell'aggiunta dell'indice univoco per i file di output potrebbero presentare record MongoDB duplicati che impediscono la creazione dell'indice. Visualizza un'anteprima della riparazione con `npm run migrate:code-file-duplicates:dry-run`, quindi applicala con `npm run migrate:code-file-duplicates`. La migrazione mantiene il nome file canonico più recente, rinomina i record più vecchi con suffissi numerici e crea l'indice univoco dopo un'esecuzione corretta.
+</Callout>
 
 ### Limitazioni [#limitations]
 - Il codice non può accedere alla rete

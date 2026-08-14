@@ -16,7 +16,24 @@ description: このドキュメントでは、AIとの会話を完全に可視�
 
 ## セットアップ [#setup]
 
-LibreChat インストールディレクトリ内の `.env` ファイルに、以下の Langfuse 関連の環境変数を追加してください。
+シングルテナントデプロイメントでは、アプリ内接続または環境管理された認証情報のいずれかを選択してください。環境認証情報が設定されている場合、そちらが優先されます。
+
+### アプリ内接続 [#in-app-connection]
+
+権限を持つ管理者は、**Settings → Langfuse** を開き、承認済みの宛先を選択し、プロジェクトの公開鍵と秘密鍵を入力して、**Save & enable** を選択できます。LibreChat は保存前に両方のキーを検証し、検証済みのプロジェクトIDを記録し、秘密鍵を保存時に暗号化します。その後読み取る際には、マスクされたプレビューのみが返されます。保存された接続は、秘密鍵を公開することなく、有効化、無効化、再テスト、または置き換えが可能です。
+
+この設定には `access:admin` と `manage:configs:langfuse` （またはそれに対応する広範な権限/管理者権限）の両方が必要です。これは、トレーシングが有効になっており、かつ以下の場合に利用可能です：
+
+- シングルテナントのデプロイメントには、`LANGFUSE_PUBLIC_KEY` と `LANGFUSE_SECRET_KEY` の両方が含まれていません。
+- ファンアウトデプロイメントでは、コレクターが有効になっており、かつ緊急スイッチによってテナントのエクスポートが無効化されていない状態です。
+
+プレーンテキストの `langfuse.secretKey` を直接 `librechat.yaml` に記述しないでください。ランタイムは、承認された設定書き込みによって生成された暗号化された値を受け入れます。通常の接続ワークフローには、設定ページを使用してください。
+
+保存された接続は基本設定に属します。ロール、グループ、およびユーザー設定のオーバーライドでは、`langfuse` セクションを置き換えたり削除したりすることはできません。
+
+### 環境変数で管理される接続 [#environment-managed-connection]
+
+デプロイメントオペレーターが中央接続を管理する必要がある場合は、`.env` ファイルに以下の値を追加してください：
 
 <OptionTable
   options={[
@@ -28,6 +45,24 @@ LibreChat インストールディレクトリ内の `.env` ファイルに、�
       'Langfuse APIのベースURL。',
       'LANGFUSE_BASE_URL=https://cloud.langfuse.com',
     ],
+    [
+      'LANGFUSE_PROJECT_ID',
+      'string',
+      'オプションの安定したプロジェクトID。省略した場合、LibreChatはバックグラウンドで自動的に検出およびキャッシュを行い、フィードバックのルーティングに使用します。',
+      'LANGFUSE_PROJECT_ID=',
+    ],
+    [
+      'LANGFUSE_TRACING_ENABLED',
+      'boolean',
+      'falseに設定すると、Langfuseのトレースとフィードバックスコアが無効になります。デフォルト: true。',
+      'LANGFUSE_TRACING_ENABLED=true',
+    ],
+    [
+      'LANGFUSE_SAMPLE_RATE',
+      'number',
+      '0から1までの決定論的なトレースレベルのサンプルレート。デフォルト: 1。',
+      'LANGFUSE_SAMPLE_RATE=1',
+    ],
   ]}
 />
 
@@ -37,6 +72,8 @@ LibreChat インストールディレクトリ内の `.env` ファイルに、�
 # Langfuse Configuration
 LANGFUSE_PUBLIC_KEY=pk-lf-***
 LANGFUSE_SECRET_KEY=sk-lf-***
+# LANGFUSE_PROJECT_ID=project-id
+# LANGFUSE_SAMPLE_RATE=1
 
 # 🇪🇺 EU Data Region
 LANGFUSE_BASE_URL=https://cloud.langfuse.com
@@ -48,6 +85,129 @@ LANGFUSE_BASE_URL=https://cloud.langfuse.com
 <Callout type="note" title="セルフホスト型 Langfuse">
   セルフホスト型の Langfuse インスタンスを使用する場合は、`LANGFUSE_BASE_URL` をカスタム URL に設定してください（例: ローカル開発環境の場合は `http://localhost:3000`）。
 </Callout>
+
+両方の環境変数が存在する場合、LibreChatはそれらを中央プロジェクトに使用し、**Settings → Langfuse** を非表示にします。`LANGFUSE_TRACING_ENABLED=false` または `LANGFUSE_SAMPLE_RATE=0` を設定すると、トレースとフィードバックスコアの両方が無効になります。サンプリングレートを小数で指定した場合、トレースごとに決定論的な判断が下されます。サンプリング対象外となったトレースには、その後のフィードバックスコアは付与されません。
+
+## テナントファンアウト (オプション) [#tenant-fanout-optional]
+
+Langfuse fanoutを使用すると、マルチテナントのLibreChatデプロイメントにおいて、各対象のトレースとそのメディアを、中央のLangfuseプロジェクトとテナント固有のプロジェクトの両方にエクスポートできます。この機能はオプトイン形式であり、ゲートウェイと内部のOpenTelemetryコレクターを追加します。fanoutがデプロイされていない場合、上記の通常の単一プロジェクトトレースは変更されません。
+
+Fanoutは2つの設定レイヤーを使用します：
+
+- デプロイメント環境変数は、起動時に中央プロジェクト、ゲートウェイ、および許可されたテナントの宛先を定義します。
+- **Settings → Langfuse** は、テナントの有効状態、公開鍵、暗号化された秘密鍵、検証済みプロジェクトID、および許可された宛先を1つ提供します。キーはゲートウェイを再起動することなく、実行時に変更可能です。
+
+付属の Compose オーバーライドは、`eu`、`us`、および `jp` の Langfuse Cloud 宛先をサポートしています：
+
+```sh filename=".env"
+LANGFUSE_BASE_URL=https://cloud.langfuse.com
+LANGFUSE_FANOUT_CENTRAL_BASE_URL=https://cloud.langfuse.com
+LANGFUSE_FANOUT_CENTRAL_AUTH_HEADER="Basic <base64-public-key-colon-secret-key>"
+LANGFUSE_FANOUT_CENTRAL_MEDIA_UPLOAD_DISABLED=false
+LANGFUSE_FANOUT_TENANT_DESTINATIONS="eu=https://cloud.langfuse.com,us=https://us.cloud.langfuse.com,jp=https://jp.cloud.langfuse.com"
+LANGFUSE_FANOUT_TRACE_DESTINATION_KEYS=eu,us,jp
+LANGFUSE_FANOUT_TENANT_EXPORT_DISABLED=false
+```
+
+fanoutオーバーライドを使用して、通常のComposeスタックを開始します：
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.langfuse-fanout.yml up -d
+```
+
+このオーバーライドにより `LANGFUSE_FANOUT_ENABLED` が有効になり、LibreChatがゲートウェイを指すようになり、コレクターおよびプライベートなRedisサービスが起動します。デプロイ済みのスタックについては、代わりに `deploy-compose.yml` と `deploy-compose.langfuse-fanout.yml` を組み合わせてください。
+
+ゲートウェイはデフォルトで `:4318` でリッスンします。カスタムデプロイメントでは `LANGFUSE_FANOUT_LISTEN_ADDR` を使用してバインドアドレスを上書きできます。同梱の Compose および Helm 設定では、標準のゲートウェイポートが既にルーティングされています。
+
+### Helm デプロイメント [#helm-deployment]
+
+Composeのオーバーライドはゲートウェイをローカルでビルドしますが、Kubernetesにはレジストリから利用可能なイメージが必要です。LibreChatリポジトリのルートから、チャートをインストールする前にゲートウェイをビルドしてプッシュしてください：
+
+```sh
+docker build \
+  -f otel/langfuse-fanout/Dockerfile \
+  -t registry.example.com/librechat-langfuse-fanout:<tag> .
+docker push registry.example.com/librechat-langfuse-fanout:<tag>
+```
+
+完全な中央Langfuse Basic認証ヘッダーを含むKubernetes Secretを作成します。その値は `Basic ` に続けて、base64エンコードされた `<public-key>:<secret-key>` 認証情報を指定します：
+
+```sh
+kubectl create secret generic langfuse-central \
+  --from-literal=LANGFUSE_FANOUT_CENTRAL_AUTH_HEADER='Basic <base64-public-key-colon-secret-key>'
+```
+
+Helm valuesでfanoutデプロイメントを有効にします。この例ではバンドルされているRedisチャートを使用しています。外部のRedisサービスを使用する場合は、代わりに `langfuseFanout.redis.uri` を設定してください。
+
+```yaml filename="values.yaml"
+redis:
+  enabled: true
+
+langfuseFanout:
+  enabled: true
+  image:
+    repository: registry.example.com/librechat-langfuse-fanout
+    tag: '<tag>'
+    pullPolicy: IfNotPresent
+  central:
+    baseUrl: https://cloud.langfuse.com
+    authHeaderSecret:
+      name: langfuse-central
+      key: LANGFUSE_FANOUT_CENTRAL_AUTH_HEADER
+  metrics:
+    secret:
+      name: librechat-metrics
+      key: METRICS_SECRET
+  tenant:
+    destinations:
+      eu:
+        baseUrl: https://cloud.langfuse.com
+      us:
+        baseUrl: https://us.cloud.langfuse.com
+      jp:
+        baseUrl: https://jp.cloud.langfuse.com
+  upstreamTimeout: 30s
+  publicUrl: ''
+  otelCollector:
+    receiverEndpoint: 127.0.0.1:4319
+  redis:
+    uri: ''
+    username: ''
+    passwordSecret:
+      name: ''
+      key: REDIS_PASSWORD
+    keyPrefix: langfuse-fanout
+  memoryLimitMiB: 256
+  memorySpikeLimitMiB: 64
+  batchTimeout: 1s
+  batchSendSize: 128
+  metadataCardinalityLimit: 1000
+```
+
+metrics Secret はオプションですが、`langfuseFanout.metrics.secret` でベアラートークンを指定しない限り、`/metrics` は `401` を返します。メトリクスのスクレイピングが必要な場合は、個別に作成してください：
+
+```sh
+kubectl create secret generic librechat-metrics \
+  --from-literal=METRICS_SECRET='<metrics-bearer-token>'
+```
+
+このチャートは、ポート `4318` のゲートウェイコンテナと、ポート `4319` の内部 OpenTelemetry Collector サイドカーを持つ1つの Deployment をレンダリングします。Service によって公開されるのはゲートウェイのみです。また、`librechat.configEnv` にこれらのキーが既に設定されていない限り、`LANGFUSE_FANOUT_ENABLED` と内部の `LANGFUSE_FANOUT_COLLECTOR_URL` を LibreChat に注入します。
+
+Redisは短命なワンタイムのメディアアップロードプランを保存するため、作成およびアップロードのリクエストが異なるゲートウェイのレプリカに到達できるようになります。外部の認証済みRedisサービスを使用する場合は、`langfuseFanout.redis.uri`、およびオプションの`username`と`passwordSecret`を設定してください。URIはDeployment環境に直接レンダリングされるため、認証情報はURIに含めないようにしてください。バンドルされているRedisチャートを使用し、認証を有効にする場合は、互換性のあるパスワードSecretを提供するか、明示的に認証された外部URIを指定してください。
+
+`langfuseFanout.replicaCount` を使用して手動でファンアウトをスケールします。チャートはファンアウト用のHPAを作成しません。LivenessプローブおよびReadinessプローブは `/healthz` を使用しており、`langfuseFanout.livenessProbe` および `langfuseFanout.readinessProbe` でカスタマイズ可能です。
+
+その他のデプロイメントのオーバーライドには、Serviceのタイプ、ポート、アノテーションを指定する `langfuseFanout.service`、ゲートウェイPod用の `resources`、`podAnnotations`、`podLabels`、そしてサイドカー用の `otelCollector.image` および `otelCollector.resources` が含まれます。`langfuseFanout.traceCollectorUrl` または `otelCollector.receiverEndpoint` を変更する場合は、両方の値が同じ内部コレクターリスナーを指すようにしてください。
+
+保存されたトップレベルの `langfuse` オブジェクトには、`enabled`、`publicKey`、暗号化された `secretKey`、検証済みの `projectId`、サーバー生成された `secretKeyPreview`、および `destination` が含まれています。これらはAPI管理下の設定として扱い、プレビューフィールドや暗号化されたペイロードをシークレットとして再送信しないでください。以前の `displaySecretKey` およびネストされた `fanout.enabled` フィールドは使用されなくなりました。
+
+テナントのエクスポートは、ファンアウトとコレクターURLが有効で、保存された接続が有効なキーで有効化されており、かつ `destination` が許可された起動先と一致する場合にのみ発生します。その他のトレースは、引き続き中央プロジェクトに送信可能です。`LANGFUSE_FANOUT_TENANT_EXPORT_DISABLED=true` を緊急スイッチとして設定することで、中央へのエクスポートを維持したまま、テナントのトレースおよびフィードバックスコアのエクスポートを停止できます。これを行うと、テナントのエクスポートが復元されるまで、アプリ内の接続設定も非表示になります。
+
+`LANGFUSE_FANOUT_CENTRAL_MEDIA_UPLOAD_DISABLED=true` を設定すると、LibreChat SDK がセントラルまたはフォールバックコレクタートレース用のメディアアップロードを作成するのを防ぐことができます。テナントルーティングされたメディアアップロードには影響しません。このアプリ側のスイッチは、ゲートウェイ側でアップロードが到達した後のセントラルメディア転送をブロックする `LANGFUSE_FANOUT_CENTRAL_MEDIA_EXPORT_DISABLED` とは異なります。
+
+トレースおよびメディアトラフィックはファンアウトゲートウェイを経由します。フィードバックスコアはLibreChatから直接送信されます。セントラルスコアは `LANGFUSE_PUBLIC_KEY`、`LANGFUSE_SECRET_KEY`、および `LANGFUSE_BASE_URL` を使用し、テナントスコアはテナントアプリの設定を使用します。
+
+すべてのゲートウェイ変数、カスタム送信先設定、メトリクス、スケーリング、およびRedisの動作については、[Langfuse fanout deployment reference](https://github.com/danny-avila/LibreChat/blob/dev/otel/langfuse-fanout/README.md)を参照してください。
 
 ## LibreChat を再起動する [#restart-librechat]
 
@@ -65,6 +225,8 @@ Langfuseが設定された状態でLibreChatを再起動すると、Langfuse UI�
 ![LibreChat example trace](https://langfuse.com/images/cookbook/integration_librechat/librechat-example-trace.png)
 
 [Langfuse UIのトレースへのリンク](https://cloud.langfuse.com/project/cloramnkj0002jz088vzn1ja4/traces/57b4aa20a258a2e9e2d1ce2e4eacb21c?observation=06f5341a68d723b1&timestamp=2026-02-04T13%3A02%3A54.248Z&traceId=57b4aa20a258a2e9e2d1ce2e4eacb21c)
+
+`access:admin` および `manage:configs:langfuse` を持つ管理者は、会話の **Context Usage**（コンテキスト使用量）の内訳を開き、**View session in Langfuse**（Langfuseでセッションを表示）を選択することもできます。このリンクは、生成が完了し、かつ会話にアクティブなアプリ内Langfuse接続へ送信されたサンプリング済みトレースが少なくとも1つ含まれている場合にのみ表示されます。このリンクは、その接続の検証済み送信先およびプロジェクトを指します。環境管理の認証情報、無効化された接続、サンプリング対象外の会話、またはLangfuse設定へのアクセス権を持たないユーザーに対しては表示されません。
 
 ## メッセージフィードバックスコア [#message-feedback-scores]
 

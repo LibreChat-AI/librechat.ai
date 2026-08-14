@@ -1,0 +1,163 @@
+---
+title: Ajan Eklentileri
+icon: Plug
+description: >-
+  Deneysel olarak dağıtım Skills, MCP sunucuları ve komut kancalarını
+  başlangıçta yüklenen paketler halinde birleştirin.
+---
+
+Agent Plugins, bir operatörün ilgili [Skills](/docs/features/skills), [MCP servers](/docs/features/mcp) ve isteğe bağlı komut kancalarını LibreChat dosya sistemi üzerinde paketlemesine olanak tanır. LibreChat, Agent Plugins `1.0.0` paket formatını uygular ve başlangıçta her bir doğrudan alt dizini bir eklenti olarak yükler.
+
+<Callout type="warning" title="Deneysel">
+  Agent Plugins deneyseldir. Paket formatı, desteklenen bileşenler, yapılandırma ve çalışma zamanı davranışı deneme aşamasında değişebilir. Eklentileri bir üretim dağıtımında kullanmadan önce test edin.
+</Callout>
+
+## Dizinleri Yapılandırın [#configure-the-directories]
+
+```bash filename=".env"
+# Defaults to ./plugin relative to the LibreChat project root
+DEPLOYMENT_PLUGINS_DIR=./plugin
+
+# Persistent data allocated separately for each plugin manifest name
+DEPLOYMENT_PLUGIN_DATA_DIR=./data/plugins
+
+# Optional and disabled by default; see Command Hooks below
+DEPLOYMENT_PLUGIN_HOOKS=true
+```
+
+Göreceli yollar, LibreChat proje kök dizininden çözümlenir. Varsayılan `./plugin` dizini mevcut değilse, başlatma işlemi eklentiler olmadan devam eder. Eğer `DEPLOYMENT_PLUGINS_DIR` açıkça ayarlanmış ancak okunamıyorsa, bir dağıtım hatasının göz ardı edilmemesi için başlatma işlemi başarısız olur.
+
+Bir eklenti ekledikten, kaldırdıktan veya değiştirdikten sonra LibreChat'i yeniden başlatın.
+
+## Paket Düzeni [#package-layout]
+
+`DEPLOYMENT_PLUGINS_DIR` dizininin her bir doğrudan alt öğesi bir eklenti paketidir:
+
+```text
+plugin/
+  analytics-tools/
+    plugin.json
+    skills/
+      analyze-events/
+        SKILL.md
+        scripts/
+          analyze.py
+    mcp.json
+    ai.librechat/
+      hooks/
+        hooks.json
+    scripts/
+      guard.sh
+```
+
+`plugin.json` gereklidir. `skills/`, `mcp.json` ve `ai.librechat/hooks/hooks.json` isteğe bağlıdır ve birbirinden bağımsız olarak başarısız olur; bu nedenle geçersiz bir bileşen, aynı eklentideki başka bir geçerli bileşenin yüklenmesini engellemez. Geçersiz veya eksik bir bildirim (manifest), eklentinin tamamının reddedilmesine neden olur. Tanılama bilgileri LibreChat başlangıç günlüklerine yazılır.
+
+## Manifest [#manifest]
+
+Manifest, tam olarak Agent Plugins `1.0.0` şema URL'sini kullanmalıdır:
+
+```json filename="plugin.json"
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "analytics-tools",
+  "version": "1.0.0",
+  "description": "Skills and tools for analyzing event data"
+}
+```
+
+`name` ayrıca eklentinin kalıcı veri dizini için de kullanılır. 1-64 karakter uzunluğunda olmalı, küçük harf veya rakamla başlamalı ve bitmeli, sadece küçük harfler, rakamlar, kısa çizgiler ve noktalar içermeli ve ardışık `--` veya `..` dizileri barındırmamalıdır. Eklenti adları dağıtım içinde benzersiz olmalıdır.
+
+## Paketlenmiş Yetenekler [#bundled-skills]
+
+Her bir Skill'i, `skills/` altındaki doğrudan bir alt dizine yerleştirin ve bu alt dizinin kök dizininde `SKILL.md` dosyası bulundurun. LibreChat, geçerli girdileri salt okunur dağıtım Skill'leri olarak yükler ve normal Skills yetenek ve erişim kurallarını uygular.
+
+Bağımsız [`DEPLOYMENT_SKILLS_DIR`](/docs/features/skills#deployment-skills), aynı isme sahip bir eklenti Skill'ine göre önceliklidir. Eklenti dizini içinde, bir Skill ismini ilk talep eden paket kazanır ve sonraki çakışmalar bir uyarı ile atlanır.
+
+## Paketlenmiş MCP Sunucuları [#bundled-mcp-servers]
+
+`mcp.json` dosyasında, tam `1.0.0` şema URL'si ile isteğe bağlı MCP sunucularını tanımlayın:
+
+```json filename="mcp.json"
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "analytics": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["${PLUGIN_ROOT}/server.js"],
+      "cwd": "${PLUGIN_ROOT}",
+      "env": {
+        "PLUGIN_CACHE": "${PLUGIN_DATA}/cache"
+      }
+    }
+  }
+}
+```
+
+Desteklenen taşıyıcılar `stdio`, `streamable-http` ve `sse` şeklindedir. Uzak HTTP taşıyıcıları, loopback hedefleri haricinde HTTPS kullanmalıdır. Sunucu adları, LibreChat'in MCP araç adı normalleştirmesinden değişmeden geçmeli ve ayrılmış JavaScript nesne adlarını kullanamaz.
+
+`stdio` sunucuları için `${PLUGIN_ROOT}` ve `${PLUGIN_DATA}`, `args`, `env` ve `cwd` içerisinde bir kez genişletilir; her iki değer de başlatılan işlem ortamına eklenir. Eklenti MCP yapılandırması, LibreChat'in ana bilgisayar ortamından rastgele değişkenleri genişletmez. `${OPENAI_API_KEY}` gibi bir değer, kayıt defteri depolaması ve çalışma zamanı başlatma boyunca değişmeden kalır. Kimlik bilgilerini eklenti dosyalarının dışında tutun ve bunları amaca yönelik bir kimlik doğrulama hizmeti veya başka bir dağıtım kontrollü mekanizma aracılığıyla sağlayın.
+
+`librechat.yaml` içinde tanımlanan bir MCP sunucusu, aynı isme sahip bir eklenti sunucusuna göre önceliklidir. Mükerrer eklenti sunucusu isimleri atlanır ve günlüğe kaydedilir.
+
+## Kalıcı Eklenti Verileri [#persistent-plugin-data]
+
+LibreChat, `<DEPLOYMENT_PLUGIN_DATA_DIR>/<plugin-name>` dizininde bir dizin oluşturur ve bunu `stdio` bileşenlerine `${PLUGIN_DATA}` olarak sunar. Bunu, eklentiye ait kalıcı durum (persistent state) için kullanın. Kalıcı durumu, paket içeriği olarak değerlendirilmesi gereken `${PLUGIN_ROOT}` içine yazmayın.
+
+## Command Hooks [#command-hooks]
+
+Agent Plugins, Agent yaşam döngüsü sınırlarında `command` kanca işleyicilerini çalıştırabilir. Kanca yürütme varsayılan olarak devre dışıdır. Bunu açıkça etkinleştirin ve LibreChat'i yeniden başlatın:
+
+```bash filename=".env"
+DEPLOYMENT_PLUGIN_HOOKS=true
+```
+
+Değişken false olduğunda veya ayarlanmadığında, LibreChat hook belgelerini yok sayar ve bir başlangıç uyarısı günlüğe kaydeder; eklentinin bağımsız olarak geçerli olan Skills ve MCP sunucuları yine de yüklenir.
+
+<Callout type="warning" title="Yalnızca güvenilir kod">
+  Bir komut kancası (command hook), LibreChat API ana bilgisayarında operatör tarafından yüklenmiş bir alt süreç çalıştırır. Kısıtlanmış ortam, kazara maruz kalma riskini azaltır ancak bir korumalı alan (sandbox) değildir. Kancaları yalnızca LibreChat kodu ve `toolApproval` kanca modülleriyle aynı düzeyde güvendiğiniz eklenti paketleri için etkinleştirin.
+</Callout>
+
+`ai.librechat/hooks/hooks.json` dosyasında hook'ları tanımlayın:
+
+```json filename="ai.librechat/hooks/hooks.json"
+{
+  "description": "Reject writes outside the workspace",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/guard.sh",
+            "timeout": 30,
+            "allowedEnvVars": ["WORKSPACE_POLICY"]
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+### Yürütme Sözleşmesi [#execution-contract]
+
+- LibreChat, komutu eklenti kök dizininden başlatır ve standart girdi üzerinde JSON olarak Claude uyumlu bir olay yükü gönderir.
+- `${PLUGIN_ROOT}`, `${PLUGIN_DATA}` ve `${CLAUDE_PLUGIN_ROOT}`, `command` ve `args` içerisinde bir kez genişletilir ve ayrıca alt işlem (child process) için de kullanılabilir durumdadır.
+- Alt ortam, yalnızca `PATH`, `HOME`, `LANG`, `LC_ALL` ve mevcutsa `TZ`, üç eklenti yolu değişkeni ve `allowedEnvVars` içinde açıkça listelenen isimleri içerir.
+- Çıkış kodu `0` başarılıdır. Standart çıktıya yazılan JSON, etkinliğe uygun kararlar ve sınırlı bağlam döndürebilir; düz metin çıktısı ise yalnızca `SessionStart` ve `UserPromptSubmit` için ek bağlam olarak değerlendirilir.
+- `2` çıkış kodu, ilgili eylemi veya devamlılığı engeller ve neden olarak standart hatayı kullanır. Diğer sıfır olmayan çıkışlar günlüğe kaydedilir ve aksi takdirde yoksayılır.
+- LibreChat, kanca (hook) durdurulduğunda veya zaman aşımına uğradığında işlemi sonlandırır. POSIX ana bilgisayarlarında komutlar Bash aracılığıyla çalıştırılır. Windows eklentileri `commandWindows` sağlamalı veya PowerShell seçmelidir.
+
+LibreChat, yaygın Claude araç isimleri olan `Bash`, `Write`, `Edit`, `Read` ve `WebSearch` ile bunların dosya argüman isimlerini karşılık gelen LibreChat araçlarına çevirir. LibreChat'in yerel araç ismiyle yazılmış bir eşleştirici (matcher), yerel yük (payload) biçimini korur.
+
+Desteklenen kaynak olayları `RunStart`, `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PostToolBatch`, `SubagentStart`, `Stop`, `StopFailure`, `PreCompact` ve `PostCompact` şeklindedir. Desteklenmeyen olaylar veya bildirimler atlanır ve başlangıç tanılama raporunda bildirilir. Bu sürümde yalnızca `command` işleyicileri yürütülür; `prompt`, `http`, `mcp_tool` ve `agent` işleyicileri henüz desteklenmemektedir.
+
+`SessionStart` ve `once: true` özelliğine sahip işleyiciler, sınırlı bir süreç içi yerel depo tarafından konuşma başına tekilleştirilir. Çok kopyalı (multi-replica) bir dağıtımda, aynı tek seferlik işleyici her süreçte bir kez çalışabilir. Bir `ask` kararı, LibreChat'in devam ettirilebilir insan onayı akışını gerektirir; bu akışın kullanılamadığı durumlarda LibreChat, çalıştırma işlemini devam ettirme yolu olmadan duraklatmak yerine kararı `deny` olarak sıkılaştırır.
+
+## İlgili [#related]
+
+- [Yetenekler](/docs/features/skills)
+- [Model Context Protocol](/docs/features/mcp)
+- [Ajanlar](/docs/features/agents)

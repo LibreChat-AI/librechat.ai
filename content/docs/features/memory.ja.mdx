@@ -1,12 +1,12 @@
 ---
 title: ユーザーメモリ
 icon: Bookmark
-description: LibreChatのすべてのチャットリクエストで実行されるユーザーメモリ用のキー/値ストア
+description: 手動制御、オプションの自動抽出、エージェント管理によるパーティションを備えた構造化ユーザーメモリ
 ---
 
 ## 概要 [#overview]
 
-LibreChatにおけるUser Memoryは、会話全体を通じてユーザー固有の情報を保持する**キー/バリュー（key/value）ストア**です。専用のメモリ・エージェントが**すべてのチャットリクエスト**の開始時に実行され、このストアに対して読み書きを行うことで、メインのAI応答にパーソナライズされたコンテキストを提供します。
+LibreChatのユーザーメモリは、会話全体でユーザー固有の情報を保持する**キー/値ストア**です。ユーザーはエントリを直接管理できるほか、オプションのメモリ・エージェントがチャットから更新情報を抽出することも可能です。また、エージェントは何かを記憶または忘れるように明示的に指示された際、メモリツールを使用できます。
 
 <Callout type="info" title="キー/バリュー・ストア（会話メモリではありません）">
 これは、会話履歴全体に対するセマンティックメモリでは**ありません**。過去の会話をインデックス化、埋め込み、検索するものではありません。その代わり、各リクエストにコンテキストとして注入されるキーと値のペア（例: `user_preferences`、`learned_facts`）の構造化されたセットを保持します。AIが応答するたびに読み込む、永続的なメモ帳のようなものだと考えてください。
@@ -21,20 +21,21 @@ LibreChatにおけるUser Memoryは、会話全体を通じてユーザー固有
 
 ## 主な機能 [#key-features]
 
-- **すべてのリクエストで実行**: メモリエージェントは各チャットリクエストの開始時に実行され、保存されたコンテキストが常に利用可能であることを保証します。
+- **オプションの自動抽出**: `memory.agent.enabled: true` を設定すると、チャットリクエスト時に設定されたメモリ・エージェントを実行できます。
 - **Key/Value Storage**: 情報は生の会話ログとしてではなく、構造化されたキー/値ペアとして保存されます
 - **手動エントリ**: ユーザーはメモリのエントリを直接追加、編集、削除できるため、AIが何を記憶するかを完全に制御できます。
 - **ユーザーコントロール**: 有効にすると、ユーザーは個々のチャットでメモリのオン/オフを切り替えることができます
 - **カスタマイズ可能なキー**: `validKeys` を使用して、保存可能な情報のカテゴリを制限します。
 - **トークン管理**: メモリ使用量に制限を設定してコストを管理します
-- **Agent Integration**: AIエージェントを使用して、何を記憶するかをインテリジェントに管理します
+- **Agent Tools**: エージェントは、ユーザーが明示的に要求した際にメモリを保存または削除できます。
+- **Agent Partitions**: エージェントのメモリを、ユーザーの共有個人プールから分離します
 
 ## 設定 [#configuration]
 
 メモリ機能を有効にするには、`librechat.yaml`ファイルに`memory`設定を追加する必要があります。
 
 ```yaml filename="librechat.yaml"
-version: 1.3.5
+version: 1.3.14
 cache: true
 
 memory:
@@ -44,6 +45,7 @@ memory:
   maxInputTokens: 12000 # Maximum recent-chat tokens sent to the memory agent
   messageWindowSize: 5 # Number of recent messages to consider
   agent:
+    enabled: true # Automatic extraction is opt-in
     provider: 'openAI'
     model: 'gpt-4'
 ```
@@ -57,7 +59,7 @@ provider フィールドは、[Model Spec Guide](/docs/configuration/librechat_y
 ## 仕組み [#how-it-works]
 
 <Callout type="note" title="Memory Agentの実行">
-メモリが有効な場合、メモリ・エージェントは**すべてのチャットリクエスト**で実行されます。これはメインのチャット応答と並行して実行されます。メインの応答が開始される前に開始され、メインのリクエストが終了してから最大3秒後までの期間に制限されます。
+`memory.agent.enabled: true` の場合、設定されたメモリ・エージェントがチャットリクエストと共に実行されます。これはメインのチャット応答と並行して実行され、メインの応答が開始される前に開始され、メインのリクエストが終了してから最大3秒後までの期間に制限されます。
 
 これは、送信するすべてのメッセージがメモリ・エージェントをトリガーし、以下の処理を行うことを意味します：
 
@@ -73,6 +75,14 @@ provider フィールドは、[Model Spec Guide](/docs/configuration/librechat_y
   </li>
 </ol>
 </Callout>
+
+## Agent Memory [#agent-memory]
+
+Agents endpointには `memory` 機能が含まれています。メモリが設定され、ユーザーにメモリ書き込み権限があり、パーソナライゼーションが有効になっている場合、エージェントに **Memory** を追加すると、そのエージェントに `set_memory` および `delete_memory` ツールが付与されます。エージェントは、ユーザーが明示的に何かを記憶、更新、または忘れるように依頼したときにのみ、これらのツールを使用するように指示されます。
+
+エージェントはデフォルトで、ユーザーの共有パーソナルメモリプールを使用します。エージェントビルダーのメモリ設定で **Keep memories separate for this agent** を有効にすると、ユーザーおよびエージェントごとにストレージを分離できます。分離されたエージェントは、既存のパーソナルメモリや、他の分離されたエージェントに属するメモリを参照しません。エージェントスコープの項目は、メモリパネルにエージェント名と共に表示され、パーティションごとにフィルタリングできます。
+
+自動メモリ機能とインラインのAgentメモリツールは独立しています。`memory.agent.enabled: true` は自動抽出を制御し、Agentsエンドポイントの `memory` 機能は、保存されたAgentが会話中にメモリを管理できるかどうかを制御します。
 
 ### 1. Key/Value Storage [#1-keyvalue-storage]
 
@@ -129,6 +139,7 @@ memory:
 ```yaml filename="memory / agent with instructions"
 memory:
   agent:
+    enabled: true
     provider: 'openAI'
     model: 'gpt-4'
     instructions: |
@@ -155,6 +166,7 @@ memory:
   tokenLimit: 2000
   maxInputTokens: 12000
   agent:
+    enabled: true
     provider: 'openAI'
     model: 'gpt-4.1-mini'
 ```
@@ -172,6 +184,7 @@ memory:
   personalize: true
   messageWindowSize: 10
   agent:
+    enabled: true
     provider: 'anthropic'
     model: 'claude-3-opus-20240229'
     instructions: 'Remember only explicitly stated preferences and key facts.'
@@ -188,6 +201,7 @@ IDで既存のAgentを参照する:
 ```yaml filename="Memory with agent ID"
 memory:
   agent:
+    enabled: true
     id: 'memory-specialist-001'
 ```
 
@@ -221,6 +235,7 @@ memory:
   personalize: true
   messageWindowSize: 10
   agent:
+    enabled: true
     provider: 'Custom Memory Endpoint'
     model: 'gpt-4o-mini'
 ```

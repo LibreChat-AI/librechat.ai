@@ -1,0 +1,163 @@
+---
+title: Plugin cho Agent
+icon: Plug
+description: >-
+  Thử nghiệm đóng gói các Skills, MCP servers và command hooks triển khai vào
+  các gói được tải khi khởi động.
+---
+
+Agent Plugins cho phép người vận hành đóng gói các [Skills](/docs/features/skills), [MCP servers](/docs/features/mcp) có liên quan và các command hook tùy chọn lại với nhau trên hệ thống tệp của LibreChat. LibreChat triển khai định dạng gói Agent Plugins `1.0.0` và tải mỗi thư mục con trực tiếp dưới dạng một plugin khi khởi động.
+
+<Callout type="warning" title="Thử nghiệm">
+  Agent Plugins đang ở giai đoạn thử nghiệm. Định dạng gói, các thành phần được hỗ trợ, cấu hình và hành vi thời gian chạy có thể thay đổi trong giai đoạn thử nghiệm này. Hãy kiểm tra các plugin trước khi sử dụng chúng trong môi trường triển khai thực tế (production).
+</Callout>
+
+## Cấu hình các thư mục [#configure-the-directories]
+
+```bash filename=".env"
+# Defaults to ./plugin relative to the LibreChat project root
+DEPLOYMENT_PLUGINS_DIR=./plugin
+
+# Persistent data allocated separately for each plugin manifest name
+DEPLOYMENT_PLUGIN_DATA_DIR=./data/plugins
+
+# Optional and disabled by default; see Command Hooks below
+DEPLOYMENT_PLUGIN_HOOKS=true
+```
+
+Các đường dẫn tương đối được giải quyết từ thư mục gốc của dự án LibreChat. Nếu thư mục mặc định `./plugin` không tồn tại, quá trình khởi động vẫn tiếp tục mà không có plugin nào. Nếu `DEPLOYMENT_PLUGINS_DIR` được thiết lập rõ ràng nhưng không thể đọc được, quá trình khởi động sẽ thất bại để tránh việc bỏ qua lỗi triển khai một cách âm thầm.
+
+Khởi động lại LibreChat sau khi thêm, xóa hoặc thay đổi một plugin.
+
+## Bố cục gói [#package-layout]
+
+Mỗi phần tử con trực tiếp của `DEPLOYMENT_PLUGINS_DIR` là một gói plugin:
+
+```text
+plugin/
+  analytics-tools/
+    plugin.json
+    skills/
+      analyze-events/
+        SKILL.md
+        scripts/
+          analyze.py
+    mcp.json
+    ai.librechat/
+      hooks/
+        hooks.json
+    scripts/
+      guard.sh
+```
+
+`plugin.json` là bắt buộc. `skills/`, `mcp.json`, và `ai.librechat/hooks/hooks.json` là tùy chọn và hoạt động độc lập, vì vậy một thành phần không hợp lệ sẽ không ngăn cản các thành phần hợp lệ khác trong cùng một plugin tải lên. Một tệp manifest không hợp lệ hoặc bị thiếu sẽ khiến toàn bộ plugin bị từ chối. Các chẩn đoán sẽ được ghi vào nhật ký khởi động của LibreChat.
+
+## Manifest [#manifest]
+
+Tệp manifest phải sử dụng đúng URL lược đồ Agent Plugins `1.0.0`:
+
+```json filename="plugin.json"
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "analytics-tools",
+  "version": "1.0.0",
+  "description": "Skills and tools for analyzing event data"
+}
+```
+
+`name` cũng được sử dụng cho thư mục dữ liệu cố định của plugin. Tên này phải có độ dài từ 1-64 ký tự, bắt đầu và kết thúc bằng chữ cái thường hoặc số, chỉ sử dụng chữ cái thường, số, dấu gạch nối và dấu chấm, và không được chứa các chuỗi `--` hoặc `..` liên tiếp. Tên plugin phải là duy nhất trong phạm vi triển khai.
+
+## Các Kỹ năng được tích hợp sẵn [#bundled-skills]
+
+Đặt mỗi Skill vào một thư mục con trực tiếp bên dưới `skills/`, với `SKILL.md` nằm tại thư mục gốc của thư mục con đó. LibreChat sẽ tải các mục hợp lệ dưới dạng Skill triển khai ở chế độ chỉ đọc và áp dụng các quy tắc truy cập cũng như khả năng Skill thông thường.
+
+[`DEPLOYMENT_SKILLS_DIR`](/docs/features/skills#deployment-skills) độc lập sẽ được ưu tiên hơn Skill plugin có cùng tên. Trong thư mục plugin, gói đầu tiên xác nhận tên Skill sẽ được chọn và các xung đột sau đó sẽ bị bỏ qua kèm theo cảnh báo.
+
+## Các MCP Server được tích hợp sẵn [#bundled-mcp-servers]
+
+Định nghĩa các MCP server tùy chọn trong `mcp.json` với URL schema `1.0.0` chính xác:
+
+```json filename="mcp.json"
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "analytics": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["${PLUGIN_ROOT}/server.js"],
+      "cwd": "${PLUGIN_ROOT}",
+      "env": {
+        "PLUGIN_CACHE": "${PLUGIN_DATA}/cache"
+      }
+    }
+  }
+}
+```
+
+Các transport được hỗ trợ là `stdio`, `streamable-http` và `sse`. Các transport HTTP từ xa phải sử dụng HTTPS ngoại trừ các đích loopback. Tên máy chủ phải giữ nguyên sau khi LibreChat chuẩn hóa tên công cụ MCP và không được sử dụng các tên đối tượng JavaScript dành riêng.
+
+Đối với các máy chủ `stdio`, `${PLUGIN_ROOT}` và `${PLUGIN_DATA}` được mở rộng một lần trong `args`, `env` và `cwd`; cả hai giá trị này cũng được thêm vào môi trường của tiến trình đã khởi chạy. Cấu hình MCP của plugin không mở rộng các biến tùy ý từ môi trường máy chủ của LibreChat. Một giá trị như `${OPENAI_API_KEY}` sẽ giữ nguyên dạng ký tự trong suốt quá trình lưu trữ đăng ký và khởi tạo thời gian chạy. Hãy giữ thông tin xác thực bên ngoài các tệp plugin và cung cấp chúng thông qua một dịch vụ xác thực chuyên dụng hoặc cơ chế kiểm soát triển khai khác.
+
+Một MCP server được khai báo trong `librechat.yaml` sẽ được ưu tiên hơn plugin server có cùng tên. Các tên plugin server bị trùng lặp sẽ bị bỏ qua và ghi lại vào nhật ký.
+
+## Dữ liệu Plugin bền vững [#persistent-plugin-data]
+
+LibreChat tạo một thư mục tại `<DEPLOYMENT_PLUGIN_DATA_DIR>/<plugin-name>` và hiển thị nó cho các thành phần `stdio` dưới dạng `${PLUGIN_DATA}`. Hãy sử dụng thư mục này cho trạng thái bền vững (persistent state) thuộc sở hữu của plugin. Không được ghi trạng thái bền vững vào `${PLUGIN_ROOT}`, vì thư mục này nên được coi là nội dung của gói.
+
+## Command Hooks [#command-hooks]
+
+Agent Plugins có thể chạy các trình xử lý hook `command` tại các ranh giới vòng đời của Agent. Việc thực thi hook bị vô hiệu hóa theo mặc định. Hãy kích hoạt nó một cách rõ ràng và khởi động lại LibreChat:
+
+```bash filename=".env"
+DEPLOYMENT_PLUGIN_HOOKS=true
+```
+
+Khi biến này là false hoặc không được thiết lập, LibreChat sẽ bỏ qua các tài liệu hook và ghi lại cảnh báo khi khởi động; các Skills và máy chủ MCP hợp lệ độc lập của plugin vẫn sẽ được tải.
+
+<Callout type="warning" title="Chỉ mã nguồn đáng tin cậy">
+  Một command hook chạy một tiến trình con do người vận hành cài đặt trên máy chủ LibreChat API. Môi trường bị hạn chế giúp giảm thiểu việc vô tình để lộ thông tin nhưng không phải là một sandbox. Chỉ kích hoạt các hook cho các gói plugin mà bạn tin tưởng ở cùng mức độ với mã nguồn LibreChat và các mô-đun hook `toolApproval`.
+</Callout>
+
+Khai báo các hook tại `ai.librechat/hooks/hooks.json`:
+
+```json filename="ai.librechat/hooks/hooks.json"
+{
+  "description": "Reject writes outside the workspace",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/guard.sh",
+            "timeout": 30,
+            "allowedEnvVars": ["WORKSPACE_POLICY"]
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+### Hợp đồng thực thi [#execution-contract]
+
+- LibreChat khởi chạy lệnh từ thư mục gốc của plugin và gửi payload sự kiện tương thích với Claude dưới dạng JSON thông qua đầu vào tiêu chuẩn (standard input).
+- `${PLUGIN_ROOT}`, `${PLUGIN_DATA}`, và `${CLAUDE_PLUGIN_ROOT}` được mở rộng một lần trong `command` và `args` và cũng khả dụng cho tiến trình con.
+- Môi trường con chỉ chứa `PATH`, `HOME`, `LANG`, `LC_ALL` và `TZ` khi có mặt, ba biến đường dẫn plugin và các tên được liệt kê rõ ràng trong `allowedEnvVars`.
+- Mã thoát `0` là thành công. JSON được ghi vào đầu ra tiêu chuẩn có thể trả về các quyết định phù hợp với sự kiện và ngữ cảnh giới hạn; đầu ra thuần túy chỉ được coi là ngữ cảnh bổ sung cho `SessionStart` và `UserPromptSubmit`.
+- Mã thoát `2` chặn hành động hoặc sự tiếp tục áp dụng và sử dụng lỗi chuẩn làm lý do. Các mã thoát khác không bằng không sẽ được ghi nhật ký và bỏ qua.
+- LibreChat sẽ kết thúc tiến trình khi hook bị hủy bỏ hoặc hết thời gian chờ. Trên các máy chủ POSIX, các lệnh được chạy thông qua Bash. Các plugin trên Windows phải cung cấp `commandWindows` hoặc chọn PowerShell.
+
+LibreChat dịch các tên công cụ Claude phổ biến như `Bash`, `Write`, `Edit`, `Read` và `WebSearch` cùng các tên đối số tệp của chúng sang các công cụ LibreChat tương ứng. Một bộ khớp (matcher) được viết bằng tên công cụ gốc của LibreChat sẽ giữ nguyên cấu trúc payload gốc.
+
+Các sự kiện nguồn được hỗ trợ bao gồm `RunStart`, `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PostToolBatch`, `SubagentStart`, `Stop`, `StopFailure`, `PreCompact` và `PostCompact`. Các sự kiện hoặc khai báo không được hỗ trợ sẽ bị bỏ qua và được báo cáo trong phần chẩn đoán khởi động. Chỉ các trình xử lý `command` mới được thực thi trong bản phát hành này; các trình xử lý `prompt`, `http`, `mcp_tool` và `agent` hiện vẫn chưa được hỗ trợ.
+
+`SessionStart` và các trình xử lý có `once: true` được khử trùng lặp theo từng cuộc trò chuyện bởi một kho lưu trữ cục bộ theo tiến trình có giới hạn. Trong triển khai đa bản sao, cùng một trình xử lý chỉ chạy một lần có thể chạy một lần trên mỗi tiến trình. Một quyết định `ask` yêu cầu quy trình phê duyệt của con người có thể tiếp tục của LibreChat; khi quy trình đó không khả dụng, LibreChat sẽ thắt chặt quyết định thành `deny` thay vì để quá trình chạy ở trạng thái tạm dừng mà không có đường dẫn tiếp tục.
+
+## Liên quan [#related]
+
+- [Skills](/docs/features/skills)
+- [Model Context Protocol](/docs/features/mcp)
+- [Agents](/docs/features/agents)

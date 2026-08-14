@@ -2,19 +2,68 @@
 title: Số liệu thống kê
 icon: BarChart3
 description: >-
-  Tài liệu này giải thích cách thêm một metrics exporter cho Prometheus vào
-  LibreChat.
+  Giám sát LibreChat với các chỉ số Prometheus tích hợp sẵn và trình xuất chỉ số
+  cơ sở dữ liệu tùy chọn.
 ---
 
-### Tổng quan [#general]
+## Tổng quan [#general]
 
 ![Người dùng đang hoạt động trong LibreChat](/images/metrics/librechat-metrics-active-users.png)
 
-Bạn có thể sử dụng Prometheus hoặc bất kỳ công cụ giám sát tương thích OpenMetrics nào khác để lấy các số liệu về việc sử dụng LibreChat.
-Điều này bao gồm các thông tin kỹ thuật như mức sử dụng token,
-cũng như thông tin về người dùng cuối như tổng số người dùng hoặc số người dùng đang hoạt động.
+LibreChat cung cấp hai bề mặt chỉ số tương thích với Prometheus. Endpoint `/metrics` tích hợp sẵn của API báo cáo hành vi vận hành như hoạt động của Redis và kết quả proxy đo lường từ trình duyệt. Trình xuất cơ sở dữ liệu tùy chọn báo cáo dữ liệu sử dụng được lưu trữ trong MongoDB, bao gồm tổng số token và số lượng người dùng đang hoạt động.
 
-LibreChat cũng cung cấp các chỉ số Prometheus tích hợp từ máy chủ API tại `/metrics` khi `METRICS_SECRET` được cấu hình. Hãy thu thập dữ liệu này với `Authorization: Bearer <METRICS_SECRET>`. Các kết quả proxy RUM của trình duyệt được báo cáo dưới dạng `rum_proxy_requests_total{endpoint,result}`, trong đó `endpoint` là `traces`, `logs`, hoặc `unknown`, và `result` có thể là `success`, `auth_drop`, `auth_error`, `bad_request`, `not_configured`, `collector_4xx`, `collector_5xx`, `collector_error`, hoặc `collector_timeout`.
+## Các chỉ số API tích hợp [#built-in-api-metrics]
+
+LibreChat cung cấp các chỉ số Prometheus từ máy chủ API tại `/metrics`. Hãy thiết lập `METRICS_SECRET` và thu thập dữ liệu từ endpoint này với `Authorization: Bearer <METRICS_SECRET>`. Endpoint sẽ trả về `401` khi chưa thiết lập secret, thiếu header hoặc token không khớp.
+
+```yaml filename="prometheus.yml"
+scrape_configs:
+  - job_name: librechat-api
+    scheme: https
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials: your-metrics-secret
+    static_configs:
+      - targets: ['librechat.example.com']
+```
+
+### Các chỉ số khởi chạy Agent [#agent-startup-metrics]
+
+Các yêu cầu trò chuyện ban đầu của Agent phát ra hai chỉ số khởi động:
+
+- `agent_startup_milestone_duration_seconds{milestone}` đo lường độ trễ tích lũy từ khi yêu cầu đi vào (ingress) cho đến từng cột mốc khởi động.
+- `agent_startups_total{result}` đếm các lần thử khởi động theo kết quả cuối cùng.
+
+Các cột mốc bao gồm việc tiếp nhận yêu cầu, tạo và xác nhận tác vụ, tải hội thoại và lịch sử, khởi tạo client và quá trình chạy, khởi động luồng, và phản hồi hoặc sự kiện nội dung được xếp hàng đầu tiên. Kết quả phân biệt giữa nội dung được xếp hàng, hoàn tất mà không có delta nội dung, khử trùng lặp, từ chối, tạm dừng, thay thế, hủy bỏ và lỗi.
+
+Khi [backend OpenTelemetry tracing](/docs/configuration/dotenv#opentelemetry-tracing) được bật, span `librechat.agent.startup` sẽ báo cáo các cột mốc tương tự như các sự kiện. Nó bao gồm tổng thời gian khởi động, số lượng cột mốc, kết quả cuối cùng và ID luồng tạo (generation stream ID) khi được chỉ định.
+
+### Các chỉ số Redis [#redis-metrics]
+
+Các dịch vụ và bộ nhớ đệm được hỗ trợ bởi Redis phát ra hai chỉ số vận hành logic:
+
+- `redis_operations_total{client,use_case,operation,status}` đếm các thao tác.
+- `redis_operation_duration_seconds{client,use_case,operation,status}` đo lường độ trễ.
+
+`client` là `keyv` hoặc `ioredis`, và `status` là `success` hoặc `error`. Các nhãn `use_case` có giới hạn xác định các công việc như bộ nhớ đệm (caches), phiên làm việc (sessions), giới hạn tốc độ (rate limits), tính đồng thời (concurrency), các thực thể ACL (ACL principals), các tác vụ luồng có thể tiếp tục (resumable stream jobs) và pub/sub, quét đăng ký MCP, và bầu chọn leader. Các chỉ số này đếm các hoạt động logic của LibreChat thay vì đếm mọi lượt truy vấn nội bộ đến Redis. Các ping vòng đời kết nối và bảo trì toàn cục được loại trừ, và việc xóa một namespace được tính là một hoạt động logic.
+
+Khi [backend OpenTelemetry tracing](/docs/configuration/dotenv#opentelemetry-tracing) được bật, mỗi HTTP span cũng sẽ tóm tắt công việc Redis của nó với:
+
+- `librechat.redis.calls`
+- `librechat.redis.duration_ms`
+- `librechat.redis.errors`
+- `librechat.redis.max_call_ms`
+- `librechat.redis.operations`
+- `librechat.redis.use_cases`
+
+Mười trường hợp sử dụng có tổng thời lượng cao nhất cũng nhận được các thuộc tính `calls`, `duration_ms`, `errors` và `max_call_ms` trong `librechat.redis.<use_case>.*`. Bản tóm tắt ở cấp độ yêu cầu này không yêu cầu các span Redis ở cấp độ lệnh; chỉ bật `OTEL_IOREDIS_TRACING_ENABLED` khi cần các span lệnh riêng lẻ.
+
+### Các chỉ số Proxy RUM của trình duyệt [#browser-rum-proxy-metrics]
+
+Các kết quả proxy RUM của trình duyệt được báo cáo dưới dạng `rum_proxy_requests_total{endpoint,result}`. `endpoint` có thể là `traces`, `logs`, hoặc `unknown`; `result` có thể là `success`, `auth_drop`, `auth_error`, `bad_request`, `not_configured`, `collector_4xx`, `collector_5xx`, `collector_error`, hoặc `collector_timeout`.
+
+## Trình xuất số liệu cơ sở dữ liệu [#database-metrics-exporter]
 
 Trình xuất số liệu (metrics exporter) có sẵn tại [virtUOS/librechat_exporter](https://github.com/virtUOS/librechat_exporter).
 Đây là một công cụ riêng biệt mà bạn triển khai cùng với LibreChat.

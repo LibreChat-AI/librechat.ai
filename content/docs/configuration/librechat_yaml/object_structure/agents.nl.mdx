@@ -12,17 +12,33 @@ endpoints:
   agents:
     recursionLimit: 50
     maxRecursionLimit: 100
+    maxToolCallArgBytes: 65536
+    maxDeltaEventsPerTurn: 100000
+    maxToolCallArgBytesByTool:
+      create_file: 131072
     disableBuilder: false
     # (optional) Agent Capabilities available to all users. Omit the ones you wish to exclude. Defaults to list below.
-    # Add "programmatic_tools" with "execute_code" to enable Programmatic Tool Calling for MCP tools.
-    # capabilities: ["deferred_tools", "execute_code", "file_search", "web_search", "artifacts", "subagents", "actions", "context", "skills", "tools", "chain", "ocr"]
+    # Opt-in capabilities: "programmatic_tools", "stateful_code_sessions", "run_in_background", and "tool_intents".
+    # capabilities: ["deferred_tools", "execute_code", "file_search", "web_search", "artifacts", "subagents", "actions", "context", "skills", "memory", "ask_user_question", "tools", "chain", "ocr"]
     # (optional) File citation configuration for file_search capability
     maxCitations: 30 # Maximum total citations in responses (1-50)
     maxCitationsPerFile: 7 # Maximum citations from each file (1-10)
     minRelevanceScore: 0.45 # Minimum relevance score threshold (0.0-1.0)
     titleTiming: immediate
+    activityLabel: true
+    activityModel: gpt-4.1-nano
+    activityPhaseLabel: true
+    activityPhaseMaxPerRun: 5
     skills:
       maxCatalogSkills: 20
+    toolApproval:
+      enabled: true
+      mode: default
+      deny: ['mcp:*:delete_*']
+      ask: ['mcp:*:*']
+    checkpointer:
+      type: mongo
+      ttl: 86400
     remoteApi:
       auth:
         oidc:
@@ -77,6 +93,51 @@ maxRecursionLimit: 100
 
 Voor meer informatie over agent-stappen, zie [Max Agent Steps](/docs/features/agents#max-agent-steps).
 
+## Stream circuit breakers [#stream-circuit-breakers]
+
+Deze instellingen stoppen een Agent-run wanneer een provider-stream onbeheerste tool-argumenten of een onbegrensde reeks delta-events lijkt te produceren.
+
+<OptionTable
+  options={[
+    [
+      'maxToolCallArgBytes',
+      'Number',
+      'Maximaal cumulatief aantal bytes voor de argumenten van één gestreamde tool-aanroep. Stel in op 0 om de globale beveiliging uit te schakelen.',
+      '65536',
+    ],
+    [
+      'maxDeltaEventsPerTurn',
+      'Number',
+      'Maximaal aantal gestreamde events voor één modelgeneratiebeurt. Stel in op 0 of laat weg om deze beveiliging uit te schakelen.',
+      '0 (disabled)',
+    ],
+    [
+      'maxToolCallArgBytesByTool',
+      'Object',
+      'Per-tool argument-byte overrides gesleuteld aan de model-gerichte toolnaam. Een waarde van 0 schakelt de guard voor die tool uit.',
+      'create_file: 131072',
+    ],
+  ]}
+/>
+
+LibreChat gebruikt een globale argumentlimiet van 64 KiB en levert een override van 128 KiB voor `create_file`, waarvan de legitieme payloads vaak groter zijn. Inzendingen in `maxToolCallArgBytesByTool` worden samengevoegd met die ingebouwde override. Als een van beide beveiligingen wordt geactiveerd, breekt LibreChat de actieve provider-stream af en rapporteert welke limiet is overschreden.
+
+```yaml filename="endpoints / agents / stream circuit breakers"
+maxToolCallArgBytes: 65536
+maxDeltaEventsPerTurn: 100000
+maxToolCallArgBytesByTool:
+  create_file: 262144
+  large_import: 524288
+```
+
+Om elke argument-size guard uit te schakelen, stelt u zowel de globale limiet als de meegeleverde `create_file` override in op `0`:
+
+```yaml
+maxToolCallArgBytes: 0
+maxToolCallArgBytesByTool:
+  create_file: 0
+```
+
 ## titleTiming
 
 <OptionTable
@@ -102,6 +163,22 @@ Voor meer informatie over agent-stappen, zie [Max Agent Steps](/docs/features/ag
 ```yaml filename="endpoints / agents / titleTiming"
 titleTiming: immediate
 ```
+
+## activityLabel
+
+Stel `activityLabel: true` in om elk blok met Agent-redeneringen en tool-aanroepen te groeperen onder een gegenereerde kopregel. Gebruik `activityModel`, `activityEndpoint`, `activityPrompt`, `activityMaxPerRun` en `activityCharLimit` om de extra model-aanroep en de bijbehorende kosten te beheren. Zie [Agent Activity Groups](/docs/configuration/librechat_yaml/object_structure/shared_endpoint_settings#agent-activity-groups) voor de volledige veldreferentie en voorrangsregels.
+
+```yaml filename="endpoints / agents / activity groups"
+activityLabel: true
+activityEndpoint: openAI
+activityModel: gpt-4.1-nano
+activityMaxPerRun: 20
+activityCharLimit: 600
+activityPhaseLabel: true
+activityPhaseMaxPerRun: 5
+```
+
+`activityPhaseLabel` kan onafhankelijk één samengevouwen bovenliggende samenvatting toevoegen rond elke uitvoeringsfase die ten minste twee logische activiteiten bevat. Gebruik `activityPhaseModel`, `activityPhaseEndpoint`, `activityPhasePrompt` en `activityPhaseMaxPerRun` om die aanroepen af te stemmen; `activityCharLimit` wordt gedeeld met labels van onderliggende activiteiten.
 
 ## disableBuilder
 
@@ -162,9 +239,9 @@ allowedProviders:
   ]}
 />
 
-**Standaard:** `["deferred_tools", "execute_code", "file_search", "web_search", "artifacts", "subagents", "actions", "context", "skills", "tools", "chain", "ocr"]`
+**Standaard:** `["deferred_tools", "execute_code", "file_search", "web_search", "artifacts", "subagents", "actions", "context", "skills", "memory", "ask_user_question", "tools", "chain", "ocr"]`
 
-Programmatic Tool Calling is opt-in. Voeg `programmatic_tools` toe naast `execute_code` alleen wanneer jouw Code Interpreter-implementatie de Tool Call Server-component bevat.
+`programmatic_tools`, `stateful_code_sessions`, `run_in_background` en `tool_intents` zijn opt-in en moeten expliciet worden toegevoegd. Programmatic tools en stateful sessions vereisen ook `execute_code` en een compatibele Code Interpreter-implementatie. Background code execution vereist `run_in_background`, `execute_code` en Code Interpreter.
 
 **Voorbeeld:**
 
@@ -182,12 +259,116 @@ capabilities:
   - 'actions'
   - 'context'
   - 'skills'
+  - 'memory'
+  - 'ask_user_question'
   - 'tools'
   - 'chain'
   - 'ocr'
+  # Optional: reuse one Code Interpreter workspace per conversation.
+  # - 'stateful_code_sessions'
+  # Optional: allow selected eligible MCP and Code Interpreter tools to run as background tasks.
+  # - 'run_in_background'
+  # Optional: show live model-written intent labels for native and selected MCP tools.
+  # - 'tool_intents'
 ```
 
 **Let op:** Dit veld is optioneel. Indien weggelaten, is het standaardgedrag om alle mogelijkheden op te nemen die in de standaard worden vermeld.
+
+## toolApproval
+
+Beheert menselijke controle voor Agent tool calls. Deze functie is standaard uitgeschakeld. Wanneer ingeschakeld, pauzeren overeenkomstige aanroepen totdat de gebruiker een besluit indient, zoals het goedkeuren, afwijzen of bewerken van de argumenten.
+
+<OptionTable
+  options={[
+    ['enabled', 'Boolean', 'Schakelt toolgoedkeuring in voor het Agents endpoint.', 'false'],
+    [
+      'mode',
+      'String',
+      'Stelt het gedrag voor niet-overeenkomende aanroepen in: `default` vraagt, `dontAsk` weigert, en `bypass` keurt goed tenzij geweigerd.',
+      'default',
+    ],
+    ['allow', 'Array of strings', 'Glob-patronen voor aanroepen die zonder prompt kunnen worden uitgevoerd.', ''],
+    ['deny', 'Array of strings', 'Glob-patronen voor aanroepen die altijd worden geweigerd. Weigeringsregels hebben voorrang.', ''],
+    ['ask', 'Array of strings', 'Glob-patronen voor aanroepen die altijd beoordeling vereisen.', ''],
+    [
+      'reason',
+      'String',
+      'Optionele uitleg getoond in de goedkeuringsprompt. Gebruik `{tool}` om de toolnaam in te voegen.',
+      '',
+    ],
+    [
+      'hooks',
+      'Array of objects',
+      'Vertrouwde programmatische beleidsmodules voor contextbewuste beslissingen. Hooks kunnen het statische beleid alleen aanscherpen.',
+      '',
+    ],
+  ]}
+/>
+
+Patronen gebruiken glob-matching. MCP tools kunnen worden beperkt met `mcp:<server>:<tool>`; bijvoorbeeld, `mcp:github:*` komt overeen met elke tool van de `github` server. Evaluatie geeft `deny` de hoogste prioriteit, ook in de `bypass` modus.
+
+```yaml filename="endpoints / agents / toolApproval"
+toolApproval:
+  enabled: true
+  mode: default
+  allow:
+    - 'mcp:analytics:read_*'
+  deny:
+    - 'mcp:*:delete_*'
+  ask:
+    - 'mcp:*:*'
+  reason: 'Review {tool} before it runs.'
+```
+
+Hooks worden eenmalig geladen bij het opstarten van de server en worden uitgevoerd in het LibreChat-proces. Elk item accepteert een `module`, een optionele `matcher` regex voor de tool-naam, en een optioneel `options` object dat wordt doorgegeven aan de builder van de module. Laad alleen code die je vertrouwt. Overschrijvingen per rol of tenant herladen hook-modules niet; implementeer contextueel gedrag binnen de hook zelf.
+
+```yaml filename="endpoints / agents / toolApproval / hooks"
+toolApproval:
+  enabled: true
+  hooks:
+    - module: '@acme/librechat-approval-hook'
+      matcher: '^mcp:production:'
+      options:
+        requireTicket: true
+```
+
+## checkpointer
+
+Configureert opslag voor Agent-runs die zijn gepauzeerd door tool-goedkeuring of Ask User. Wanneer een van beide functies een checkpointer nodig heeft en dit blok wordt weggelaten, gebruikt LibreChat de primaire MongoDB met een beslissingsvenster van 24 uur.
+
+<OptionTable
+  options={[
+    [
+      'type',
+      'String',
+      '`mongo` behoudt gepauzeerde runs bij herstarts en replica\'s; `memory` is proces-lokaal en bedoeld voor ontwikkeling.',
+      'mongo',
+    ],
+    ['ttl', 'Number', 'Hoe lang een gepauzeerde run wacht op een beslissing, in seconden.', '86400'],
+    [
+      'checkpointCollectionName',
+      'String',
+      'Optionele overschrijving van de MongoDB checkpoint-collectienaam.',
+      'agent_checkpoints',
+    ],
+    [
+      'checkpointWritesCollectionName',
+      'String',
+      'Optionele overschrijving van de MongoDB checkpoint-write collectienaam.',
+      'agent_checkpoint_writes',
+    ],
+  ]}
+/>
+
+```yaml filename="endpoints / agents / checkpointer"
+checkpointer:
+  type: mongo
+  ttl: 86400
+```
+
+Gebruik `type: memory` alleen voor een development-implementatie met één proces. Een gepauzeerde run die in het geheugen is opgeslagen, kan niet worden hervat na een herstart of op een andere replica.
+
+MongoDB-checkpoints loggen een waarschuwing wanneer de geserialiseerde status groter is dan 8 MiB en wijzen een duurzame pauze boven de 15 MiB af, waardoor er ruimte overblijft onder de documentlimiet van 16 MiB van MongoDB. Grote inline media of tool-outputs zijn veelvoorkomende oorzaken; start een nieuw gesprek of verklein de context als een run `CHECKPOINT_TOO_LARGE` rapporteert.
 
 ## skills
 
@@ -329,6 +510,7 @@ Het `capabilities` veld stelt je in staat om specifieke functionaliteiten voor a
 - **deferred_tools**: Hiermee kunnen agents deferred MCP-tools ontdekken tijdens runtime in plaats van elke tool vooraf in de context te laden.
 - **programmatic_tools**: Schakelt Programmatic Tool Calling in voor MCP-tools die in de Agent Builder als Programmatic zijn gemarkeerd. Vereist `execute_code` en een Code Interpreter-implementatie met de Tool Call Server-component. Deze mogelijkheid is opt-in en is standaard niet ingeschakeld.
 - **execute_code**: Staat de agent toe om code uit te voeren.
+- **stateful_code_sessions**: Hiermee kunnen agents die hiervoor kiezen één Code Interpreter-werkruimte per gesprek hergebruiken. Vereist `execute_code`, een compatibele Code Interpreter-implementatie en de geavanceerde instelling per agent. Deze functionaliteit is zeer experimenteel, is niet standaard ingeschakeld en kan tijdens het experimenteren aanzienlijk veranderen; beschouw het huidige gedrag of de configuratie ervan niet als een stabiel productiecontract.
 - **file_search**: Stelt de agent in staat om bestanden te doorzoeken en ermee te werken. Wanneer ingeschakeld, wordt het gedrag van citaten beheerd door de instellingen `maxCitations`, `maxCitationsPerFile` en `minRelevanceScore`.
 - **web_search**: Schakelt webzoekfunctionaliteit in voor agents, waardoor ze informatie van het internet kunnen zoeken en ophalen.
 - **artifacts**: Hiermee kan de agent interactieve artifacts genereren (React-componenten, HTML, Mermaid-diagrammen).
@@ -336,9 +518,13 @@ Het `capabilities` veld stelt je in staat om specifieke functionaliteiten voor a
 - **actions**: Staat de agent toe om vooraf gedefinieerde acties uit te voeren.
 - **context**: Schakelt de "Upload als tekst"-functionaliteit in de chat in, evenals "Bestandscontext" voor agents, waardoor gebruikers bestanden kunnen uploaden en de inhoud ervan kunnen laten extraheren en direct in het gesprek kunnen opnemen.
 - **skills**: Schakelt Skills in in het zijpaneel, handmatige `$` aanroepen, door modellen aangeroepen skills en allowlists voor agent-skills. Zie [Skills](/docs/features/skills).
+- **memory**: Laat agents `set_memory` en `delete_memory` gebruiken wanneer memory is geconfigureerd en de gebruiker toegang heeft. Standaard ingeschakeld; wordt verwijderd tijdens runtime wanneer memory is uitgeschakeld.
+- **ask_user_question**: Hiermee kunnen agents pauzeren om één tot vier gerelateerde vragen in één formulier te stellen en door te gaan met de antwoorden. Standaard ingeschakeld.
 - **tools**: Geeft de agent toegang tot verschillende tools.
 - **chain**: Schakelt de bètafunctie in voor agent-chaining, ook wel bekend als Mixture-of-Agents (MoA) workflows.
 - **ocr**: Verbetert optioneel "Uploaden als tekst" in de chat en "Bestandscontext" voor agents, waardoor bestanden kunnen worden geüpload en verwerkt met OCR. **Vereist dat een OCR-service is geconfigureerd.**
+- **run_in_background**: Maakt de uitvoering van Code Interpreter en shell-tools standaard geschikt voor achtergronduitvoering en schakelt per-tool opt-in voor achtergronduitvoering in voor MCP tools. Een agent kan Code Interpreter expliciet uitsluiten. De instelling staat achtergronduitvoering toe; het model beslist per aanroep of het hiervan gebruikmaakt. Vereist `execute_code` en een geconfigureerde Code Interpreter-implementatie voor code. Deze functionaliteit is standaard niet ingeschakeld.
+- **tool_intents**: Voegt live door het model geschreven intent-labels toe aan in aanmerking komende tool-aanroepen. Native tools, inclusief Code Interpreter-tools, worden automatisch ingeschakeld; MCP-tools kunnen individueel of in bulk worden ingeschakeld in de Agent Builder. Model specs gebruiken `describeIntent`. Deze functionaliteit is standaard niet ingeschakeld.
 
 Door de mogelijkheden (capabilities) te specificeren, kun je de functies beheren die beschikbaar zijn voor gebruikers wanneer zij met agents communiceren.
 
@@ -359,6 +545,10 @@ endpoints:
       # Optional: enables Programmatic Tool Calling for MCP tools marked Programmatic in the Agent Builder.
       # - 'programmatic_tools'
       - 'execute_code'
+      # Optional: makes Code Interpreter background-eligible and enables selected MCP tools.
+      # - 'run_in_background'
+      # Optional: enables live intent labels for native and selected MCP tools.
+      # - 'tool_intents'
       - 'file_search'
       - 'skills'
       - 'subagents'
@@ -376,6 +566,8 @@ In dit voorbeeld:
 - Alleen bronnen met 60%+ relevantie worden opgenomen
 - LibreChat Agents hebben toegang tot code-uitvoering, bestandszoekopdrachten (met bronvermeldingen), Skills, Subagents, actions, artifacts, bestandscontext, ocr-services indien geconfigureerd, en webzoekmogelijkheden.
 - Programmatic Tool Calling blijft uitgeschakeld tenzij je de `programmatic_tools` capability toevoegt naast `execute_code`
+- Aanroepen van achtergrondtools blijven uitgeschakeld tenzij je `run_in_background` toevoegt; Code Interpreter-tools worden daarna standaard in aanmerking genomen, terwijl MCP-tools nog steeds per tool geselecteerd moeten worden.
+- Tool intent labels blijven uitgeschakeld tenzij je `tool_intents` toevoegt; native tools kiezen daarna automatisch deel, terwijl MCP tools nog steeds per tool geselecteerd moeten worden.
 
 ## remoteApi
 

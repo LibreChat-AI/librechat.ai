@@ -44,7 +44,7 @@ endpoints:
     titleEndpoint: 'anthropic'
 
   google:
-    streamRate: 1
+    streamRate: 25
     titleModel: 'gemini-2.0-flash-lite'
     titlePromptTemplate: "Human: {input}\nAssistant: {output}"
     headers:
@@ -55,6 +55,15 @@ endpoints:
 
   azureAssistants:
     streamRate: 30
+
+  agents:
+    activityLabel: true
+    activityEndpoint: 'openAI'
+    activityModel: 'gpt-4.1-nano'
+    activityMaxPerRun: 20
+    activityCharLimit: 600
+    activityPhaseLabel: true
+    activityPhaseMaxPerRun: 5
 
   # Global configuration using 'all' - this applies shared settings across endpoints.
   # Most defined values override endpoint defaults; headers are merged and endpoint values win on collisions.
@@ -72,7 +81,7 @@ endpoints:
       {convo}
 ```
 
-> **Importante:** Quando si utilizza la configurazione `all`, la maggior parte delle proprietà condivise definite si applica a tutti gli endpoint. Nell'esempio precedente, la configurazione `all` applicherebbe `titleConvo`, `titleModel` e `titlePrompt` a tutti gli endpoint, mentre le impostazioni individuali di `streamRate` verrebbero preservate poiché non sono definite in `all`. Gli `headers` vengono uniti separatamente: i valori da `endpoints.all.headers` si applicano globalmente e gli header a livello di endpoint prevalgono in caso di conflitti di chiave.
+> **Importante:** Quando si utilizza la configurazione `all`, la maggior parte delle proprietà condivise definite si applica a tutti gli endpoint. Nell'esempio precedente, la configurazione `all` applicherebbe `titleConvo`, `titleModel` e `titlePrompt` a tutti gli endpoint, mentre le impostazioni individuali di `streamRate` verrebbero preservate poiché non sono definite in `all`. Gli `headers` vengono uniti separatamente: i valori da `endpoints.all.headers` si applicano globalmente e gli header a livello di endpoint prevalgono in caso di collisione di chiavi. Le impostazioni dell'attività vengono risolte campo per campo nello stesso ordine, quindi un'impostazione `all` non correlata non nasconde la configurazione dell'attività di un endpoint.
 
 ## streamRate
 
@@ -89,9 +98,11 @@ endpoints:
   ]}
 />
 
-**Predefinito:** 1
+**Predefinito:** Dipendente dal provider. OpenAI, endpoint personalizzati, Anthropic, Google, Bedrock e i flussi supportati da Agents SDK utilizzano uno smoothing adattivo con un obiettivo di 25 ms. I gestori di Legacy Assistants e Ollama mantengono il loro comportamento per chunk del provider, con un valore predefinito di 1 ms.
 
-> Consente lo streaming dei dati alla massima velocità possibile, permettendo al sistema di attendere il tick successivo
+L'adaptive smoothing emette il primo token di testo senza ritardi, aumenta la dimensione del chunk quando uno stream rimane indietro e preserva l'ordine delle chiamate agli strumenti (tool-call) e dei metadati. Imposta `streamRate` su un valore target in millisecondi non negativo; `streamRate: 0` disabilita l'adaptive smoothing sui provider supportati dall'SDK elencati sopra.
+
+Un valore specifico per un endpoint viene preservato quando `endpoints.all` esiste senza `streamRate`. Definire `endpoints.all.streamRate` sovrascrive i valori dell'endpoint, incluso uno `0` esplicito.
 
 ## titleConvo
 
@@ -300,6 +311,99 @@ endpoints:
     # Will use anthropic's configuration for title generation
 ```
 
+## Gruppi di attività degli agenti [#agent-activity-groups]
+
+I gruppi di attività rendono le esecuzioni lunghe degli Agent più facili da scansionare, comprimendo ogni blocco contiguo di ragionamento e chiamate a strumenti sotto un'intestazione generata su una sola riga. La generazione dell'intestazione viene eseguita al di fuori del percorso principale di risposta del modello, ma si tratta comunque di una chiamata al modello il cui utilizzo viene registrato e fatturato.
+
+Con le etichette di fase padre abilitate, il testo di avanzamento breve rimane all'interno della fase attiva. Una fase si chiude prima del testo di risposta sostanziale, in modo che il risultato rimanga al di fuori del riepilogo compresso, e un blocco successivo di ragionamento o chiamate a strumenti può iniziare un'altra fase nella stessa esecuzione. LibreChat riorganizza inoltre i confini di fase salvati quando il contenuto malformato o omesso viene compattato, preservandone l'allineamento dopo il ricaricamento.
+
+<OptionTable
+  options={[
+    [
+      'activityLabel',
+      'Boolean',
+      'Abilita le intestazioni dei gruppi di attività generate per le esecuzioni dell\'Agente che utilizzano questo endpoint.',
+      'false',
+    ],
+    [
+      'activityModel',
+      'String',
+      'Modello utilizzato per generare le intestazioni. Ricorre a titleModel, poi al modello di esecuzione dell\'Agent. Usa current_model per selezionare esplicitamente il modello di esecuzione.',
+      '',
+    ],
+    [
+      'activityEndpoint',
+      'String',
+      'Endpoint le cui credenziali vengono utilizzate per la generazione dell\'intestazione. Il valore predefinito è il provider del modello Agent.',
+      '',
+    ],
+    [
+      'activityPrompt',
+      'String',
+      'Sovrascrive il prompt utilizzato per generare l\'intestazione su una riga.',
+      '',
+    ],
+    [
+      'activityMaxPerRun',
+      'Positive integer',
+      'Numero massimo di intestazioni di attività generate per risposta, limitando le chiamate aggiuntive al modello.',
+      '20',
+    ],
+    [
+      'activityCharLimit',
+      'Positive integer',
+      'Numero massimo di caratteri da ogni voce di input o output dello strumento inclusa nel prompt dell\'intestazione.',
+      '600',
+    ],
+    [
+      'activityPhaseLabel',
+      'Boolean',
+      'Genera un riepilogo principale compresso per ogni fase di esecuzione che contiene almeno due attività.',
+      'false',
+    ],
+    [
+      'activityPhaseModel',
+      'String',
+      'Modello utilizzato per i riepiloghi della fase principale. Ricorre a activityModel, titleModel e infine al modello di esecuzione dell\'Agent.',
+      '',
+    ],
+    [
+      'activityPhaseEndpoint',
+      'String',
+      'Endpoint le cui credenziali vengono utilizzate per i riepiloghi delle fasi. Ricorre a activityEndpoint, poi al provider dell\'Agent.',
+      '',
+    ],
+    [
+      'activityPhasePrompt',
+      'String',
+      'Sovrascrive il prompt utilizzato per generare i riepiloghi della fase principale.',
+      '',
+    ],
+    [
+      'activityPhaseMaxPerRun',
+      'Positive integer',
+      'Numero massimo di riepiloghi della fase principale generati per risposta.',
+      '5',
+    ],
+  ]}
+/>
+
+```yaml filename="endpoints / agents / activity groups"
+endpoints:
+  agents:
+    activityLabel: true
+    activityEndpoint: 'openAI'
+    activityModel: 'gpt-4.1-nano'
+    activityMaxPerRun: 20
+    activityCharLimit: 600
+    activityPhaseLabel: true
+    activityPhaseMaxPerRun: 5
+```
+
+Puoi anche impostare questi campi sotto `endpoints.all` o un provider di supporto/endpoint personalizzato. I valori vengono risolti in modo indipendente, con il primo valore definito che ha la precedenza in questo ordine: `endpoints.all`, l'endpoint pubblico `agents`, quindi il provider di supporto o l'endpoint personalizzato. Se `activityEndpoint` è sconosciuto, LibreChat registra un avviso e utilizza invece il provider dell'Agent.
+
+I riepiloghi delle fasi principali sono indipendenti dalle etichette delle attività secondarie: `activityPhaseLabel` può essere abilitato con o senza `activityLabel`. LibreChat utilizza una chiamata al modello di riepilogo di fase solo per una fase contenente almeno due attività logiche. Anche `activityCharLimit` limita le prove utilizzate per i riepiloghi di fase. La selezione del modello di fase viene risolta tramite `activityPhaseModel`, `activityModel`, il `titleModel` dell'endpoint di origine, e infine il modello di esecuzione corrente; la selezione dell'endpoint di fase viene risolta tramite `activityPhaseEndpoint`, `activityEndpoint` e infine il provider dell'Agent. Un endpoint di fase configurato sconosciuto registra un avviso e ripiega sul provider dell'Agent.
+
 ## maxToolResultChars
 
 **Chiave:**
@@ -362,6 +466,7 @@ endpoints:
 **Note:**
 
 - I valori supportano `${ENV_VAR}`, `{{LIBRECHAT_USER_*}}` e segnaposto del corpo della richiesta come `{{LIBRECHAT_BODY_CONVERSATIONID}}`.
+- Al passaggio finale di risoluzione in uscita, i segnaposto riconosciuti per utente, corpo della richiesta e OpenID privi di valore diventano stringhe vuote invece di essere inoltrati come testo del modello. I nomi dei segnaposto sconosciuti rimangono invariati, in modo che gli errori di battitura nella configurazione siano visibili.
 - Gli header a livello di endpoint sovrascrivono `endpoints.all.headers` in caso di collisione delle chiavi.
 - L'autenticazione gestita dal provider e le intestazioni beta/protocollo richieste rimangono autorevoli. I valori beta di Anthropic vengono uniti in modo che i flag beta personalizzati non sovrascrivano i flag richiesti dal provider.
 - Anche le intestazioni vengono inoltrate per le richieste di elenco modelli dei provider supportati.
@@ -375,7 +480,7 @@ endpoints:
 - Quando si utilizza la configurazione `all`, questa sovrascriverà le impostazioni corrispondenti in TUTTI i singoli endpoint.
 - La chiave `all` non accetta `baseURL`
 - Le impostazioni non definite in `all` manterranno i loro valori specifici per ogni endpoint.
-- Per `streamRate`: I valori consigliati sono compresi tra 25-40 per un'esperienza di streaming fluida
+- Per `streamRate`: Si consigliano valori compresi tra 25-40 laddove sia desiderato uno smoothing specifico per l'endpoint.
 - L'utilizzo di una frequenza di streaming più elevata è indispensabile quando si serve l'app a molti utenti su larga scala
 
 **Esempio di comportamento di override:**

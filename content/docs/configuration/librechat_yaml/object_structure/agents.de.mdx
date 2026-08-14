@@ -12,17 +12,33 @@ endpoints:
   agents:
     recursionLimit: 50
     maxRecursionLimit: 100
+    maxToolCallArgBytes: 65536
+    maxDeltaEventsPerTurn: 100000
+    maxToolCallArgBytesByTool:
+      create_file: 131072
     disableBuilder: false
     # (optional) Agent Capabilities available to all users. Omit the ones you wish to exclude. Defaults to list below.
-    # Add "programmatic_tools" with "execute_code" to enable Programmatic Tool Calling for MCP tools.
-    # capabilities: ["deferred_tools", "execute_code", "file_search", "web_search", "artifacts", "subagents", "actions", "context", "skills", "tools", "chain", "ocr"]
+    # Opt-in capabilities: "programmatic_tools", "stateful_code_sessions", "run_in_background", and "tool_intents".
+    # capabilities: ["deferred_tools", "execute_code", "file_search", "web_search", "artifacts", "subagents", "actions", "context", "skills", "memory", "ask_user_question", "tools", "chain", "ocr"]
     # (optional) File citation configuration for file_search capability
     maxCitations: 30 # Maximum total citations in responses (1-50)
     maxCitationsPerFile: 7 # Maximum citations from each file (1-10)
     minRelevanceScore: 0.45 # Minimum relevance score threshold (0.0-1.0)
     titleTiming: immediate
+    activityLabel: true
+    activityModel: gpt-4.1-nano
+    activityPhaseLabel: true
+    activityPhaseMaxPerRun: 5
     skills:
       maxCatalogSkills: 20
+    toolApproval:
+      enabled: true
+      mode: default
+      deny: ['mcp:*:delete_*']
+      ask: ['mcp:*:*']
+    checkpointer:
+      type: mongo
+      ttl: 86400
     remoteApi:
       auth:
         oidc:
@@ -77,6 +93,51 @@ maxRecursionLimit: 100
 
 Weitere Informationen zu Agent-Schritten finden Sie unter [Max Agent Steps](/docs/features/agents#max-agent-steps).
 
+## Stream circuit breakers [#stream-circuit-breakers]
+
+Diese Einstellungen stoppen einen Agent-Lauf, wenn ein Provider-Stream anscheinend ausufernde Tool-Argumente oder eine unbegrenzte Sequenz von Delta-Events erzeugt.
+
+<OptionTable
+  options={[
+    [
+      'maxToolCallArgBytes',
+      'Number',
+      'Maximale kumulative Bytes für die Argumente eines gestreamten Tool-Aufrufs. Auf 0 setzen, um den globalen Schutz zu deaktivieren.',
+      '65536',
+    ],
+    [
+      'maxDeltaEventsPerTurn',
+      'Number',
+      'Maximale Anzahl an gestreamten Ereignissen für einen Modell-Generierungsdurchlauf. Auf 0 setzen oder weglassen, um diesen Schutz zu deaktivieren.',
+      '0 (disabled)',
+    ],
+    [
+      'maxToolCallArgBytesByTool',
+      'Object',
+      'Pro-Tool-Argument-Byte-Überschreibungen, indiziert nach dem modellseitigen Tool-Namen. Ein Wert von 0 deaktiviert den Schutz für dieses Tool.',
+      'create_file: 131072',
+    ],
+  ]}
+/>
+
+LibreChat verwendet ein globales Argument-Limit von 64 KiB und liefert eine 128 KiB-Überschreibung für `create_file` mit, deren legitime Payloads oft größer sind. Einträge in `maxToolCallArgBytesByTool` werden über diese eingebaute Überschreibung zusammengeführt. Wenn eine der Schutzmaßnahmen greift, bricht LibreChat den laufenden Provider-Stream ab und meldet, welches Limit überschritten wurde.
+
+```yaml filename="endpoints / agents / stream circuit breakers"
+maxToolCallArgBytes: 65536
+maxDeltaEventsPerTurn: 100000
+maxToolCallArgBytesByTool:
+  create_file: 262144
+  large_import: 524288
+```
+
+Um jede Argumentgrößen-Beschränkung zu deaktivieren, setzen Sie sowohl das globale Limit als auch die mitgelieferte `create_file`-Überschreibung auf `0`:
+
+```yaml
+maxToolCallArgBytes: 0
+maxToolCallArgBytesByTool:
+  create_file: 0
+```
+
 ## titleTiming
 
 <OptionTable
@@ -102,6 +163,22 @@ Weitere Informationen zu Agent-Schritten finden Sie unter [Max Agent Steps](/doc
 ```yaml filename="endpoints / agents / titleTiming"
 titleTiming: immediate
 ```
+
+## activityLabel
+
+Setzen Sie `activityLabel: true`, um jeden Block von Agent-Reasoning und Tool-Aufrufen unter einer generierten einzeiligen Überschrift zu gruppieren. Verwenden Sie `activityModel`, `activityEndpoint`, `activityPrompt`, `activityMaxPerRun` und `activityCharLimit`, um den zusätzlichen Modellaufruf und dessen Kosten zu steuern. Siehe [Agent Activity Groups](/docs/configuration/librechat_yaml/object_structure/shared_endpoint_settings#agent-activity-groups) für die vollständige Feldreferenz und die Rangfolgeregeln.
+
+```yaml filename="endpoints / agents / activity groups"
+activityLabel: true
+activityEndpoint: openAI
+activityModel: gpt-4.1-nano
+activityMaxPerRun: 20
+activityCharLimit: 600
+activityPhaseLabel: true
+activityPhaseMaxPerRun: 5
+```
+
+`activityPhaseLabel` kann unabhängig eine eingeklappte übergeordnete Zusammenfassung um jede Ausführungsphase hinzufügen, die mindestens zwei logische Aktivitäten enthält. Verwenden Sie `activityPhaseModel`, `activityPhaseEndpoint`, `activityPhasePrompt` und `activityPhaseMaxPerRun`, um diese Aufrufe anzupassen; `activityCharLimit` wird mit untergeordneten Aktivitätsbezeichnungen geteilt.
 
 ## disableBuilder
 
@@ -162,9 +239,9 @@ allowedProviders:
   ]}
 />
 
-**Standard:** `["deferred_tools", "execute_code", "file_search", "web_search", "artifacts", "subagents", "actions", "context", "skills", "tools", "chain", "ocr"]`
+**Standard:** `["deferred_tools", "execute_code", "file_search", "web_search", "artifacts", "subagents", "actions", "context", "skills", "memory", "ask_user_question", "tools", "chain", "ocr"]`
 
-Programmatic Tool Calling ist optional. Fügen Sie `programmatic_tools` neben `execute_code` nur dann hinzu, wenn Ihre Code Interpreter-Bereitstellung die Tool Call Server-Komponente enthält.
+`programmatic_tools`, `stateful_code_sessions`, `run_in_background` und `tool_intents` sind optional und müssen explizit hinzugefügt werden. Programmatic Tools und Stateful Sessions erfordern zudem `execute_code` sowie eine kompatible Code Interpreter-Bereitstellung. Die Code-Ausführung im Hintergrund erfordert `run_in_background`, `execute_code` und den Code Interpreter.
 
 **Beispiel:**
 
@@ -182,12 +259,116 @@ capabilities:
   - 'actions'
   - 'context'
   - 'skills'
+  - 'memory'
+  - 'ask_user_question'
   - 'tools'
   - 'chain'
   - 'ocr'
+  # Optional: reuse one Code Interpreter workspace per conversation.
+  # - 'stateful_code_sessions'
+  # Optional: allow selected eligible MCP and Code Interpreter tools to run as background tasks.
+  # - 'run_in_background'
+  # Optional: show live model-written intent labels for native and selected MCP tools.
+  # - 'tool_intents'
 ```
 
 **Hinweis:** Dieses Feld ist optional. Wenn es weggelassen wird, besteht das Standardverhalten darin, alle Funktionen einzubeziehen, die in der Standardeinstellung aufgeführt sind.
+
+## toolApproval
+
+Steuert die manuelle Überprüfung für Agent-Tool-Aufrufe. Diese Funktion ist standardmäßig deaktiviert. Wenn sie aktiviert ist, werden entsprechende Aufrufe angehalten, bis der Benutzer eine Entscheidung trifft, wie z. B. das Genehmigen, Ablehnen oder Bearbeiten der Argumente.
+
+<OptionTable
+  options={[
+    ['enabled', 'Boolean', 'Aktiviert die Tool-Genehmigung für den Agents endpoint.', 'false'],
+    [
+      'mode',
+      'String',
+      'Legt das Verhalten bei nicht übereinstimmenden Aufrufen fest: `default` fragt nach, `dontAsk` lehnt ab und `bypass` genehmigt, sofern nicht abgelehnt.',
+      'default',
+    ],
+    ['allow', 'Array of strings', 'Glob-Muster für Aufrufe, die ohne Aufforderung ausgeführt werden können.', ''],
+    ['deny', 'Array of strings', 'Glob-Muster für Aufrufe, die immer abgelehnt werden. Ablehnungsregeln haben Vorrang.', ''],
+    ['ask', 'Array of strings', 'Glob-Muster für Aufrufe, die immer eine Überprüfung erfordern.', ''],
+    [
+      'reason',
+      'String',
+      'Optionale Erklärung, die in der Genehmigungsaufforderung angezeigt wird. Verwenden Sie `{tool}`, um den Tool-Namen einzufügen.',
+      '',
+    ],
+    [
+      'hooks',
+      'Array of objects',
+      'Vertrauenswürdige programmatische Richtlinienmodule für kontextbezogene Entscheidungen. Hooks können die statische Richtlinie nur verschärfen.',
+      '',
+    ],
+  ]}
+/>
+
+Muster verwenden Glob-Matching. MCP-Tools können mit `mcp:<server>:<tool>` eingegrenzt werden; zum Beispiel entspricht `mcp:github:*` jedem Tool vom `github`-Server. Die Auswertung gibt `deny` die höchste Priorität, auch im `bypass`-Modus.
+
+```yaml filename="endpoints / agents / toolApproval"
+toolApproval:
+  enabled: true
+  mode: default
+  allow:
+    - 'mcp:analytics:read_*'
+  deny:
+    - 'mcp:*:delete_*'
+  ask:
+    - 'mcp:*:*'
+  reason: 'Review {tool} before it runs.'
+```
+
+Hooks werden einmal beim Serverstart geladen und im LibreChat-Prozess ausgeführt. Jeder Eintrag akzeptiert ein `module`, ein optionales Tool-Name `matcher` Regex und ein optionales `options`-Objekt, das an den Builder des Moduls übergeben wird. Laden Sie nur Code, dem Sie vertrauen. Rollen- oder mandantenspezifische Überschreibungen laden Hook-Module nicht neu; implementieren Sie kontextbezogenes Verhalten innerhalb des Hooks.
+
+```yaml filename="endpoints / agents / toolApproval / hooks"
+toolApproval:
+  enabled: true
+  hooks:
+    - module: '@acme/librechat-approval-hook'
+      matcher: '^mcp:production:'
+      options:
+        requireTicket: true
+```
+
+## checkpointer
+
+Konfiguriert den Speicher für Agenten-Ausführungen, die durch Tool-Genehmigung oder „Ask User“ pausiert wurden. Wenn eine dieser Funktionen einen Checkpointer benötigt und dieser Block weggelassen wird, verwendet LibreChat die primäre MongoDB mit einem Entscheidungsfenster von 24 Stunden.
+
+<OptionTable
+  options={[
+    [
+      'type',
+      'String',
+      '`mongo` speichert pausierte Ausführungen über Neustarts und Replikate hinweg; `memory` ist prozesslokal und für die Entwicklung gedacht.',
+      'mongo',
+    ],
+    ['ttl', 'Number', 'Wie lange ein pausierter Durchlauf auf eine Entscheidung wartet, in Sekunden.', '86400'],
+    [
+      'checkpointCollectionName',
+      'String',
+      'Optionaler Überschreibungsname für die MongoDB-Checkpoint-Collection.',
+      'agent_checkpoints',
+    ],
+    [
+      'checkpointWritesCollectionName',
+      'String',
+      'Optionale Überschreibung des MongoDB-Collection-Namens für Checkpoint-Schreibvorgänge.',
+      'agent_checkpoint_writes',
+    ],
+  ]}
+/>
+
+```yaml filename="endpoints / agents / checkpointer"
+checkpointer:
+  type: mongo
+  ttl: 86400
+```
+
+Verwenden Sie `type: memory` nur für eine Single-Prozess-Entwicklungsumgebung. Ein pausierter Lauf, der im Arbeitsspeicher gespeichert ist, kann nach einem Neustart oder auf einem anderen Replikat nicht fortgesetzt werden.
+
+MongoDB-Checkpoints protokollieren eine Warnung, wenn der serialisierte Status 8 MiB überschreitet, und lehnen eine dauerhafte Pause oberhalb von 15 MiB ab, um Spielraum unterhalb des 16-MiB-Dokumentenlimits von MongoDB zu lassen. Große eingebettete Medien oder Tool-Outputs sind häufige Ursachen; starten Sie eine neue Konversation oder reduzieren Sie deren Kontext, falls ein Durchlauf `CHECKPOINT_TOO_LARGE` meldet.
 
 ## skills
 
@@ -329,6 +510,7 @@ Das Feld `capabilities` ermöglicht es Ihnen, spezifische Funktionalitäten für
 - **deferred_tools**: Ermöglicht es Agenten, verzögerte MCP-Tools zur Laufzeit zu entdecken, anstatt jedes Tool vorab in den Kontext zu laden.
 - **programmatic_tools**: Aktiviert den programmatischen Tool-Aufruf (Programmatic Tool Calling) für MCP-Tools, die im Agent Builder als Programmatic markiert sind. Erfordert `execute_code` und eine Code Interpreter-Bereitstellung mit der Tool Call Server-Komponente. Diese Funktion ist optional und standardmäßig nicht aktiviert.
 - **execute_code**: Ermöglicht dem Agenten, Code auszuführen.
+- **stateful_code_sessions**: Ermöglicht es Agents, die sich dafür entscheiden, einen Code Interpreter-Arbeitsbereich pro Konversation wiederzuverwenden. Erfordert `execute_code`, eine kompatible Code Interpreter-Bereitstellung sowie die erweiterte Einstellung pro Agent. Diese Funktion ist hochgradig experimentell, standardmäßig nicht aktiviert und kann sich während der Experimentierphase erheblich ändern; betrachten Sie das aktuelle Verhalten oder die Konfiguration nicht als stabilen Produktionsvertrag.
 - **file_search**: Ermöglicht dem Agenten, Dateien zu durchsuchen und mit ihnen zu interagieren. Wenn diese Funktion aktiviert ist, wird das Zitierverhalten durch die Einstellungen `maxCitations`, `maxCitationsPerFile` und `minRelevanceScore` gesteuert.
 - **web_search**: Aktiviert die Websuchfunktion für Agents, wodurch diese Informationen aus dem Internet suchen und abrufen können.
 - **artifacts**: Ermöglicht es dem Agenten, interaktive Artefakte (React-Komponenten, HTML, Mermaid-Diagramme) zu generieren.
@@ -336,9 +518,13 @@ Das Feld `capabilities` ermöglicht es Ihnen, spezifische Funktionalitäten für
 - **actions**: Erlaubt dem Agenten, vordefinierte Aktionen auszuführen.
 - **context**: Aktiviert die Funktion „Als Text hochladen“ im Chat sowie den „Dateikontext“ für Agents, wodurch Benutzer Dateien hochladen können, deren Inhalt extrahiert und direkt in die Konversation einbezogen wird.
 - **skills**: Aktiviert Skills in der Seitenleiste, manuelle `$`-Aufrufe, von Modellen aufgerufene Skills und Agent-Skill-Allowlists. Siehe [Skills](/docs/features/skills).
+- **memory**: Ermöglicht es Agenten, `set_memory` und `delete_memory` zu verwenden, wenn memory konfiguriert ist und der Benutzer Zugriff hat. Standardmäßig aktiviert; wird zur Laufzeit entfernt, wenn memory deaktiviert ist.
+- **ask_user_question**: Ermöglicht es Agenten, zu pausieren, um ein bis vier zusammenhängende Fragen in einem einzigen Formular zu stellen und mit den Antworten fortzufahren. Standardmäßig aktiviert.
 - **tools**: Gewährt dem Agenten Zugriff auf verschiedene Tools.
 - **chain**: Aktiviert die Beta-Funktion für Agent-Chaining, auch bekannt als Mixture-of-Agents (MoA)-Workflows.
 - **ocr**: Verbessert optional „Als Text hochladen“ im Chat sowie den „Dateikontext“ für Agents, wodurch Dateien hochgeladen und mittels OCR verarbeitet werden können. **Erfordert die Konfiguration eines OCR-Dienstes.**
+- **run_in_background**: Macht die Ausführung von Code Interpreter und Shell-Tools standardmäßig für die Hintergrundausführung berechtigt und ermöglicht eine individuelle Hintergrund-Opt-in-Option für MCP-Tools. Ein Agent kann Code Interpreter explizit von der Hintergrundausführung ausschließen. Die Einstellung erlaubt die Hintergrundausführung; das Modell entscheidet pro Aufruf, ob es diese nutzt. Erfordert `execute_code` und eine konfigurierte Code Interpreter-Bereitstellung für Code. Diese Funktion ist standardmäßig nicht aktiviert.
+- **tool_intents**: Fügt berechtigten Tool-Aufrufen live vom Modell geschriebene Intent-Labels hinzu. Native Tools, einschließlich Code Interpreter-Tools, werden automatisch einbezogen; MCP-Tools können im Agent Builder einzeln oder gesammelt aktiviert werden. Model Specs verwenden `describeIntent`. Diese Funktion ist standardmäßig nicht aktiviert.
 
 Durch die Angabe der capabilities können Sie die Funktionen steuern, die Benutzern bei der Interaktion mit Agents zur Verfügung stehen.
 
@@ -359,6 +545,10 @@ endpoints:
       # Optional: enables Programmatic Tool Calling for MCP tools marked Programmatic in the Agent Builder.
       # - 'programmatic_tools'
       - 'execute_code'
+      # Optional: makes Code Interpreter background-eligible and enables selected MCP tools.
+      # - 'run_in_background'
+      # Optional: enables live intent labels for native and selected MCP tools.
+      # - 'tool_intents'
       - 'file_search'
       - 'skills'
       - 'subagents'
@@ -376,6 +566,8 @@ In diesem Beispiel:
 - Nur Quellen mit einer Relevanz von 60%+ werden einbezogen
 - LibreChat Agents haben Zugriff auf Code-Ausführung, Dateisuche (mit Zitaten), Skills, Subagents, Aktionen, Artefakte, Dateikontext, OCR-Dienste (sofern konfiguriert) sowie Web-Suchfunktionen.
 - Programmatic Tool Calling bleibt deaktiviert, es sei denn, Sie fügen die `programmatic_tools` Capability zusammen mit `execute_code` hinzu.
+- Hintergrund-Tool-Aufrufe bleiben deaktiviert, es sei denn, Sie fügen `run_in_background` hinzu; Code Interpreter-Tools werden dann standardmäßig berechtigt, während MCP-Tools weiterhin eine Auswahl pro Tool erfordern.
+- Tool-Intent-Labels bleiben deaktiviert, es sei denn, Sie fügen `tool_intents` hinzu; native Tools werden dann automatisch aktiviert, während MCP-Tools weiterhin eine Auswahl pro Tool erfordern.
 
 ## remoteApi
 

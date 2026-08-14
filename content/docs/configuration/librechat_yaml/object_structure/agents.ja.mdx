@@ -12,17 +12,33 @@ endpoints:
   agents:
     recursionLimit: 50
     maxRecursionLimit: 100
+    maxToolCallArgBytes: 65536
+    maxDeltaEventsPerTurn: 100000
+    maxToolCallArgBytesByTool:
+      create_file: 131072
     disableBuilder: false
     # (optional) Agent Capabilities available to all users. Omit the ones you wish to exclude. Defaults to list below.
-    # Add "programmatic_tools" with "execute_code" to enable Programmatic Tool Calling for MCP tools.
-    # capabilities: ["deferred_tools", "execute_code", "file_search", "web_search", "artifacts", "subagents", "actions", "context", "skills", "tools", "chain", "ocr"]
+    # Opt-in capabilities: "programmatic_tools", "stateful_code_sessions", "run_in_background", and "tool_intents".
+    # capabilities: ["deferred_tools", "execute_code", "file_search", "web_search", "artifacts", "subagents", "actions", "context", "skills", "memory", "ask_user_question", "tools", "chain", "ocr"]
     # (optional) File citation configuration for file_search capability
     maxCitations: 30 # Maximum total citations in responses (1-50)
     maxCitationsPerFile: 7 # Maximum citations from each file (1-10)
     minRelevanceScore: 0.45 # Minimum relevance score threshold (0.0-1.0)
     titleTiming: immediate
+    activityLabel: true
+    activityModel: gpt-4.1-nano
+    activityPhaseLabel: true
+    activityPhaseMaxPerRun: 5
     skills:
       maxCatalogSkills: 20
+    toolApproval:
+      enabled: true
+      mode: default
+      deny: ['mcp:*:delete_*']
+      ask: ['mcp:*:*']
+    checkpointer:
+      type: mongo
+      ttl: 86400
     remoteApi:
       auth:
         oidc:
@@ -77,6 +93,51 @@ maxRecursionLimit: 100
 
 エージェントのステップに関する詳細については、[Max Agent Steps](/docs/features/agents#max-agent-steps) を参照してください。
 
+## ストリームサーキットブレーカー [#stream-circuit-breakers]
+
+これらの設定は、プロバイダーのストリームが暴走したツール引数や制限のないデルタイベントのシーケンスを生成していると思われる場合に、Agentの実行を停止します。
+
+<OptionTable
+  options={[
+    [
+      'maxToolCallArgBytes',
+      'Number',
+      '1回のストリーミングツール呼び出しの引数に対する累積バイト数の上限。0に設定するとグローバルガードが無効になります。',
+      '65536',
+    ],
+    [
+      'maxDeltaEventsPerTurn',
+      'Number',
+      '1回のモデル生成ターンにおける最大ストリーミングイベント数。0に設定するか省略すると、このガードは無効になります。',
+      '0 (disabled)',
+    ],
+    [
+      'maxToolCallArgBytesByTool',
+      'Object',
+      'モデル向けのツール名でキー指定された、ツールごとの引数バイト数のオーバーライド。値を0にすると、そのツールのガードが無効になります。',
+      'create_file: 131072',
+    ],
+  ]}
+/>
+
+LibreChatは64 KiBのグローバル引数制限を使用しており、正当なペイロードがこれより大きくなることが多い`create_file`に対しては128 KiBのオーバーライドを提供しています。`maxToolCallArgBytesByTool`内のエントリは、その組み込みオーバーライドにマージされます。いずれかのガードが作動した場合、LibreChatは実行中のプロバイダストリームを中断し、どの制限を超過したかを報告します。
+
+```yaml filename="endpoints / agents / stream circuit breakers"
+maxToolCallArgBytes: 65536
+maxDeltaEventsPerTurn: 100000
+maxToolCallArgBytesByTool:
+  create_file: 262144
+  large_import: 524288
+```
+
+すべての引数サイズのガードを無効にするには、グローバル制限と同梱されている `create_file` オーバーライドの両方を `0` に設定します。
+
+```yaml
+maxToolCallArgBytes: 0
+maxToolCallArgBytesByTool:
+  create_file: 0
+```
+
 ## titleTiming
 
 <OptionTable
@@ -102,6 +163,22 @@ maxRecursionLimit: 100
 ```yaml filename="endpoints / agents / titleTiming"
 titleTiming: immediate
 ```
+
+## activityLabel
+
+`activityLabel: true` を設定すると、エージェントの推論とツール呼び出しの各ブロックが、生成された1行のヘッダーの下にグループ化されます。追加のモデル呼び出しとそのコストを制御するには、`activityModel`、`activityEndpoint`、`activityPrompt`、`activityMaxPerRun`、および `activityCharLimit` を使用します。フィールドの完全なリファレンスと優先順位のルールについては、[Agent Activity Groups](/docs/configuration/librechat_yaml/object_structure/shared_endpoint_settings#agent-activity-groups) を参照してください。
+
+```yaml filename="endpoints / agents / activity groups"
+activityLabel: true
+activityEndpoint: openAI
+activityModel: gpt-4.1-nano
+activityMaxPerRun: 20
+activityCharLimit: 600
+activityPhaseLabel: true
+activityPhaseMaxPerRun: 5
+```
+
+`activityPhaseLabel` は、少なくとも2つの論理的なアクティビティを含む各実行フェーズの周囲に、折りたたみ可能な親サマリーを個別に付加できます。これらの呼び出しを調整するには `activityPhaseModel`、`activityPhaseEndpoint`、`activityPhasePrompt`、および `activityPhaseMaxPerRun` を使用してください。`activityCharLimit` は子アクティビティラベルと共有されます。
 
 ## disableBuilder
 
@@ -162,9 +239,9 @@ allowedProviders:
   ]}
 />
 
-**デフォルト:** `["deferred_tools", "execute_code", "file_search", "web_search", "artifacts", "subagents", "actions", "context", "skills", "tools", "chain", "ocr"]`
+**デフォルト:** `["deferred_tools", "execute_code", "file_search", "web_search", "artifacts", "subagents", "actions", "context", "skills", "memory", "ask_user_question", "tools", "chain", "ocr"]`
 
-Programmatic Tool Callingはオプトイン機能です。Code InterpreterのデプロイメントにTool Call Serverコンポーネントが含まれている場合にのみ、`execute_code`と併せて`programmatic_tools`を追加してください。
+`programmatic_tools`、`stateful_code_sessions`、`run_in_background`、および `tool_intents` はオプトイン機能であり、明示的に追加する必要があります。Programmatic tools（プログラムツール）と Stateful sessions（ステートフルセッション）には、`execute_code` および互換性のある Code Interpreter デプロイメントも必要です。バックグラウンドでのコード実行には、`run_in_background`、`execute_code`、および Code Interpreter が必要です。
 
 **例:**
 
@@ -182,12 +259,116 @@ capabilities:
   - 'actions'
   - 'context'
   - 'skills'
+  - 'memory'
+  - 'ask_user_question'
   - 'tools'
   - 'chain'
   - 'ocr'
+  # Optional: reuse one Code Interpreter workspace per conversation.
+  # - 'stateful_code_sessions'
+  # Optional: allow selected eligible MCP and Code Interpreter tools to run as background tasks.
+  # - 'run_in_background'
+  # Optional: show live model-written intent labels for native and selected MCP tools.
+  # - 'tool_intents'
 ```
 
 **注:** このフィールドは任意です。省略した場合、デフォルトの動作として、デフォルトでリストされているすべての機能が含まれます。
+
+## toolApproval
+
+エージェントのツール呼び出しに対する人間によるレビューを制御します。この機能はデフォルトで無効になっています。有効にすると、一致する呼び出しは、ユーザーが承認、拒否、または引数の編集といった許可の決定を送信するまで一時停止します。
+
+<OptionTable
+  options={[
+    ['enabled', 'Boolean', 'Agents endpointのツール承認を有効にします。', 'false'],
+    [
+      'mode',
+      'String',
+      '一致しない呼び出しの動作を設定します：`default` は確認し、`dontAsk` は拒否し、`bypass` は拒否されない限り承認します。',
+      'default',
+    ],
+    ['allow', 'Array of strings', 'プロンプトなしで実行可能な呼び出しのためのGlobパターン。', ''],
+    ['deny', 'Array of strings', '常に拒否される呼び出しのGlobパターン。拒否ルールが優先されます。', ''],
+    ['ask', 'Array of strings', '常にレビューを必要とする呼び出しのGlobパターン。', ''],
+    [
+      'reason',
+      'String',
+      'Optional explanation shown in the approval prompt. Use `{tool}` to insert the tool name.',
+      '',
+    ],
+    [
+      'hooks',
+      'Array of objects',
+      'コンテキストを認識した意思決定のための信頼されたプログラム可能なポリシーモジュール。フックは静的ポリシーを強化することのみ可能です。',
+      '',
+    ],
+  ]}
+/>
+
+パターンはglobマッチングを使用します。MCPツールは `mcp:<server>:<tool>` でスコープを指定できます。例えば、`mcp:github:*` は `github` サーバーのすべてのツールにマッチします。評価では `deny` が最も高い優先度を持ち、これは `bypass` モードにおいても同様です。
+
+```yaml filename="endpoints / agents / toolApproval"
+toolApproval:
+  enabled: true
+  mode: default
+  allow:
+    - 'mcp:analytics:read_*'
+  deny:
+    - 'mcp:*:delete_*'
+  ask:
+    - 'mcp:*:*'
+  reason: 'Review {tool} before it runs.'
+```
+
+Hooksはサーバー起動時に一度だけ読み込まれ、LibreChatプロセス内で実行されます。各エントリは `module`、オプションのツール名 `matcher` 正規表現、およびモジュールのビルダーに渡されるオプションの `options` オブジェクトを受け入れます。信頼できるコードのみを読み込んでください。ロールごとやテナントごとのオーバーライドではフックモジュールは再読み込みされません。コンテキストに応じた動作はフック内部で実装してください。
+
+```yaml filename="endpoints / agents / toolApproval / hooks"
+toolApproval:
+  enabled: true
+  hooks:
+    - module: '@acme/librechat-approval-hook'
+      matcher: '^mcp:production:'
+      options:
+        requireTicket: true
+```
+
+## checkpointer
+
+ツール承認または「ユーザーに尋ねる (Ask User)」によって一時停止されたエージェント実行のストレージを設定します。いずれかの機能でチェックポインターが必要な場合にこのブロックが省略されると、LibreChatは24時間の決定ウィンドウを持つプライマリのMongoDBを使用します。
+
+<OptionTable
+  options={[
+    [
+      'type',
+      'String',
+      '`mongo` は再起動やレプリカをまたいで一時停止中の実行を保持しますが、`memory` はプロセスローカルであり、開発用を意図しています。',
+      'mongo',
+    ],
+    ['ttl', 'Number', '一時停止された実行が決定を待機する時間（秒単位）。', '86400'],
+    [
+      'checkpointCollectionName',
+      'String',
+      'オプションのMongoDBチェックポイントコレクション名のオーバーライド。',
+      'agent_checkpoints',
+    ],
+    [
+      'checkpointWritesCollectionName',
+      'String',
+      'オプションのMongoDBチェックポイント書き込み用コレクション名のオーバーライド。',
+      'agent_checkpoint_writes',
+    ],
+  ]}
+/>
+
+```yaml filename="endpoints / agents / checkpointer"
+checkpointer:
+  type: mongo
+  ttl: 86400
+```
+
+`type: memory` は、単一プロセスの開発環境でのデプロイメントにのみ使用してください。メモリ内に保存された一時停止中の実行状態は、再起動後や別のレプリカ上では再開できません。
+
+MongoDBのチェックポイントは、シリアル化された状態が8 MiBを超えると警告をログに記録し、15 MiBを超えると永続的な一時停止を拒否します。これにより、MongoDBの16 MiBのドキュメント制限を下回る余裕を確保しています。インライン化された大きなメディアやツール出力が主な原因となるため、実行時に `CHECKPOINT_TOO_LARGE` が報告された場合は、新しい会話を開始するか、コンテキストを削減してください。
 
 ## skills
 
@@ -329,6 +510,7 @@ endpoints:
 - **deferred_tools**: エージェントが実行時に MCP ツールを遅延検出できるようにし、すべてのツールを事前にコンテキストへ読み込む必要をなくします。
 - **programmatic_tools**: Agent BuilderでProgrammaticとマークされたMCPツールに対して、Programmatic Tool Callingを有効にします。これには `execute_code` およびTool Call Serverコンポーネントを備えたCode Interpreterのデプロイメントが必要です。この機能はオプトインであり、デフォルトでは有効になっていません。
 - **execute_code**: エージェントがコードを実行できるようにします。
+- **stateful_code_sessions**: オプトインしたエージェントが、1つの会話につき1つのCode Interpreterワークスペースを再利用できるようにします。これには `execute_code`、互換性のあるCode Interpreterのデプロイメント、およびエージェントごとの詳細設定が必要です。この機能は非常に実験的なものであり、デフォルトでは有効になっておらず、実験中に大幅に変更される可能性があります。現在の動作や構成を安定した本番環境の契約として扱わないでください。
 - **file_search**: エージェントがファイルを検索し、操作できるようにします。有効にすると、引用の動作は `maxCitations`、`maxCitationsPerFile`、および `minRelevanceScore` の設定によって制御されます。
 - **web_search**: エージェントのウェブ検索機能を有効にし、インターネット上の情報を検索および取得できるようにします。
 - **artifacts**: エージェントがインタラクティブなアーティファクト（Reactコンポーネント、HTML、Mermaidダイアグラム）を生成できるようにします。
@@ -336,9 +518,13 @@ endpoints:
 - **actions**: エージェントが定義済みの操作を実行することを許可します。
 - **context**: チャットでの「テキストとしてアップロード」機能およびエージェントの「ファイルコンテキスト」を有効にします。これにより、ユーザーはファイルをアップロードし、その内容を抽出して会話に直接含めることができるようになります。
 - **skills**: サイドパネルでのSkillsの有効化、手動での `$` 呼び出し、モデルによるSkillsの呼び出し、およびエージェントのSkill許可リストを有効にします。詳細は [Skills](/docs/features/skills) を参照してください。
+- **memory**: メモリが設定されており、ユーザーがアクセス権を持っている場合に、エージェントが `set_memory` および `delete_memory` を使用できるようにします。デフォルトで有効になっており、メモリが無効な場合は実行時に削除されます。
+- **ask_user_question**: エージェントが一時停止し、単一のフォームで1〜4つの関連する質問を行い、回答を得てから再開できるようにします。デフォルトで有効になっています。
 - **tools**: エージェントに様々なツールへのアクセス権を付与します。
 - **chain**: エージェントチェーン（Mixture-of-Agents (MoA) ワークフローとも呼ばれます）のベータ機能を有効にします。
 - **ocr**: チャットでの「テキストとしてアップロード」およびエージェントの「ファイルコンテキスト」をオプションで強化し、ファイルをアップロードしてOCRで処理できるようにします。**OCRサービスの設定が必要です。**
+- **run_in_background**: Code Interpreterの実行およびシェルツールをデフォルトでバックグラウンド実行の対象とし、MCPツールに対してはツールごとのバックグラウンド実行のオプトインを有効にします。エージェントはCode Interpreterを明示的に除外することができます。この設定はバックグラウンド実行を許可するものであり、実際に使用するかどうかはモデルが呼び出しごとに判断します。コードを実行するには `execute_code` および設定済みのCode Interpreterデプロイメントが必要です。この機能はデフォルトでは有効になっていません。
+- **tool_intents**: 適切なツール呼び出しに対して、モデルが記述したライブインテントラベルを追加します。Code Interpreterツールを含むネイティブツールは自動的にオプトインされます。MCPツールは、Agent Builderで個別または一括で有効にできます。Model Specsでは `describeIntent` を使用します。この機能はデフォルトでは有効になっていません。
 
 capabilitiesを指定することで、エージェントと対話する際にユーザーが利用できる機能を制御できます。
 
@@ -359,6 +545,10 @@ endpoints:
       # Optional: enables Programmatic Tool Calling for MCP tools marked Programmatic in the Agent Builder.
       # - 'programmatic_tools'
       - 'execute_code'
+      # Optional: makes Code Interpreter background-eligible and enables selected MCP tools.
+      # - 'run_in_background'
+      # Optional: enables live intent labels for native and selected MCP tools.
+      # - 'tool_intents'
       - 'file_search'
       - 'skills'
       - 'subagents'
@@ -376,6 +566,8 @@ endpoints:
 - 関連度が60%以上のソースのみが含まれます
 - LibreChat Agentsは、コード実行、ファイル検索（引用付き）、Skills、Subagents、actions、artifacts、ファイルコンテキスト、設定済みの場合はOCRサービス、およびウェブ検索機能にアクセスできます。
 - `execute_code` と併せて `programmatic_tools` 機能を有効にしない限り、Programmatic Tool Calling は無効のままとなります。
+- バックグラウンドツール呼び出しは、`run_in_background` を追加しない限り無効のままです。Code Interpreterツールはデフォルトで有効になりますが、MCPツールは引き続きツールごとの選択が必要です。
+- `tool_intents` を追加しない限り、ツールインテントのラベルは無効のままです。ネイティブツールは自動的にオプトインされますが、MCPツールは引き続きツールごとの選択が必要です。
 
 ## remoteApi
 

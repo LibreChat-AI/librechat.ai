@@ -12,17 +12,33 @@ endpoints:
   agents:
     recursionLimit: 50
     maxRecursionLimit: 100
+    maxToolCallArgBytes: 65536
+    maxDeltaEventsPerTurn: 100000
+    maxToolCallArgBytesByTool:
+      create_file: 131072
     disableBuilder: false
     # (optional) Agent Capabilities available to all users. Omit the ones you wish to exclude. Defaults to list below.
-    # Add "programmatic_tools" with "execute_code" to enable Programmatic Tool Calling for MCP tools.
-    # capabilities: ["deferred_tools", "execute_code", "file_search", "web_search", "artifacts", "subagents", "actions", "context", "skills", "tools", "chain", "ocr"]
+    # Opt-in capabilities: "programmatic_tools", "stateful_code_sessions", "run_in_background", and "tool_intents".
+    # capabilities: ["deferred_tools", "execute_code", "file_search", "web_search", "artifacts", "subagents", "actions", "context", "skills", "memory", "ask_user_question", "tools", "chain", "ocr"]
     # (optional) File citation configuration for file_search capability
     maxCitations: 30 # Maximum total citations in responses (1-50)
     maxCitationsPerFile: 7 # Maximum citations from each file (1-10)
     minRelevanceScore: 0.45 # Minimum relevance score threshold (0.0-1.0)
     titleTiming: immediate
+    activityLabel: true
+    activityModel: gpt-4.1-nano
+    activityPhaseLabel: true
+    activityPhaseMaxPerRun: 5
     skills:
       maxCatalogSkills: 20
+    toolApproval:
+      enabled: true
+      mode: default
+      deny: ['mcp:*:delete_*']
+      ask: ['mcp:*:*']
+    checkpointer:
+      type: mongo
+      ttl: 86400
     remoteApi:
       auth:
         oidc:
@@ -77,6 +93,51 @@ maxRecursionLimit: 100
 
 Để biết thêm thông tin về các bước của tác nhân (agent steps), hãy xem [Max Agent Steps](/docs/features/agents#max-agent-steps).
 
+## Bộ ngắt mạch luồng (Stream circuit breakers) [#stream-circuit-breakers]
+
+Các cài đặt này sẽ dừng quá trình chạy Agent khi luồng dữ liệu từ nhà cung cấp có dấu hiệu tạo ra các đối số công cụ không kiểm soát được hoặc một chuỗi sự kiện delta vô hạn.
+
+<OptionTable
+  options={[
+    [
+      'maxToolCallArgBytes',
+      'Number',
+      'Số byte tích lũy tối đa cho các đối số của một lệnh gọi công cụ được truyền phát. Đặt thành 0 để tắt tính năng bảo vệ toàn cục.',
+      '65536',
+    ],
+    [
+      'maxDeltaEventsPerTurn',
+      'Number',
+      'Số lượng sự kiện truyền phát tối đa cho một lượt tạo mô hình. Đặt thành 0 hoặc bỏ qua để tắt tính năng bảo vệ này.',
+      '0 (disabled)',
+    ],
+    [
+      'maxToolCallArgBytesByTool',
+      'Object',
+      'Ghi đè byte đối số theo từng công cụ, được khóa bằng tên công cụ hiển thị với model. Giá trị 0 sẽ vô hiệu hóa cơ chế bảo vệ cho công cụ đó.',
+      'create_file: 131072',
+    ],
+  ]}
+/>
+
+LibreChat sử dụng giới hạn đối số toàn cục 64 KiB và cung cấp mức ghi đè 128 KiB cho `create_file`, vì các payload hợp lệ của hàm này thường lớn hơn. Các mục trong `maxToolCallArgBytesByTool` sẽ hợp nhất đè lên mức ghi đè tích hợp sẵn đó. Nếu một trong hai cơ chế bảo vệ bị kích hoạt, LibreChat sẽ hủy luồng nhà cung cấp đang chạy và báo cáo giới hạn nào đã bị vượt quá.
+
+```yaml filename="endpoints / agents / stream circuit breakers"
+maxToolCallArgBytes: 65536
+maxDeltaEventsPerTurn: 100000
+maxToolCallArgBytesByTool:
+  create_file: 262144
+  large_import: 524288
+```
+
+Để vô hiệu hóa mọi cơ chế bảo vệ kích thước đối số (argument-size guard), hãy đặt cả giới hạn toàn cục và ghi đè `create_file` mặc định thành `0`:
+
+```yaml
+maxToolCallArgBytes: 0
+maxToolCallArgBytesByTool:
+  create_file: 0
+```
+
 ## titleTiming
 
 <OptionTable
@@ -102,6 +163,22 @@ maxRecursionLimit: 100
 ```yaml filename="endpoints / agents / titleTiming"
 titleTiming: immediate
 ```
+
+## activityLabel
+
+Đặt `activityLabel: true` để nhóm từng khối suy luận của Agent và các lệnh gọi công cụ dưới một tiêu đề một dòng được tạo tự động. Sử dụng `activityModel`, `activityEndpoint`, `activityPrompt`, `activityMaxPerRun` và `activityCharLimit` để kiểm soát lệnh gọi model bổ sung và chi phí của nó. Xem [Agent Activity Groups](/docs/configuration/librechat_yaml/object_structure/shared_endpoint_settings#agent-activity-groups) để biết tài liệu tham khảo đầy đủ về các trường và quy tắc ưu tiên.
+
+```yaml filename="endpoints / agents / activity groups"
+activityLabel: true
+activityEndpoint: openAI
+activityModel: gpt-4.1-nano
+activityMaxPerRun: 20
+activityCharLimit: 600
+activityPhaseLabel: true
+activityPhaseMaxPerRun: 5
+```
+
+`activityPhaseLabel` có thể tự động thêm một bản tóm tắt cha đã thu gọn xung quanh mỗi giai đoạn chạy (run phase) chứa ít nhất hai hoạt động logic. Sử dụng `activityPhaseModel`, `activityPhaseEndpoint`, `activityPhasePrompt` và `activityPhaseMaxPerRun` để tinh chỉnh các lệnh gọi đó; `activityCharLimit` được chia sẻ với các nhãn hoạt động con.
 
 ## disableBuilder
 
@@ -162,9 +239,9 @@ allowedProviders:
   ]}
 />
 
-**Mặc định:** `["deferred_tools", "execute_code", "file_search", "web_search", "artifacts", "subagents", "actions", "context", "skills", "tools", "chain", "ocr"]`
+**Mặc định:** `["deferred_tools", "execute_code", "file_search", "web_search", "artifacts", "subagents", "actions", "context", "skills", "memory", "ask_user_question", "tools", "chain", "ocr"]`
 
-Programmatic Tool Calling là tính năng tùy chọn. Chỉ thêm `programmatic_tools` cùng với `execute_code` khi quá trình triển khai Code Interpreter của bạn bao gồm thành phần Tool Call Server.
+`programmatic_tools`, `stateful_code_sessions`, `run_in_background`, và `tool_intents` là các tính năng tùy chọn (opt-in) và phải được thêm một cách rõ ràng. Các công cụ lập trình (programmatic tools) và phiên làm việc có trạng thái (stateful sessions) cũng yêu cầu `execute_code` và một triển khai Code Interpreter tương thích. Việc thực thi mã trong nền (background code execution) yêu cầu `run_in_background`, `execute_code` và Code Interpreter.
 
 **Ví dụ:**
 
@@ -182,12 +259,116 @@ capabilities:
   - 'actions'
   - 'context'
   - 'skills'
+  - 'memory'
+  - 'ask_user_question'
   - 'tools'
   - 'chain'
   - 'ocr'
+  # Optional: reuse one Code Interpreter workspace per conversation.
+  # - 'stateful_code_sessions'
+  # Optional: allow selected eligible MCP and Code Interpreter tools to run as background tasks.
+  # - 'run_in_background'
+  # Optional: show live model-written intent labels for native and selected MCP tools.
+  # - 'tool_intents'
 ```
 
 **Lưu ý:** Trường này là tùy chọn. Nếu bỏ qua, hành vi mặc định là bao gồm tất cả các khả năng được liệt kê trong phần mặc định.
+
+## toolApproval
+
+Kiểm soát việc con người xem xét các lệnh gọi công cụ của Agent. Tính năng này bị vô hiệu hóa theo mặc định. Khi được bật, các lệnh gọi khớp sẽ tạm dừng cho đến khi người dùng gửi quyết định cho phép, chẳng hạn như phê duyệt, từ chối hoặc chỉnh sửa các đối số.
+
+<OptionTable
+  options={[
+    ['enabled', 'Boolean', 'Cho phép phê duyệt công cụ cho endpoint Agents.', 'false'],
+    [
+      'mode',
+      'String',
+      'Thiết lập hành vi cho các cuộc gọi không khớp: `default` sẽ hỏi, `dontAsk` sẽ từ chối và `bypass` sẽ phê duyệt trừ khi bị từ chối.',
+      'default',
+    ],
+    ['allow', 'Array of strings', 'Các mẫu Glob cho các lệnh gọi có thể chạy mà không cần nhắc.', ''],
+    ['deny', 'Array of strings', 'Các mẫu Glob cho các lệnh gọi luôn bị từ chối. Các quy tắc từ chối được ưu tiên.', ''],
+    ['ask', 'Array of strings', 'Các mẫu Glob cho các lệnh gọi luôn yêu cầu xem xét.', ''],
+    [
+      'reason',
+      'String',
+      'Giải thích tùy chọn hiển thị trong lời nhắc phê duyệt. Sử dụng `{tool}` để chèn tên công cụ.',
+      '',
+    ],
+    [
+      'hooks',
+      'Array of objects',
+      'Các mô-đun chính sách lập trình đáng tin cậy cho các quyết định nhận biết ngữ cảnh. Hooks chỉ có thể thắt chặt chính sách tĩnh.',
+      '',
+    ],
+  ]}
+/>
+
+Các mẫu sử dụng đối sánh glob. Các công cụ MCP có thể được giới hạn phạm vi bằng `mcp:<server>:<tool>`; ví dụ: `mcp:github:*` khớp với mọi công cụ từ máy chủ `github`. Việc đánh giá ưu tiên `deny` cao nhất, bao gồm cả ở chế độ `bypass`.
+
+```yaml filename="endpoints / agents / toolApproval"
+toolApproval:
+  enabled: true
+  mode: default
+  allow:
+    - 'mcp:analytics:read_*'
+  deny:
+    - 'mcp:*:delete_*'
+  ask:
+    - 'mcp:*:*'
+  reason: 'Review {tool} before it runs.'
+```
+
+Các Hooks được tải một lần khi khởi động máy chủ và thực thi trong tiến trình LibreChat. Mỗi mục nhập chấp nhận một `module`, một `matcher` regex tùy chọn cho tên công cụ, và một đối tượng `options` tùy chọn được truyền tới trình xây dựng của module. Chỉ tải mã mà bạn tin tưởng. Các ghi đè theo vai trò hoặc theo đối tượng thuê (tenant) không tải lại các module hook; hãy triển khai hành vi theo ngữ cảnh bên trong hook.
+
+```yaml filename="endpoints / agents / toolApproval / hooks"
+toolApproval:
+  enabled: true
+  hooks:
+    - module: '@acme/librechat-approval-hook'
+      matcher: '^mcp:production:'
+      options:
+        requireTicket: true
+```
+
+## checkpointer
+
+Cấu hình lưu trữ cho các lần chạy Agent bị tạm dừng do phê duyệt công cụ hoặc Ask User. Khi một trong hai tính năng này cần một checkpointer mà khối này bị bỏ qua, LibreChat sẽ sử dụng MongoDB chính với thời gian chờ quyết định là 24 giờ.
+
+<OptionTable
+  options={[
+    [
+      'type',
+      'String',
+      '`mongo` duy trì các lượt chạy bị tạm dừng qua các lần khởi động lại và bản sao; `memory` là cục bộ theo tiến trình và dành cho mục đích phát triển.',
+      'mongo',
+    ],
+    ['ttl', 'Number', 'Thời gian chờ đợi quyết định cho một lượt chạy bị tạm dừng, tính bằng giây.', '86400'],
+    [
+      'checkpointCollectionName',
+      'String',
+      'Ghi đè tên collection checkpoint MongoDB tùy chọn.',
+      'agent_checkpoints',
+    ],
+    [
+      'checkpointWritesCollectionName',
+      'String',
+      'Ghi đè tên collection checkpoint-write của MongoDB tùy chọn.',
+      'agent_checkpoint_writes',
+    ],
+  ]}
+/>
+
+```yaml filename="endpoints / agents / checkpointer"
+checkpointer:
+  type: mongo
+  ttl: 86400
+```
+
+Chỉ sử dụng `type: memory` cho triển khai phát triển đơn tiến trình. Một tiến trình tạm dừng được lưu trữ trong bộ nhớ sẽ không thể tiếp tục sau khi khởi động lại hoặc trên một bản sao khác.
+
+Các điểm kiểm tra (checkpoints) của MongoDB sẽ ghi lại cảnh báo khi trạng thái được tuần tự hóa vượt quá 8 MiB và từ chối tạm dừng bền vững (durable pause) nếu vượt quá 15 MiB, nhằm duy trì khoảng trống dưới giới hạn tài liệu 16 MiB của MongoDB. Các tệp phương tiện nội dòng (inlined media) hoặc đầu ra của công cụ (tool outputs) có dung lượng lớn là những nguyên nhân phổ biến; hãy bắt đầu một cuộc trò chuyện mới hoặc giảm bớt ngữ cảnh của cuộc trò chuyện nếu một lần chạy báo lỗi `CHECKPOINT_TOO_LARGE`.
 
 ## skills
 
@@ -329,6 +510,7 @@ Trường `capabilities` cho phép bạn bật hoặc tắt các chức năng c�
 - **deferred_tools**: Cho phép các agent khám phá các MCP tool bị trì hoãn (deferred) tại thời điểm chạy thay vì tải mọi tool vào ngữ cảnh ngay từ đầu.
 - **programmatic_tools**: Cho phép Gọi Công cụ Lập trình (Programmatic Tool Calling) đối với các công cụ MCP được đánh dấu là Programmatic trong Agent Builder. Yêu cầu `execute_code` và một triển khai Code Interpreter với thành phần Tool Call Server. Tính năng này là tùy chọn và không được bật theo mặc định.
 - **execute_code**: Cho phép tác nhân (agent) thực thi mã.
+- **stateful_code_sessions**: Cho phép các agent đã chọn sử dụng lại một không gian làm việc Code Interpreter cho mỗi cuộc trò chuyện. Yêu cầu `execute_code`, một triển khai Code Interpreter tương thích và cài đặt Advanced cho từng agent. Tính năng này mang tính thử nghiệm cao, không được bật theo mặc định và có thể thay đổi đáng kể trong quá trình thử nghiệm; đừng coi hành vi hoặc cấu hình hiện tại của nó là một hợp đồng sản xuất ổn định.
 - **file_search**: Cho phép agent tìm kiếm và tương tác với các tệp tin. Khi được bật, hành vi trích dẫn sẽ được kiểm soát bởi các cài đặt `maxCitations`, `maxCitationsPerFile` và `minRelevanceScore`.
 - **web_search**: Kích hoạt chức năng tìm kiếm web cho các tác nhân (agents), cho phép chúng tìm kiếm và truy xuất thông tin từ internet.
 - **artifacts**: Cho phép tác nhân tạo ra các artifacts tương tác (các thành phần React, HTML, sơ đồ Mermaid).
@@ -336,9 +518,13 @@ Trường `capabilities` cho phép bạn bật hoặc tắt các chức năng c�
 - **actions**: Cho phép tác nhân thực hiện các hành động được xác định trước.
 - **context**: Kích hoạt chức năng "Upload as Text" (Tải lên dưới dạng văn bản) trong trò chuyện và "File Context" (Ngữ cảnh tệp) cho các tác nhân (agents), cho phép người dùng tải lên các tệp tin để nội dung của chúng được trích xuất và đưa trực tiếp vào cuộc trò chuyện.
 - **skills**: Kích hoạt Skills trong bảng điều khiển bên, gọi thủ công bằng `$`, các kỹ năng do model gọi và danh sách cho phép kỹ năng của agent. Xem [Skills](/docs/features/skills).
+- **memory**: Cho phép các agent sử dụng `set_memory` và `delete_memory` khi memory được cấu hình và người dùng có quyền truy cập. Được bật theo mặc định; bị loại bỏ tại thời điểm chạy khi memory bị vô hiệu hóa.
+- **ask_user_question**: Cho phép các agent tạm dừng để đặt từ một đến bốn câu hỏi liên quan trong một biểu mẫu duy nhất và tiếp tục với các câu trả lời. Được bật theo mặc định.
 - **tools**: Cấp cho tác nhân quyền truy cập vào các công cụ khác nhau.
 - **chain**: Kích hoạt tính năng Beta cho việc tạo chuỗi tác nhân (agent chaining), còn được gọi là quy trình làm việc Mixture-of-Agents (MoA).
 - **ocr**: Tùy chọn nâng cao tính năng "Tải lên dưới dạng văn bản" (Upload as Text) trong trò chuyện và "Ngữ cảnh tệp" (File Context) cho các tác nhân (agents), cho phép tải tệp lên và xử lý bằng OCR. **Yêu cầu phải cấu hình một dịch vụ OCR.**
+- **run_in_background**: Cho phép thực thi Code Interpreter và các công cụ shell chạy ngầm theo mặc định và kích hoạt tùy chọn chạy ngầm cho từng công cụ MCP. Một agent có thể chủ động từ chối Code Interpreter. Cài đặt này cho phép thực thi chạy ngầm; mô hình sẽ quyết định cho mỗi lần gọi xem có sử dụng tính năng này hay không. Yêu cầu `execute_code` và một triển khai Code Interpreter đã được cấu hình cho mã nguồn. Khả năng này không được bật theo mặc định.
+- **tool_intents**: Thêm các nhãn ý định (intent labels) do mô hình viết trực tiếp vào các lệnh gọi công cụ đủ điều kiện. Các công cụ gốc, bao gồm cả công cụ Code Interpreter, sẽ tự động tham gia; các công cụ MCP có thể được bật riêng lẻ hoặc hàng loạt trong Agent Builder. Model specs sử dụng `describeIntent`. Tính năng này không được bật theo mặc định.
 
 Bằng cách chỉ định các capabilities, bạn có thể kiểm soát các tính năng khả dụng cho người dùng khi tương tác với các agent.
 
@@ -359,6 +545,10 @@ endpoints:
       # Optional: enables Programmatic Tool Calling for MCP tools marked Programmatic in the Agent Builder.
       # - 'programmatic_tools'
       - 'execute_code'
+      # Optional: makes Code Interpreter background-eligible and enables selected MCP tools.
+      # - 'run_in_background'
+      # Optional: enables live intent labels for native and selected MCP tools.
+      # - 'tool_intents'
       - 'file_search'
       - 'skills'
       - 'subagents'
@@ -376,6 +566,8 @@ Trong ví dụ này:
 - Chỉ các nguồn có độ liên quan từ 60% trở lên mới được bao gồm
 - Các Agent của LibreChat có quyền truy cập vào thực thi mã, tìm kiếm tệp (có trích dẫn), Skills, Subagents, actions, artifacts, ngữ cảnh tệp, các dịch vụ ocr nếu được cấu hình và khả năng tìm kiếm web.
 - Programmatic Tool Calling vẫn bị vô hiệu hóa trừ khi bạn thêm khả năng `programmatic_tools` cùng với `execute_code`
+- Các lệnh gọi công cụ trong nền vẫn bị vô hiệu hóa trừ khi bạn thêm `run_in_background`; các công cụ Code Interpreter sau đó sẽ mặc định đủ điều kiện, trong khi các công cụ MCP vẫn yêu cầu phải chọn từng công cụ một.
+- Các nhãn ý định công cụ (tool intent labels) vẫn bị vô hiệu hóa trừ khi bạn thêm `tool_intents`; các công cụ gốc (native tools) sau đó sẽ tự động chọn tham gia, trong khi các công cụ MCP vẫn yêu cầu lựa chọn cho từng công cụ.
 
 ## remoteApi
 

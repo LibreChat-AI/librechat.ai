@@ -2,19 +2,68 @@
 title: Metrik
 icon: BarChart3
 description: >-
-  Dokumen ini menjelaskan cara menambahkan eksportir metrik untuk Prometheus ke
-  LibreChat.
+  Pantau LibreChat dengan metrik Prometheus bawaan dan eksportir metrik basis
+  data opsional.
 ---
 
-### Umum [#general]
+## Umum [#general]
 
 ![Pengguna aktif di LibreChat](/images/metrics/librechat-metrics-active-users.png)
 
-Anda dapat menggunakan Prometheus atau alat pemantauan lain yang kompatibel dengan OpenMetrics untuk mendapatkan metrik mengenai penggunaan aktif LibreChat.
-Ini mencakup informasi teknis seperti penggunaan token,
-tetapi juga informasi mengenai pengguna akhir seperti jumlah total atau pengguna aktif.
+LibreChat menyediakan dua antarmuka metrik yang kompatibel dengan Prometheus. Endpoint `/metrics` bawaan API melaporkan perilaku operasional seperti aktivitas Redis dan hasil proksi telemetri peramban. Eksportir basis data opsional melaporkan data penggunaan yang disimpan di MongoDB, termasuk total token dan jumlah pengguna aktif.
 
-LibreChat juga mengekspos metrik Prometheus bawaan dari server API di `/metrics` saat `METRICS_SECRET` dikonfigurasi. Lakukan scraping dengan `Authorization: Bearer <METRICS_SECRET>`. Hasil proxy RUM browser dilaporkan sebagai `rum_proxy_requests_total{endpoint,result}`, di mana `endpoint` adalah `traces`, `logs`, atau `unknown`, dan `result` bisa berupa `success`, `auth_drop`, `auth_error`, `bad_request`, `not_configured`, `collector_4xx`, `collector_5xx`, `collector_error`, atau `collector_timeout`.
+## Metrik API Bawaan [#built-in-api-metrics]
+
+LibreChat mengekspos metrik Prometheus dari server API di `/metrics`. Atur `METRICS_SECRET` dan lakukan scrape pada endpoint tersebut dengan `Authorization: Bearer <METRICS_SECRET>`. Endpoint akan mengembalikan `401` jika secret tidak diatur, header tidak ada, atau token tidak cocok.
+
+```yaml filename="prometheus.yml"
+scrape_configs:
+  - job_name: librechat-api
+    scheme: https
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials: your-metrics-secret
+    static_configs:
+      - targets: ['librechat.example.com']
+```
+
+### Metrik Startup Agen [#agent-startup-metrics]
+
+Permintaan chat Agen awal memancarkan dua metrik startup:
+
+- `agent_startup_milestone_duration_seconds{milestone}` mengukur latensi kumulatif dari masuknya permintaan hingga ke setiap milestone startup.
+- `agent_startups_total{result}` menghitung upaya startup berdasarkan hasil terminal.
+
+Milestones mencakup penerimaan permintaan, pembuatan dan pengakuan tugas, pemuatan percakapan dan riwayat, inisialisasi klien dan eksekusi, permulaan stream, serta respons atau peristiwa konten pertama yang diantrekan. Hasil membedakan antara konten yang diantrekan, penyelesaian tanpa delta konten, deduplikasi, penolakan, jeda, penggantian, pembatalan, dan kesalahan.
+
+Ketika [backend OpenTelemetry tracing](/docs/configuration/dotenv#opentelemetry-tracing) diaktifkan, span `librechat.agent.startup` melaporkan tonggak pencapaian yang sama sebagai peristiwa. Ini mencakup durasi startup total, jumlah tonggak pencapaian, hasil terminal, dan ID aliran generasi saat ditetapkan.
+
+### Metrik Redis [#redis-metrics]
+
+Cache dan layanan yang didukung Redis memancarkan dua metrik operasi logis:
+
+- `redis_operations_total{client,use_case,operation,status}` menghitung operasi.
+- `redis_operation_duration_seconds{client,use_case,operation,status}` mengukur latensi.
+
+`client` adalah `keyv` atau `ioredis`, dan `status` adalah `success` atau `error`. Label `use_case` yang dibatasi mengidentifikasi pekerjaan seperti cache, sesi, batas laju (rate limits), konkurensi, prinsipal ACL, pekerjaan stream yang dapat dilanjutkan (resumable stream jobs) dan pub/sub, pemindaian registri MCP, serta pemilihan pemimpin (leader election). Metrik ini menghitung operasi logis LibreChat alih-alih setiap perjalanan pulang-pergi (round trip) Redis internal. Ping siklus hidup koneksi dan pemeliharaan global dikecualikan, dan pembersihan namespace dihitung sebagai satu operasi logis.
+
+Ketika [backend OpenTelemetry tracing](/docs/configuration/dotenv#opentelemetry-tracing) diaktifkan, setiap span HTTP juga meringkas pekerjaan Redis-nya dengan:
+
+- `librechat.redis.calls`
+- `librechat.redis.duration_ms`
+- `librechat.redis.errors`
+- `librechat.redis.max_call_ms`
+- `librechat.redis.operations`
+- `librechat.redis.use_cases`
+
+Sepuluh kasus penggunaan dengan durasi total tertinggi juga menerima atribut `calls`, `duration_ms`, `errors`, dan `max_call_ms` di bawah `librechat.redis.<use_case>.*`. Ringkasan tingkat permintaan ini tidak memerlukan rentang (span) Redis tingkat perintah; aktifkan `OTEL_IOREDIS_TRACING_ENABLED` hanya jika rentang perintah individual diperlukan.
+
+### Metrik Proxy RUM Browser [#browser-rum-proxy-metrics]
+
+Hasil proxy RUM browser dilaporkan sebagai `rum_proxy_requests_total{endpoint,result}`. `endpoint` bisa berupa `traces`, `logs`, atau `unknown`; `result` bisa berupa `success`, `auth_drop`, `auth_error`, `bad_request`, `not_configured`, `collector_4xx`, `collector_5xx`, `collector_error`, atau `collector_timeout`.
+
+## Eksportir Metrik Basis Data [#database-metrics-exporter]
 
 Metrics exporter tersedia di [virtUOS/librechat_exporter](https://github.com/virtUOS/librechat_exporter).
 Ini adalah alat terpisah yang Anda deploy bersama LibreChat.

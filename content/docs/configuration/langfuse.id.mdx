@@ -18,7 +18,24 @@ Sebelum Anda memulai, pastikan Anda telah memiliki:
 
 ## Pengaturan [#setup]
 
-Tambahkan variabel lingkungan terkait Langfuse berikut ke dalam file `.env` Anda di direktori instalasi LibreChat:
+Pilih koneksi dalam aplikasi atau kredensial yang dikelola lingkungan untuk penyebaran penyewa tunggal (single-tenant). Kredensial lingkungan yang lengkap akan lebih diutamakan.
+
+### Koneksi Dalam Aplikasi [#in-app-connection]
+
+Administrator yang berwenang dapat membuka **Settings → Langfuse**, memilih tujuan yang disetujui, memasukkan kunci publik dan rahasia proyek, lalu memilih **Save & enable**. LibreChat memverifikasi kedua kunci tersebut sebelum menyimpannya, mencatat ID proyek yang telah diverifikasi, mengenkripsi kunci rahasia saat tidak digunakan (at rest), dan hanya menampilkan pratinjau yang disamarkan pada pembacaan berikutnya. Koneksi yang tersimpan dapat diaktifkan, dinonaktifkan, diuji ulang, atau diganti tanpa mengekspos kunci rahasianya.
+
+Pengaturan ini memerlukan `access:admin` dan `manage:configs:langfuse` (atau izin luas/admin yang sesuai). Pengaturan ini tersedia saat pelacakan diaktifkan dan:
+
+- Penyebaran single-tenant tidak memiliki `LANGFUSE_PUBLIC_KEY` dan `LANGFUSE_SECRET_KEY` secara bersamaan.
+- Penyebaran fanout memiliki kolektor yang diaktifkan dan ekspor penyewa tidak dinonaktifkan oleh tombol darurat.
+
+Jangan letakkan `langfuse.secretKey` dalam bentuk teks biasa secara langsung di dalam `librechat.yaml`; runtime akan menerima nilai terenkripsi yang dihasilkan oleh penulisan konfigurasi resmi. Gunakan halaman Settings untuk alur kerja koneksi yang normal.
+
+Koneksi yang disimpan termasuk dalam konfigurasi dasar. Penggantian konfigurasi peran, grup, dan pengguna tidak dapat menggantikan atau menghapus bagian `langfuse`.
+
+### Koneksi yang Dikelola Lingkungan [#environment-managed-connection]
+
+Tambahkan nilai-nilai berikut ke file `.env` Anda ketika operator penyebaran harus memiliki koneksi pusat:
 
 <OptionTable
   options={[
@@ -30,6 +47,24 @@ Tambahkan variabel lingkungan terkait Langfuse berikut ke dalam file `.env` Anda
       'URL dasar API Langfuse.',
       'LANGFUSE_BASE_URL=https://cloud.langfuse.com',
     ],
+    [
+      'LANGFUSE_PROJECT_ID',
+      'string',
+      'ID proyek stabil opsional. Jika dihilangkan, LibreChat akan menemukannya dan menyimpannya di latar belakang untuk perutean umpan balik.',
+      'LANGFUSE_PROJECT_ID=',
+    ],
+    [
+      'LANGFUSE_TRACING_ENABLED',
+      'boolean',
+      'Atur ke false untuk menonaktifkan pelacakan Langfuse dan skor umpan balik. Default: true.',
+      'LANGFUSE_TRACING_ENABLED=true',
+    ],
+    [
+      'LANGFUSE_SAMPLE_RATE',
+      'number',
+      'Laju sampel tingkat jejak deterministik dari 0 hingga 1. Default: 1.',
+      'LANGFUSE_SAMPLE_RATE=1',
+    ],
   ]}
 />
 
@@ -39,6 +74,8 @@ Tambahkan variabel lingkungan terkait Langfuse berikut ke dalam file `.env` Anda
 # Langfuse Configuration
 LANGFUSE_PUBLIC_KEY=pk-lf-***
 LANGFUSE_SECRET_KEY=sk-lf-***
+# LANGFUSE_PROJECT_ID=project-id
+# LANGFUSE_SAMPLE_RATE=1
 
 # 🇪🇺 EU Data Region
 LANGFUSE_BASE_URL=https://cloud.langfuse.com
@@ -50,6 +87,129 @@ LANGFUSE_BASE_URL=https://cloud.langfuse.com
 <Callout type="note" title="Langfuse yang Dihosting Sendiri">
   Untuk instans Langfuse yang di-host sendiri (self-hosted), atur `LANGFUSE_BASE_URL` ke URL kustom Anda (contohnya, `http://localhost:3000` untuk pengembangan lokal).
 </Callout>
+
+Ketika kedua kunci lingkungan tersebut ada, LibreChat menggunakannya untuk proyek pusat dan menyembunyikan **Settings → Langfuse**. `LANGFUSE_TRACING_ENABLED=false` atau `LANGFUSE_SAMPLE_RATE=0` akan menonaktifkan pelacakan (traces) dan skor umpan balik. Pengambilan sampel fraksional membuat satu keputusan deterministik per pelacakan; pelacakan yang tidak diambil sampelnya tidak akan menerima skor umpan balik di kemudian hari.
+
+## Tenant Fanout (Opsional) [#tenant-fanout-optional]
+
+Langfuse fanout memungkinkan deployment LibreChat multi-tenant untuk mengekspor setiap trace yang memenuhi syarat beserta medianya ke proyek Langfuse pusat dan proyek khusus tenant. Fitur ini bersifat opsional (opt-in) dan menambahkan gateway serta kolektor OpenTelemetry internal; pelacakan satu proyek (single-project tracing) standar di atas tidak akan berubah jika fanout tidak di-deploy.
+
+Fanout menggunakan dua lapisan konfigurasi:
+
+- Variabel lingkungan deployment menentukan proyek pusat, gateway, dan tujuan tenant yang diizinkan saat startup.
+- **Settings → Langfuse** menyediakan status aktif tenant, kunci publik, kunci rahasia terenkripsi, ID proyek yang terverifikasi, dan satu tujuan yang diizinkan. Kunci dapat diubah saat runtime tanpa perlu memulai ulang gateway.
+
+Compose override yang disertakan mendukung destinasi Langfuse Cloud `eu`, `us`, dan `jp`:
+
+```sh filename=".env"
+LANGFUSE_BASE_URL=https://cloud.langfuse.com
+LANGFUSE_FANOUT_CENTRAL_BASE_URL=https://cloud.langfuse.com
+LANGFUSE_FANOUT_CENTRAL_AUTH_HEADER="Basic <base64-public-key-colon-secret-key>"
+LANGFUSE_FANOUT_CENTRAL_MEDIA_UPLOAD_DISABLED=false
+LANGFUSE_FANOUT_TENANT_DESTINATIONS="eu=https://cloud.langfuse.com,us=https://us.cloud.langfuse.com,jp=https://jp.cloud.langfuse.com"
+LANGFUSE_FANOUT_TRACE_DESTINATION_KEYS=eu,us,jp
+LANGFUSE_FANOUT_TENANT_EXPORT_DISABLED=false
+```
+
+Jalankan stack Compose reguler dengan penggantian fanout:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.langfuse-fanout.yml up -d
+```
+
+Penggantian (override) ini mengaktifkan `LANGFUSE_FANOUT_ENABLED`, mengarahkan LibreChat ke gateway, serta menjalankan layanan collector dan Redis privat. Untuk stack yang dideploy, gabungkan `deploy-compose.yml` dengan `deploy-compose.langfuse-fanout.yml` sebagai gantinya.
+
+Gateway mendengarkan pada `:4318` secara default. Deployment kustom dapat mengganti alamat bind-nya dengan `LANGFUSE_FANOUT_LISTEN_ADDR`; konfigurasi Compose dan Helm yang disertakan sudah merutekan port gateway standar.
+
+### Deployment Helm [#helm-deployment]
+
+Compose overrides membangun gateway secara lokal, namun Kubernetes memerlukan image yang tersedia dari sebuah registry. Dari root repositori LibreChat, bangun dan push gateway tersebut sebelum menginstal chart:
+
+```sh
+docker build \
+  -f otel/langfuse-fanout/Dockerfile \
+  -t registry.example.com/librechat-langfuse-fanout:<tag> .
+docker push registry.example.com/librechat-langfuse-fanout:<tag>
+```
+
+Buat Kubernetes Secret yang berisi header Basic auth Langfuse pusat yang lengkap. Nilainya adalah `Basic ` diikuti oleh kredensial `<public-key>:<secret-key>` yang di-encode dengan base64:
+
+```sh
+kubectl create secret generic langfuse-central \
+  --from-literal=LANGFUSE_FANOUT_CENTRAL_AUTH_HEADER='Basic <base64-public-key-colon-secret-key>'
+```
+
+Aktifkan deployment fanout di dalam nilai Helm. Contoh ini menggunakan chart Redis bawaan; atur `langfuseFanout.redis.uri` sebagai gantinya saat menggunakan layanan Redis eksternal.
+
+```yaml filename="values.yaml"
+redis:
+  enabled: true
+
+langfuseFanout:
+  enabled: true
+  image:
+    repository: registry.example.com/librechat-langfuse-fanout
+    tag: '<tag>'
+    pullPolicy: IfNotPresent
+  central:
+    baseUrl: https://cloud.langfuse.com
+    authHeaderSecret:
+      name: langfuse-central
+      key: LANGFUSE_FANOUT_CENTRAL_AUTH_HEADER
+  metrics:
+    secret:
+      name: librechat-metrics
+      key: METRICS_SECRET
+  tenant:
+    destinations:
+      eu:
+        baseUrl: https://cloud.langfuse.com
+      us:
+        baseUrl: https://us.cloud.langfuse.com
+      jp:
+        baseUrl: https://jp.cloud.langfuse.com
+  upstreamTimeout: 30s
+  publicUrl: ''
+  otelCollector:
+    receiverEndpoint: 127.0.0.1:4319
+  redis:
+    uri: ''
+    username: ''
+    passwordSecret:
+      name: ''
+      key: REDIS_PASSWORD
+    keyPrefix: langfuse-fanout
+  memoryLimitMiB: 256
+  memorySpikeLimitMiB: 64
+  batchTimeout: 1s
+  batchSendSize: 128
+  metadataCardinalityLimit: 1000
+```
+
+Secret metrics bersifat opsional, namun `/metrics` akan mengembalikan `401` kecuali `langfuseFanout.metrics.secret` menyediakan bearer token. Buatlah secara terpisah jika scraping metrik diperlukan:
+
+```sh
+kubectl create secret generic librechat-metrics \
+  --from-literal=METRICS_SECRET='<metrics-bearer-token>'
+```
+
+Bagan tersebut merender satu Deployment dengan kontainer gateway pada port `4318` dan sidecar OpenTelemetry Collector internal pada port `4319`; hanya gateway yang diekspos oleh Service. Bagan ini juga menyuntikkan `LANGFUSE_FANOUT_ENABLED` dan `LANGFUSE_FANOUT_COLLECTOR_URL` internal ke dalam LibreChat kecuali jika kunci-kunci tersebut sudah diatur di dalam `librechat.configEnv`.
+
+Redis menyimpan rencana unggahan media sekali pakai yang berumur pendek agar permintaan pembuatan dan pengunggahan dapat mencapai replika gateway yang berbeda. Untuk layanan Redis eksternal yang terautentikasi, atur `langfuseFanout.redis.uri`, serta `username` dan `passwordSecret` opsional; jangan sertakan kredensial di dalam URI karena URI tersebut dirender langsung ke dalam lingkungan Deployment. Dengan chart Redis bawaan dan autentikasi yang diaktifkan, sediakan Secret kata sandi yang kompatibel atau URI eksternal yang terautentikasi secara eksplisit.
+
+Skalakan fanout secara manual dengan `langfuseFanout.replicaCount`; chart ini tidak membuat HPA fanout. Probe liveness dan readiness menggunakan `/healthz` dan dapat disesuaikan di bawah `langfuseFanout.livenessProbe` dan `langfuseFanout.readinessProbe`.
+
+Penggantian penyebaran (deployment overrides) tambahan mencakup `langfuseFanout.service` untuk tipe Service, port, dan anotasi; `resources`, `podAnnotations`, dan `podLabels` untuk Pod gateway; serta `otelCollector.image` dan `otelCollector.resources` untuk sidecar. Jika Anda mengubah `langfuseFanout.traceCollectorUrl` atau `otelCollector.receiverEndpoint`, pastikan kedua nilai tersebut tetap mengarah ke pendengar kolektor internal yang sama.
+
+Objek `langfuse` tingkat atas yang tersimpan berisi `enabled`, `publicKey`, `secretKey` terenkripsi, `projectId` yang terverifikasi, `secretKeyPreview` yang dihasilkan server, dan `destination`. Perlakukan ini sebagai konfigurasi yang dikelola API: jangan kirimkan kembali kolom pratinjau atau payload terenkripsi sebagai rahasia. Kolom `displaySecretKey` dan `fanout.enabled` yang bersarang sebelumnya tidak lagi digunakan.
+
+Ekspor tenant hanya terjadi ketika fanout dan URL collector diaktifkan, koneksi yang disimpan diaktifkan dengan kunci yang valid, dan `destination` cocok dengan tujuan startup yang diizinkan. Trace lainnya masih dapat mengalir ke proyek pusat. Atur `LANGFUSE_FANOUT_TENANT_EXPORT_DISABLED=true` sebagai tombol darurat untuk menghentikan ekspor trace tenant dan skor umpan balik sambil tetap mempertahankan ekspor pusat; ini juga menyembunyikan pengaturan koneksi dalam aplikasi hingga ekspor tenant dipulihkan.
+
+Atur `LANGFUSE_FANOUT_CENTRAL_MEDIA_UPLOAD_DISABLED=true` untuk mencegah SDK LibreChat membuat unggahan media untuk pelacakan kolektor pusat atau cadangan; unggahan media yang dirutekan ke penyewa tidak berubah. Tombol sisi aplikasi ini berbeda dari `LANGFUSE_FANOUT_CENTRAL_MEDIA_EXPORT_DISABLED` di sisi gateway, yang memblokir penerusan media pusat setelah unggahan mencapai gateway.
+
+Lalu lintas jejak dan media melewati fanout gateway. Skor umpan balik dikirim langsung dari LibreChat: skor pusat menggunakan `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, dan `LANGFUSE_BASE_URL`, sedangkan skor penyewa menggunakan konfigurasi aplikasi penyewa.
+
+Lihat [referensi deployment fanout Langfuse](https://github.com/danny-avila/LibreChat/blob/dev/otel/langfuse-fanout/README.md) untuk setiap variabel gateway, pengaturan tujuan kustom, metrik, penskalaan, dan perilaku Redis.
 
 ## Restart LibreChat [#restart-librechat]
 
@@ -67,6 +227,8 @@ Setelah LibreChat dimulai ulang dengan Langfuse yang telah dikonfigurasi, Anda a
 ![Contoh pelacakan LibreChat](https://langfuse.com/images/cookbook/integration_librechat/librechat-example-trace.png)
 
 [Tautan ke pelacakan di UI Langfuse](https://cloud.langfuse.com/project/cloramnkj0002jz088vzn1ja4/traces/57b4aa20a258a2e9e2d1ce2e4eacb21c?observation=06f5341a68d723b1&timestamp=2026-02-04T13%3A02%3A54.248Z&traceId=57b4aa20a258a2e9e2d1ce2e4eacb21c)
+
+Administrator dengan `access:admin` dan `manage:configs:langfuse` juga dapat membuka rincian **Context Usage** percakapan dan memilih **View session in Langfuse**. Tautan tersebut hanya muncul setelah pembuatan selesai dan ketika percakapan berisi setidaknya satu jejak (trace) sampel yang dikirim ke koneksi Langfuse dalam aplikasi yang aktif. Tautan tersebut mengarah ke tujuan dan proyek terverifikasi dari koneksi tersebut; tautan tidak ditampilkan untuk kredensial yang dikelola lingkungan, koneksi yang dinonaktifkan, percakapan yang tidak disampel, atau pengguna tanpa akses konfigurasi Langfuse.
 
 ## Skor Umpan Balik Pesan [#message-feedback-scores]
 

@@ -39,6 +39,8 @@ LibreChat 的 Code Interpreter API 提供了一种安全且便捷的方式，通
 - 安全文件管理
 - 基于会话的文件组织
 
+LibreChat 会在 Agent 运行前将引用的对话文件恢复到当前的 Code Interpreter 环境中。如果所有必需的 Code Interpreter 文件均恢复失败，运行将在模型调用前停止，并提示用户重新附加文件，而不是继续使用过期的引用。
+
 ### 安全与便捷 [#security--convenience]
 
 - 安全的沙盒执行环境
@@ -52,6 +54,24 @@ LibreChat 的 Code Interpreter API 提供了一种安全且便捷的方式，通
 
 沙盒仍然无法获得常规的网络访问权限。工具调用通过 Code Interpreter Tool Call Server 和 LibreChat 的已注册工具映射进行中转，因此只有代理（agent）可用的工具才能被调用。
 
+### 后台代码执行 [#background-code-execution]
+
+后台执行允许 Agent 分派长时间运行的代码或 shell 任务，继续对话，并稍后通过 `check_background_task` 获取结果。在 LibreChat 聊天中，当任务完成时，标准输出（stdout）和生成的文件会出现在原始代码调用处。即使 Agent 尚未轮询该任务，生成的文件也会被持久化以供后续轮次使用。
+
+此功能需要在部署级别选择开启。请在 [Agents endpoint capabilities](/docs/configuration/librechat_yaml/object_structure/agents#capabilities) 中将 `run_in_background` 与 `execute_code` 一起添加，然后在 Agent 上启用 Code Interpreter。代码执行和 shell 调用将自动具备后台运行资格；当 Agent 需要退出此功能时，请在 Code Interpreter 工具设置中关闭 **Background execution**。模型仍会针对每次调用决定是否将符合条件的工作分派到后台执行。
+
+后台任务状态是进程局部的，不会在应用重启或副本迁移后保留。后台调度也不会延长 Code Interpreter 服务的执行限制；部署的常规服务器端超时设置仍然适用。
+
+### 有状态代码会话 [#stateful-code-sessions]
+
+有状态代码会话允许 LibreChat Agent 在每个对话中复用一个 Code Interpreter 沙盒工作区。文件、已安装的包以及工作状态通常会在执行之间保留，从而使迭代分析和多步文件生成更加高效。
+
+<Callout type="warning" title="高度实验性">
+  Stateful Code Sessions 目前处于早期实验阶段。其行为、配置、持久化特性以及底层集成可能会发生重大变化。请勿将当前的实现视为稳定的生产环境契约。
+</Callout>
+
+此功能为选择性加入。请在 [Agents endpoint capabilities](/docs/configuration/librechat_yaml/object_structure/agents#capabilities) 中启用 `execute_code` 和 `stateful_code_sessions`，在 Agent 上启用 Code Interpreter，然后在该 Agent 的高级设置中开启 **Stateful code sessions**。工作区可能会随时重置。请将重要输出保存至 `/mnt/data`，不要将其他会话状态视为持久存储。
+
 ## 使用 API [#using-the-api]
 
 ### 在 LibreChat 中 [#in-librechat]
@@ -63,6 +83,10 @@ LibreChat 通过以下主要方法为 API 提供了一流的支持：
 2. **手动执行**：使用聊天界面中代码块内的“Run Code”按钮，如下所示：
 
 3. **[程序化工具调用](/docs/features/agents#programmatic-tool-calling)**：启用 `programmatic_tools` 功能并将选定的 MCP 工具标记为 Programmatic，以便智能体（agents）能够从沙盒代码中编排这些工具。
+
+4. **[后台工具调用](/docs/features/agents#background-tool-calls)**：允许 Agent 在后台分派符合条件的任务并继续执行，无需等待其运行结束。
+
+5. **[Stateful Code Sessions](/docs/features/agents#stateful-code-sessions)**：实验性地在代理的代码执行过程中复用每个对话的工作区。
 
 ![LibreChat 中的代码解释器](/images/agents/run_code.png)
 
@@ -96,12 +120,19 @@ Code Interpreter API 可以通过简单的 API 密钥认证集成到任何应用
 
 - 上传输入文件
 - 下载生成的输出
-- 当 LibreChat 可以安全地提取/渲染 Office、CSV、文本和类 PDF 的工件时，可在内联预览中生成它们。
+- 当 LibreChat 可以安全地提取/渲染时，内联预览生成的 Office 文件（包括 PowerPoint `.pptx` 演示文稿和 `.potx` 模板），以及 CSV、文本和类 PDF 的工件。
+- 将 Agent 的 `read_file` 工具返回的 PNG、JPEG、GIF 和 WebP 图像显示为可查看的工件 (artifacts)
 - 列出可用文件
 - 删除不必要的文件
 - 管理文件会话
 
-生成的工件预览在大小上受到限制。在 LibreChat 的 `.env` 中设置 `FILE_PREVIEW_MAX_EXTRACT_BYTES` 以更改用于内联预览提取的源文件大小限制；较大的文件仍可供下载。
+生成的工件预览在大小上受到限制。在 LibreChat 的 `.env` 中设置 [`FILE_PREVIEW_MAX_EXTRACT_BYTES`](/docs/configuration/dotenv#inline-file-previews) 以更改用于内联预览提取的源文件大小限制；较大的文件仍可供下载。
+
+通过 `read_file` 返回的 Sandbox 图像具有 1 MiB 的内联限制。较大的图像将保留在 Sandbox 中，以便使用 `bash_tool` 进行处理。`LIBRECHAT_CODE_IMAGE_CHUNK_BYTES` 仅控制读取符合条件的图像时所使用的传输分块大小；它不会提高内联限制。
+
+<Callout type="warning" title="针对旧代码输出的升级检查">
+  在添加唯一输出文件索引之前，重新生成相同 Code Interpreter 文件名的部署可能会产生重复的 MongoDB 记录，从而导致索引无法构建。请先使用 `npm run migrate:code-file-duplicates:dry-run` 预览修复操作，然后使用 `npm run migrate:code-file-duplicates` 应用修复。该迁移脚本会保留最新的规范文件名，为旧记录重命名并添加数字后缀，并在成功运行后构建唯一索引。
+</Callout>
 
 ### 局限性 [#limitations]
 - 代码无法访问网络

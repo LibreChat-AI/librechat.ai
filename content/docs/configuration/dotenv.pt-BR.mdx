@@ -45,6 +45,41 @@ Para mais informações, veja:
   ]}
 />
 
+### Timeouts do Servidor HTTP [#http-server-timeouts]
+
+Estes valores opcionais configuram o servidor HTTP do Node.js. Deixe-os sem definição para manter os padrões do Node. Um valor de `0` desativa esse tempo limite (timeout).
+
+<OptionTable
+  options={[
+    [
+      'HTTP_KEEP_ALIVE_TIMEOUT_MS',
+      'integer',
+      'Tempo limite de keep-alive ocioso em milissegundos. Defina este valor acima do tempo limite de ociosidade do balanceador de carga para evitar que conexões reutilizadas entrem em conflito com o fechamento do servidor. Padrão do Node: 5000.',
+      '# HTTP_KEEP_ALIVE_TIMEOUT_MS=70000',
+    ],
+    [
+      'HTTP_KEEP_ALIVE_TIMEOUT_BUFFER_MS',
+      'integer',
+      'Buffer adicional de tempo limite de socket em milissegundos. Padrão do Node: 1000.',
+      '# HTTP_KEEP_ALIVE_TIMEOUT_BUFFER_MS=5000',
+    ],
+    [
+      'HTTP_HEADERS_TIMEOUT_MS',
+      'integer',
+      'Tempo permitido para receber os cabeçalhos completos da requisição. Padrão do Node: 60000.',
+      '# HTTP_HEADERS_TIMEOUT_MS=80000',
+    ],
+    [
+      'HTTP_REQUEST_TIMEOUT_MS',
+      'integer',
+      'Tempo permitido para receber a solicitação completa. Padrão do Node: 300000.',
+      '# HTTP_REQUEST_TIMEOUT_MS=300000',
+    ],
+  ]}
+/>
+
+Os valores devem ser números inteiros seguros não negativos; valores inválidos são ignorados. Quando os timeouts de cabeçalho e de requisição estão ambos ativados, o LibreChat limita o timeout de cabeçalho ao timeout de requisição caso ele seja maior. O Node verifica a expiração do cabeçalho e da requisição em uma varredura de conexão de 30 segundos, portanto, valores abaixo de `30000` não são aplicados com precisão exata de milissegundos. O Bun atualmente aceita essas configurações, mas não as aplica; o LibreChat registra um aviso quando o servidor de API é executado sob o Bun.
+
 ### Trust proxy [#trust-proxy]
 
 Use o endereço que esteja a, no máximo, n saltos de distância da aplicação Express.
@@ -60,27 +95,37 @@ Consulte [Express.js - trust proxy](https://expressjs.com/en/guide/behind-proxie
 
 ### Configuração de Credenciais [#credentials-configuration]
 
-Para armazenar credenciais de forma segura, você precisa de uma chave e um IV fixos. Você pode defini-los aqui para ambientes de prod e dev.
+O LibreChat usa `CREDS_KEY` e `CREDS_IV` para criptografar credenciais suportadas armazenadas no banco de dados. Configure valores fixos e únicos para produção e compartilhe os mesmos valores entre todas as réplicas.
 
 <OptionTable
   options={[
     [
       'CREDS_KEY',
       'string',
-      'Chave de 32 bytes (64 caracteres em hex) para armazenamento seguro de credenciais. Obrigatória para a inicialização do app.',
-      'CREDS_KEY=f34be427ebb29de8d88c107a71546019685ed8b241d8f2ed00c3df97ad2566f0',
+      'Chave de 32 bytes (64 caracteres hexadecimais) para armazenamento seguro de credenciais.',
+      'CREDS_KEY=',
     ],
     [
       'CREDS_IV',
       'string',
-      'IV de 16 bytes (32 caracteres em hex) para armazenamento seguro de credenciais. Necessário para a inicialização do app.',
-      'CREDS_IV=e2341419ec3dd3d19b13a1a87fafcbfb',
+      'IV de 16 bytes (32 caracteres hexadecimais) para armazenamento seguro de credenciais.',
+      'CREDS_IV=',
+    ],
+    [
+      'LIBRECHAT_TEMP_CREDENTIALS_PATH',
+      'string',
+      'Caminho usado para persistir credenciais temporárias geradas automaticamente. O padrão é `.env.temp` no diretório de trabalho do processo.',
+      '# LIBRECHAT_TEMP_CREDENTIALS_PATH=/app/data/.env.temp',
     ],
   ]}
 />
 
-<Callout type="warning" title="Aviso">
-  **Aviso:** Se você não definir `CREDS_KEY` e `CREDS_IV`, o aplicativo irá travar na inicialização. - Você pode usar este [Gerador de Chaves](/toolkit/creds_generator) para gerá-las rapidamente.
+Quando qualquer um dos campos `CREDS_KEY`, `CREDS_IV`, `JWT_SECRET` ou `JWT_REFRESH_SECRET` estiver vazio, o LibreChat primeiro reutiliza um valor válido do arquivo de credenciais temporário. Se nenhum existir, ele gera um valor criptograficamente aleatório e grava o arquivo com permissões apenas para o proprietário. Valores de ambiente explícitos sempre têm precedência. O LibreChat se recusa a usar `.env` ou `.env.example` como o caminho do arquivo gerado, evitando a substituição acidental de qualquer um dos arquivos de configuração.
+
+Os arquivos Docker Compose incluídos persistem `/app/data/.env.temp` no volume `librechat-data`, portanto, uma única implantação do Compose pode ser reiniciada sem alterar esses valores gerados. Se o arquivo não puder ser persistido, os valores serão locais ao processo e as sessões ou registros criptografados poderão se tornar inacessíveis após a reinicialização.
+
+<Callout type="warning" title="Definir valores permanentes para produção">
+  A geração temporária é uma conveniência de inicialização, não um sistema de rotação de credenciais. Antes do uso em produção, gere valores permanentes com o [Credentials Generator](/toolkit/creds_generator), armazene-os em seu gerenciador de segredos e forneça os mesmos valores para cada réplica. Alterar uma chave estabelecida não re-criptografa registros existentes. O LibreChat registra impressões digitais de credenciais no banco de dados e avisa quando os valores ativos divergem; não sobrescreva esse marcador em vez de realizar uma migração controlada.
 </Callout>
 
 ### Manipulação de Arquivos Estáticos [#static-file-handling]
@@ -232,14 +277,11 @@ Se você estiver usando um banco de dados online, o formato da URI é `mongodb+s
   ]}
 />
 
-Alternativamente, você pode usar o `documentDb` que emula o `mongoDb`, mas ele:
+Clusters baseados em instâncias do Amazon DocumentDB 5.0+ são um destino suportado. O DocumentDB requer `retryWrites=false` e TLS com o pacote CA da AWS; clusters elásticos não são suportados porque não fornecem índices únicos. Uma URI típica tem esta forma:
 
-- não suporta `retryWrites` - use `retryWrites=false`
-- requer uma conexão TLS, portanto, use os parâmetros `tls=true` para habilitar o TLS e `tlsCAFile=/path-to-ca/bundle.pem` para apontar para o arquivo de pacote CA fornecido pela AWS
+`mongodb://username:password@cluster:27017/librechat?tls=true&tlsCAFile=/path-to-ca/global-bundle.pem&replicaSet=rs0&readPreference=secondaryPreferred&retryWrites=false`
 
-O URI para `documentDb` será parecido com:
-
-- `mongodb+srv://username:password@domain/dbname?retryWrites=false&tls=true&tlsCAFile=/path-to-ca/bundle.pem`
+O DocumentDB 4.0 pode ser executado com aplicação reduzida de índices únicos parciais. Consulte [Amazon DocumentDB Compatibility](/docs/user_guides/mongodb#amazon-documentdb-compatibility) para o destino suportado e as ressalvas.
 
 Veja também:
 
@@ -269,7 +311,7 @@ Para configurar o LibreChat para uso local ou implantação em domínio personal
     [
       'ADMIN_PANEL_URL',
       'string',
-      'URL base do painel de administração externo usado para redirecionamentos de OAuth/SSO do administrador quando o painel de administração é hospedado separadamente. Não inclua uma barra ao final.',
+      'URL base do painel administrativo externo usada para redirecionamentos de OAuth/SSO do administrador e para o link Configurações > Geral exclusivo do administrador. Não inclua uma barra ao final.',
       'ADMIN_PANEL_URL=https://admin.example.com/admin',
     ],
     [
@@ -387,6 +429,50 @@ Nota: `DEBUG_CONSOLE` não é recomendado, pois as saídas podem ser bastante de
     ['GID', 'number', 'O ID do grupo.', '# GID=1000'],
   ]}
 />
+
+### Rastreamento Langfuse e Fanout de Tenant [#langfuse-tracing-and-tenant-fanout]
+
+Use as variáveis padrão do Langfuse para um projeto de observabilidade central. A implantação opcional de fanout pode, adicionalmente, rotear rastreamentos (traces), mídia e pontuações de feedback de tenants para projetos específicos do Langfuse de cada tenant. Veja [Langfuse Tracing](/docs/configuration/langfuse) para configuração, gerenciamento de conexão no aplicativo e arquitetura.
+
+<OptionTable
+  options={[
+    ['LANGFUSE_PUBLIC_KEY', 'string', 'Chave pública para o projeto central do Langfuse.', '# LANGFUSE_PUBLIC_KEY='],
+    ['LANGFUSE_SECRET_KEY', 'string', 'Chave secreta para o projeto central do Langfuse.', '# LANGFUSE_SECRET_KEY='],
+    ['LANGFUSE_BASE_URL', 'string', 'URL base para rastreamento central e pontuações de feedback.', '# LANGFUSE_BASE_URL=https://cloud.langfuse.com'],
+    ['LANGFUSE_PROJECT_ID', 'string', 'ID de projeto Langfuse central estável. Quando omitido, o LibreChat o descobre e armazena em cache em segundo plano para o roteamento de feedback.', '# LANGFUSE_PROJECT_ID='],
+    ['LANGFUSE_TRACING_ENABLED', 'boolean', 'Defina como false para desativar os rastreamentos e pontuações de feedback do Langfuse. Padrão: true.', '# LANGFUSE_TRACING_ENABLED=true'],
+    ['LANGFUSE_SAMPLE_RATE', 'number', 'Taxa de amostragem determinística em nível de rastreamento de 0 a 1. Rastreamentos amostrados não recebem pontuações de feedback. Padrão: 1.', '# LANGFUSE_SAMPLE_RATE=1'],
+    ['LANGFUSE_FANOUT_ENABLED', 'boolean', 'Habilitar o roteamento através do gateway fanout opcional.', '# LANGFUSE_FANOUT_ENABLED=false'],
+    ['LANGFUSE_FANOUT_COLLECTOR_URL', 'string', 'URL de Gateway usada pela API do LibreChat.', '# LANGFUSE_FANOUT_COLLECTOR_URL=http://langfuse-fanout-collector:4318'],
+    ['LANGFUSE_FANOUT_CENTRAL_MEDIA_UPLOAD_DISABLED', 'boolean', 'Impede que o SDK do LibreChat crie uploads de mídia para traces de coletores centrais ou de fallback. Uploads de mídia roteados por tenant permanecem inalterados.', '# LANGFUSE_FANOUT_CENTRAL_MEDIA_UPLOAD_DISABLED=false'],
+    ['LANGFUSE_FANOUT_LISTEN_ADDR', 'string', 'Endereço de escuta do Gateway HTTP. Padrão: :4318.', '# LANGFUSE_FANOUT_LISTEN_ADDR=:4318'],
+    ['LANGFUSE_FANOUT_TENANT_EXPORT_DISABLED', 'boolean', 'Interruptor de emergência que desativa o rastreamento de tenant e a exportação de pontuação, mantendo a exportação central.', '# LANGFUSE_FANOUT_TENANT_EXPORT_DISABLED=false'],
+    ['LANGFUSE_FANOUT_CENTRAL_BASE_URL', 'string', 'URL base central do Langfuse usada pelo gateway.', '# LANGFUSE_FANOUT_CENTRAL_BASE_URL=https://cloud.langfuse.com'],
+    ['LANGFUSE_FANOUT_CENTRAL_AUTH_HEADER', 'string', 'Cabeçalho de autorização Basic completo para rastreamento central e exportação de mídia.', '# LANGFUSE_FANOUT_CENTRAL_AUTH_HEADER=Basic <base64-public-colon-secret>'],
+    ['LANGFUSE_FANOUT_CENTRAL_MEDIA_EXPORT_DISABLED', 'boolean', 'Desativar o fanout de mídia central sem desativar os rastreamentos centrais.', '# LANGFUSE_FANOUT_CENTRAL_MEDIA_EXPORT_DISABLED=false'],
+    ['LANGFUSE_FANOUT_TENANT_DESTINATIONS', 'string', 'Mapeamentos de chave de destino e URL base separados por vírgula permitidos na inicialização.', '# LANGFUSE_FANOUT_TENANT_DESTINATIONS=eu=https://cloud.langfuse.com,us=https://us.cloud.langfuse.com'],
+    ['LANGFUSE_FANOUT_TRACE_DESTINATION_KEYS', 'string', 'Chaves de destino suportadas pela configuração de roteamento do coletor.', '# LANGFUSE_FANOUT_TRACE_DESTINATION_KEYS=eu,us,jp'],
+    ['LANGFUSE_FANOUT_PUBLIC_URL', 'string', 'URL base do gateway usada para criar URLs de upload de mídia de uso único.', '# LANGFUSE_FANOUT_PUBLIC_URL=http://langfuse-fanout-collector:4318'],
+    ['LANGFUSE_FANOUT_TRACE_COLLECTOR_URL', 'string', 'Endpoint de rastreamento interno de gateway para coletor.', '# LANGFUSE_FANOUT_TRACE_COLLECTOR_URL=http://langfuse-fanout-otel:4319'],
+    ['LANGFUSE_FANOUT_REDIS_URI', 'string', 'URI do Redis para planos de upload de mídia única.', '# LANGFUSE_FANOUT_REDIS_URI=redis://langfuse-fanout-redis:6379'],
+    ['LANGFUSE_FANOUT_REDIS_USERNAME', 'string', 'Nome de usuário opcional do Redis para o gateway de fanout.', '# LANGFUSE_FANOUT_REDIS_USERNAME='],
+    ['LANGFUSE_FANOUT_REDIS_PASSWORD', 'string', 'Senha opcional do Redis para o gateway de fanout.', '# LANGFUSE_FANOUT_REDIS_PASSWORD='],
+    ['LANGFUSE_FANOUT_REDIS_KEY_PREFIX', 'string', 'Prefixo de chave Redis para planos de mídia fanout.', '# LANGFUSE_FANOUT_REDIS_KEY_PREFIX=langfuse-fanout'],
+    ['LANGFUSE_FANOUT_OTEL_RECEIVER_ENDPOINT', 'string', 'Endereço de vinculação do receptor do coletor interno.', '# LANGFUSE_FANOUT_OTEL_RECEIVER_ENDPOINT=0.0.0.0:4319'],
+    ['LANGFUSE_FANOUT_TENANT_EU_BASE_URL', 'string', 'URL de destino estática da UE para o coletor Compose incluído.', '# LANGFUSE_FANOUT_TENANT_EU_BASE_URL=https://cloud.langfuse.com'],
+    ['LANGFUSE_FANOUT_TENANT_US_BASE_URL', 'string', 'URL de destino estática nos EUA para o coletor Compose incluído.', '# LANGFUSE_FANOUT_TENANT_US_BASE_URL=https://us.cloud.langfuse.com'],
+    ['LANGFUSE_FANOUT_TENANT_JP_BASE_URL', 'string', 'URL de destino JP estática para o coletor Compose incluído.', '# LANGFUSE_FANOUT_TENANT_JP_BASE_URL=https://jp.cloud.langfuse.com'],
+    ['LANGFUSE_FANOUT_UPSTREAM_TIMEOUT', 'duration', 'Tempo limite para solicitações de gateway para Langfuse e URLs de upload de mídia.', '# LANGFUSE_FANOUT_UPSTREAM_TIMEOUT=30s'],
+    ['LANGFUSE_FANOUT_METRICS_SECRET', 'string', 'Bearer token necessário para coletar métricas do endpoint do gateway.', '# LANGFUSE_FANOUT_METRICS_SECRET='],
+    ['LANGFUSE_FANOUT_MEMORY_LIMIT_MIB', 'number', 'Limite de memória do coletor em MiB.', '# LANGFUSE_FANOUT_MEMORY_LIMIT_MIB=256'],
+    ['LANGFUSE_FANOUT_MEMORY_SPIKE_LIMIT_MIB', 'number', 'Tolerância de pico de memória do coletor em MiB.', '# LANGFUSE_FANOUT_MEMORY_SPIKE_LIMIT_MIB=64'],
+    ['LANGFUSE_FANOUT_BATCH_TIMEOUT', 'duration', 'Tempo limite de esvaziamento do lote do coletor.', '# LANGFUSE_FANOUT_BATCH_TIMEOUT=1s'],
+    ['LANGFUSE_FANOUT_BATCH_SEND_SIZE', 'number', 'Tamanho do lote de envio do coletor.', '# LANGFUSE_FANOUT_BATCH_SEND_SIZE=128'],
+    ['LANGFUSE_FANOUT_METADATA_CARDINALITY_LIMIT', 'number', 'Limite de cardinalidade de metadados do coletor.', '# LANGFUSE_FANOUT_METADATA_CARDINALITY_LIMIT=1000'],
+  ]}
+/>
+
+Em uma implantação de locatário único (single-tenant) sem as credenciais de ambiente `LANGFUSE_PUBLIC_KEY` e `LANGFUSE_SECRET_KEY` completas, um administrador autorizado pode configurar uma conexão criptografada em **Configurações → Langfuse**. As credenciais de ambiente completas têm precedência e ocultam essa configuração. Implantações com fanout usam a mesma configuração para a conexão do locatário quando o fanout e a exportação de locatário estão habilitados.
 
 ### Rastreamento OpenTelemetry [#opentelemetry-tracing]
 
@@ -548,6 +634,8 @@ O LibreChat pode publicar telemetria de Real User Monitoring (RUM) do navegador 
 
 No modo `publicToken`, o navegador envia telemetria diretamente para `RUM_URL` com `RUM_PUBLIC_TOKEN`. No modo `proxy`, o navegador envia telemetria através do LibreChat; o backend valida a sessão do usuário, remove os cabeçalhos de autenticação do aplicativo e encaminha a telemetria para `RUM_PROXY_TARGET_URL`. Sessões inválidas ou expiradas são descartadas com uma resposta `204`, para que falhas de telemetria do navegador não exibam erros normais de autenticação da API. Os resultados do proxy são contabilizados em `rum_proxy_requests_total` com os rótulos `endpoint` e `result` no endpoint `/metrics` da API do LibreChat.
 
+Para carregamentos de página amostrados, o LibreChat emite uma ação `page-load-diagnostics` quando o First Contentful Paint é observado. Ela inclui atribuição de tempo de navegação, como tempo até o primeiro byte, tempo do primeiro byte até o FCP, tempo do service-worker, tipo de navegação e uma rota normalizada em vez de IDs de conversa brutos. O RUM também registra eventos de ciclo de vida inicial da página, service-worker, recuperação de ativos obsoletos e mudanças de rota em aplicativos de página única (SPA). Os diagnósticos são de melhor esforço e nunca atrasam a inicialização nem acionam comportamento de recuperação; eventos iniciais são descartados quando a página não é amostrada.
+
 ### Caminho de Configuração - `librechat.yaml` [#configuration-path---librechatyaml]
 
 Especifique um local alternativo para o arquivo de configuração do LibreChat.
@@ -582,6 +670,35 @@ As Deployment Skills são carregadas como somente leitura na inicialização a p
 />
 
 Reinicie o LibreChat após alterar este diretório ou quaisquer arquivos dentro dele. As Skills fornecidas pela implantação têm precedência sobre as Skills persistidas com o mesmo nome.
+
+### Plugins de Agente (Experimental) [#agent-plugins-experimental]
+
+O LibreChat pode carregar Agent Plugins experimentais a partir de diretórios filhos imediatos na inicialização. Um plugin pode agrupar Skills de implantação, servidores MCP e hooks de comando opcionais.
+
+<OptionTable
+  options={[
+    [
+      'DEPLOYMENT_PLUGINS_DIR',
+      'string',
+      'Diretório contendo pacotes de Agent Plugin. O padrão é `./plugin` na raiz do projeto.',
+      '# DEPLOYMENT_PLUGINS_DIR=./plugin',
+    ],
+    [
+      'DEPLOYMENT_PLUGIN_DATA_DIR',
+      'string',
+      'Raiz de dados persistentes para Plugins de Agente. O padrão é `./data/plugins` na raiz do projeto.',
+      '# DEPLOYMENT_PLUGIN_DATA_DIR=./data/plugins',
+    ],
+    [
+      'DEPLOYMENT_PLUGIN_HOOKS',
+      'boolean',
+      'Executa manipuladores de `command` confiáveis declarados em `ai.librechat/hooks/hooks.json`. Desativado por padrão. Os comandos são executados como processos filhos no host da API.',
+      '# DEPLOYMENT_PLUGIN_HOOKS=true',
+    ],
+  ]}
+/>
+
+Consulte [Agent Plugins](/docs/features/agent_plugins) para obter informações sobre o layout do pacote, versões de esquema, componentes suportados, precedência e limitações atuais.
 
 ### Validação de Configuração [#configuration-validation]
 
@@ -777,7 +894,7 @@ veja: [Anthropic Endpoint](/docs/configuration/pre_configured_ai/anthropic)
       'ANTHROPIC_MODELS',
       'string',
       'Lista separada por vírgulas de modelos Anthropic para usar.',
-      '# ANTHROPIC_MODELS=claude-fable-5,claude-opus-4-8,claude-opus-4-7,claude-sonnet-4-6,claude-opus-4-6,claude-opus-4-20250514,claude-3-7-sonnet-20250219,claude-3-5-sonnet-20241022,claude-3-5-haiku-20241022',
+      '# ANTHROPIC_MODELS=claude-fable-5,claude-opus-5,claude-opus-4-8,claude-opus-4-7,claude-sonnet-5,claude-sonnet-4-6,claude-opus-4-6,claude-opus-4-20250514,claude-3-7-sonnet-20250219,claude-3-5-sonnet-20241022,claude-3-5-haiku-20241022',
     ],
     [
       'ANTHROPIC_REVERSE_PROXY',
@@ -815,8 +932,8 @@ Você também pode usar modelos Anthropic Claude através do Google Cloud Vertex
     [
       'ANTHROPIC_VERTEX_REGION',
       'string',
-      'A região do Google Cloud para o Vertex AI. Padrão: us-east5.',
-      'ANTHROPIC_VERTEX_REGION=us-east5',
+      'A localização do Google Cloud para o Vertex AI. Padrão: us-east5. Use global, us ou eu para Opus 4.7+, Opus 5, Sonnet 5 e Fable/Mythos 5.',
+      'ANTHROPIC_VERTEX_REGION=global',
     ],
   ]}
 />
@@ -869,7 +986,7 @@ Veja: [Configuração do AWS Bedrock](/docs/configuration/pre_configured_ai/bedr
       'BEDROCK_AWS_MODELS',
       'string',
       'Lista de IDs de modelos do Bedrock separados por vírgula. Se omitido, todos os modelos suportados conhecidos são incluídos.',
-      '# BEDROCK_AWS_MODELS=anthropic.claude-fable-5,anthropic.claude-opus-4-8,anthropic.claude-opus-4-7,anthropic.claude-sonnet-4-6,meta.llama3-1-8b-instruct-v1:0',
+      '# BEDROCK_AWS_MODELS=global.anthropic.claude-fable-5,global.anthropic.claude-opus-5,global.anthropic.claude-opus-4-8,global.anthropic.claude-opus-4-7,global.anthropic.claude-sonnet-5,global.anthropic.claude-sonnet-4-6,meta.llama3-1-8b-instruct-v1:0',
     ],
   ]}
 />
@@ -930,13 +1047,13 @@ Siga estas instruções para configurar o [Google Endpoint](/docs/configuration/
       'GOOGLE_MODELS',
       'string',
       'Modelos da API Gemini do Google disponíveis, separados por vírgulas.',
-      'GOOGLE_MODELS=gemini-3.1-pro-preview,gemini-3.1-pro-preview-customtools,gemini-2.5-pro,gemini-2.5-flash,gemini-2.5-flash-lite,gemini-2.0-flash,gemini-2.0-flash-lite',
+      'GOOGLE_MODELS=gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.1-pro-preview,gemini-3.1-pro-preview-customtools,gemini-3.1-flash-lite-preview,gemini-2.5-pro,gemini-2.5-flash,gemini-2.5-flash-lite,gemini-2.0-flash,gemini-2.0-flash-lite',
     ],
     [
       'GOOGLE_MODELS',
       'string',
       'Modelos Vertex AI Google disponíveis, separados por vírgulas.',
-      'GOOGLE_MODELS=gemini-3.1-pro-preview,gemini-3.1-pro-preview-customtools,gemini-2.5-pro,gemini-2.5-flash,gemini-2.5-flash-lite,gemini-2.0-flash-001,gemini-2.0-flash-lite-001',
+      'GOOGLE_MODELS=gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.1-pro-preview,gemini-3.1-pro-preview-customtools,gemini-3.1-flash-lite-preview,gemini-2.5-pro,gemini-2.5-flash,gemini-2.5-flash-lite,gemini-2.0-flash-001,gemini-2.0-flash-lite-001',
     ],
     [
       'GOOGLE_TITLE_MODEL',
@@ -1175,6 +1292,35 @@ Veja instruções detalhadas aqui: **[OpenWeather](/docs/configuration/tools/ope
   ]}
 />
 
+## Upload de Arquivos [#file-uploads]
+
+<OptionTable
+  options={[
+    [
+      'FILE_UPLOAD_SSE_ENABLED',
+      'boolean',
+      'Transmitir respostas de upload com eventos de heartbeat durante o processamento de arquivos de longa duração. Padrão: false.',
+      '# FILE_UPLOAD_SSE_ENABLED=false',
+    ],
+    [
+      'REMOTE_FILE_FETCH_TIMEOUT_MS',
+      'number',
+      'Tempo limite em milissegundos para downloads de arquivos remotos no lado do servidor. Padrão: 15000.',
+      '# REMOTE_FILE_FETCH_TIMEOUT_MS=15000',
+    ],
+    [
+      'REMOTE_FILE_FETCH_MAX_BYTES',
+      'number',
+      'Tamanho máximo em bytes para downloads de arquivos remotos no lado do servidor. Padrão: 536870912 (512 MiB).',
+      '# REMOTE_FILE_FETCH_MAX_BYTES=536870912',
+    ],
+  ]}
+/>
+
+Com `FILE_UPLOAD_SSE_ENABLED=true`, clientes que solicitam `text/event-stream` recebem eventos de heartbeat de um segundo enquanto o processamento do upload ainda está em execução, seguidos por um evento `data` ou `error` e um evento final `close`. Clientes que não solicitam SSE continuam a receber a resposta JSON normal. Isso é útil quando um proxy reverso encerraria uma conexão ociosa durante trabalhos longos de OCR, análise ou RAG.
+
+Os controles de busca remota (remote fetch) são aplicados quando o LibreChat ingere uma URL de arquivo HTTP ou HTTPS para armazenamento local, Firebase, Azure ou S3/CloudFront. O LibreChat verifica tanto o `Content-Length` declarado quanto os bytes efetivamente transmitidos, portanto, o limite ainda se aplica quando o servidor remoto omite ou informa incorretamente seu tamanho. Esses controles são independentes dos limites por upload definidos em [`fileConfig`](/docs/configuration/librechat_yaml/object_structure/file_config).
+
 ## Code Interpreter [#code-interpreter]
 
 A API do Code Interpreter fornece um ambiente seguro para executar código e gerenciar arquivos. Veja: [Code Interpreter API](/docs/features/code_interpreter)
@@ -1190,8 +1336,26 @@ A API do Code Interpreter fornece um ambiente seguro para executar código e ger
     [
       'LIBRECHAT_CODE_BASEURL',
       'string',
-      'URL base personalizada para a API do Code Interpreter (apenas para planos Enterprise).',
+      'URL base para o seu serviço de Code Interpreter.',
       '# LIBRECHAT_CODE_BASEURL=https://your-custom-domain.com',
+    ],
+    [
+      'CODE_SANDBOX_PREWARM',
+      'boolean',
+      'Pré-aqueça sandboxes stateful por conversa em paralelo com a geração do modelo. Defina como false para desativar. Padrão: true.',
+      '# CODE_SANDBOX_PREWARM=true',
+    ],
+    [
+      'CODE_SANDBOX_COLD_AFTER_MS',
+      'number',
+      'Tempo em milissegundos antes que o LibreChat considere um sandbox rastreado como inativo. Padrão: 2100000 (35 minutos).',
+      '# CODE_SANDBOX_COLD_AFTER_MS=2100000',
+    ],
+    [
+      'LIBRECHAT_CODE_IMAGE_CHUNK_BYTES',
+      'number',
+      'Bytes lidos por chunk de imagem do sandbox. Diminua este valor quando o runner tiver um limite de stdout menor. Padrão: 32768.',
+      '# LIBRECHAT_CODE_IMAGE_CHUNK_BYTES=32768',
     ],
   ]}
 />
@@ -1217,10 +1381,10 @@ Para mais informações, incluindo imagens de contêiner pré-configuradas para 
 
 ## Pesquisa (Meilisearch) [#search-meilisearch]
 
-Habilita a pesquisa em mensagens e conversas:
+A pesquisa está desativada por padrão. Ative-a apenas após configurar o Meilisearch com uma master key exclusiva:
 
 <OptionTable
-  options={[['SEARCH', 'boolean', 'Habilita a pesquisa em mensagens e conversas.', 'SEARCH=true']]}
+  options={[['SEARCH', 'boolean', 'Habilita a pesquisa em mensagens e conversas. Padrão: false.', 'SEARCH=true']]}
 />
 
 > Nota: Se você não estiver usando Docker, é necessária a instalação do Meilisearch gratuito auto-hospedado ou um plano remoto pago.
@@ -1251,7 +1415,7 @@ Para que o servidor da API se conecte ao servidor de busca. Substitua '0.0.0.0' 
   ]}
 />
 
-Esta chave mestra deve ter pelo menos 16 bytes, composta por caracteres UTF-8 válidos. O MeiliSearch emitirá um erro e se recusará a iniciar se nenhuma chave mestra for fornecida ou se ela tiver menos de 16 bytes. O MeiliSearch sugerirá uma chave mestra segura gerada automaticamente. Esta é uma chave segura pronta para uso no docker-compose, você pode substituí-la pela sua própria.
+Esta chave mestra deve ter pelo menos 16 bytes de UTF-8 válido. Gere um valor único e forneça a mesma chave para o LibreChat e para o serviço Meilisearch. A pesquisa requer tanto `SEARCH=true` quanto uma `MEILI_MASTER_KEY` configurada.
 
 <OptionTable
   options={[
@@ -1259,7 +1423,7 @@ Esta chave mestra deve ter pelo menos 16 bytes, composta por caracteres UTF-8 v�
       'MEILI_MASTER_KEY',
       'string',
       'A chave mestra para o MeiliSearch.',
-      'MEILI_MASTER_KEY=DrhYf7zENyR6AlUCKmnz0eYASOQdl6zxH7s7MKFSfFCt',
+      'MEILI_MASTER_KEY=',
     ],
   ]}
 />
@@ -1385,6 +1549,19 @@ Esta seção contém a configuração para:
 - [Registro e Logins Sociais](#registration-and-login)
 - [Redefinição de Senha por E-mail](#password-reset)
 
+### Controles de Conversa do Agente [#agent-conversation-controls]
+
+<OptionTable
+  options={[
+    [
+      'STEER_MAX_LENGTH',
+      'number',
+      'Número máximo de caracteres permitidos em uma mensagem de direcionamento de Agent durante a execução. Padrão: 16000.',
+      '# STEER_MAX_LENGTH=16000',
+    ],
+  ]}
+/>
+
 ### Moderação [#moderation]
 
 O Automated Moderation System utiliza um mecanismo de pontuação para rastrear violações dos usuários. À medida que os usuários cometem ações como excesso de logins, registros ou envio de mensagens, eles acumulam pontos de violação. Ao atingir um limite definido, o usuário e seu IP são banidos temporariamente. Este sistema garante a segurança da plataforma ao monitorar e penalizar atividades rápidas ou suspeitas.
@@ -1469,6 +1646,63 @@ Previne ataques de força bruta e registros de spam ao limitar tentativas de log
   ]}
 />
 
+#### Limitação de taxa para redefinição de senha e verificação de e-mail [#password-reset-and-email-verification-rate-limiting]
+
+O LibreChat aplica limites separados baseados em IP para a solicitação de um e-mail e para o envio do token desse e-mail. Isso evita tentativas repetidas de adivinhação de tokens sem forçar as implantações a usar o mesmo limite para o envio de e-mail e para a validação de token.
+
+<OptionTable
+  options={[
+    [
+      'RESET_PASSWORD_MAX',
+      'integer',
+      'Máximo de solicitações de e-mail para redefinição de senha por IP em RESET_PASSWORD_WINDOW. Padrão: 2.',
+      '# RESET_PASSWORD_MAX=2',
+    ],
+    [
+      'RESET_PASSWORD_WINDOW',
+      'integer',
+      'Janela de solicitação de redefinição de senha por e-mail em minutos. Padrão: 2.',
+      '# RESET_PASSWORD_WINDOW=2',
+    ],
+    [
+      'RESET_PASSWORD_SUBMISSION_MAX',
+      'integer',
+      'Máximo de envios de token de redefinição de senha por IP. O padrão é RESET_PASSWORD_MAX, depois 2.',
+      '# RESET_PASSWORD_SUBMISSION_MAX=2',
+    ],
+    [
+      'RESET_PASSWORD_SUBMISSION_WINDOW',
+      'integer',
+      'Janela de envio do token de redefinição de senha em minutos. O padrão é RESET_PASSWORD_WINDOW, seguido por 2.',
+      '# RESET_PASSWORD_SUBMISSION_WINDOW=2',
+    ],
+    [
+      'VERIFY_EMAIL_MAX',
+      'integer',
+      'Máximo de solicitações de reenvio de e-mail de verificação por IP em VERIFY_EMAIL_WINDOW. Padrão: 2.',
+      '# VERIFY_EMAIL_MAX=2',
+    ],
+    [
+      'VERIFY_EMAIL_WINDOW',
+      'integer',
+      'Janela de reenvio de e-mail de verificação em minutos. Padrão: 2.',
+      '# VERIFY_EMAIL_WINDOW=2',
+    ],
+    [
+      'VERIFY_EMAIL_SUBMISSION_MAX',
+      'integer',
+      'Máximo de envios de token de verificação de e-mail por IP. O padrão é VERIFY_EMAIL_MAX, seguido por 2.',
+      '# VERIFY_EMAIL_SUBMISSION_MAX=2',
+    ],
+    [
+      'VERIFY_EMAIL_SUBMISSION_WINDOW',
+      'integer',
+      'Janela de envio do token de verificação de e-mail em minutos. O padrão é VERIFY_EMAIL_WINDOW, seguido por 2.',
+      '# VERIFY_EMAIL_SUBMISSION_WINDOW=2',
+    ],
+  ]}
+/>
+
 #### Pontuação para cada violação [#score-for-each-violation]
 
 <OptionTable
@@ -1537,14 +1771,26 @@ Previne ataques de força bruta e registros de spam ao limitar tentativas de log
     [
       'RESET_PASSWORD_VIOLATION_SCORE',
       'integer',
-      'Pontuação para violações de redefinição de senha.',
-      'RESET_PASSWORD_VIOLATION_SCORE=0',
+      'Pontuação para violações de solicitação de redefinição de senha por e-mail. Padrão: 1.',
+      '# RESET_PASSWORD_VIOLATION_SCORE=1',
     ],
     [
       'VERIFY_EMAIL_VIOLATION_SCORE',
       'integer',
-      'Pontuação para violações de verificação de e-mail.',
-      'VERIFY_EMAIL_VIOLATION_SCORE=0',
+      'Pontuação para violações de reenvio de e-mail de verificação. Padrão: 1.',
+      '# VERIFY_EMAIL_VIOLATION_SCORE=1',
+    ],
+    [
+      'RESET_PASSWORD_SUBMISSION_VIOLATION_SCORE',
+      'integer',
+      'Pontuação para violações de envio de token de redefinição de senha. Padrão: 1.',
+      '# RESET_PASSWORD_SUBMISSION_VIOLATION_SCORE=1',
+    ],
+    [
+      'VERIFY_EMAIL_SUBMISSION_VIOLATION_SCORE',
+      'integer',
+      'Pontuação para violações de envio de token de verificação de e-mail. Padrão: 1.',
+      '# VERIFY_EMAIL_SUBMISSION_VIOLATION_SCORE=1',
     ],
     [
       'TOOL_CALL_VIOLATION_SCORE',
@@ -1632,6 +1878,27 @@ Previne ataques de força bruta e registros de spam ao limitar tentativas de log
       'integer',
       'Em minutos, determina a janela de tempo para `MESSAGE_USER_MAX` mensagens.',
       'MESSAGE_USER_WINDOW=1',
+    ],
+  ]}
+/>
+
+##### Limitador de TTL de Anexos na Fila: [#queued-attachment-ttl-limiter]
+
+O endpoint `/files/usage` renova um período de retenção (TTL) limitado para anexos aguardando em mensagens de Agent na fila. Ele possui um limitador separado por usuário, para que as renovações de metadados não consumam a cota de upload.
+
+<OptionTable
+  options={[
+    [
+      'FILE_USAGE_USER_MAX',
+      'integer',
+      'Máximo de solicitações de renovação de TTL de anexo na fila por usuário e janela. Padrão: 120.',
+      '# FILE_USAGE_USER_MAX=120',
+    ],
+    [
+      'FILE_USAGE_USER_WINDOW',
+      'integer',
+      'Janela em minutos para FILE_USAGE_USER_MAX. Padrão: 15.',
+      '# FILE_USAGE_USER_WINDOW=15',
     ],
   ]}
 />
@@ -1937,6 +2204,12 @@ veja: **[Sistema de Autenticação](/docs/configuration/authentication)**
       'ALLOW_EMAIL_LOGIN=true',
     ],
     [
+      'ALLOW_EMAIL_LOGIN_OVERRIDE',
+      'boolean',
+      'Permitir login direto por e-mail na API enquanto ALLOW_EMAIL_LOGIN=false. Cada uso é registrado. Padrão: false.',
+      '# ALLOW_EMAIL_LOGIN_OVERRIDE=false',
+    ],
+    [
       'ALLOW_REGISTRATION',
       'boolean',
       'Habilitar ou desabilitar o registro de novos usuários por e-mail.',
@@ -2014,8 +2287,7 @@ veja: **[Sistema de Autenticação](/docs/configuration/authentication)**
 
 - Configurações de JWT:
 
-Você deve usar novos valores seguros. Os exemplos fornecidos são chaves de 32 bytes (64 caracteres em hexadecimal).
-Use este replit para gerar alguns rapidamente: **[JWT Keys](/toolkit/creds_generator)**
+Use valores únicos de pelo menos 32 bytes. Gere valores permanentes para produção com o [Credentials Generator](/toolkit/creds_generator).
 
 <OptionTable
   options={[
@@ -2023,16 +2295,18 @@ Use este replit para gerar alguns rapidamente: **[JWT Keys](/toolkit/creds_gener
       'JWT_SECRET',
       'string (hex)',
       'Chave secreta JWT.',
-      'JWT_SECRET=16f8c0ef4a5d391b26034086c628469d3f9f497f08163ab9b40137092f2909ef',
+      'JWT_SECRET=',
     ],
     [
       'JWT_REFRESH_SECRET',
       'string (hex)',
       'Chave secreta de atualização JWT.',
-      'JWT_REFRESH_SECRET=eaa5191f2914e30b9387fd84e254e4ba6fc51b4654968a9b0803b456a54b8418',
+      'JWT_REFRESH_SECRET=',
     ],
   ]}
 />
+
+Segredos JWT em branco usam o mesmo bootstrap de credenciais temporárias descrito em [Credentials Configuration](#credentials-configuration). Em produção e implantações com escalonamento horizontal, defina valores permanentes e compartilhe-os entre as réplicas para que as sessões emitidas permaneçam válidas.
 
 ### Logins Sociais [#social-logins]
 
@@ -2978,7 +3252,7 @@ Controle o tamanho máximo que os arquivos gerados podem ter antes que o LibreCh
     [
       'FILE_PREVIEW_MAX_EXTRACT_BYTES',
       'number',
-      'Tamanho máximo do arquivo de origem em bytes para visualizações inline de artefatos de execução de código. Padrão: 2097152 (2 MiB). Visualizações em HTML renderizadas ainda possuem um limite separado, portanto arquivos muito complexos podem não ser visualizados mesmo abaixo deste valor.',
+      'Tamanho máximo do arquivo de origem em bytes para visualizações inline de artefatos de execução de código, incluindo DOCX, XLSX, CSV, PPTX, POTX, texto e arquivos do tipo PDF. Padrão: 2097152 (2 MiB). Visualizações em HTML renderizadas ainda são limitadas separadamente, portanto, arquivos muito ricos podem não ser visualizados mesmo abaixo deste valor.',
       '# FILE_PREVIEW_MAX_EXTRACT_BYTES=2097152',
     ],
   ]}
@@ -3076,6 +3350,18 @@ Para configurações detalhadas e exemplos, veja: **[Guia de Configuração do R
       '# USE_REDIS_STREAMS=true',
     ],
     [
+      'GENERATION_PROTOCOL_VERSION',
+      'integer',
+      'Protocolo de stream de geração (1 ou 2). Implantações baseadas em Redis usam por padrão a v1, segura para rolling-upgrade, até que sejam explicitamente alteradas; streams em memória usam por padrão a v2.',
+      '# GENERATION_PROTOCOL_VERSION=2',
+    ],
+    [
+      'STREAM_DELTA_COALESCE_MS',
+      'integer',
+      'Agrupa publicações delta de stream do Redis dentro deste intervalo de milissegundos. Deixar vazio ou definir como 0 desativa o agrupamento; 25 é o valor recomendado e os valores são limitados a 1000.',
+      '# STREAM_DELTA_COALESCE_MS=25',
+    ],
+    [
       'REDIS_URI',
       'string',
       'URI de conexão do Redis. Para instância única: `redis://host:port`. Para cluster: URIs separadas por vírgula.',
@@ -3142,6 +3428,30 @@ Para configurações detalhadas e exemplos, veja: **[Guia de Configuração do R
       '# FORCED_IN_MEMORY_CACHE_NAMESPACES=ROLES,MESSAGES',
     ],
     [
+      'AUTH_USER_CACHE_MODE',
+      'string',
+      'Defina exatamente como `on` para armazenar em cache documentos de usuários autenticados durante picos de solicitações. Requer Redis e um namespace AUTH_USER_DOC baseado em Redis. Padrão: off.',
+      '# AUTH_USER_CACHE_MODE=off',
+    ],
+    [
+      'USER_PRINCIPALS_CACHE_TTL_MS',
+      'number',
+      'TTL em milissegundos para associações de grupo em cache usadas em verificações de ACL. Defina como 0 para desativar. Padrão: 300000.',
+      '# USER_PRINCIPALS_CACHE_TTL_MS=300000',
+    ],
+    [
+      'USER_PRINCIPALS_LOCK_TTL_MS',
+      'number',
+      'TTL do bloqueio Redis em milissegundos para builds de principal-cache entre containers. Defina como 0 para desativar o bloqueio de build. Padrão: 5000.',
+      '# USER_PRINCIPALS_LOCK_TTL_MS=5000',
+    ],
+    [
+      'USER_PRINCIPALS_LOCK_WAIT_MS',
+      'number',
+      'Tempo máximo de espera para outro container preencher o cache principal antes de ler o banco de dados diretamente. O padrão é USER_PRINCIPALS_LOCK_TTL_MS.',
+      '# USER_PRINCIPALS_LOCK_WAIT_MS=5000',
+    ],
+    [
       'REDIS_USE_ALTERNATIVE_DNS_LOOKUP',
       'boolean',
       'Habilitar dnsLookup alternativo para conexões TLS com AWS Elasticache. Necessário para clusters Elasticache com TLS.',
@@ -3153,6 +3463,8 @@ Para configurações detalhadas e exemplos, veja: **[Guia de Configuração do R
 Notas:
 
 - Quando `USE_REDIS=true`, você deve fornecer `REDIS_URI` ou a aplicação lançará um erro.
+- Para fluxos de geração com suporte a Redis, primeiro implante a versão compatível com v2 em cada réplica com `GENERATION_PROTOCOL_VERSION` não definido (ou `1`). Após o término das gerações ativas antigas, defina-o como `2` em uma segunda implementação. Não reverta para uma imagem anterior à v2 enquanto gerações v2 permanecerem ativas. Veja [Generation Protocol Rollout](/docs/configuration/redis#generation-protocol-rollout).
+- Habilite `STREAM_DELTA_COALESCE_MS` apenas após cada réplica suportar quadros em lote (batch frames). Assinantes mais antigos descartam quadros coalescidos. Veja [Stream Delta Coalescing](/docs/configuration/redis#stream-delta-coalescing).
 - Para o modo Redis Cluster, forneça múltiplas URIs: `redis://node1:7001,redis://node2:7002,redis://node3:7003` (o modo cluster é detectado automaticamente).
 - Para serviços Redis gerenciados de endpoint único que fragmentam chaves internamente, mantenha `USE_REDIS_CLUSTER=false` e defina `REDIS_CLUSTER_SAFE_DELETE=true` se as limpezas de cache falharem com erros `CROSSSLOT`.
 - Use o protocolo `rediss://` para conexões TLS e defina `REDIS_CA` se sua CA não for publicamente confiável.

@@ -1,17 +1,67 @@
 ---
 title: 指标
 icon: BarChart3
-description: 本文档介绍了如何为 LibreChat 添加 Prometheus 指标导出器。
+description: 使用 LibreChat 内置的 Prometheus 指标和可选的数据库指标导出器来监控 LibreChat。
 ---
 
-### 常规 [#general]
+## 常规 [#general]
 
 ![LibreChat 中的活跃用户](/images/metrics/librechat-metrics-active-users.png)
 
-您可以使用 Prometheus 或任何其他兼容 OpenMetrics 的监控工具来获取有关 LibreChat 活跃使用情况的指标。
-这包括诸如令牌（token）使用情况等技术信息，也包括诸如总用户数或活跃用户数等关于最终用户的信息。
+LibreChat 提供了两个兼容 Prometheus 的指标接口。API 内置的 `/metrics` endpoint 会报告运行行为，例如 Redis 活动和浏览器遥测代理结果。可选的数据库导出器会报告存储在 MongoDB 中的使用数据，包括令牌总数和活跃用户数。
 
-当配置了 `METRICS_SECRET` 时，LibreChat 还会通过 `/metrics` 路径从 API 服务器公开内置的 Prometheus 指标。请使用 `Authorization: Bearer <METRICS_SECRET>` 进行抓取。浏览器 RUM 代理的结果记录为 `rum_proxy_requests_total{endpoint,result}`，其中 `endpoint` 为 `traces`、`logs` 或 `unknown`，而 `result` 可以是 `success`、`auth_drop`、`auth_error`、`bad_request`、`not_configured`、`collector_4xx`、`collector_5xx`、`collector_error` 或 `collector_timeout`。
+## 内置 API 指标 [#built-in-api-metrics]
+
+LibreChat 通过 API 服务器的 `/metrics` 路径公开 Prometheus 指标。请设置 `METRICS_SECRET` 并使用 `Authorization: Bearer <METRICS_SECRET>` 来抓取该 endpoint。当未设置密钥、缺少请求头或令牌不匹配时，该 endpoint 将返回 `401`。
+
+```yaml filename="prometheus.yml"
+scrape_configs:
+  - job_name: librechat-api
+    scheme: https
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials: your-metrics-secret
+    static_configs:
+      - targets: ['librechat.example.com']
+```
+
+### 智能体启动指标 [#agent-startup-metrics]
+
+初始 Agent 聊天请求会发出两个启动指标：
+
+- `agent_startup_milestone_duration_seconds{milestone}` 用于衡量从请求进入到每个启动里程碑的累积延迟。
+- `agent_startups_total{result}` 根据终端结果统计启动尝试次数。
+
+里程碑涵盖了请求准入、任务创建与确认、对话与历史记录加载、客户端与运行初始化、流式传输启动，以及第一个排队响应或内容事件。结果区分了内容排队、无内容增量的完成、去重、拒绝、暂停、替换、中止和错误。
+
+当启用 [backend OpenTelemetry tracing](/docs/configuration/dotenv#opentelemetry-tracing) 时，`librechat.agent.startup` span 会报告与事件相同的里程碑。它包括总启动持续时间、里程碑计数、最终结果以及分配后的生成流 ID。
+
+### Redis 指标 [#redis-metrics]
+
+Redis 支持的缓存和服务会发出两个逻辑操作指标：
+
+- `redis_operations_total{client,use_case,operation,status}` 用于统计操作次数。
+- `redis_operation_duration_seconds{client,use_case,operation,status}` 用于衡量延迟。
+
+`client` 为 `keyv` 或 `ioredis`，`status` 为 `success` 或 `error`。有界的 `use_case` 标签用于标识诸如缓存、会话、速率限制、并发、ACL 主体、可恢复流作业和发布/订阅、MCP 注册表扫描以及领导者选举等工作。这些指标统计的是 LibreChat 的逻辑操作，而非每一次内部 Redis 的往返。连接生命周期 ping 和全局维护不包含在内，清除命名空间被计为一次逻辑操作。
+
+当启用了 [backend OpenTelemetry tracing](/docs/configuration/dotenv#opentelemetry-tracing) 时，每个 HTTP span 也会通过以下内容总结其 Redis 工作：
+
+- `librechat.redis.calls`
+- `librechat.redis.duration_ms`
+- `librechat.redis.errors`
+- `librechat.redis.max_call_ms`
+- `librechat.redis.operations`
+- `librechat.redis.use_cases`
+
+总持续时间最长的十个用例也会在 `librechat.redis.<use_case>.*` 下接收 `calls`、`duration_ms`、`errors` 和 `max_call_ms` 属性。此请求级别的摘要不需要命令级别的 Redis 跨度（spans）；仅在需要单个命令跨度时启用 `OTEL_IOREDIS_TRACING_ENABLED`。
+
+### 浏览器 RUM 代理指标 [#browser-rum-proxy-metrics]
+
+Browser RUM 代理结果报告为 `rum_proxy_requests_total{endpoint,result}`。`endpoint` 为 `traces`、`logs` 或 `unknown`；`result` 可以是 `success`、`auth_drop`、`auth_error`、`bad_request`、`not_configured`、`collector_4xx`、`collector_5xx`、`collector_error` 或 `collector_timeout`。
+
+## 数据库指标导出器 [#database-metrics-exporter]
 
 指标导出器可在 [virtUOS/librechat_exporter](https://github.com/virtUOS/librechat_exporter) 获取。
 这是一个与 LibreChat 一起部署的独立工具。

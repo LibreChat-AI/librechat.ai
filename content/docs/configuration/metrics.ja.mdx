@@ -1,17 +1,67 @@
 ---
 title: メトリクス
 icon: BarChart3
-description: このドキュメントでは、LibreChatにPrometheus用のメトリクスエクスポーターを追加する方法を説明します。
+description: LibreChatの組み込みPrometheusメトリクスとオプションのデータベースメトリクスエクスポーターを使用して、LibreChatを監視します。
 ---
 
-### 一般 [#general]
+## 一般 [#general]
 
 ![LibreChatのアクティブユーザー](/images/metrics/librechat-metrics-active-users.png)
 
-Prometheus やその他の OpenMetrics 互換の監視ツールを使用して、LibreChat のアクティブな使用状況に関するメトリクスを取得できます。
-これには、トークンの使用量といった技術的な情報だけでなく、合計ユーザー数やアクティブユーザー数といったエンドユーザーに関する情報も含まれます。
+LibreChatは、Prometheus互換のメトリクスサーフェスを2つ提供しています。APIに組み込まれた `/metrics` endpointは、Redisのアクティビティやブラウザテレメトリプロキシの結果といった運用状況を報告します。オプションのデータベースエクスポーターは、トークン合計数やアクティブユーザー数など、MongoDBに保存された使用状況データを報告します。
 
-LibreChatは、`METRICS_SECRET`が設定されている場合、APIサーバーの `/metrics` で組み込みのPrometheusメトリクスを公開します。`Authorization: Bearer <METRICS_SECRET>` を使用してスクレイピングしてください。ブラウザのRUMプロキシの結果は `rum_proxy_requests_total{endpoint,result}` として報告されます。ここで `endpoint` は `traces`、`logs`、または `unknown` であり、`result` は `success`、`auth_drop`、`auth_error`、`bad_request`、`not_configured`、`collector_4xx`、`collector_5xx`、`collector_error`、または `collector_timeout` となります。
+## 組み込みのAPIメトリクス [#built-in-api-metrics]
+
+LibreChatは、APIサーバーから `/metrics` でPrometheusメトリクスを公開しています。`METRICS_SECRET` を設定し、`Authorization: Bearer <METRICS_SECRET>` を使用してエンドポイントをスクレイピングしてください。シークレットが未設定の場合、ヘッダーが欠落している場合、またはトークンが一致しない場合、エンドポイントは `401` を返します。
+
+```yaml filename="prometheus.yml"
+scrape_configs:
+  - job_name: librechat-api
+    scheme: https
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials: your-metrics-secret
+    static_configs:
+      - targets: ['librechat.example.com']
+```
+
+### エージェント起動メトリクス [#agent-startup-metrics]
+
+初期のエージェントチャットリクエストは、2つのスタートアップメトリクスを出力します：
+
+- `agent_startup_milestone_duration_seconds{milestone}` は、リクエストの受信から各スタートアップマイルストーンまでの累積レイテンシを測定します。
+- `agent_startups_total{result}` は、ターミナルの結果ごとの起動試行回数をカウントします。
+
+マイルストーンは、リクエストの受付、ジョブの作成と承認、会話と履歴の読み込み、クライアントと実行の初期化、ストリームの開始、そして最初のキューに入れられたレスポンスまたはコンテンツイベントをカバーします。結果は、コンテンツのキューイング、コンテンツのデルタなしの完了、重複排除、拒否、一時停止、置換、中止、およびエラーを区別します。
+
+[backend OpenTelemetry tracing](/docs/configuration/dotenv#opentelemetry-tracing) が有効な場合、`librechat.agent.startup` スパンはイベントと同じマイルストーンを報告します。これには、起動にかかった合計時間、マイルストーン数、最終結果、および割り当てられた場合の生成ストリームIDが含まれます。
+
+### Redis メトリクス [#redis-metrics]
+
+Redis-backedキャッシュおよびサービスは、2つの論理操作メトリクスを出力します：
+
+- `redis_operations_total{client,use_case,operation,status}` は操作の回数をカウントします。
+- `redis_operation_duration_seconds{client,use_case,operation,status}` はレイテンシを測定します。
+
+`client` は `keyv` または `ioredis` であり、`status` は `success` または `error` です。境界付けられた `use_case` ラベルは、キャッシュ、セッション、レート制限、同時実行、ACLプリンシパル、再開可能なストリームジョブとPub/Sub、MCPレジストリのスキャン、リーダー選出といった作業を識別します。これらのメトリクスは、Redisの内部的なラウンドトリップすべてではなく、LibreChatの論理的な操作をカウントします。接続ライフサイクルのpingやグローバルなメンテナンスは除外され、名前空間のクリアは1つの論理操作としてカウントされます。
+
+[backend OpenTelemetry tracing](/docs/configuration/dotenv#opentelemetry-tracing) が有効な場合、各HTTPスパンは以下の情報でRedisの処理内容も要約します：
+
+- `librechat.redis.calls`
+- `librechat.redis.duration_ms`
+- `librechat.redis.errors`
+- `librechat.redis.max_call_ms`
+- `librechat.redis.operations`
+- `librechat.redis.use_cases`
+
+合計期間が最も長い10個のユースケースには、`librechat.redis.<use_case>.*` の下に `calls`、`duration_ms`、`errors`、および `max_call_ms` 属性も付与されます。このリクエストレベルのサマリーにはコマンドレベルの Redis スパンは不要です。個別のコマンドスパンが必要な場合にのみ、`OTEL_IOREDIS_TRACING_ENABLED` を有効にしてください。
+
+### ブラウザRUMプロキシメトリクス [#browser-rum-proxy-metrics]
+
+Browser RUM プロキシの結果は `rum_proxy_requests_total{endpoint,result}` として報告されます。`endpoint` は `traces`、`logs`、または `unknown` です。`result` は `success`、`auth_drop`、`auth_error`、`bad_request`、`not_configured`、`collector_4xx`、`collector_5xx`、`collector_error`、または `collector_timeout` となります。
+
+## データベースメトリクスエクスポーター [#database-metrics-exporter]
 
 メトリクスエクスポーターは [virtUOS/librechat_exporter](https://github.com/virtUOS/librechat_exporter) で利用可能です。
 これは LibreChat と並行してデプロイする独立したツールです。

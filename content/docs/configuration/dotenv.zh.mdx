@@ -41,6 +41,41 @@ description: 配置应用程序环境的综合指南，使用 `.env` 文件。�
   ]}
 />
 
+### HTTP 服务器超时 [#http-server-timeouts]
+
+这些可选值用于配置 Node.js HTTP 服务器。保持未设置状态以保留 Node 的默认值。设置为 `0` 则会禁用该超时。
+
+<OptionTable
+  options={[
+    [
+      'HTTP_KEEP_ALIVE_TIMEOUT_MS',
+      'integer',
+      '空闲保持连接超时时间（以毫秒为单位）。请将其设置为高于负载均衡器的空闲超时时间，以避免复用的连接在服务器关闭时发生冲突。Node 默认值：5000。',
+      '# HTTP_KEEP_ALIVE_TIMEOUT_MS=70000',
+    ],
+    [
+      'HTTP_KEEP_ALIVE_TIMEOUT_BUFFER_MS',
+      'integer',
+      '额外的套接字超时缓冲（以毫秒为单位）。Node 默认值：1000。',
+      '# HTTP_KEEP_ALIVE_TIMEOUT_BUFFER_MS=5000',
+    ],
+    [
+      'HTTP_HEADERS_TIMEOUT_MS',
+      'integer',
+      '接收完整请求头所允许的时间。Node 默认值：60000。',
+      '# HTTP_HEADERS_TIMEOUT_MS=80000',
+    ],
+    [
+      'HTTP_REQUEST_TIMEOUT_MS',
+      'integer',
+      '接收完整请求所允许的时间。Node 默认值：300000。',
+      '# HTTP_REQUEST_TIMEOUT_MS=300000',
+    ],
+  ]}
+/>
+
+值必须是非负的安全整数；无效值将被忽略。当同时启用标头超时和请求超时时，如果标头超时设置高于请求超时，LibreChat 会将其限制为请求超时值。Node 会在 30 秒的连接扫描中检查标头和请求是否过期，因此低于 `30000` 的值不会以精确的毫秒精度执行。Bun 目前接受这些设置但不强制执行；当 API 服务器在 Bun 下运行时，LibreChat 会记录一条警告。
+
 ### Trust proxy [#trust-proxy]
 
 使用距离 Express 应用程序最多 n 跳的地址。
@@ -56,27 +91,37 @@ req.socket.remoteAddress 是第一跳，其余地址从右到左在 X-Forwarded-
 
 ### 凭据配置 [#credentials-configuration]
 
-为了安全地存储凭据，您需要一个固定的密钥和 IV。您可以在此处为生产环境和开发环境设置它们。
+LibreChat 使用 `CREDS_KEY` 和 `CREDS_IV` 来加密存储在数据库中的受支持凭据。请为生产环境配置固定且唯一的值，并在每个副本中共享相同的值。
 
 <OptionTable
   options={[
     [
       'CREDS_KEY',
       'string',
-      '用于安全存储凭据的 32 字节密钥（十六进制为 64 个字符）。应用启动时必需。',
-      'CREDS_KEY=f34be427ebb29de8d88c107a71546019685ed8b241d8f2ed00c3df97ad2566f0',
+      '用于安全存储凭据的 32 字节密钥（64 个十六进制字符）。',
+      'CREDS_KEY=',
     ],
     [
       'CREDS_IV',
       'string',
-      '用于安全存储凭据的 16 字节 IV（32 个十六进制字符）。应用启动所必需。',
-      'CREDS_IV=e2341419ec3dd3d19b13a1a87fafcbfb',
+      '用于安全存储凭据的 16 字节 IV（32 个十六进制字符）。',
+      'CREDS_IV=',
+    ],
+    [
+      'LIBRECHAT_TEMP_CREDENTIALS_PATH',
+      'string',
+      '用于持久化自动生成的临时凭据的路径。默认为当前进程工作目录下的 `.env.temp`。',
+      '# LIBRECHAT_TEMP_CREDENTIALS_PATH=/app/data/.env.temp',
     ],
   ]}
 />
 
-<Callout type="warning" title="警告">
-  **警告：** 如果您不设置 `CREDS_KEY` 和 `CREDS_IV`，应用程序将在启动时崩溃。- 您可以使用此 [密钥生成器](/toolkit/creds_generator) 快速生成它们。
+当 `CREDS_KEY`、`CREDS_IV`、`JWT_SECRET` 或 `JWT_REFRESH_SECRET` 中的任何一个为空时，LibreChat 会首先从临时凭据文件中复用有效值。如果不存在，它将生成一个加密随机值，并以仅限所有者拥有的权限写入该文件。显式的环境变量值始终具有最高优先级。LibreChat 拒绝使用 `.env` 或 `.env.example` 作为生成的文件路径，以防止意外替换任一配置文件。
+
+捆绑的 Docker Compose 文件将 `/app/data/.env.temp` 持久化在 `librechat-data` 卷中，因此单个 Compose 部署可以在不更改这些生成值的情况下重启。如果该文件无法持久化，这些值将仅存在于进程本地，重启后会话或加密记录可能会变得无法访问。
+
+<Callout type="warning" title="为生产环境设置永久值">
+  临时生成是一种引导便利措施，而非凭据轮换系统。在生产环境使用前，请使用 [Credentials Generator](/toolkit/creds_generator) 生成永久值，将其存储在您的密钥管理器中，并为每个副本提供相同的值。更改已建立的密钥不会重新加密现有记录。LibreChat 会在数据库中记录凭据指纹，并在活动值发生偏移时发出警告；请勿通过覆盖该标记来代替受控迁移。
 </Callout>
 
 ### 静态文件处理 [#static-file-handling]
@@ -228,14 +273,11 @@ req.socket.remoteAddress 是第一跳，其余地址从右到左在 X-Forwarded-
   ]}
 />
 
-或者，您可以使用模拟 `mongoDb` 的 `documentDb`，但它：
+Amazon DocumentDB 5.0+ 基于实例的集群是受支持的目标。DocumentDB 需要 `retryWrites=false` 以及带有 AWS CA 证书包的 TLS；不支持弹性集群，因为它们不提供唯一索引。典型的 URI 格式如下：
 
-- 不支持 `retryWrites` - 请使用 `retryWrites=false`
-- 需要 TLS 连接，因此请使用参数 `tls=true` 来启用 TLS，并使用 `tlsCAFile=/path-to-ca/bundle.pem` 来指向 AWS 提供的 CA 证书包文件。
+`mongodb://username:password@cluster:27017/librechat?tls=true&tlsCAFile=/path-to-ca/global-bundle.pem&replicaSet=rs0&readPreference=secondaryPreferred&retryWrites=false`
 
-`documentDb` 的 URI 看起来如下：
-
-- `mongodb+srv://username:password@domain/dbname?retryWrites=false&tls=true&tlsCAFile=/path-to-ca/bundle.pem`
+DocumentDB 4.0 可以在降低部分唯一索引（partial-unique-index）强制执行的情况下运行。有关支持的目标和注意事项，请参阅 [Amazon DocumentDB Compatibility](/docs/user_guides/mongodb#amazon-documentdb-compatibility)。
 
 另请参阅：
 
@@ -265,7 +307,7 @@ req.socket.remoteAddress 是第一跳，其余地址从右到左在 X-Forwarded-
     [
       'ADMIN_PANEL_URL',
       'string',
-      '当管理面板单独托管时，用于管理 OAuth/SSO 重定向的外部管理面板基础 URL。请勿在末尾包含斜杠。',
+      '用于管理员 OAuth/SSO 重定向以及仅限管理员的“设置 > 常规”链接的外部管理面板基础 URL。请勿包含末尾斜杠。',
       'ADMIN_PANEL_URL=https://admin.example.com/admin',
     ],
     [
@@ -383,6 +425,50 @@ LibreChat 具有内置的中央日志记录功能，更多信息请参阅 [Loggi
     ['GID', 'number', '组 ID。', '# GID=1000'],
   ]}
 />
+
+### Langfuse 追踪与租户分发 (Tenant Fanout) [#langfuse-tracing-and-tenant-fanout]
+
+使用标准的 Langfuse 变量进行一个中央可观测性项目。可选的扇出（fanout）部署可以额外将租户追踪、媒体和反馈评分路由到特定于租户的 Langfuse 项目。请参阅 [Langfuse Tracing](/docs/configuration/langfuse) 以了解设置、应用内连接管理和架构。
+
+<OptionTable
+  options={[
+    ['LANGFUSE_PUBLIC_KEY', 'string', '用于中央 Langfuse 项目的公钥。', '# LANGFUSE_PUBLIC_KEY='],
+    ['LANGFUSE_SECRET_KEY', 'string', '用于中央 Langfuse 项目的密钥。', '# LANGFUSE_SECRET_KEY='],
+    ['LANGFUSE_BASE_URL', 'string', '用于集中追踪和反馈评分的 Base URL。', '# LANGFUSE_BASE_URL=https://cloud.langfuse.com'],
+    ['LANGFUSE_PROJECT_ID', 'string', '稳定的中央 Langfuse 项目 ID。如果省略，LibreChat 将在后台自动发现并缓存它，以便进行反馈路由。', '# LANGFUSE_PROJECT_ID='],
+    ['LANGFUSE_TRACING_ENABLED', 'boolean', '设置为 false 以禁用 Langfuse 追踪和反馈评分。默认值：true。', '# LANGFUSE_TRACING_ENABLED=true'],
+    ['LANGFUSE_SAMPLE_RATE', 'number', '确定性跟踪级别采样率，范围从 0 到 1。被采样排除的跟踪不会收到反馈分数。默认值：1。', '# LANGFUSE_SAMPLE_RATE=1'],
+    ['LANGFUSE_FANOUT_ENABLED', 'boolean', '通过可选的 fanout 网关启用路由。', '# LANGFUSE_FANOUT_ENABLED=false'],
+    ['LANGFUSE_FANOUT_COLLECTOR_URL', 'string', 'LibreChat API 使用的网关 URL。', '# LANGFUSE_FANOUT_COLLECTOR_URL=http://langfuse-fanout-collector:4318'],
+    ['LANGFUSE_FANOUT_CENTRAL_MEDIA_UPLOAD_DISABLED', 'boolean', '防止 LibreChat SDK 为中央或回退收集器追踪创建媒体上传。租户路由的媒体上传保持不变。', '# LANGFUSE_FANOUT_CENTRAL_MEDIA_UPLOAD_DISABLED=false'],
+    ['LANGFUSE_FANOUT_LISTEN_ADDR', 'string', 'Gateway HTTP 监听地址。默认值：:4318。', '# LANGFUSE_FANOUT_LISTEN_ADDR=:4318'],
+    ['LANGFUSE_FANOUT_TENANT_EXPORT_DISABLED', 'boolean', '紧急开关，用于禁用租户追踪和评分导出，同时保留中央导出功能。', '# LANGFUSE_FANOUT_TENANT_EXPORT_DISABLED=false'],
+    ['LANGFUSE_FANOUT_CENTRAL_BASE_URL', 'string', '网关使用的中央 Langfuse 基础 URL。', '# LANGFUSE_FANOUT_CENTRAL_BASE_URL=https://cloud.langfuse.com'],
+    ['LANGFUSE_FANOUT_CENTRAL_AUTH_HEADER', 'string', '用于中央追踪和媒体导出的完整 Basic 授权标头。', '# LANGFUSE_FANOUT_CENTRAL_AUTH_HEADER=Basic <base64-public-colon-secret>'],
+    ['LANGFUSE_FANOUT_CENTRAL_MEDIA_EXPORT_DISABLED', 'boolean', '在不禁用中心追踪的情况下禁用中心媒体扇出。', '# LANGFUSE_FANOUT_CENTRAL_MEDIA_EXPORT_DISABLED=false'],
+    ['LANGFUSE_FANOUT_TENANT_DESTINATIONS', 'string', '启动时允许使用的以逗号分隔的目标键和基础 URL 映射。', '# LANGFUSE_FANOUT_TENANT_DESTINATIONS=eu=https://cloud.langfuse.com,us=https://us.cloud.langfuse.com'],
+    ['LANGFUSE_FANOUT_TRACE_DESTINATION_KEYS', 'string', '收集器路由配置支持的目标键。', '# LANGFUSE_FANOUT_TRACE_DESTINATION_KEYS=eu,us,jp'],
+    ['LANGFUSE_FANOUT_PUBLIC_URL', 'string', '用于创建一次性媒体上传 URL 的网关基础 URL。', '# LANGFUSE_FANOUT_PUBLIC_URL=http://langfuse-fanout-collector:4318'],
+    ['LANGFUSE_FANOUT_TRACE_COLLECTOR_URL', 'string', '内部网关到收集器的追踪 endpoint。', '# LANGFUSE_FANOUT_TRACE_COLLECTOR_URL=http://langfuse-fanout-otel:4319'],
+    ['LANGFUSE_FANOUT_REDIS_URI', 'string', '用于一次性媒体上传计划的 Redis URI。', '# LANGFUSE_FANOUT_REDIS_URI=redis://langfuse-fanout-redis:6379'],
+    ['LANGFUSE_FANOUT_REDIS_USERNAME', 'string', '用于 fanout 网关的可选 Redis 用户名。', '# LANGFUSE_FANOUT_REDIS_USERNAME='],
+    ['LANGFUSE_FANOUT_REDIS_PASSWORD', 'string', '用于 fanout 网关的可选 Redis 密码。', '# LANGFUSE_FANOUT_REDIS_PASSWORD='],
+    ['LANGFUSE_FANOUT_REDIS_KEY_PREFIX', 'string', '用于扇出媒体计划的 Redis 键前缀。', '# LANGFUSE_FANOUT_REDIS_KEY_PREFIX=langfuse-fanout'],
+    ['LANGFUSE_FANOUT_OTEL_RECEIVER_ENDPOINT', 'string', '内部收集器接收器绑定地址。', '# LANGFUSE_FANOUT_OTEL_RECEIVER_ENDPOINT=0.0.0.0:4319'],
+    ['LANGFUSE_FANOUT_TENANT_EU_BASE_URL', 'string', '用于所包含 Compose 收集器的静态欧盟目标 URL。', '# LANGFUSE_FANOUT_TENANT_EU_BASE_URL=https://cloud.langfuse.com'],
+    ['LANGFUSE_FANOUT_TENANT_US_BASE_URL', 'string', '包含的 Compose 收集器的静态美国目标 URL。', '# LANGFUSE_FANOUT_TENANT_US_BASE_URL=https://us.cloud.langfuse.com'],
+    ['LANGFUSE_FANOUT_TENANT_JP_BASE_URL', 'string', '包含的 Compose 收集器的静态 JP 目标 URL。', '# LANGFUSE_FANOUT_TENANT_JP_BASE_URL=https://jp.cloud.langfuse.com'],
+    ['LANGFUSE_FANOUT_UPSTREAM_TIMEOUT', 'duration', '网关请求至 Langfuse 和媒体上传 URL 的超时时间。', '# LANGFUSE_FANOUT_UPSTREAM_TIMEOUT=30s'],
+    ['LANGFUSE_FANOUT_METRICS_SECRET', 'string', '抓取网关指标 endpoint 所需的 Bearer token。', '# LANGFUSE_FANOUT_METRICS_SECRET='],
+    ['LANGFUSE_FANOUT_MEMORY_LIMIT_MIB', 'number', '收集器内存限制（单位：MiB）。', '# LANGFUSE_FANOUT_MEMORY_LIMIT_MIB=256'],
+    ['LANGFUSE_FANOUT_MEMORY_SPIKE_LIMIT_MIB', 'number', '收集器内存峰值余量（单位：MiB）。', '# LANGFUSE_FANOUT_MEMORY_SPIKE_LIMIT_MIB=64'],
+    ['LANGFUSE_FANOUT_BATCH_TIMEOUT', 'duration', '收集器批量刷新超时。', '# LANGFUSE_FANOUT_BATCH_TIMEOUT=1s'],
+    ['LANGFUSE_FANOUT_BATCH_SEND_SIZE', 'number', 'Collector 批量发送大小。', '# LANGFUSE_FANOUT_BATCH_SEND_SIZE=128'],
+    ['LANGFUSE_FANOUT_METADATA_CARDINALITY_LIMIT', 'number', '采集器元数据基数限制。', '# LANGFUSE_FANOUT_METADATA_CARDINALITY_LIMIT=1000'],
+  ]}
+/>
+
+在没有完整 `LANGFUSE_PUBLIC_KEY` 和 `LANGFUSE_SECRET_KEY` 环境变量凭据的单租户部署中，授权管理员可以在 **Settings → Langfuse** 下配置一个加密连接。完整的环境变量凭据具有优先权，并会隐藏该设置。当启用扇出（fanout）和租户导出功能时，扇出部署将使用相同的设置进行租户连接。
 
 ### OpenTelemetry Tracing [#opentelemetry-tracing]
 
@@ -544,6 +630,8 @@ LibreChat 可以将浏览器真实用户监控 (RUM) 遥测数据发布到兼容
 
 在 `publicToken` 模式下，浏览器将遥测数据直接发送到带有 `RUM_PUBLIC_TOKEN` 的 `RUM_URL`。在 `proxy` 模式下，浏览器通过 LibreChat 发送遥测数据；后端会验证用户会话，剥离应用身份验证标头，并将遥测数据转发到 `RUM_PROXY_TARGET_URL`。无效或过期的会话将以 `204` 响应被丢弃，因此浏览器遥测失败不会显现出正常的 API 身份验证错误。代理结果会在 LibreChat API `/metrics` 端点上通过带有 `endpoint` 和 `result` 标签的 `rum_proxy_requests_total` 进行统计。
 
+对于采样页面加载，LibreChat 会在观察到首次内容绘制 (First Contentful Paint) 时发出一个 `page-load-diagnostics` 操作。它包含导航计时归因，例如首字节时间、首字节到 FCP 的时间、Service Worker 计时、导航类型以及规范化的路由（而非原始对话 ID）。RUM 还会记录早期页面生命周期、Service Worker、陈旧资源恢复以及单页应用路由更改事件。诊断信息属于尽力而为，绝不会延迟启动或触发恢复行为；当页面未被采样时，早期事件将被丢弃。
+
 ### 配置路径 - `librechat.yaml` [#configuration-path---librechatyaml]
 
 为 LibreChat 配置文件指定一个替代位置。
@@ -579,6 +667,35 @@ Deployment Skills 在启动时以只读方式从文件系统加载，并向启�
 />
 
 更改此目录或其中的任何文件后，请重启 LibreChat。部署提供的 Skills 优先级高于同名的持久化 Skills。
+
+### Agent 插件 (实验性) [#agent-plugins-experimental]
+
+LibreChat 可以在启动时从直接子目录中加载实验性的 Agent Plugins。一个插件可以捆绑部署 Skills、MCP 服务器以及可选的命令钩子 (command hooks)。
+
+<OptionTable
+  options={[
+    [
+      'DEPLOYMENT_PLUGINS_DIR',
+      'string',
+      '包含 Agent Plugin 包的目录。默认为项目根目录下的 `./plugin`。',
+      '# DEPLOYMENT_PLUGINS_DIR=./plugin',
+    ],
+    [
+      'DEPLOYMENT_PLUGIN_DATA_DIR',
+      'string',
+      'Agent Plugins 的持久化数据根目录。默认为项目根目录下的 `./data/plugins`。',
+      '# DEPLOYMENT_PLUGIN_DATA_DIR=./data/plugins',
+    ],
+    [
+      'DEPLOYMENT_PLUGIN_HOOKS',
+      'boolean',
+      '运行在 `ai.librechat/hooks/hooks.json` 中声明的受信任 `command` 处理程序。默认禁用。命令作为 API 主机上的子进程执行。',
+      '# DEPLOYMENT_PLUGIN_HOOKS=true',
+    ],
+  ]}
+/>
+
+请参阅 [Agent Plugins](/docs/features/agent_plugins) 以了解包布局、架构版本、支持的组件、优先级以及当前的限制。
 
 ### 配置验证 [#configuration-validation]
 
@@ -774,7 +891,7 @@ Deployment Skills 在启动时以只读方式从文件系统加载，并向启�
       'ANTHROPIC_MODELS',
       'string',
       '要使用的 Anthropic 模型列表，以逗号分隔。',
-      '# ANTHROPIC_MODELS=claude-fable-5,claude-opus-4-8,claude-opus-4-7,claude-sonnet-4-6,claude-opus-4-6,claude-opus-4-20250514,claude-3-7-sonnet-20250219,claude-3-5-sonnet-20241022,claude-3-5-haiku-20241022',
+      '# ANTHROPIC_MODELS=claude-fable-5,claude-opus-5,claude-opus-4-8,claude-opus-4-7,claude-sonnet-5,claude-sonnet-4-6,claude-opus-4-6,claude-opus-4-20250514,claude-3-7-sonnet-20250219,claude-3-5-sonnet-20241022,claude-3-5-haiku-20241022',
     ],
     [
       'ANTHROPIC_REVERSE_PROXY',
@@ -812,8 +929,8 @@ Claude Fable 5 已包含在默认的 Anthropic 模型列表中。Fable/Mythos �
     [
       'ANTHROPIC_VERTEX_REGION',
       'string',
-      'Vertex AI 的 Google Cloud 区域。默认值：us-east5。',
-      'ANTHROPIC_VERTEX_REGION=us-east5',
+      'Vertex AI 的 Google Cloud 位置。默认值：us-east5。对于 Opus 4.7+、Opus 5、Sonnet 5 和 Fable/Mythos 5，请使用 global、us 或 eu。',
+      'ANTHROPIC_VERTEX_REGION=global',
     ],
   ]}
 />
@@ -866,7 +983,7 @@ Claude Fable 5 已包含在默认的 Anthropic 模型列表中。Fable/Mythos �
       'BEDROCK_AWS_MODELS',
       'string',
       '以逗号分隔的 Bedrock 模型 ID 列表。如果省略，则包含所有已知的受支持模型。',
-      '# BEDROCK_AWS_MODELS=anthropic.claude-fable-5,anthropic.claude-opus-4-8,anthropic.claude-opus-4-7,anthropic.claude-sonnet-4-6,meta.llama3-1-8b-instruct-v1:0',
+      '# BEDROCK_AWS_MODELS=global.anthropic.claude-fable-5,global.anthropic.claude-opus-5,global.anthropic.claude-opus-4-8,global.anthropic.claude-opus-4-7,global.anthropic.claude-sonnet-5,global.anthropic.claude-sonnet-4-6,meta.llama3-1-8b-instruct-v1:0',
     ],
   ]}
 />
@@ -927,13 +1044,13 @@ Bing，也用于 Sydney、越狱以及 Bing Image Creator
       'GOOGLE_MODELS',
       'string',
       '可用的 Gemini API Google 模型，以逗号分隔。',
-      'GOOGLE_MODELS=gemini-3.1-pro-preview,gemini-3.1-pro-preview-customtools,gemini-2.5-pro,gemini-2.5-flash,gemini-2.5-flash-lite,gemini-2.0-flash,gemini-2.0-flash-lite',
+      'GOOGLE_MODELS=gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.1-pro-preview,gemini-3.1-pro-preview-customtools,gemini-3.1-flash-lite-preview,gemini-2.5-pro,gemini-2.5-flash,gemini-2.5-flash-lite,gemini-2.0-flash,gemini-2.0-flash-lite',
     ],
     [
       'GOOGLE_MODELS',
       'string',
       '可用的 Vertex AI Google 模型，以逗号分隔。',
-      'GOOGLE_MODELS=gemini-3.1-pro-preview,gemini-3.1-pro-preview-customtools,gemini-2.5-pro,gemini-2.5-flash,gemini-2.5-flash-lite,gemini-2.0-flash-001,gemini-2.0-flash-lite-001',
+      'GOOGLE_MODELS=gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.1-pro-preview,gemini-3.1-pro-preview-customtools,gemini-3.1-flash-lite-preview,gemini-2.5-pro,gemini-2.5-flash,gemini-2.5-flash-lite,gemini-2.0-flash-001,gemini-2.0-flash-lite-001',
     ],
     [
       'GOOGLE_TITLE_MODEL',
@@ -1172,6 +1289,35 @@ Gemini Image Generation 是一个适用于 Agents 的工具，同时支持 Gemin
   ]}
 />
 
+## 文件上传 [#file-uploads]
+
+<OptionTable
+  options={[
+    [
+      'FILE_UPLOAD_SSE_ENABLED',
+      'boolean',
+      '在长时间文件处理期间，通过心跳事件流式传输上传响应。默认值：false。',
+      '# FILE_UPLOAD_SSE_ENABLED=false',
+    ],
+    [
+      'REMOTE_FILE_FETCH_TIMEOUT_MS',
+      'number',
+      '服务器端远程文件下载的超时时间（以毫秒为单位）。默认值：15000。',
+      '# REMOTE_FILE_FETCH_TIMEOUT_MS=15000',
+    ],
+    [
+      'REMOTE_FILE_FETCH_MAX_BYTES',
+      'number',
+      '服务器端远程文件下载的最大字节数。默认值：536870912 (512 MiB)。',
+      '# REMOTE_FILE_FETCH_MAX_BYTES=536870912',
+    ],
+  ]}
+/>
+
+当 `FILE_UPLOAD_SSE_ENABLED=true` 时，请求 `text/event-stream` 的客户端会在上传处理过程中接收到一秒一次的心跳事件，随后是 `data` 或 `error` 事件以及最终的 `close` 事件。不请求 SSE 的客户端将继续接收正常的 JSON 响应。这在反向代理可能会在长时间的 OCR、解析或 RAG 工作期间关闭空闲连接时非常有用。
+
+当 LibreChat 将 HTTP 或 HTTPS 文件 URL 提取到本地、Firebase、Azure 或 S3/CloudFront 存储时，远程获取控制（remote fetch controls）即会生效。LibreChat 会同时检查声明的 `Content-Length` 和实际流式传输的字节数，因此即使远程服务器省略或错误声明了长度，该限制仍然适用。这些控制与 [`fileConfig`](/docs/configuration/librechat_yaml/object_structure/file_config) 中的单次上传限制相互独立。
+
 ## Code Interpreter [#code-interpreter]
 
 Code Interpreter API 提供了一个用于执行代码和管理文件的安全环境。请参阅：[Code Interpreter API](/docs/features/code_interpreter)
@@ -1187,8 +1333,26 @@ Code Interpreter API 提供了一个用于执行代码和管理文件的安全�
     [
       'LIBRECHAT_CODE_BASEURL',
       'string',
-      'Code Interpreter API 的自定义基础 URL（仅限企业版）。',
+      'Code Interpreter 服务的 Base URL。',
       '# LIBRECHAT_CODE_BASEURL=https://your-custom-domain.com',
+    ],
+    [
+      'CODE_SANDBOX_PREWARM',
+      'boolean',
+      '在模型生成的同时并行预热有状态的会话沙盒。设置为 false 以禁用。默认值：true。',
+      '# CODE_SANDBOX_PREWARM=true',
+    ],
+    [
+      'CODE_SANDBOX_COLD_AFTER_MS',
+      'number',
+      'LibreChat 将受追踪的沙盒视为冷启动前的毫秒数。默认值：2100000（35 分钟）。',
+      '# CODE_SANDBOX_COLD_AFTER_MS=2100000',
+    ],
+    [
+      'LIBRECHAT_CODE_IMAGE_CHUNK_BYTES',
+      'number',
+      '每个沙盒镜像块读取的字节数。当运行器的 stdout 限制较小时，请调低此值。默认值：32768。',
+      '# LIBRECHAT_CODE_IMAGE_CHUNK_BYTES=32768',
     ],
   ]}
 />
@@ -1214,10 +1378,10 @@ Artifacts 利用 CodeSandbox 库来安全地渲染 HTML/JS 代码。默认情况
 
 ## 搜索 (Meilisearch) [#search-meilisearch]
 
-启用消息和对话搜索：
+搜索功能默认处于禁用状态。请仅在配置好带有唯一主密钥的 Meilisearch 后再启用它：
 
 <OptionTable
-  options={[['SEARCH', 'boolean', '启用消息和对话搜索。', 'SEARCH=true']]}
+  options={[['SEARCH', 'boolean', '启用消息和对话搜索。默认值：false。', 'SEARCH=true']]}
 />
 
 > 注意：如果您没有使用 Docker，则需要安装免费的自托管 Meilisearch 或付费的远程方案。
@@ -1248,7 +1412,7 @@ Artifacts 利用 CodeSandbox 库来安全地渲染 HTML/JS 代码。默认情况
   ]}
 />
 
-此主密钥必须至少为 16 字节，并由有效的 UTF-8 字符组成。如果未提供主密钥或密钥少于 16 字节，MeiliSearch 将抛出错误并拒绝启动。MeiliSearch 会建议一个自动生成的安全主密钥。这是一个为 docker-compose 准备好的安全密钥，你可以将其替换为你自己的密钥。
+此主密钥必须至少包含 16 字节的有效 UTF-8 字符。请生成一个唯一的值，并将相同的密钥提供给 LibreChat 和 Meilisearch 服务。搜索功能需要同时设置 `SEARCH=true` 和配置好的 `MEILI_MASTER_KEY`。
 
 <OptionTable
   options={[
@@ -1256,7 +1420,7 @@ Artifacts 利用 CodeSandbox 库来安全地渲染 HTML/JS 代码。默认情况
       'MEILI_MASTER_KEY',
       'string',
       'MeiliSearch 的主密钥。',
-      'MEILI_MASTER_KEY=DrhYf7zENyR6AlUCKmnz0eYASOQdl6zxH7s7MKFSfFCt',
+      'MEILI_MASTER_KEY=',
     ],
   ]}
 />
@@ -1382,6 +1546,19 @@ Artifacts 利用 CodeSandbox 库来安全地渲染 HTML/JS 代码。默认情况
 - [注册与社交登录](#registration-and-login)
 - [电子邮件密码重置](#password-reset)
 
+### 智能体对话控制 [#agent-conversation-controls]
+
+<OptionTable
+  options={[
+    [
+      'STEER_MAX_LENGTH',
+      'number',
+      '单次运行中 Agent 引导消息允许的最大字符数。默认值：16000。',
+      '# STEER_MAX_LENGTH=16000',
+    ],
+  ]}
+/>
+
 ### 内容审核 [#moderation]
 
 自动审核系统使用评分机制来跟踪用户的违规行为。当用户进行诸如频繁登录、注册或发送消息等操作时，他们会积累违规分数。一旦达到设定的阈值，该用户及其 IP 地址将被暂时封禁。该系统通过监控并惩罚快速或可疑的活动，确保了平台的安全性。
@@ -1466,6 +1643,63 @@ Artifacts 利用 CodeSandbox 库来安全地渲染 HTML/JS 代码。默认情况
   ]}
 />
 
+#### 密码重置和电子邮件验证速率限制 [#password-reset-and-email-verification-rate-limiting]
+
+LibreChat 对请求电子邮件和提交该邮件中的令牌（token）分别应用了基于 IP 的限制。这既防止了重复猜测令牌，又无需强制部署在电子邮件发送和令牌验证上使用相同的限制。
+
+<OptionTable
+  options={[
+    [
+      'RESET_PASSWORD_MAX',
+      'integer',
+      '在 RESET_PASSWORD_WINDOW 时间窗口内，每个 IP 地址允许的最大密码重置邮件请求数。默认值：2。',
+      '# RESET_PASSWORD_MAX=2',
+    ],
+    [
+      'RESET_PASSWORD_WINDOW',
+      'integer',
+      '密码重置邮件请求窗口（以分钟为单位）。默认值：2。',
+      '# RESET_PASSWORD_WINDOW=2',
+    ],
+    [
+      'RESET_PASSWORD_SUBMISSION_MAX',
+      'integer',
+      '每个 IP 地址允许的最大密码重置令牌提交次数。默认为 RESET_PASSWORD_MAX，若未设置则为 2。',
+      '# RESET_PASSWORD_SUBMISSION_MAX=2',
+    ],
+    [
+      'RESET_PASSWORD_SUBMISSION_WINDOW',
+      'integer',
+      '密码重置令牌提交窗口（以分钟为单位）。默认为 RESET_PASSWORD_WINDOW，其次为 2。',
+      '# RESET_PASSWORD_SUBMISSION_WINDOW=2',
+    ],
+    [
+      'VERIFY_EMAIL_MAX',
+      'integer',
+      '在 VERIFY_EMAIL_WINDOW 时间窗口内，每个 IP 地址允许重新发送验证邮件的最大请求次数。默认值：2。',
+      '# VERIFY_EMAIL_MAX=2',
+    ],
+    [
+      'VERIFY_EMAIL_WINDOW',
+      'integer',
+      '验证邮件重发时间窗口（分钟）。默认值：2。',
+      '# VERIFY_EMAIL_WINDOW=2',
+    ],
+    [
+      'VERIFY_EMAIL_SUBMISSION_MAX',
+      'integer',
+      '每个 IP 允许提交电子邮件验证令牌的最大次数。默认为 VERIFY_EMAIL_MAX，其次为 2。',
+      '# VERIFY_EMAIL_SUBMISSION_MAX=2',
+    ],
+    [
+      'VERIFY_EMAIL_SUBMISSION_WINDOW',
+      'integer',
+      '电子邮件验证令牌提交窗口（以分钟为单位）。默认为 VERIFY_EMAIL_WINDOW，其次为 2。',
+      '# VERIFY_EMAIL_SUBMISSION_WINDOW=2',
+    ],
+  ]}
+/>
+
 #### 每个违规项的评分 [#score-for-each-violation]
 
 <OptionTable
@@ -1534,14 +1768,26 @@ Artifacts 利用 CodeSandbox 库来安全地渲染 HTML/JS 代码。默认情况
     [
       'RESET_PASSWORD_VIOLATION_SCORE',
       'integer',
-      '密码重置违规得分。',
-      'RESET_PASSWORD_VIOLATION_SCORE=0',
+      '密码重置邮件请求违规的评分。默认值：1。',
+      '# RESET_PASSWORD_VIOLATION_SCORE=1',
     ],
     [
       'VERIFY_EMAIL_VIOLATION_SCORE',
       'integer',
-      '电子邮件验证违规的评分。',
-      'VERIFY_EMAIL_VIOLATION_SCORE=0',
+      '验证邮件重发违规的评分。默认值：1。',
+      '# VERIFY_EMAIL_VIOLATION_SCORE=1',
+    ],
+    [
+      'RESET_PASSWORD_SUBMISSION_VIOLATION_SCORE',
+      'integer',
+      '密码重置令牌提交违规的评分。默认值：1。',
+      '# RESET_PASSWORD_SUBMISSION_VIOLATION_SCORE=1',
+    ],
+    [
+      'VERIFY_EMAIL_SUBMISSION_VIOLATION_SCORE',
+      'integer',
+      '电子邮件验证令牌提交违规的评分。默认值：1。',
+      '# VERIFY_EMAIL_SUBMISSION_VIOLATION_SCORE=1',
     ],
     [
       'TOOL_CALL_VIOLATION_SCORE',
@@ -1629,6 +1875,27 @@ Artifacts 利用 CodeSandbox 库来安全地渲染 HTML/JS 代码。默认情况
       'integer',
       '以分钟为单位，确定 `MESSAGE_USER_MAX` 消息的时间窗口。',
       'MESSAGE_USER_WINDOW=1',
+    ],
+  ]}
+/>
+
+##### 排队附件 TTL 限制器： [#queued-attachment-ttl-limiter]
+
+`/files/usage` endpoint 会为排队等待 Agent 消息的附件续订有界 TTL 保持期。它具有独立的每用户限制器，因此元数据续订不会占用上传配额。
+
+<OptionTable
+  options={[
+    [
+      'FILE_USAGE_USER_MAX',
+      'integer',
+      '每个用户在每个窗口内允许的最大排队附件 TTL 续期请求数。默认值：120。',
+      '# FILE_USAGE_USER_MAX=120',
+    ],
+    [
+      'FILE_USAGE_USER_WINDOW',
+      'integer',
+      'FILE_USAGE_USER_MAX 的时间窗口（以分钟为单位）。默认值：15。',
+      '# FILE_USAGE_USER_WINDOW=15',
     ],
   ]}
 />
@@ -1934,6 +2201,12 @@ Artifacts 利用 CodeSandbox 库来安全地渲染 HTML/JS 代码。默认情况
       'ALLOW_EMAIL_LOGIN=true',
     ],
     [
+      'ALLOW_EMAIL_LOGIN_OVERRIDE',
+      'boolean',
+      '当 ALLOW_EMAIL_LOGIN=false 时，允许直接通过 API 进行电子邮件登录。每次使用都会被记录。默认值：false。',
+      '# ALLOW_EMAIL_LOGIN_OVERRIDE=false',
+    ],
+    [
       'ALLOW_REGISTRATION',
       'boolean',
       '启用或禁用新用户的电子邮件注册。',
@@ -2011,8 +2284,7 @@ Artifacts 利用 CodeSandbox 库来安全地渲染 HTML/JS 代码。默认情况
 
 - JWT 设置：
 
-您应该使用新的安全值。提供的示例是 32 字节的密钥（十六进制下为 64 个字符）。
-使用此 replit 快速生成一些：**[JWT Keys](/toolkit/creds_generator)**
+使用至少 32 字节的唯一值。请使用 [Credentials Generator](/toolkit/creds_generator) 为生产环境生成永久值。
 
 <OptionTable
   options={[
@@ -2020,16 +2292,18 @@ Artifacts 利用 CodeSandbox 库来安全地渲染 HTML/JS 代码。默认情况
       'JWT_SECRET',
       'string (hex)',
       'JWT 密钥。',
-      'JWT_SECRET=16f8c0ef4a5d391b26034086c628469d3f9f497f08163ab9b40137092f2909ef',
+      'JWT_SECRET=',
     ],
     [
       'JWT_REFRESH_SECRET',
       'string (hex)',
       'JWT 刷新密钥。',
-      'JWT_REFRESH_SECRET=eaa5191f2914e30b9387fd84e254e4ba6fc51b4654968a9b0803b456a54b8418',
+      'JWT_REFRESH_SECRET=',
     ],
   ]}
 />
+
+空的 JWT 密钥使用 [Credentials Configuration](#credentials-configuration) 下所述的相同临时凭据引导程序。在生产环境和水平扩展部署中，请设置永久值并在副本之间共享它们，以确保已颁发的会话保持有效。
 
 ### 社交登录 [#social-logins]
 
@@ -2975,7 +3249,7 @@ LibreChat 支持使用 Google Tag Manager 进行分析。你需要在 LibreChat 
     [
       'FILE_PREVIEW_MAX_EXTRACT_BYTES',
       'number',
-      '代码执行工件内联预览的最大源文件大小（以字节为单位）。默认值：2097152 (2 MiB)。渲染后的 HTML 预览仍有单独的上限，因此即使文件大小低于此值，内容非常丰富的文件也可能跳过预览。',
+      '用于代码执行工件内联预览的源文件最大字节数，包括 DOCX、XLSX、CSV、PPTX、POTX、文本和 PDF 类文件。默认值：2097152 (2 MiB)。渲染后的 HTML 预览仍有单独的上限，因此即使文件大小低于此值，内容非常丰富的文件也可能跳过预览。',
       '# FILE_PREVIEW_MAX_EXTRACT_BYTES=2097152',
     ],
   ]}
@@ -3073,6 +3347,18 @@ Redis 为 LibreChat 提供了显著的性能提升，并实现了水平扩展能
       '# USE_REDIS_STREAMS=true',
     ],
     [
+      'GENERATION_PROTOCOL_VERSION',
+      'integer',
+      '生成流协议（1 或 2）。基于 Redis 的部署默认使用支持滚动升级的 v1，直到明确切换；内存流默认使用 v2。',
+      '# GENERATION_PROTOCOL_VERSION=2',
+    ],
+    [
+      'STREAM_DELTA_COALESCE_MS',
+      'integer',
+      '在指定的毫秒数内批量处理 Redis 流增量发布。取消设置或设为 0 将禁用批量处理；建议设置为 25，最大值为 1000。',
+      '# STREAM_DELTA_COALESCE_MS=25',
+    ],
+    [
       'REDIS_URI',
       'string',
       'Redis 连接 URI。单实例格式：`redis://host:port`。集群格式：以逗号分隔的 URI。',
@@ -3139,6 +3425,30 @@ Redis 为 LibreChat 提供了显著的性能提升，并实现了水平扩展能
       '# FORCED_IN_MEMORY_CACHE_NAMESPACES=ROLES,MESSAGES',
     ],
     [
+      'AUTH_USER_CACHE_MODE',
+      'string',
+      '设置为 `on` 以在请求突发期间缓存已认证的用户文档。需要 Redis 和基于 Redis 的 AUTH_USER_DOC 命名空间。默认值：off。',
+      '# AUTH_USER_CACHE_MODE=off',
+    ],
+    [
+      'USER_PRINCIPALS_CACHE_TTL_MS',
+      'number',
+      '用于 ACL 检查的缓存组成员资格的 TTL（以毫秒为单位）。设置为 0 则禁用。默认值：300000。',
+      '# USER_PRINCIPALS_CACHE_TTL_MS=300000',
+    ],
+    [
+      'USER_PRINCIPALS_LOCK_TTL_MS',
+      'number',
+      '用于跨容器 principal-cache 构建的 Redis 锁 TTL（以毫秒为单位）。设置为 0 可禁用构建锁定。默认值：5000。',
+      '# USER_PRINCIPALS_LOCK_TTL_MS=5000',
+    ],
+    [
+      'USER_PRINCIPALS_LOCK_WAIT_MS',
+      'number',
+      '在直接读取数据库之前，等待另一个容器填充主体缓存的最长时间。默认为 USER_PRINCIPALS_LOCK_TTL_MS。',
+      '# USER_PRINCIPALS_LOCK_WAIT_MS=5000',
+    ],
+    [
       'REDIS_USE_ALTERNATIVE_DNS_LOOKUP',
       'boolean',
       '为 AWS Elasticache 的 TLS 连接启用备用 dnsLookup。对于启用 TLS 的 Elasticache 集群是必需的。',
@@ -3150,6 +3460,8 @@ Redis 为 LibreChat 提供了显著的性能提升，并实现了水平扩展能
 注意：
 
 - 当 `USE_REDIS=true` 时，你必须提供 `REDIS_URI`，否则应用程序将抛出错误。
+- 对于基于 Redis 的生成流，首先将支持 v2 的版本部署到每个副本，并将 `GENERATION_PROTOCOL_VERSION` 设置为未设置（或 `1`）。在旧的活跃生成任务处理完毕后，在第二次发布中将其设置为 `2`。当 v2 生成任务仍然活跃时，请勿回滚到 v2 之前的镜像。请参阅 [Generation Protocol Rollout](/docs/configuration/redis#generation-protocol-rollout)。
+- 仅在每个副本都支持批处理帧后，才启用 `STREAM_DELTA_COALESCE_MS`。旧版订阅者会丢弃合并后的帧。请参阅 [Stream Delta Coalescing](/docs/configuration/redis#stream-delta-coalescing)。
 - 对于 Redis Cluster 模式，请提供多个 URI：`redis://node1:7001,redis://node2:7002,redis://node3:7003`（集群模式会自动检测）。
 - For single-endpoint managed Redis services that shard keys internally, keep `USE_REDIS_CLUSTER=false` and set `REDIS_CLUSTER_SAFE_DELETE=true` if cache clears fail with `CROSSSLOT` errors.
 - 对于 TLS 连接，请使用 `rediss://` 协议；如果您的 CA 不受公共信任，请设置 `REDIS_CA`。

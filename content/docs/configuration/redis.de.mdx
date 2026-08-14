@@ -17,6 +17,9 @@ Dieser Leitfaden beschreibt, wie Sie Redis für das Caching und die Sitzungsspei
 - [Leistungsoptimierung](#performance-tuning)
 - [Konfigurationsbeispiele](#configuration-examples)
 - [Resumable Streams](#resumable-streams)
+- [Generation Protocol Rollout](#generation-protocol-rollout)
+- [Stream Delta Coalescing](#stream-delta-coalescing)
+- [MCP-Katalog-Koordination](#mcp-catalog-coordination)
 
 ## Grundlegende Einrichtung [#basic-setup]
 
@@ -324,6 +327,42 @@ REDIS_URI=redis://127.0.0.1:6379
 # USE_REDIS_STREAMS=true  # Enabled by default when USE_REDIS=true
 ```
 
+### Einführung des Generation Protocol [#generation-protocol-rollout]
+
+Das v2-Generierungsprotokoll fügt die dauerhafte Warteschlange, Unterbrechung, Pause/Fortsetzen sowie Wiederherstellungsgarantien hinzu, die von aktuellen Agent-Ausführungen verwendet werden. Redis-basierte Bereitstellungen verbleiben absichtlich auf Protokoll v1, wenn `GENERATION_PROTOCOL_VERSION` nicht gesetzt ist, damit Replikate, die unterschiedliche LibreChat-Versionen ausführen, während eines Rolling-Upgrades koexistieren können.
+
+Verwenden Sie eine zweistufige Einführung:
+
+1. Stellen Sie das v2-fähige LibreChat-Image auf **jeder** Replik bereit, bei der `GENERATION_PROTOCOL_VERSION` nicht gesetzt oder auf `1` gesetzt ist.
+2. Warten Sie, bis aktive Generierungen, die vom vorherigen Image stammen, abgeschlossen oder beendet sind.
+3. Setze `GENERATION_PROTOCOL_VERSION=2` und rolle dasselbe Image erneut aus.
+
+```bash filename=".env"
+USE_REDIS=true
+USE_REDIS_STREAMS=true
+GENERATION_PROTOCOL_VERSION=2
+```
+
+<Callout type="warning" title="Sicherheit bei Rolling Deployments">
+  Aktivieren Sie das Protokoll v2 erst, wenn jedes Replikat es unterstützt. Nachdem die v2-Generierungen begonnen haben, führen Sie kein Rollback auf ein LibreChat-Image vor v2 durch, bis diese Generierungen abgeschlossen sind; ältere Replikate können nicht sicher mit ihrem Redis-Status arbeiten.
+</Callout>
+
+In-Memory-Generierungs-Streams teilen keinen Status zwischen Replikaten und verwenden standardmäßig das Protokoll v2, daher ist diese Umstellung nicht erforderlich.
+
+### Stream Delta Coalescing [#stream-delta-coalescing]
+
+Redis-gestützte Streams können Delta-Publikationen bündeln, um Redis-Skripte, Roundtrips und die CPU-Auslastung bei hohen Token-Raten zu reduzieren:
+
+```bash filename=".env"
+STREAM_DELTA_COALESCE_MS=25
+```
+
+Die Einstellung ist deaktiviert, wenn sie nicht festgelegt oder auf `0` gesetzt ist. Es werden `25` Millisekunden empfohlen, und Werte über `1000` werden begrenzt. Batching kann zu einer konfigurierten Zustellungsverzögerung führen.
+
+<Callout type="warning" title="Sicherheit bei Rolling Deployments">
+  Aktiviere Coalescing erst, nachdem jede LibreChat-Replik Batch-Frames unterstützt. Ältere Abonnenten verwerfen zusammengefasste (coalesced) Frames.
+</Callout>
+
 ### Hauptvorteile (für horizontale Skalierung) [#key-benefits-for-horizontal-scaling]
 
 - **Kontinuität über Instanzen hinweg**: Benutzer können eine Generierung auf einem Server starten und auf einem anderen fortsetzen
@@ -343,3 +382,9 @@ REDIS_URI=redis://node1:7001,redis://node2:7002,redis://node3:7003
 ```
 
 Weitere Details zu dieser Funktion finden Sie unter [Resumable Streams](/docs/features/resumable_streams).
+
+## MCP-Katalog-Koordination [#mcp-catalog-coordination]
+
+Wenn Redis aktiviert ist, koordiniert LibreChat anwendungsebene MCP-Tool-Kataloge über Replikate hinweg. Die Veröffentlichung beim Start, die Synchronisierung bei der Wiederverbindung und `notifications/tools/list_changed`-Aktualisierungen verwenden Generations- und Revisionsmarkierungen, sodass ein veraltetes Replikat keinen neueren Katalog überschreiben kann.
+
+Redis Cluster-Bereitstellungen verwenden Slot-sichere Katalogschlüssel und Aktualisierungsvorgänge; eine separate MCP Redis-Einstellung ist nicht erforderlich. Siehe [MCP Server Management](/docs/features/mcp#mcp-server-management) für das Verhalten bei dynamischen Katalogen und OAuth-Bereitschaft.

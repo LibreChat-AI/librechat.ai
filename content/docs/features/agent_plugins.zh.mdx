@@ -1,0 +1,161 @@
+---
+title: 智能体插件
+icon: Plug
+description: 实验性地将部署的 Skills、MCP servers 和命令钩子打包到启动加载的包中。
+---
+
+Agent Plugins 允许操作员将相关的 [Skills](/docs/features/skills)、[MCP servers](/docs/features/mcp) 以及可选的命令钩子打包在 LibreChat 文件系统中。LibreChat 实现了 Agent Plugins `1.0.0` 软件包格式，并在启动时将每个直接子目录作为一个插件进行加载。
+
+<Callout type="warning" title="实验性">
+  Agent Plugins 处于实验阶段。在实验阶段期间，包格式、支持的组件、配置和运行时行为可能会发生变化。在生产部署中使用插件之前，请务必进行测试。
+</Callout>
+
+## 配置目录 [#configure-the-directories]
+
+```bash filename=".env"
+# Defaults to ./plugin relative to the LibreChat project root
+DEPLOYMENT_PLUGINS_DIR=./plugin
+
+# Persistent data allocated separately for each plugin manifest name
+DEPLOYMENT_PLUGIN_DATA_DIR=./data/plugins
+
+# Optional and disabled by default; see Command Hooks below
+DEPLOYMENT_PLUGIN_HOOKS=true
+```
+
+相对路径是相对于 LibreChat 项目根目录进行解析的。如果默认的 `./plugin` 目录不存在，启动将继续进行且不加载任何插件。如果显式设置了 `DEPLOYMENT_PLUGINS_DIR` 但无法读取，启动将会失败，以确保部署错误不会被静默忽略。
+
+在添加、移除或更改插件后，请重启 LibreChat。
+
+## 软件包布局 [#package-layout]
+
+`DEPLOYMENT_PLUGINS_DIR` 的每个直接子目录都是一个插件包：
+
+```text
+plugin/
+  analytics-tools/
+    plugin.json
+    skills/
+      analyze-events/
+        SKILL.md
+        scripts/
+          analyze.py
+    mcp.json
+    ai.librechat/
+      hooks/
+        hooks.json
+    scripts/
+      guard.sh
+```
+
+`plugin.json` 是必需的。`skills/`、`mcp.json` 和 `ai.librechat/hooks/hooks.json` 是可选的，并且会独立失败，因此一个组件无效不会阻止同一插件中的其他有效组件加载。清单文件无效或缺失会导致整个插件被拒绝。诊断信息会写入 LibreChat 的启动日志中。
+
+## Manifest [#manifest]
+
+清单必须使用确切的 Agent Plugins `1.0.0` 模式 URL：
+
+```json filename="plugin.json"
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "analytics-tools",
+  "version": "1.0.0",
+  "description": "Skills and tools for analyzing event data"
+}
+```
+
+`name` 也用于插件的持久化数据目录。它必须为 1-64 个字符，以小写字母或数字开头和结尾，仅能使用小写字母、数字、连字符和句点，且不能包含连续的 `--` 或 `..` 序列。插件名称在部署中必须是唯一的。
+
+## 捆绑技能 (Bundled Skills) [#bundled-skills]
+
+将每个 Skill 放置在 `skills/` 下的直接子目录中，并在该子目录的根目录下包含 `SKILL.md`。LibreChat 会将有效的条目加载为只读部署的 Skills，并应用常规的 Skills 功能和访问规则。
+
+独立的 [`DEPLOYMENT_SKILLS_DIR`](/docs/features/skills#deployment-skills) 优先级高于同名的插件 Skill。在插件目录中，第一个声明某个 Skill 名称的包将胜出，后续的冲突将被跳过并发出警告。
+
+## 捆绑的 MCP Servers [#bundled-mcp-servers]
+
+在 `mcp.json` 中定义可选的 MCP 服务器，并使用确切的 `1.0.0` 模式 URL：
+
+```json filename="mcp.json"
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "analytics": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["${PLUGIN_ROOT}/server.js"],
+      "cwd": "${PLUGIN_ROOT}",
+      "env": {
+        "PLUGIN_CACHE": "${PLUGIN_DATA}/cache"
+      }
+    }
+  }
+}
+```
+
+支持的传输方式包括 `stdio`、`streamable-http` 和 `sse`。远程 HTTP 传输必须使用 HTTPS，回环（loopback）目标除外。服务器名称必须在经过 LibreChat 的 MCP 工具名称规范化处理后保持不变，且不能使用保留的 JavaScript 对象名称。
+
+对于 `stdio` 服务器，`${PLUGIN_ROOT}` 和 `${PLUGIN_DATA}` 会在 `args`、`env` 和 `cwd` 中进行一次扩展；这两个值也会被添加到启动进程的环境变量中。插件 MCP 配置不会从 LibreChat 的宿主环境中扩展任意变量。像 `${OPENAI_API_KEY}` 这样的值在注册表存储和运行时初始化期间将保持为字面量。请将凭据保留在插件文件之外，并通过专门构建的身份验证服务或其他受部署控制的机制来提供它们。
+
+在 `librechat.yaml` 中声明的 MCP 服务器优先级高于同名的插件服务器。重复的插件服务器名称将被跳过并记录在日志中。
+
+## 持久化插件数据 [#persistent-plugin-data]
+
+LibreChat 会在 `<DEPLOYMENT_PLUGIN_DATA_DIR>/<plugin-name>` 创建一个目录，并将其作为 `${PLUGIN_DATA}` 暴露给 `stdio` 组件。请将其用于插件拥有的持久化状态。不要将持久化状态写入 `${PLUGIN_ROOT}`，该目录应被视为包内容。
+
+## Command Hooks [#command-hooks]
+
+Agent Plugins 可以在 Agent 生命周期边界运行 `command` 钩子处理程序。钩子执行默认处于禁用状态。请显式启用它并重启 LibreChat：
+
+```bash filename=".env"
+DEPLOYMENT_PLUGIN_HOOKS=true
+```
+
+当该变量为 false 或未设置时，LibreChat 将忽略 hook 文档并记录一条启动警告；插件中独立有效的 Skills 和 MCP 服务器仍会加载。
+
+<Callout type="warning" title="仅限受信任的代码">
+  命令钩子（command hook）会在 LibreChat API 主机上运行一个由操作员安装的子进程。受限环境减少了意外暴露的风险，但它并非沙盒。仅在您信任的插件包（其信任级别与 LibreChat 代码和 `toolApproval` 钩子模块相同）中启用钩子。
+</Callout>
+
+在 `ai.librechat/hooks/hooks.json` 中声明 hooks：
+
+```json filename="ai.librechat/hooks/hooks.json"
+{
+  "description": "Reject writes outside the workspace",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/guard.sh",
+            "timeout": 30,
+            "allowedEnvVars": ["WORKSPACE_POLICY"]
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+### 执行契约 [#execution-contract]
+
+- LibreChat 从插件根目录启动命令，并以 JSON 格式通过标准输入发送兼容 Claude 的事件负载。
+- `${PLUGIN_ROOT}`、`${PLUGIN_DATA}` 和 `${CLAUDE_PLUGIN_ROOT}` 会在 `command` 和 `args` 中被展开一次，并且也可供子进程使用。
+- 子环境仅包含 `PATH`、`HOME`、`LANG`、`LC_ALL` 以及存在时的 `TZ`、三个插件路径变量，以及在 `allowedEnvVars` 中明确列出的名称。
+- 退出代码 `0` 表示成功。写入标准输出的 JSON 可以返回与事件相关的决策和有界上下文；纯文本输出仅被视为 `SessionStart` 和 `UserPromptSubmit` 的附加上下文。
+- 退出代码 `2` 会阻止相应的操作或继续执行，并使用标准错误作为原因。其他非零退出代码会被记录，但在其他方面会被忽略。
+- 当 hook 被中止或超时时，LibreChat 会终止该进程。在 POSIX 主机上，命令通过 Bash 运行。Windows 插件必须提供 `commandWindows` 或选择 PowerShell。
+
+LibreChat 会将常见的 Claude 工具名称 `Bash`、`Write`、`Edit`、`Read` 和 `WebSearch` 及其文件参数名称转换为相应的 LibreChat 工具。使用 LibreChat 原生工具名称编写的匹配器将保留原生的载荷格式。
+
+支持的源事件包括 `RunStart`、`SessionStart`、`UserPromptSubmit`、`PreToolUse`、`PostToolUse`、`PostToolUseFailure`、`PostToolBatch`、`SubagentStart`、`Stop`、`StopFailure`、`PreCompact` 和 `PostCompact`。不支持的事件或声明将被跳过，并在启动诊断中报告。在此版本中，仅执行 `command` 处理程序；`prompt`、`http`、`mcp_tool` 和 `agent` 处理程序暂不支持。
+
+`SessionStart` 和带有 `once: true` 的处理程序会通过一个有界的进程本地存储在每个对话中进行去重。在多副本部署中，同一个“仅运行一次”的处理程序可能会在每个进程上运行一次。`ask` 决策需要 LibreChat 的可恢复人工审批流程；当该流程不可用时，LibreChat 会将决策收紧为 `deny`，而不是让运行在没有恢复路径的情况下保持暂停状态。
+
+## 相关内容 [#related]
+
+- [Skills](/docs/features/skills)
+- [Model Context Protocol](/docs/features/mcp)
+- [智能体](/docs/features/agents)

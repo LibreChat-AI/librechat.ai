@@ -15,6 +15,9 @@ description: 在 LibreChat 中设置 Redis 以实现缓存、会话存储和水�
 - [性能调优](#performance-tuning)
 - [配置示例](#configuration-examples)
 - [可恢复流](#resumable-streams)
+- [生成协议发布](#generation-protocol-rollout)
+- [流式增量合并](#stream-delta-coalescing)
+- [MCP Catalog Coordination](#mcp-catalog-coordination)
 
 ## 基本设置 [#basic-setup]
 
@@ -322,6 +325,42 @@ REDIS_URI=redis://127.0.0.1:6379
 # USE_REDIS_STREAMS=true  # Enabled by default when USE_REDIS=true
 ```
 
+### 生成协议发布 [#generation-protocol-rollout]
+
+v2 生成协议增加了当前 Agent 运行所使用的持久队列、中断、暂停/恢复以及恢复保证。当 `GENERATION_PROTOCOL_VERSION` 未设置时，基于 Redis 的部署将有意保留在协议 v1 上，以便在滚动升级期间运行不同 LibreChat 版本的副本可以共存。
+
+使用两阶段发布：
+
+1. 将支持 v2 的 LibreChat 镜像部署到 `GENERATION_PROTOCOL_VERSION` 未设置或设置为 `1` 的**每一个**副本中。
+2. 等待由上一个镜像拥有的活跃生成任务完成或排空。
+3. 设置 `GENERATION_PROTOCOL_VERSION=2` 并再次部署相同的镜像。
+
+```bash filename=".env"
+USE_REDIS=true
+USE_REDIS_STREAMS=true
+GENERATION_PROTOCOL_VERSION=2
+```
+
+<Callout type="warning" title="滚动部署安全性">
+  在所有副本都支持协议 v2 之前，请勿启用协议 v2。在 v2 生成开始后，请勿回滚到 v2 之前的 LibreChat 镜像，直到这些生成任务处理完毕；旧版本的副本无法安全地操作其 Redis 状态。
+</Callout>
+
+内存中生成流不会在副本之间共享状态，且默认使用协议 v2，因此不需要进行此切换。
+
+### 流式增量合并 (Stream Delta Coalescing) [#stream-delta-coalescing]
+
+基于 Redis 的流可以批量处理增量发布，从而在高令牌速率下减少 Redis 脚本执行、往返次数和 CPU 占用：
+
+```bash filename=".env"
+STREAM_DELTA_COALESCE_MS=25
+```
+
+当未设置或设置为 `0` 时，该设置处于关闭状态。建议设置为 `25` 毫秒，超过 `1000` 的值将被限制。批处理可能会增加最多一个配置窗口的交付延迟。
+
+<Callout type="warning" title="滚动部署安全性">
+  仅在每个 LibreChat 副本都支持批处理帧（batch frames）后，才启用合并（coalescing）。旧版本的订阅者会丢弃合并后的帧。
+</Callout>
+
 ### 主要优势（针对水平扩展） [#key-benefits-for-horizontal-scaling]
 
 - **跨实例连续性**：用户可以在一台服务器上开始生成，并在另一台服务器上继续。
@@ -341,3 +380,9 @@ REDIS_URI=redis://node1:7001,redis://node2:7002,redis://node3:7003
 ```
 
 有关此功能的更多详细信息，请参阅 [Resumable Streams](/docs/features/resumable_streams)。
+
+## MCP Catalog Coordination [#mcp-catalog-coordination]
+
+当启用 Redis 时，LibreChat 会在各个副本之间协调应用层级的 MCP 工具目录。启动发布、重连同步以及 `notifications/tools/list_changed` 更新均使用生成和修订标记，以确保过时的副本不会覆盖较新的目录。
+
+Redis Cluster 部署使用槽位安全 (slot-safe) 的目录键和更新操作；无需单独的 MCP Redis 设置。有关动态目录和 OAuth 就绪行为，请参阅 [MCP Server Management](/docs/features/mcp#mcp-server-management)。

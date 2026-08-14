@@ -41,6 +41,8 @@ Voer code uit in meerdere programmeertalen:
 - Veilig bestandsbeheer
 - Sessie-gebaseerde bestandsorganisatie
 
+LibreChat herstelt gerefereerde gespreksbestanden naar de huidige Code Interpreter-omgeving vóór een Agent-uitvoering. Als het herstel van elk vereist Code Interpreter-bestand mislukt, stopt de uitvoering vóór de modelaanroep en wordt de gebruiker gevraagd de bestanden opnieuw bij te voegen in plaats van door te gaan met verouderde referenties.
+
 ### Beveiliging & Gemak [#security--convenience]
 
 - Beveiligde sandboxed uitvoeringsomgeving
@@ -54,6 +56,24 @@ Programmatic Tool Calling stelt LibreChat Agents in staat om geselecteerde MCP t
 
 De sandbox heeft nog steeds geen algemene netwerktoegang. Tool-aanroepen worden afgehandeld via de Code Interpreter Tool Call Server en de geregistreerde tool-map van LibreChat, waardoor alleen tools die beschikbaar zijn voor de agent kunnen worden aangeroepen.
 
+### Background Code Execution [#background-code-execution]
+
+Achtergronduitvoering stelt een Agent in staat om langlopende code of shell-taken te verzenden, het gesprek voort te zetten en het resultaat later op te halen via `check_background_task`. In LibreChat-chats verschijnen stdout en gegenereerde bestanden bij de oorspronkelijke code-aanroep zodra het werk is voltooid. Gegenereerde bestanden worden behouden voor volgende beurten, zelfs als de Agent de taak nog niet heeft opgevraagd.
+
+Deze functie is opt-in op implementatieniveau. Voeg `run_in_background` toe naast `execute_code` in de [Agents endpoint capabilities](/docs/configuration/librechat_yaml/object_structure/agents#capabilities) en schakel vervolgens Code Interpreter in op de agent. Code-executie en shell-aanroepen komen automatisch in aanmerking voor achtergrondverwerking; schakel **Background execution** uit in de instellingen van de Code Interpreter-tool wanneer een agent zich hiervoor moet afmelden. Het model beslist nog steeds per aanroep of in aanmerking komend werk op de achtergrond wordt uitgevoerd.
+
+De status van achtergrondtaken is proces-lokaal en overleeft geen herstart van de app of verplaatsing tussen replica's. Achtergrondverzending verlengt ook niet de uitvoeringslimiet van de Code Interpreter-service; de normale server-side time-out van de implementatie blijft van toepassing.
+
+### Stateful Code Sessions [#stateful-code-sessions]
+
+Stateful code sessions stellen een LibreChat Agent in staat om één Code Interpreter sandbox-werkruimte per gesprek te hergebruiken. Bestanden, geïnstalleerde pakketten en de werkstatus blijven doorgaans behouden tussen uitvoeringen, waardoor iteratieve analyses en het genereren van bestanden in meerdere stappen efficiënter worden.
+
+<Callout type="warning" title="Zeer experimenteel">
+  Stateful Code Sessions bevinden zich in een vroege experimentele fase. Hun gedrag, configuratie, persistentie-eigenschappen en onderliggende integratie kunnen aanzienlijk veranderen. Beschouw de huidige implementatie niet als een stabiel productiecontract.
+</Callout>
+
+Deze functie is opt-in. Schakel `execute_code` en `stateful_code_sessions` in bij de [Agents endpoint capabilities](/docs/configuration/librechat_yaml/object_structure/agents#capabilities), schakel Code Interpreter in op de agent en zet vervolgens **Stateful code sessions** aan in de geavanceerde instellingen. De workspace kan op elk moment worden gereset. Sla belangrijke uitvoer op onder `/mnt/data` en vertrouw verder niet op de sessiestatus als duurzame opslag.
+
 ## De API gebruiken [#using-the-api]
 
 ### In LibreChat [#in-librechat]
@@ -65,6 +85,10 @@ De API heeft eersteklas ondersteuning in LibreChat via deze hoofdmethoden:
 2. **Handmatige uitvoering**: Gebruik de "Run Code"-knop in codeblokken binnen de chatinterface, zoals hier getoond:
 
 3. **[Programmatic Tool Calling](/docs/features/agents#programmatic-tool-calling)**: Schakel de `programmatic_tools` capability in en markeer geselecteerde MCP tools als Programmatic, zodat agents deze tools kunnen aansturen vanuit sandboxed code.
+
+4. **[Background Tool Calls](/docs/features/agents#background-tool-calls)**: Laat een agent in aanmerking komende code op de achtergrond uitvoeren en doorgaan terwijl deze draait.
+
+5. **[Stateful Code Sessions](/docs/features/agents#stateful-code-sessions)**: Experimenteel hergebruik van een werkruimte per gesprek voor de code-uitvoeringen van een agent.
 
 ![Code Interpreter in LibreChat](/images/agents/run_code.png)
 
@@ -98,12 +122,19 @@ Stel de `LIBRECHAT_CODE_BASEURL` omgevingsvariabele in om LibreChat te laten ver
 
 - Upload invoerbestanden
 - Genereerde outputs downloaden
-- Bekijk gegenereerde Office-, CSV-, tekst- en PDF-achtige artefacten inline wanneer LibreChat deze veilig kan extraheren/renderen
+- Bekijk gegenereerde Office-bestanden, inclusief PowerPoint `.pptx` presentaties en `.potx` sjablonen, plus CSV-, tekst- en PDF-achtige artefacten inline wanneer LibreChat deze veilig kan extraheren/renderen
+- Geef PNG-, JPEG-, GIF- en WebP-afbeeldingen die door de `read_file` tool van een Agent worden geretourneerd weer als bekijkbare artefacten
 - Beschikbare bestanden weergeven
 - Verwijder onnodige bestanden
 - Bestandssessies beheren
 
-Gegenereerde artifact-voorbeelden zijn opzettelijk beperkt in grootte. Stel `FILE_PREVIEW_MAX_EXTRACT_BYTES` in het `.env` bestand van LibreChat in om de limiet voor de bronbestandsgrootte voor inline voorbeeldextractie te wijzigen; grotere bestanden blijven beschikbaar om te downloaden.
+Gegenereerde artifact-voorbeelden zijn opzettelijk beperkt in grootte. Stel [`FILE_PREVIEW_MAX_EXTRACT_BYTES`](/docs/configuration/dotenv#inline-file-previews) in het `.env` bestand van LibreChat in om de limiet voor de bronbestandsgrootte voor inline preview-extractie te wijzigen; grotere bestanden blijven beschikbaar om te downloaden.
+
+Sandbox-afbeeldingen die via `read_file` worden geretourneerd, hebben een inline-limiet van 1 MiB. Grotere afbeeldingen blijven in de sandbox voor verwerking met `bash_tool`. `LIBRECHAT_CODE_IMAGE_CHUNK_BYTES` regelt alleen de transport-chunkgrootte die wordt gebruikt bij het lezen van in aanmerking komende afbeeldingen; het verhoogt de inline-limiet niet.
+
+<Callout type="warning" title="Upgrade-controle voor legacy code-outputs">
+  Implementaties die dezelfde Code Interpreter-bestandsnaam genereerden voordat de unieke output-file index werd toegevoegd, kunnen dubbele MongoDB-records bevatten die voorkomen dat de index wordt opgebouwd. Bekijk het herstelproces eerst met `npm run migrate:code-file-duplicates:dry-run` en pas het vervolgens toe met `npm run migrate:code-file-duplicates`. De migratie behoudt de nieuwste canonieke bestandsnaam, hernoemt oudere records met numerieke achtervoegsels en bouwt de unieke index na een succesvolle uitvoering.
+</Callout>
 
 ### Beperkingen [#limitations]
 - Code heeft geen toegang tot het netwerk

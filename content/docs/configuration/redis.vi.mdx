@@ -17,6 +17,9 @@ Hướng dẫn này bao gồm cách cấu hình Redis để lưu trữ bộ nh�
 - [Tối ưu hóa hiệu năng](#performance-tuning)
 - [Các ví dụ về cấu hình](#configuration-examples)
 - [Luồng có thể tiếp tục](#resumable-streams)
+- [Triển khai Giao thức Tạo (Generation Protocol Rollout)](#generation-protocol-rollout)
+- [Hợp nhất Stream Delta](#stream-delta-coalescing)
+- [Điều phối Danh mục MCP](#mcp-catalog-coordination)
 
 ## Thiết lập cơ bản [#basic-setup]
 
@@ -324,6 +327,42 @@ REDIS_URI=redis://127.0.0.1:6379
 # USE_REDIS_STREAMS=true  # Enabled by default when USE_REDIS=true
 ```
 
+### Triển khai Giao thức Tạo (Generation Protocol Rollout) [#generation-protocol-rollout]
+
+Giao thức thế hệ v2 bổ sung hàng đợi bền vững (durable queue), ngắt, tạm dừng/tiếp tục và các đảm bảo khôi phục được sử dụng bởi các lần chạy Agent hiện tại. Các triển khai dựa trên Redis cố ý giữ nguyên giao thức v1 khi `GENERATION_PROTOCOL_VERSION` không được thiết lập để các bản sao chạy các phiên bản LibreChat khác nhau có thể cùng tồn tại trong quá trình nâng cấp luân phiên (rolling upgrade).
+
+Sử dụng quy trình triển khai hai giai đoạn:
+
+1. Triển khai image LibreChat hỗ trợ v2 cho **mọi** bản sao (replica) có `GENERATION_PROTOCOL_VERSION` chưa được thiết lập hoặc được đặt thành `1`.
+2. Đợi các thế hệ đang hoạt động thuộc về hình ảnh trước đó hoàn tất hoặc giải phóng.
+3. Đặt `GENERATION_PROTOCOL_VERSION=2` và triển khai lại cùng một image đó.
+
+```bash filename=".env"
+USE_REDIS=true
+USE_REDIS_STREAMS=true
+GENERATION_PROTOCOL_VERSION=2
+```
+
+<Callout type="warning" title="An toàn triển khai cuốn chiếu">
+  Không bật protocol v2 cho đến khi mọi bản sao (replica) đều hỗ trợ nó. Sau khi các thế hệ v2 bắt đầu, không được quay lại phiên bản LibreChat tiền-v2 cho đến khi các thế hệ đó đã được giải phóng; các bản sao cũ hơn không thể vận hành an toàn trên trạng thái Redis của chúng.
+</Callout>
+
+Các luồng tạo nội dung trong bộ nhớ (in-memory generation streams) không chia sẻ trạng thái giữa các bản sao và sử dụng giao thức v2 theo mặc định, vì vậy chúng không yêu cầu quá trình chuyển đổi này.
+
+### Hợp nhất Stream Delta [#stream-delta-coalescing]
+
+Các luồng được hỗ trợ bởi Redis có thể xử lý hàng loạt các bản tin delta để giảm bớt các tập lệnh Redis, số lượt truy vấn khứ hồi và mức sử dụng CPU ở tốc độ token cao:
+
+```bash filename=".env"
+STREAM_DELTA_COALESCE_MS=25
+```
+
+Cài đặt này sẽ bị tắt khi không được thiết lập hoặc được đặt thành `0`, khuyến nghị nên để là `25` mili giây và các giá trị trên `1000` sẽ bị giới hạn. Việc xử lý theo lô (batching) có thể làm tăng thêm độ trễ phân phối lên tới một khoảng thời gian đã cấu hình.
+
+<Callout type="warning" title="An toàn triển khai cuốn chiếu">
+  Chỉ kích hoạt tính năng gộp (coalescing) sau khi mọi bản sao LibreChat đều hỗ trợ batch frames. Các subscriber cũ hơn sẽ loại bỏ các frame đã được gộp.
+</Callout>
+
 ### Các lợi ích chính (cho việc mở rộng theo chiều ngang) [#key-benefits-for-horizontal-scaling]
 
 - **Tính liên tục giữa các instance**: Người dùng có thể bắt đầu tạo phản hồi trên một máy chủ và tiếp tục trên một máy chủ khác
@@ -343,3 +382,9 @@ REDIS_URI=redis://node1:7001,redis://node2:7002,redis://node3:7003
 ```
 
 Xem [Resumable Streams](/docs/features/resumable_streams) để biết thêm chi tiết về tính năng này.
+
+## Điều phối MCP Catalog [#mcp-catalog-coordination]
+
+Khi Redis được bật, LibreChat điều phối các danh mục công cụ MCP ở cấp ứng dụng trên các bản sao (replicas). Việc công bố khi khởi động, đồng bộ hóa khi kết nối lại và các bản cập nhật `notifications/tools/list_changed` sử dụng các đánh dấu thế hệ và phiên bản để đảm bảo một bản sao cũ không thể ghi đè lên một danh mục mới hơn.
+
+Các triển khai Redis Cluster sử dụng các khóa danh mục an toàn theo slot và các thao tác cập nhật; không cần cài đặt MCP Redis riêng biệt. Xem [Quản lý máy chủ MCP](/docs/features/mcp#mcp-server-management) để biết về hành vi của danh mục động và khả năng sẵn sàng OAuth.

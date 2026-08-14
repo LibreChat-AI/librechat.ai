@@ -64,9 +64,9 @@ mcpServers:
 Servidores MCP integram-se perfeitamente aos Agents do LibreChat:
 
 1. Criar ou editar um agente
-2. Clique em "Add MCP Server Tools" para abrir a caixa de diálogo de Ferramentas (Tools Dialog) no painel do Agent Builder
-3. Selecione os servidores MCP após adicioná-los; cada um aparecerá como uma entrada única
-4. Ajuste as capacidades do seu agente ativando/desativando ferramentas individuais após adicioná-las
+2. Abra **Add tools** no Agent Builder e selecione **MCP**
+3. Selecione um servidor MCP; cada servidor aparece como uma única entrada de catálogo
+4. Expanda o servidor selecionado para ativar ou desativar ferramentas individuais
 5. Salve seu agente
 
 ![Ferramentas MCP no Construtor de Agentes](/images/mcp/mcp_ui_agent.png)
@@ -168,6 +168,8 @@ Ao adicionar um servidor MCP através da interface do usuário, você pode exigi
 
 Nos bastidores, o LibreChat cria automaticamente uma entrada `customUserVars` chamada `MCP_API_KEY` e configura o modelo de cabeçalho apropriado (por exemplo, `Authorization: Bearer {{MCP_API_KEY}}`). Cada usuário fornece sua própria chave através da Caixa de Diálogo de Seleção de Ferramentas MCP ao configurar um agente — a mesma interface usada para [`customUserVars` definidas em YAML](#user-provided-credentials).
 
+Quando uma chave de API de administrador ou de usuário é configurada, o LibreChat trata o servidor como autenticado por chave de API e ignora a detecção automática de OAuth. Uma configuração explícita de OAuth ainda tem precedência. Se um servidor com chave de API criado pela interface foi salvo por uma versão mais antiga do LibreChat e permanece travado em **OAuth Required**, edite e salve o servidor uma vez para que seus metadados de conexão armazenados sejam atualizados.
+
 <Callout type="warning">
 Por motivos de segurança, servidores MCP criados pela UI (provenientes do banco de dados) **apenas** podem resolver placeholders `customUserVars` (`{{VAR_NAME}}`). Variáveis de ambiente do lado do servidor (`${ENV_VAR}`), campos de perfil de usuário (`{{LIBRECHAT_USER_*}}`) e tokens OIDC (`{{LIBRECHAT_OPENID_*}}`) são bloqueados intencionalmente para evitar acesso não autorizado a segredos do servidor ou dados de outros usuários. Para suporte completo a placeholders, configure o servidor no `librechat.yaml` em vez disso.
 </Callout>
@@ -213,6 +215,7 @@ Para opções de configuração detalhadas e exemplos, veja:
 - [Configuração de Servidores MCP](/docs/configuration/librechat_yaml/object_structure/mcp_servers)
 - [Configuração de Agentes](/docs/configuration/librechat_yaml/object_structure/agents)
 - [Recursos Avançados de Agentes](/docs/features/agents#model-context-protocol-mcp)
+- [Agent Plugins](/docs/features/agent_plugins) para agrupar experimentalmente servidores MCP de implantação com Skills
 
 ## Gerenciamento de Servidor MCP [#mcp-server-management]
 
@@ -256,6 +259,16 @@ Você pode inicializar ou reinicializar servidores MCP diretamente da interface:
 - Configure variáveis de usuário personalizadas e clique no botão Authenticate/Initialize dependendo do tipo de autenticação do servidor
 
   <Video src="/videos/mcp_settings_init.mp4" title="Inicialização do painel de configurações MCP" />
+
+As falhas de inicialização agora distinguem um servidor inacessível, `customUserVars` ausentes, uma conexão OAuth que precisa ser autenticada novamente e uma falha de inicialização genérica. Use as variáveis ausentes nomeadas ou a ação de reautenticação na mensagem antes de tentar novamente; o servidor não precisa mais ser removido e adicionado novamente para esses casos.
+
+Se um Agent espera explicitamente ferramentas MCP, mas nenhuma pode ser resolvida no início da execução, o LibreChat falha a execução com orientações de conexão e acesso em vez de executar silenciosamente sem essas ferramentas.
+
+Servidores MCP que emitem `notifications/tools/list_changed` podem atualizar seu catálogo de ferramentas sem a necessidade de reiniciar o LibreChat. O LibreChat busca a lista atual da conexão ativa, publica as ferramentas adicionadas e para de anunciar as ferramentas que o servidor removeu. Reconexões também sincronizam o catálogo antes que a conexão seja considerada pronta.
+
+Para servidores HTTP com suporte a streaming, uma reconexão pode retornar brevemente um HTTP `409` quando o servidor ainda mantém um fluxo SSE autônomo obsoleto para a sessão antiga. O LibreChat trata isso como transitório, encerra a sessão obsoleta e restabelece a conexão automaticamente; nenhuma ação do operador é necessária quando a recuperação é bem-sucedida. Se a conexão restabelecida também falhar, o LibreChat continuará a exibir o erro de conexão subjacente.
+
+O LibreChat classifica respostas HTTP transmissíveis (Streamable) a partir do tipo de mídia `Content-Type` analisado, em vez de uma correspondência de substring. Parâmetros não podem fazer com que uma resposta que não seja SSE pareça ser `text/event-stream`, portanto, erros de tamanho de resposta continuam através do caminho de tratamento correto para SSE ou não-SSE.
 
 ### Visibilidade do Painel de Configurações MCP [#mcp-settings-panel-visibility]
 
@@ -305,7 +318,7 @@ Os placeholders disponíveis incluem:
 - `{{LIBRECHAT_USER_USERNAME}}` - Nome de usuário
 - E muitos outros (veja [Configuração de Servidores MCP](/docs/configuration/librechat_yaml/object_structure/mcp_servers#headers) para a lista completa)
 
-Servidores MCP definidos em YAML também podem usar os placeholders `{{LIBRECHAT_OPENID_*}}`, `{{LIBRECHAT_GRAPH_*}}` e `{{LIBRECHAT_BODY_*}}`. Os valores de `{{LIBRECHAT_BODY_*}}` possuem escopo de requisição, portanto o LibreChat cria conexões para a execução ativa, reutiliza-as em chamadas de ferramentas durante essa execução e as encerra quando a requisição termina. Servidores com escopo de requisição são excluídos do cache persistente de ferramentas para que cabeçalhos e URLs específicos da requisição não sejam reutilizados fora da execução ativa. Os placeholders de usuário, OpenID e Graph possuem escopo de usuário; transportes HTTP atualizam seus cabeçalhos resolvidos antes de cada chamada de ferramenta sem exigir uma reconexão por conta própria.
+Servidores MCP definidos em YAML também podem usar os placeholders `{{LIBRECHAT_OPENID_*}}`, `{{LIBRECHAT_GRAPH_*}}` e `{{LIBRECHAT_BODY_*}}`. Os valores de `{{LIBRECHAT_BODY_*}}` são delimitados pelo escopo da requisição, portanto, o LibreChat cria conexões para a execução ativa, reutiliza-as em chamadas de ferramentas durante essa execução e as encerra quando a requisição termina. Servidores com escopo de requisição são excluídos do cache persistente de ferramentas para que cabeçalhos e URLs específicos da requisição não sejam reutilizados fora da execução ativa. Como sua lista de ferramentas não pode ser resolvida antes que uma requisição de chat exista, o Agent Builder expõe uma seleção de ferramentas de tempo de execução para o servidor completo e resolve suas ferramentas no momento da execução. A conclusão do OAuth armazena a autorização, mas adia a conexão até que a primeira execução forneça o contexto da requisição. Os placeholders de usuário, OpenID e Graph são delimitados pelo escopo do usuário; transportes HTTP atualizam seus cabeçalhos resolvidos antes de cada chamada de ferramenta sem exigir uma reconexão por conta própria.
 
 ### Instruções do Servidor [#server-instructions]
 
@@ -325,9 +338,11 @@ mcpServers:
 
 Opções:
 
-- `true`: Usar instruções fornecidas pelo servidor
+- `true`: Use as instruções anunciadas pelo servidor quando disponíveis
 - `false`: Desativar instruções
-- `string`: Instruções personalizadas (mostradas acima)
+- `string`: Use as instruções personalizadas literalmente (mostradas acima)
+
+O LibreChat preserva esta declaração configurada separadamente das instruções obtidas durante a inspeção do servidor. Portanto, uma declaração `true` permanece habilitada durante a inspeção e recarregamentos do registro em cache, enquanto uma string personalizada permanece como autoritativa.
 
 ### Configuração de Timeout [#timeout-configuration]
 
@@ -403,6 +418,9 @@ Os servidores MCP do LibreChat suportam OAuth 2.0 com:
 - **Authorization Code Flow with PKCE**: Recomendado para segurança máxima
 - **Descoberta de Cliente**: Registro automático de cliente quando suportado pelo provedor OAuth
 - **Refresh Tokens**: Renovação automática de token quando disponível
+- **Descoberta do endpoint de token**: Clientes pré-configurados podem descobrir se o provedor espera credenciais de cliente no corpo da requisição POST ou em um cabeçalho de autorização HTTP Basic
+
+No MCP Builder, o **Token Exchange Method** oferece **Auto**, **Default (POST request)** e **Basic authorization header**. O Auto deixa o método não definido para que o LibreChat possa usar metadados de provedores confiáveis, recorrendo à autenticação Basic quando o provedor não anuncia um método.
 
 #### Exemplos de configuração [#configuration-examples]
 
@@ -431,9 +449,9 @@ Ao configurar pela primeira vez um servidor MCP habilitado para OAuth:
 
 1. **Conexão Inicial**: O LibreChat tenta se conectar ao servidor MCP
 2. **Autenticação Necessária**: Se nenhum token válido existir, você verá um indicador de autenticação OAuth no menu suspenso de chat para aquele servidor
-3. **Interface de Botão**: Clique no botão indicador de autenticação para abrir o MCPConfigDialog e iniciar o fluxo OAuth
-4. **Config Dialog**: Clique no botão Authenticate no MCPConfigDialog para abrir a página de autenticação OAuth no seu navegador
-5. **Redirecionamento de Navegador**: O LibreChat abre o provedor OAuth no seu navegador
+3. **Interface de Botão**: Clique no indicador de autenticação para abrir a caixa de diálogo de configuração do MCP e iniciar o fluxo OAuth
+4. **Continue ou use outro dispositivo**: Continue no navegador atual, copie o link de autorização ou exiba um QR code para abri-lo em outro dispositivo
+5. **Redirecionamento de Navegador**: Conclua a autenticação com o provedor OAuth
 6. **Tratamento de Retorno**: O LibreChat processa automaticamente o callback de OAuth assim que você se autentica
 7. **Armazenamento de Tokens**: O LibreChat armazena os tokens de forma segura para uso futuro
 8. **Conexão Estabelecida**: Uma vez autenticado, o servidor MCP estará conectado e você poderá usá-lo em seu chat
@@ -477,8 +495,14 @@ O LibreChat gerencia tokens OAuth de forma inteligente:
 
 - **Armazenamento Seguro**: Os tokens são criptografados e armazenados de forma segura
 - **Atualização Automática**: Quando tokens de atualização estão disponíveis, o LibreChat renova automaticamente tokens de acesso expirados
-- **Recuperação Silenciosa de 401**: Se uma conexão MCP OAuth receber um erro 401 durante a sessão e um token de atualização estiver disponível, o LibreChat tentará uma atualização silenciosa antes de exibir um novo prompt de autenticação.
+- **Recuperação Silenciosa de 401**: Se uma conexão MCP OAuth receber uma rejeição de autenticação no meio da sessão, o LibreChat coordena uma tentativa limitada de atualização e reconexão por usuário e servidor. Chamadores simultâneos compartilham esse resultado de recuperação antes que o LibreChat exiba um novo prompt de autenticação.
 - **Gerenciamento de Sessão**: Cada usuário mantém suas próprias sessões OAuth para ambientes multiusuário
+
+Clientes OAuth e tokens armazenados estão vinculados à URL do servidor MCP e às configurações de cliente/endpoint OAuth. Alterar essas configurações exige que os usuários se autentiquem novamente. Ao editar um servidor criado pela interface que retém um `client_secret` armazenado, insira novamente o segredo ao alterar um campo de vinculação, como a URL do servidor, ID do cliente, URL de autorização, URL do token ou método de autenticação de token.
+
+Em implantações com escalonamento horizontal, o status do fluxo OAuth e a prontidão do token vinculado podem ser reconciliados entre os pods do LibreChat. A UI relata que um servidor está pronto apenas após a inicialização pós-OAuth ser bem-sucedida, mesmo quando o callback e a sondagem de status atingem pods diferentes. Callbacks de tentativas substituídas são rejeitados.
+
+Quando o Redis está habilitado, as gerações de catálogo MCP em nível de aplicação e as revisões de publicação são coordenadas entre as réplicas. Implantações de Redis Cluster utilizam chaves de catálogo e atualizações seguras para slots, portanto, a sincronização na inicialização e as atualizações de `tools/list_changed` não exigem um layout de Redis de nó único.
 
 Cada usuário será solicitado a autenticar com seu próprio login OAuth ao usar um servidor MCP habilitado para OAuth pela primeira vez. Isso garante que os detalhes de conexão e autenticação sejam exclusivos para cada usuário, mantendo a segurança e a privacidade em ambientes multiusuário.
 
@@ -515,8 +539,6 @@ Exemplo de atualização automática de token:
 3. **Monitorar expiração de tokens**: Verifique os logs para problemas de autenticação
 4. **Plano para reautenticação**: Alguns provedores não suportam tokens de atualização
 
-**Nota**: A configuração de OAuth baseada na interface do usuário chegará em breve, o que simplificará o processo de autenticação diretamente da interface do LibreChat.
-
 ## Server Transports [#server-transports]
 
 Servidores MCP podem ser configurados para usar diferentes mecanismos de transporte:
@@ -525,6 +547,7 @@ Servidores MCP podem ser configurados para usar diferentes mecanismos de transpo
 
 - Funciona bem para ambientes locais de usuário único
 - Não escalável para implantações remotas ou em nuvem
+- O SDK MCP integrado limita cada mensagem STDIO individual a 10 MB. Um único resultado maior fecha o transporte com um erro; este limite é separado do tamanho total de uma sessão ou stream.
 
 **Servidores Server-Sent Events (SSE)**
 

@@ -39,6 +39,8 @@ LibreChatのCode Interpreter APIは、シンプルなAPIインターフェース
 - 安全なファイル管理
 - セッションベースのファイル整理
 
+LibreChatは、エージェントの実行前に、参照されている会話ファイルを現在のCode Interpreter環境に復元します。必要なCode Interpreterファイルがすべて復元に失敗した場合、実行はモデルの呼び出し前に停止し、古い参照のまま続行するのではなく、ユーザーにファイルの再添付を求めます。
+
 ### セキュリティと利便性 [#security--convenience]
 
 - 安全なサンドボックス化された実行環境
@@ -52,6 +54,24 @@ Programmatic Tool Calling（プログラムによるツール呼び出し）を�
 
 サンドボックスは依然として一般的なネットワークアクセスを受け取りません。ツール呼び出しは Code Interpreter Tool Call Server および LibreChat の登録済みツールマップを介して仲介されるため、エージェントが利用可能なツールのみが呼び出し可能です。
 
+### Background Code Execution [#background-code-execution]
+
+バックグラウンド実行により、Agentは長時間実行されるコードやシェル作業をディスパッチし、会話を継続し、後で `check_background_task` を通じて結果を取得できるようになります。LibreChatのチャットでは、作業が完了すると、標準出力と生成されたファイルが元のコード呼び出し箇所に表示されます。生成されたファイルは、Agentがまだタスクをポーリングしていない場合でも、後続のターンに向けて保持されます。
+
+この機能は、デプロイメントレベルでオプトインする必要があります。[Agents endpoint capabilities](/docs/configuration/librechat_yaml/object_structure/agents#capabilities) の `execute_code` と並べて `run_in_background` を追加し、エージェントで Code Interpreter を有効にしてください。コード実行とシェル呼び出しは自動的にバックグラウンド実行の対象となります。エージェントがオプトアウトすべき場合は、Code Interpreter ツールの設定で **Background execution** をオフにしてください。モデルは、対象となる作業をバックグラウンドで実行するかどうかを呼び出しごとに判断します。
+
+バックグラウンドタスクの状態はプロセスローカルであり、アプリの再起動やレプリカ間の移動では保持されません。また、バックグラウンドディスパッチは Code Interpreter サービスの実行制限を延長するものではなく、デプロイメントの通常のサーバーサイドタイムアウトが引き続き適用されます。
+
+### ステートフルなコードセッション [#stateful-code-sessions]
+
+Stateful code sessions（ステートフルなコードセッション）により、LibreChat Agentは1つの会話につき1つのCode Interpreterサンドボックスワークスペースを再利用できるようになります。ファイル、インストール済みのパッケージ、および作業状態は通常、実行間で引き継がれるため、反復的な分析や複数ステップのファイル生成がより効率的になります。
+
+<Callout type="warning" title="非常に実験的">
+  Stateful Code Sessionsは初期の実験段階にあります。その動作、設定、永続性の特性、および基盤となる統合は大幅に変更される可能性があります。現在の実装を安定した本番環境向けの契約として扱わないでください。
+</Callout>
+
+この機能はオプトイン形式です。[Agents endpoint capabilities](/docs/configuration/librechat_yaml/object_structure/agents#capabilities) で `execute_code` と `stateful_code_sessions` を有効にし、エージェントで Code Interpreter を有効にした後、その詳細設定で **Stateful code sessions** をオンにしてください。ワークスペースはいつでもリセットされる可能性があります。重要な出力は `/mnt/data` に保存し、それ以外でセッション状態を永続的なストレージとして信頼しないでください。
+
 ## APIの使用 [#using-the-api]
 
 ### LibreChatにて [#in-librechat]
@@ -63,6 +83,10 @@ LibreChatでは、以下の主要な方法を通じてAPIがファーストク�
 2. **手動実行**: チャットインターフェース内のコードブロックにある「Run Code」ボタンを使用します（以下を参照）。
 
 3. **[Programmatic Tool Calling](/docs/features/agents#programmatic-tool-calling)**: `programmatic_tools` 機能を有効にし、選択した MCP ツールを Programmatic としてマークすることで、エージェントがサンドボックス化されたコードからそれらのツールをオーケストレーションできるようにします。
+
+4. **[Background Tool Calls](/docs/features/agents#background-tool-calls)**: エージェントが適切なコードをバックグラウンドで実行し、その実行中も処理を継続できるようにします。
+
+5. **[Stateful Code Sessions](/docs/features/agents#stateful-code-sessions)**: エージェントのコード実行全体で、会話ごとのワークスペースを実験的に再利用します。
 
 ![LibreChatでのコードインタープリター](/images/agents/run_code.png)
 
@@ -96,12 +120,19 @@ Code Interpreter APIは、シンプルなAPIキー認証を使用して任意の
 
 - 入力ファイルをアップロード
 - 生成された出力をダウンロード
-- LibreChatが安全に抽出・レンダリングできる場合、生成されたOffice、CSV、テキスト、およびPDFのようなアーティファクトをインラインでプレビューします。
+- LibreChatが安全に抽出・レンダリングできる場合、PowerPointの `.pptx` プレゼンテーションや `.potx` テンプレート、CSV、テキスト、PDFのようなアーティファクトを含む、生成されたOfficeファイルをインラインでプレビューします。
+- Agentの `read_file` ツールによって返されたPNG、JPEG、GIF、およびWebP画像を、閲覧可能なアーティファクトとして表示します。
 - 利用可能なファイルの一覧を表示
 - 不要なファイルを削除
 - ファイルセッションの管理
 
-生成されたアーティファクトのプレビューは、意図的にサイズ制限が設けられています。インラインプレビュー抽出のソースファイルサイズ制限を変更するには、LibreChatの`.env`で`FILE_PREVIEW_MAX_EXTRACT_BYTES`を設定してください。これより大きいファイルは、引き続きダウンロード可能です。
+生成されたアーティファクトのプレビューは、意図的にサイズ制限が設けられています。インラインプレビュー抽出のソースファイルサイズ制限を変更するには、LibreChatの`.env`で[`FILE_PREVIEW_MAX_EXTRACT_BYTES`](/docs/configuration/dotenv#inline-file-previews)を設定してください。これより大きいファイルは、引き続きダウンロード可能です。
+
+`read_file` を通じて返されるサンドボックス内の画像には、1 MiB のインライン制限があります。これより大きい画像は、`bash_tool` で処理するためにサンドボックス内に保持されます。`LIBRECHAT_CODE_IMAGE_CHUNK_BYTES` は、対象となる画像を読み取る際に使用される転送チャンクサイズのみを制御するものであり、インライン制限を引き上げるものではありません。
+
+<Callout type="warning" title="レガシーコード出力のアップグレードチェック">
+  一意の出力ファイルインデックスが追加される前に、同じ Code Interpreter のファイル名を再生成したデプロイメントでは、インデックスの構築を妨げる重複した MongoDB レコードが存在する可能性があります。`npm run migrate:code-file-duplicates:dry-run` で修復のプレビューを行い、その後 `npm run migrate:code-file-duplicates` で適用してください。このマイグレーションでは、最新の正規ファイル名が保持され、古いレコードには数値のサフィックスが付けられて名前が変更されます。実行が成功した後に、一意のインデックスが構築されます。
+</Callout>
 
 ### 制限事項 [#limitations]
 - コードはネットワークにアクセスできません
