@@ -146,14 +146,14 @@ bun dev                 # http://localhost:3000
 | `VITE_API_BASE_URL`             | **Yes** in Docker     | `http://localhost:3080` (local dev only)                                          | Browser-facing URL of the LibreChat API server, used for OAuth redirects.                                                                                                                 |
 | `API_SERVER_URL`                | No                    | Falls back to `VITE_API_BASE_URL`                                                 | Server-side URL for LibreChat API calls. Useful when the admin-panel server reaches LibreChat on a different URL than the browser (e.g. internal Kubernetes service vs. public hostname). |
 | `PORT`                          | No                    | `3000`                                                                            | Port the admin panel listens on.                                                                                                                                                          |
-| `ADMIN_PANEL_SESSION_SECRET`    | **Yes** in production | Falls back to `CREDS_KEY` in bundled LibreChat Docker stacks                      | LibreChat-side variable mapped to the admin panel's `SESSION_SECRET` for the bundled admin-panel service. Generate a unique value of at least 32 characters for production.               |
+| `ADMIN_PANEL_SESSION_SECRET`    | **Yes**               | _unset_                                                                           | LibreChat-side variable mapped to the admin panel's `SESSION_SECRET` for the bundled admin-panel service. Generate a unique value of at least 32 characters before starting the panel.    |
 | `ADMIN_PANEL_PORT`              | No                    | `3000`                                                                            | Host port exposed by the bundled admin-panel service in the default `docker-compose.yml`.                                                                                                  |
 | `ADMIN_SSO_ONLY`                | No                    | `false`                                                                           | Hide the email/password form, forcing SSO-only login.                                                                                                                                     |
 | `ADMIN_SESSION_IDLE_TIMEOUT_MS` | No                    | `1800000` (30 min)                                                                | Session idle timeout in milliseconds.                                                                                                                                                     |
 | `SESSION_COOKIE_SECURE`         | No                    | `true` in production                                                              | Whether the session cookie requires HTTPS.                                                                                                                                                |
 | `ADMIN_PANEL_METRICS_SECRET`    | No                    | _unset_                                                                           | Bearer token required to scrape the `/metrics` Prometheus endpoint. The endpoint returns `401` when unset or mismatched.                                                                  |
 
-In LibreChat's bundled Docker stacks, the admin panel runs as an `admin-panel` service. The default `docker-compose.yml` exposes it on `ADMIN_PANEL_PORT`; `deploy-compose.yml` routes it through nginx at `http://admin.localhost` and sets `ADMIN_PANEL_URL` for the API service.
+In LibreChat's bundled Docker stacks, the admin panel runs as an `admin-panel` service. The default `docker-compose.yml` exposes it on `ADMIN_PANEL_PORT`; `deploy-compose.yml` routes it through nginx at `http://admin.localhost` and sets `ADMIN_PANEL_URL` for the API service. The panel refuses to start until `ADMIN_PANEL_SESSION_SECRET` is configured.
 
 ### LibreChat Redirect URL
 
@@ -162,6 +162,8 @@ When the admin panel is hosted on a separate URL from LibreChat, set `ADMIN_PANE
 ```bash filename=".env"
 ADMIN_PANEL_URL=https://admin.example.com/admin
 ```
+
+When set, LibreChat also shows an **Admin Panel** link to administrators under **Settings -> General**. Non-admin users do not see the link.
 
 For Helm deployments, set `librechat.adminPanelUrl` in your values file. The chart renders it as `ADMIN_PANEL_URL` for LibreChat's admin OAuth flow:
 
@@ -198,6 +200,8 @@ Admin access is verified server-side by LibreChat for every request. The account
 
 Sessions are cookie-based, encrypted with `SESSION_SECRET`, and idle-expire per `ADMIN_SESSION_IDLE_TIMEOUT_MS`.
 
+Google admin SSO requests offline access and consent so the panel can refresh an expired LibreChat admin token without forcing an immediate new login. Configure both `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`, and register `${DOMAIN_SERVER}/api/admin/oauth/google/callback` with Google. Each refresh rechecks the account's provider identity, ban state, allowed email domain, tenant, and current admin access; losing access ends the admin session.
+
 ## Configuration Management
 
 The panel renders the LibreChat config as a dynamic form driven by the config schema. This has two useful properties:
@@ -210,6 +214,18 @@ This is the surface behind LibreChat's [DB-backed per-principal configuration ov
 - Give a "Research" group higher `recursionLimit` and additional endpoints
 - Let a "FinanceAdmins" role manage MCP servers while regular users can only use them
 - Scope stricter `interface` permissions to external-contractor groups
+
+### Section-Scoped Delegation
+
+Configuration grants can be broad (`read:configs`, `manage:configs`) or limited to one top-level section (`read:configs:<section>`, `manage:configs:<section>`). A section-scoped reader receives a filtered configuration response containing only authorized sections instead of being denied the entire request. Section-level manage grants imply read access to the same section; broad manage access implies broad read access.
+
+Examples include `read:configs:interface`, `manage:configs:endpoints`, and `manage:configs:langfuse`. Delegated users still need `access:admin` to enter the admin surface. Every create, patch, tombstone, or delete mutation of the base `__base__` profile requires broad `manage:configs`; section-scoped management applies to role, group, and user overrides.
+
+### Stored Secrets
+
+When registered secret fields are written through the admin configuration API, LibreChat encrypts literal values at rest and returns only server-generated masked previews. This currently covers Langfuse, OCR, speech, web-search, Assistants, Azure Assistants, and each `endpoints.custom[].apiKey`. Omitting a secret during a later edit preserves the stored value.
+
+Supported environment references remain readable references for fields that allow them. Custom endpoint API keys also preserve `${ENV_VAR}` and `user_provided` values instead of encrypting them. Secret handling is registry-based: arbitrary values in generic maps such as custom headers or MCP configuration are not automatically encrypted, so continue to use environment references or the feature's dedicated credential mechanism there.
 
 ## Related
 
