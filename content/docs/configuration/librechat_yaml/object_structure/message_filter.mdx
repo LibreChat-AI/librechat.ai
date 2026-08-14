@@ -1,15 +1,117 @@
 ---
-title: 'Message Filter Object Structure'
+title: 'Content Filter Object Structure'
 icon: ShieldAlert
 ---
 
 ## Overview
 
-The `messageFilter` object configures server-side message filters. The supported filter type is `messageFilter.pii`.
+LibreChat provides two server-side filter configurations:
 
-`messageFilter.pii` rejects submitted message text that matches credential-shaped starter patterns or operator-defined regular expressions before the text reaches moderation, a model request, or message persistence.
+- `filters` applies source-aware policy to selected fields across messages, prompts, agents, files, skills, memories, tools, and other reusable content.
+- `messageFilter` is the legacy message-text filter. Existing deployments can keep using it while migrating to `filters.messages`.
 
-## Example
+Both are opt-in. When both are configured, both policies apply.
+
+<Callout type="warning" title="Base configuration only">
+  `filters` is loaded only from the base `librechat.yaml`. Database, role, group, and user
+  overrides cannot add, change, or remove it. In a multi-replica deployment, roll out or restart
+  every replica together and verify that each loaded the same base configuration before treating
+  the policy as active.
+</Callout>
+
+## Source-Aware Filters
+
+Each source has an optional `pii` policy. Omit `filters`, a source, or its `pii` block to leave that scope disabled.
+
+```yaml filename="librechat.yaml"
+filters:
+  messages:
+    unattributedAssistantContent: model_output
+    pii:
+      fields: [text, summary, attachment_reference]
+      starterPatterns: [sk_prefix, bearer_header, api_key_header]
+      customPatterns:
+        - id: organization_identifier
+          label: Organization identifier
+          regex: 'ORG-[A-Z0-9]{12}'
+  files:
+    pii:
+      fields: [name, content, extracted_text, transcript]
+      uninspectable: block
+  skills:
+    pii:
+      fields: [name, description, instructions, imported_text, file_text]
+```
+
+### Pattern Configuration
+
+For each enabled source:
+
+- Omit `fields` to inspect every supported field for that source. An explicit list must contain between 1 and 256 supported field names.
+- Omit `starterPatterns` to enable the full starter catalog. Set it to `[]` to disable starter patterns while retaining any `customPatterns`.
+- Configure `customPatterns` with an `id`, user-facing `label`, and `regex`.
+
+The built-in starter pattern IDs are:
+
+- `sk_prefix`: `sk-`-style token prefixes.
+- `bearer_header`: bearer tokens in text.
+- `api_key_header`: `api-key` header-shaped text.
+
+Custom patterns use RE2JS's bounded, linear-time regular-expression syntax. Backreferences and lookaround are unsupported, and some escapes differ from JavaScript regular expressions. LibreChat rejects invalid or unsupported patterns while loading the configuration.
+
+### Supported Sources and Fields
+
+| Source | Supported fields |
+| --- | --- |
+| `messages` | `name`, `text`, `summary`, `quote`, `answer`, `decision_response`, `decision_reason`, `content_part`, `attachment_reference`, `assembled_context` |
+| `prompts` | `name`, `description`, `oneliner`, `category`, `command`, `text`, `preset_text`, `system`, `context`, `instructions`, `additional_instructions`, `greeting`, `example_input`, `example_output` |
+| `agentInstructions` | `name`, `category`, `description`, `instructions`, `additional_instructions`, `edge_description`, `edge_prompt`, `edge_prompt_key`, `artifacts`, `support_contact_name`, `support_contact_email` |
+| `conversationStarters` | `text` |
+| `conversationTitles` | `title` |
+| `feedback` | `text` |
+| `skills` | `name`, `display_title`, `description`, `category`, `frontmatter`, `instructions`, `imported_text`, `file_name`, `file_text` |
+| `memories` | `key`, `value`, `summary` |
+| `files` | `name`, `content`, `extracted_text`, `transcript`, `uri` |
+| `toolArguments` | `name`, `arguments`, `output` |
+| `modelParameters` | `stop`, `request_fields`, `response_format`, `metadata` |
+| `actionMetadata` | `raw_spec`, `domain`, `privacy_policy_url`, `authorization_type`, `custom_auth_header`, `authorization_content_type`, `authorization_url`, `client_url`, `scope`, `token_exchange_method`, `api_key`, `oauth_client_id`, `oauth_client_secret` |
+
+### Message Provenance
+
+`filters.messages.unattributedAssistantContent` controls how legacy assistant content without provenance is classified:
+
+- `model_output` (default): preserves legacy behavior by treating unattributed assistant content as model output.
+- `inspect`: treats otherwise unattributed assistant content, including selected attachment projections, as submitted content. Assistant content explicitly marked as model output remains exempt.
+
+This classification can affect an enabled legacy `messageFilter.pii` policy even when `filters.messages.pii` is omitted. Inventory or migrate old records before relying on retroactive inspection.
+
+### Uninspectable Files
+
+`filters.files.pii.uninspectable` controls selected file content that LibreChat cannot inspect, including opaque or oversized content:
+
+- `allow` (default): preserves compatibility and permits the content.
+- `block`: rejects it before provider or storage side effects.
+
+Roll out `block` deliberately. It can make older files unavailable for reuse until inspectable text is present.
+
+### Stored and Reused Content
+
+Enabling or changing a policy does not rewrite or delete stored records. LibreChat applies the current policy when protected content is submitted, copied, shared, reused, or becomes model-bound.
+
+Safe metadata edits can still succeed so blocked records remain repairable. In management views, blocked prompt or preset fields can be blank with `contentFilterBlocked: true`; blocked prompt groups return an error on direct retrieval and are omitted from collection and reuse responses. A rejected background memory update can be skipped while the main chat response continues.
+
+Source-aware text matches return HTTP `400` with `content_filter_block`. Uninspectable file rejections use `content_filter_uninspectable`.
+
+### Limits
+
+- Up to 256 fields, starter patterns, or custom patterns per source.
+- Up to 256 custom patterns across the full configuration.
+- Pattern IDs up to 256 characters, labels up to 512 characters, and regexes up to 512 characters.
+- Up to 8,192 total regex characters and 8,192 compiled filter instructions.
+
+## Legacy `messageFilter`
+
+`messageFilter.pii` rejects matching caller-supplied message text before moderation, model requests, or persistence with `message_filter_pii_block`. It does not inspect file contents or the other reusable sources covered by `filters`.
 
 ```yaml filename="librechat.yaml"
 messageFilter:
@@ -24,63 +126,4 @@ messageFilter:
         regex: 'sk-ant-[A-Za-z0-9_-]{20,}'
 ```
 
-## Fields
-
-### messageFilter.pii
-
-<OptionTable
-  options={[
-    [
-      'pii.starterPatterns',
-      'Array of Strings',
-      'Optional subset of built-in starter pattern ids to enable. Omit to enable all starter patterns.',
-      'starterPatterns: [sk_prefix, bearer_header]',
-    ],
-    [
-      'pii.customPatterns',
-      'Array of Objects',
-      'Operator-defined patterns. Each entry requires `id`, `label`, and `regex`.',
-      '',
-    ],
-  ]}
-/>
-
-**Built-in starter pattern ids:**
-
-- `sk_prefix`: matches `sk-` style token prefixes.
-- `bearer_header`: matches bearer tokens in text.
-- `api_key_header`: matches `api-key` header-shaped text.
-
-### customPatterns
-
-<OptionTable
-  options={[
-    ['id', 'String', 'Stable pattern id used for logs and debugging.', 'id: anthropic_api_key'],
-    [
-      'label',
-      'String',
-      'Human-readable label shown in the rejection message.',
-      'label: Anthropic API key',
-    ],
-    [
-      'regex',
-      'String',
-      'RE2 regular expression. LibreChat validates it at config load time and applies it globally.',
-      "regex: 'sk-ant-[A-Za-z0-9_-]{20,}'",
-    ],
-  ]}
-/>
-
-Custom patterns use the linear-time RE2 engine. Backreferences and lookaround are not supported, and some escapes differ from JavaScript regular expressions. LibreChat rejects patterns that RE2 cannot compile when loading the configuration.
-
-## Behavior
-
-When submitted message text matches a configured PII pattern, LibreChat returns HTTP `400` with `message_filter_pii_block` and a message asking the caller to remove the matched credential type.
-
-The filter checks:
-
-- Chat route user text submitted through the LibreChat UI.
-- Text content across all caller-supplied message roles in OpenAI-compatible Chat Completions requests.
-- Text content across all caller-supplied message roles in OpenAI-compatible Responses requests.
-
-The filter evaluates text supplied in the request body. It does not scan file contents.
+The legacy filter checks chat-route user text and caller-supplied text across all roles in OpenAI-compatible Chat Completions and Responses requests. It uses the same built-in IDs and linear-time custom-regex rules described above.

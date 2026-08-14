@@ -21,8 +21,10 @@ LibreChat's Code Interpreter API provides a secure and hassle-free way to execut
 ## Getting Started
 
 1. Deploy the [code-interpreter](https://github.com/ClickHouse/code-interpreter) service (Docker Compose or Helm, see the repository's README)
-2. Point LibreChat at it with the `LIBRECHAT_CODE_BASEURL` and `LIBRECHAT_CODE_API_KEY` environment variables
-3. Start executing code and generating files securely through LibreChat's Agents or the "Run Code" button
+2. Point LibreChat at it with `LIBRECHAT_CODE_BASEURL`
+3. Configure [LibreChat JWT authentication](#self-hosted-jwt-authentication) for the current open-source service, or set `LIBRECHAT_CODE_API_KEY` for an API-key-compatible deployment
+4. To experiment with stateful Agent sessions, deploy a separate `stateful`-profile Code Interpreter route and configure `LIBRECHAT_CODE_BASEURL_STATEFUL` or named [`statefulCodeSessions.environments`](/docs/configuration/librechat_yaml/object_structure/agents#statefulcodesessions)
+5. Start executing code and generating files securely through LibreChat's Agents or the "Run Code" button
 
 ## Key Features
 
@@ -52,25 +54,59 @@ LibreChat restores referenced conversation files into the current Code Interpret
 
 Programmatic Tool Calling lets LibreChat Agents route selected MCP tools through the Code Interpreter sandbox. Instead of asking the model to call each tool directly, LibreChat provides a Code Interpreter-backed orchestration tool; generated sandbox code can call registered tool stubs, use loops and conditionals, process intermediate results, and return a final answer.
 
-The sandbox still does not receive general network access. Tool calls are brokered through the Code Interpreter Tool Call Server and LibreChat's registered tool map, so only tools available to the agent can be called.
+The sandbox still does not receive general network access. Tool calls are brokered through the Code Interpreter Tool Call Server. LibreChat intersects the live caller-capability projection with its trusted registry, so only active programmatic tools already registered for the Agent can be called and a request cannot expand its own access.
+
+Programmatic tools require Code Interpreter on the Agent. Their toggles stay disabled until Code Interpreter is selected, and removing Code Interpreter clears existing Programmatic selections. LibreChat also strips stale programmatic caller options from Agent create, update, duplicate, and version-restore operations when `execute_code` or the Code Interpreter tool is unavailable.
+
+During a programmatic execution, expand the Code Interpreter card to see a live terminal-style trace of inner tool calls with bounded argument previews, statuses, durations, and failures. This trace helps inspect the program while it runs, but it is not persisted across a page reload.
 
 ### Background Code Execution
 
-Background execution lets an Agent dispatch long-running code or shell work, continue the conversation, and retrieve the result later through `check_background_task`. In LibreChat chat, when the work finishes, stdout and generated files appear on the original code call. Generated files are persisted for subsequent turns even if the Agent has not polled the task yet.
+Background execution lets an Agent dispatch long-running code or shell work and continue the conversation. For saved Agents, supported content-only completions are delivered automatically in a follow-up continuation by default. `check_background_task` remains available for explicit status, control, live artifacts, and recovery. In LibreChat chat, when the work finishes, stdout and generated files appear on the original code call and are persisted for subsequent turns.
 
 This feature is opt-in at the deployment level. Add `run_in_background` alongside `execute_code` in the [Agents endpoint capabilities](/docs/configuration/librechat_yaml/object_structure/agents#capabilities), then enable Code Interpreter on the agent. Code execution and shell calls become background-eligible automatically; turn off **Background execution** in the Code Interpreter tool settings when an agent should opt out. The model still decides per call whether to dispatch eligible work in the background.
 
-Background task state is process-local and does not survive an app restart or move between replicas. Background dispatch also does not extend the Code Interpreter service's execution limit; the deployment's normal server-side timeout still applies.
+Ordinary background execution remains process-local and does not survive the loss of its app worker. Once a content-only terminal result is persisted, its automatic delivery is durable and may continue on another replica; tasks with a live artifact still require polling on the owning run. Set [`endpoints.agents.backgroundTasks.completionWakeups: false`](/docs/configuration/librechat_yaml/object_structure/agents#backgroundtasks) to require polling for every result. Background dispatch does not extend the Code Interpreter service's execution limit; the deployment's normal server-side timeout still applies.
 
 ### Stateful Code Sessions
 
-Stateful code sessions let a LibreChat Agent reuse one Code Interpreter sandbox workspace per conversation. Files, installed packages, and working state usually carry over between executions, making iterative analysis and multi-step file generation more efficient.
+Stateful code sessions let a LibreChat Agent reuse one Code Interpreter sandbox workspace across executions. Files, installed packages, and working state usually carry over, making iterative analysis and multi-step file generation more efficient. Each agent selects one workspace scope:
+
+- **User workspace (recommended):** one workspace for the signed-in user across stateful-enabled agents
+- **Agent + user workspace:** one workspace for each user and agent combination
+- **Conversation workspace:** one workspace for each user and conversation
+
+For newly created Agents, the initial scope comes from **Settings > Data Controls > Code execution > Default stateful workspace**. The personal setting defaults to **User workspace**; changing it does not modify existing Agents or enable stateful sessions. Deployment administrators can restrict selectable scopes with [`statefulCodeSessions.allowedEnvironments`](/docs/configuration/librechat_yaml/object_structure/agents#statefulcodesessions). If a saved personal default becomes unavailable, new Agents use the first allowed scope; an existing enabled Agent with a now-disallowed scope must be reconfigured before it can run.
+
+The workspace scope is separate from its execution backend. When administrators configure named [`statefulCodeSessions.environments`](/docs/configuration/librechat_yaml/object_structure/agents#statefulcodesessions), the Agent Builder adds an **Execution environment** selector:
+
+- **Managed:** a stateful Code API operated by the deployment
+- **Attached:** a compatible Code API remote bridge that leases work to an outbound `@librechat/code` worker, such as an operator-managed VM
+- **Deployment default:** the one configured environment marked as the default
 
 <Callout type="warning" title="Highly experimental">
   Stateful Code Sessions are in an early experimentation phase. Their behavior, configuration, persistence characteristics, and underlying integration may change substantially. Do not treat the current implementation as a stable production contract.
 </Callout>
 
-This feature is opt-in. Enable `execute_code` and `stateful_code_sessions` in the [Agents endpoint capabilities](/docs/configuration/librechat_yaml/object_structure/agents#capabilities), enable Code Interpreter on the agent, then turn on **Stateful code sessions** in its Advanced settings. The workspace may reset at any time. Save important outputs under `/mnt/data`, and do not otherwise rely on session state as durable storage.
+This feature is opt-in. Enable `execute_code` and `stateful_code_sessions` in the [Agents endpoint capabilities](/docs/configuration/librechat_yaml/object_structure/agents#capabilities), configure a dedicated stateful route with [`LIBRECHAT_CODE_BASEURL_STATEFUL`](/docs/configuration/dotenv#stateful-code-interpreter-endpoint) or named environments, enable Code Interpreter on the agent, then turn on **Stateful code sessions** and choose its execution backend and workspace scope under Advanced settings.
+
+Stateful requests fail closed when the selected environment is missing, inaccessible, or incompatible; LibreChat does not send them to `LIBRECHAT_CODE_BASEURL` or silently choose another named backend. When no named environments are configured, `LIBRECHAT_CODE_BASEURL_STATEFUL` remains the stateful route. Stateless agents continue using the normal endpoint. LibreChat also sends `X-CodeAPI-Expected-Profile: stateful`, so the dedicated service must advertise the `stateful` profile.
+
+Stateful and stateless sessions do not share a live workspace. The stateful workspace may reset at any time, regardless of its selected scope. Save important outputs under `/mnt/data`, and do not otherwise rely on session state as durable storage.
+
+Files authored by stateful `create_file` and `edit_file` calls appear on the assistant message under an expandable **Workspace changes** row. It lists each unique changed path for that response and provides an authenticated download action. Downloads use LibreChat's persisted file flow when available and a secure Code Interpreter fallback otherwise. The row is a record of authored outputs, not a durable workspace snapshot; stateless outputs continue to appear as regular inline attachments.
+
+#### Attached environments and pairing
+
+Attached environments require a matching experimental Code Interpreter remote-bridge build. The bridge remains LibreChat's authenticated policy, queue, and result boundary, while the `@librechat/code` worker connects outbound from the attached machine; the machine does not need an inbound public worker port. LibreChat does not prewarm attached environments.
+
+An operator may configure pairing metadata for a deployment-owned attached environment. `pairing.workerId` identifies the worker and `pairing.tokenEnv` names the environment variable that contains the administrator bootstrap token; the secret itself never belongs in YAML. LibreChat uses the deployment's base configuration for this control plane, requires HTTPS outside loopback development, and returns only a short-lived one-time pairing response to an authorized administrator.
+
+LibreChat can also register principal-owned environments against a deployment-approved attached control plane through its authenticated Code Environments API. Creation requires code-environment management permission, accepts the approved control-plane ID rather than an arbitrary client URL, and grants access through the Code Environment ACL. These request-scoped entries cannot override a deployment environment with the same ID.
+
+Pairing authenticates the remote worker transport; it is not a sandbox boundary. Keep the worker's local execution endpoint on loopback or a private network and use an appropriate isolation mode for untrusted code.
+
+While an execution is active, expanded code and shell detail panes follow streamed arguments to the bottom. Scrolling upward pauses the follow behavior so you can inspect earlier output without the pane pulling the viewport away.
 
 ## Using the API
 
@@ -86,25 +122,66 @@ The API has first-class support in LibreChat through these main methods:
 
 4. **[Background Tool Calls](/docs/features/agents#background-tool-calls)**: Let an agent dispatch eligible code in the background and continue while it runs.
 
-5. **[Stateful Code Sessions](/docs/features/agents#stateful-code-sessions)**: Experimentally reuse a per-conversation workspace across an agent's code executions.
+5. **[Stateful Code Sessions](/docs/features/agents#stateful-code-sessions)**: Experimentally reuse a user-, agent-and-user-, or conversation-scoped workspace across an agent's code executions.
 
 ![Code Interpreter in LibreChat](/images/agents/run_code.png)
 
 ### Set up API key
 
-- **Per-user setup:** input your API key in LibreChat when prompted (using the above methods)
-- **Global setup:** use `LIBRECHAT_CODE_API_KEY` environment variable in the .env file of your project (provides access to all users)
+- **Per-user setup:** Input your API key in LibreChat when prompted.
+- **Global setup:** Set `LIBRECHAT_CODE_API_KEY` in LibreChat's `.env` to provide one key for all users.
+
+The current [ClickHouse/code-interpreter](https://github.com/ClickHouse/code-interpreter) service uses LibreChat JWT authentication outside local mode. API keys remain available for compatible Code Interpreter deployments.
+
+### Self-hosted JWT authentication
+
+With JWT authentication, LibreChat signs a short-lived bearer token for the authenticated user on each Code Interpreter request. The Code Interpreter service verifies the matching public key and uses the signed user and tenant context to isolate files and sessions. The private signing key stays in LibreChat; Code Interpreter receives only its public verifier.
+
+Configure LibreChat with:
+
+```env
+CODEAPI_AUTH_PROVIDER=librechat-jwt
+CODEAPI_JWT_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"
+CODEAPI_JWT_ALGORITHM=EdDSA
+CODEAPI_JWT_KID=lc-codeapi-2026-05
+CODEAPI_JWT_ISSUER=librechat
+CODEAPI_JWT_AUDIENCE=codeapi
+CODEAPI_JWT_TTL_SECONDS=300
+CODEAPI_JWT_MINT_CACHE_SECONDS=30
+CODEAPI_JWT_SINGLE_TENANT_ID=legacy
+```
+
+`CODEAPI_JWT_PRIVATE_KEY_BASE64` can hold a base64-encoded PEM instead, and `CODEAPI_JWT_PRIVATE_JWK_JSON` accepts a private JWK. LibreChat supports Ed25519 (`EdDSA`, the default) and RSA (`RS256`) signing. See the [environment-variable reference](/docs/configuration/dotenv#code-interpreter-jwt-authentication) for every LibreChat-side setting.
+
+Configure Code Interpreter with the corresponding verifier:
+
+```env
+LOCAL_MODE=false
+CODEAPI_AUTH_PROVIDER=librechat-jwt
+CODEAPI_JWT_ISSUER=librechat
+CODEAPI_JWT_AUDIENCE=codeapi
+CODEAPI_JWT_ALLOWED_ALGS=EdDSA
+CODEAPI_JWT_JWKS_JSON={"keys":[{"kty":"OKP","crv":"Ed25519","x":"...","kid":"lc-codeapi-2026-05","alg":"EdDSA"}]}
+CODEAPI_JWT_SINGLE_TENANT_ID=legacy
+```
+
+The issuer, audience, key ID, algorithm, and public key must match LibreChat's signer. Code Interpreter can also load verifier keys from `CODEAPI_JWT_PUBLIC_KEY` plus `CODEAPI_JWT_KID`, or from `CODEAPI_JWT_PUBLIC_KEYS_DIR`; an inline JWKS is convenient for rotation. Keep the token TTL at or below the Code Interpreter service's `CODEAPI_JWT_MAX_TTL_SECONDS`, which defaults to and is capped at 300 seconds.
+
+For a local checkout, the Code Interpreter repository includes a helper that generates matching Ed25519 signing and execution-manifest keys and updates both `.env` files:
+
+```bash
+node scripts/setup-local-auth-env.js --librechat /path/to/LibreChat
+```
+
+Single-tenant deployments can leave `CODEAPI_JWT_SINGLE_TENANT_ID=legacy`, but the value must match on both services. Multi-tenant deployments should provide an authenticated tenant context and enable `TENANT_ISOLATION_STRICT=true` in LibreChat plus `CODEAPI_TENANT_ISOLATION_STRICT=true` in Code Interpreter. Strict mode rejects requests without tenant context instead of using the single-tenant fallback.
 
 ### Direct API Integration
 
-The Code Interpreter API can be integrated into any application using a simple API key authentication:
-
-1. Deploy your own [code-interpreter](https://github.com/ClickHouse/code-interpreter) instance and create an API key
-2. Include the API key in your requests using the `x-api-key` header
+The current self-hosted service expects a bearer token that satisfies its LibreChat JWT claim contract. A direct integration must mint compatible short-lived tokens and send them in the `Authorization: Bearer <token>` header. API-key-compatible deployments instead accept their configured key in the `x-api-key` header. Never use Code Interpreter's authentication-free local mode on a public or production endpoint.
 
 ### Self-hosted base URL
 
-Set the `LIBRECHAT_CODE_BASEURL` environment variable to point LibreChat at your self-hosted [code-interpreter](https://github.com/ClickHouse/code-interpreter) instance, along with an API key generated on that deployment, used the same way as above.
+Set `LIBRECHAT_CODE_BASEURL` to point LibreChat at your self-hosted [code-interpreter](https://github.com/ClickHouse/code-interpreter) instance, then configure [JWT authentication](#self-hosted-jwt-authentication). For an API-key-compatible service, set `LIBRECHAT_CODE_API_KEY` instead. Highly experimental stateful Agent sessions require a separate `stateful`-profile route configured through [`LIBRECHAT_CODE_BASEURL_STATEFUL`](/docs/configuration/dotenv#stateful-code-interpreter-endpoint) or named [`statefulCodeSessions.environments`](/docs/configuration/librechat_yaml/object_structure/agents#statefulcodesessions).
 
 ## Core Functionality
 
