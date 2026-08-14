@@ -44,7 +44,7 @@ endpoints:
     titleEndpoint: 'anthropic'
 
   google:
-    streamRate: 1
+    streamRate: 25
     titleModel: 'gemini-2.0-flash-lite'
     titlePromptTemplate: "Human: {input}\nAssistant: {output}"
     headers:
@@ -55,6 +55,15 @@ endpoints:
 
   azureAssistants:
     streamRate: 30
+
+  agents:
+    activityLabel: true
+    activityEndpoint: 'openAI'
+    activityModel: 'gpt-4.1-nano'
+    activityMaxPerRun: 20
+    activityCharLimit: 600
+    activityPhaseLabel: true
+    activityPhaseMaxPerRun: 5
 
   # Global configuration using 'all' - this applies shared settings across endpoints.
   # Most defined values override endpoint defaults; headers are merged and endpoint values win on collisions.
@@ -72,7 +81,7 @@ endpoints:
       {convo}
 ```
 
-> **Important:** When using the `all` configuration, most shared properties you define apply across endpoints. In the example above, the `all` configuration would apply `titleConvo`, `titleModel`, and `titlePrompt` to all endpoints, while individual `streamRate` settings would be preserved since it's not defined in `all`. `headers` are merged separately: values from `endpoints.all.headers` apply globally, and endpoint-level headers win on key collisions.
+> **Important:** When using the `all` configuration, most shared properties you define apply across endpoints. In the example above, the `all` configuration would apply `titleConvo`, `titleModel`, and `titlePrompt` to all endpoints, while individual `streamRate` settings would be preserved since it's not defined in `all`. `headers` are merged separately: values from `endpoints.all.headers` apply globally, and endpoint-level headers win on key collisions. Activity settings resolve field by field in the same order, so an unrelated `all` setting does not hide an endpoint's activity configuration.
 
 ## streamRate
 
@@ -89,9 +98,11 @@ endpoints:
   ]}
 />
 
-**Default:** 1
+**Default:** Provider-dependent. OpenAI, custom endpoints, Anthropic, Google, Bedrock, and Agents SDK-backed streams use adaptive smoothing with a 25 ms target. Legacy Assistants and Ollama handlers retain their per-provider-chunk behavior, with a 1 ms default.
 
-> Allows for streaming data at the fastest rate possible while allowing the system to wait for the next tick
+Adaptive smoothing emits the first text token without delay, increases chunk size when a stream falls behind, and preserves tool-call and metadata ordering. Set `streamRate` to a non-negative millisecond target; `streamRate: 0` disables adaptive smoothing on the SDK-backed providers listed above.
+
+An endpoint-specific value is preserved when `endpoints.all` exists without `streamRate`. Defining `endpoints.all.streamRate` overrides endpoint values, including an explicit `0`.
 
 ## titleConvo
 
@@ -300,6 +311,99 @@ endpoints:
     # Will use anthropic's configuration for title generation
 ```
 
+## Agent Activity Groups
+
+Activity groups make long Agent runs easier to scan by collapsing each contiguous block of reasoning and tool calls under a generated one-line header. Header generation runs outside the main model-response path, but it is still a model call and its usage is recorded and billed.
+
+With parent phase labels enabled, short progress text stays inside the active phase. A phase closes before substantial answer text so the result remains outside the collapsed summary, and a later block of reasoning or tool calls can begin another phase in the same run. LibreChat also rebases saved phase boundaries when malformed or omitted content is compacted, preserving their alignment after reload.
+
+<OptionTable
+  options={[
+    [
+      'activityLabel',
+      'Boolean',
+      'Enables generated activity-group headers for Agent runs using this endpoint.',
+      'false',
+    ],
+    [
+      'activityModel',
+      'String',
+      'Model used to generate headers. Falls back to titleModel, then the Agent run model. Use current_model to select the run model explicitly.',
+      '',
+    ],
+    [
+      'activityEndpoint',
+      'String',
+      'Endpoint whose credentials are used for header generation. Defaults to the Agent model provider.',
+      '',
+    ],
+    [
+      'activityPrompt',
+      'String',
+      'Overrides the prompt used to generate the one-line header.',
+      '',
+    ],
+    [
+      'activityMaxPerRun',
+      'Positive integer',
+      'Maximum generated activity headers per response, limiting additional model calls.',
+      '20',
+    ],
+    [
+      'activityCharLimit',
+      'Positive integer',
+      'Maximum characters from each tool input or output entry included in the header prompt.',
+      '600',
+    ],
+    [
+      'activityPhaseLabel',
+      'Boolean',
+      'Generates a collapsed parent summary for each run phase containing at least two activities.',
+      'false',
+    ],
+    [
+      'activityPhaseModel',
+      'String',
+      'Model used for parent phase summaries. Falls back to activityModel, titleModel, then the Agent run model.',
+      '',
+    ],
+    [
+      'activityPhaseEndpoint',
+      'String',
+      'Endpoint whose credentials are used for phase summaries. Falls back to activityEndpoint, then the Agent provider.',
+      '',
+    ],
+    [
+      'activityPhasePrompt',
+      'String',
+      'Overrides the prompt used to generate parent phase summaries.',
+      '',
+    ],
+    [
+      'activityPhaseMaxPerRun',
+      'Positive integer',
+      'Maximum generated parent phase summaries per response.',
+      '5',
+    ],
+  ]}
+/>
+
+```yaml filename="endpoints / agents / activity groups"
+endpoints:
+  agents:
+    activityLabel: true
+    activityEndpoint: 'openAI'
+    activityModel: 'gpt-4.1-nano'
+    activityMaxPerRun: 20
+    activityCharLimit: 600
+    activityPhaseLabel: true
+    activityPhaseMaxPerRun: 5
+```
+
+You can also set these fields under `endpoints.all` or a backing provider/custom endpoint. Values resolve independently, with the first defined value winning in this order: `endpoints.all`, the public `agents` endpoint, then the backing provider or custom endpoint. If `activityEndpoint` is unknown, LibreChat logs a warning and uses the Agent's provider instead.
+
+Parent phase summaries are independent of child activity labels: `activityPhaseLabel` can be enabled with or without `activityLabel`. LibreChat spends a phase-summary model call only for a phase containing at least two logical activities. `activityCharLimit` also bounds the evidence used for phase summaries. Phase model selection resolves through `activityPhaseModel`, `activityModel`, the originating endpoint's `titleModel`, then the current run model; phase endpoint selection resolves through `activityPhaseEndpoint`, `activityEndpoint`, then the Agent provider. An unknown configured phase endpoint logs a warning and falls back to the Agent provider.
+
 ## maxToolResultChars
 
 **Key:**
@@ -362,6 +466,7 @@ endpoints:
 **Notes:**
 
 - Values support `${ENV_VAR}`, `{{LIBRECHAT_USER_*}}`, and request-body placeholders such as `{{LIBRECHAT_BODY_CONVERSATIONID}}`.
+- At the final outbound resolution step, recognized user, request-body, and OpenID placeholders without a value become empty strings instead of being forwarded as template text. Unknown placeholder names remain unchanged so configuration typos are visible.
 - Endpoint-level headers override `endpoints.all.headers` on key collisions.
 - Provider-managed auth and required beta/protocol headers remain authoritative. Anthropic beta values are merged so custom beta flags do not clobber required provider flags.
 - Headers are also forwarded for supported provider model-list requests.
@@ -375,7 +480,7 @@ endpoints:
 - When using the `all` configuration, it will override the corresponding settings in ALL individual endpoints
 - The `all` key does not accept `baseURL`
 - Settings not defined in `all` will preserve their individual endpoint values
-- For `streamRate`: Recommended values are between 25-40 for a smooth streaming experience
+- For `streamRate`: Values between 25-40 are recommended where endpoint-specific smoothing is desired
 - Using a higher stream rate is a must when serving the app to many users at scale
 
 **Example of Override Behavior:**
