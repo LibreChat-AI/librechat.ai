@@ -89,6 +89,28 @@ LANGFUSE_BASE_URL=https://cloud.langfuse.com
 
 When both environment keys are present, LibreChat uses them for the central project and hides **Settings → Langfuse**. `LANGFUSE_TRACING_ENABLED=false` or `LANGFUSE_SAMPLE_RATE=0` disables both traces and feedback scores. Fractional sampling makes one deterministic decision per trace; sampled-out traces do not receive later feedback scores.
 
+### Authenticated Proxies and Gateways
+
+For a self-hosted Langfuse instance behind Cloudflare Access, oauth2-proxy, or another authenticating gateway, define deployment-level custom request headers in `librechat.yaml`:
+
+```yaml filename="librechat.yaml"
+langfuse:
+  headers:
+    CF-Access-Client-Id: '${CF_ACCESS_CLIENT_ID}'
+    CF-Access-Client-Secret: '${CF_ACCESS_CLIENT_SECRET}'
+```
+
+LibreChat applies the resolved headers to every direct Langfuse surface: trace and media export, feedback-score creation and deletion, project-identity lookup, and admin credential verification. Langfuse's own `Authorization` credential remains authoritative on REST requests. Values support `${ENV_VAR}` interpolation; unresolved variables, protected infrastructure-secret references, blank values, and invalid header names are dropped with a warning. Header values are masked in startup logs and admin configuration reads, but environment references are still recommended over literal credentials.
+
+These headers are operator-owned and YAML-only. They cannot be written through the Admin Panel or configuration API, stored in MongoDB, or populated with per-user `{{...}}` placeholders. LibreChat sends them only when configuration resolves exactly one Langfuse origin. With multiple central, tenant, or collector origins, it logs a warning and sends no custom headers because the map cannot safely select a recipient.
+
+<Callout type="warning" title="Fanout limitation">
+  The fanout collector currently forwards only `Authorization` to tenant Langfuse destinations.
+  Custom `langfuse.headers` can authenticate LibreChat's direct request to a single collector or
+  Langfuse origin, but they do not authenticate the collector's upstream request to a tenant
+  destination behind another proxy.
+</Callout>
+
 ## Tenant Fanout (Optional)
 
 Langfuse fanout lets a multi-tenant LibreChat deployment export each eligible trace and its media to both a central Langfuse project and a tenant-specific project. The feature is opt-in and adds a gateway plus an internal OpenTelemetry collector; normal single-project tracing above is unchanged when fanout is not deployed.
@@ -206,6 +228,8 @@ Tenant export occurs only when fanout and the collector URL are enabled, the sav
 
 Set `LANGFUSE_FANOUT_CENTRAL_MEDIA_UPLOAD_DISABLED=true` to prevent the LibreChat SDK from creating media uploads for central or fallback collector traces; tenant-routed media uploads are unchanged. This app-side switch is distinct from the gateway-side `LANGFUSE_FANOUT_CENTRAL_MEDIA_EXPORT_DISABLED`, which blocks central media forwarding after an upload reaches the gateway.
 
+For media forwarding, the fanout gateway accepts only absolute HTTPS upload targets returned by the configured Langfuse authority and does not follow redirects on upload `PUT` requests. Self-hosted object storage, including private MinIO hosts, remains supported when its returned upload URL uses HTTPS. Plain HTTP or redirect-dependent media upload targets now fail closed while trace export continues independently.
+
 Trace and media traffic goes through the fanout gateway. Feedback scores are sent directly from LibreChat: central scores use `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, and `LANGFUSE_BASE_URL`, while tenant scores use tenant app configuration.
 
 See the [Langfuse fanout deployment reference](https://github.com/danny-avila/LibreChat/blob/dev/otel/langfuse-fanout/README.md) for every gateway variable, custom destination setup, metrics, scaling, and Redis behavior.
@@ -222,6 +246,8 @@ docker compose up -d
 ## See Traces in Langfuse
 
 Once LibreChat is restarted with Langfuse configured, you will see a new trace for every chat message response in the Langfuse UI:
+
+LibreChat v0.8.8-rc2 updates Agent trace shaping to use `StandardGraph`, `MultiAgentGraph`, and `AgentModelCall` runtime observation names, with activity and reasoning-label calls nested under the work they describe. Trace-level input and output are also represented on root observations. Review saved Langfuse filters, dashboards, and evaluations that depend on the earlier observation names or trace-level input/output fields.
 
 ![LibreChat example trace](https://langfuse.com/images/cookbook/integration_librechat/librechat-example-trace.png)
 

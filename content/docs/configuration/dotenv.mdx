@@ -89,6 +89,27 @@ Refer to [Express.js - trust proxy](https://expressjs.com/en/guide/behind-proxie
   options={[['TRUST_PROXY', 'number', 'Specifies the number of hops.', 'TRUST_PROXY=1']]}
 />
 
+### Trusted Tenant Header
+
+`TRUST_TENANT_HEADER` controls whether LibreChat accepts `X-Tenant-Id` before authentication on the `/oauth`, `/api/auth`, and `/api/share` route trees. It is disabled by default; while disabled, those routes ignore the header.
+
+<OptionTable
+  options={[
+    [
+      'TRUST_TENANT_HEADER',
+      'boolean',
+      'Trust X-Tenant-Id on pre-authentication routes. Enable only behind a trusted proxy that replaces client-supplied values.',
+      'TRUST_TENANT_HEADER=false',
+    ],
+  ]}
+/>
+
+<Callout type="warning" title="Do not trust client-supplied tenant headers">
+  Enable this setting only when a trusted reverse proxy strips every incoming `X-Tenant-Id` value and sets the authoritative tenant ID itself. Otherwise, an untrusted client could choose the tenant context used before authentication. LibreChat logs a security warning when the setting is enabled.
+</Callout>
+
+When `TENANT_ISOLATION_STRICT` is enabled but `TRUST_TENANT_HEADER` is disabled, LibreChat warns at startup that pre-authentication tenant headers will be ignored.
+
 ### Credentials Configuration
 
 LibreChat uses `CREDS_KEY` and `CREDS_IV` to encrypt supported credentials stored in the database. Configure fixed, unique values for production and share the same values across every replica.
@@ -1342,13 +1363,19 @@ The Code Interpreter API provides a secure environment for executing code and ma
     [
       'LIBRECHAT_CODE_BASEURL',
       'string',
-      'Base URL for your Code Interpreter service.',
+      'Base URL for the normal stateless Code Interpreter service.',
       '# LIBRECHAT_CODE_BASEURL=https://your-custom-domain.com',
+    ],
+    [
+      'LIBRECHAT_CODE_BASEURL_STATEFUL',
+      'string',
+      'Dedicated Code Interpreter base URL for highly experimental stateful Agent sessions. The service must advertise the stateful profile. Stateful requests fail closed when this is unset.',
+      '# LIBRECHAT_CODE_BASEURL_STATEFUL=https://your-stateful-code-domain.com',
     ],
     [
       'CODE_SANDBOX_PREWARM',
       'boolean',
-      'Prewarm stateful per-conversation sandboxes in parallel with model generation. Set to false to disable. Default: true.',
+      'Prewarm selected stateful sandboxes in parallel with model generation. Set to false to disable. Default: true.',
       '# CODE_SANDBOX_PREWARM=true',
     ],
     [
@@ -1365,6 +1392,14 @@ The Code Interpreter API provides a secure environment for executing code and ma
     ],
   ]}
 />
+
+### Stateful Code Interpreter Endpoint
+
+[`stateful_code_sessions`](/docs/configuration/librechat_yaml/object_structure/agents#capabilities) is highly experimental and requires a separate Code Interpreter deployment configured with `LIBRECHAT_CODE_BASEURL_STATEFUL`. The endpoint must run the `stateful` profile; LibreChat sends `X-CodeAPI-Expected-Profile: stateful` with stateful requests.
+
+Stateful requests never fall back to `LIBRECHAT_CODE_BASEURL`. If the dedicated URL is missing, LibreChat stops the Agent run with a configuration error. Stateless agents continue using `LIBRECHAT_CODE_BASEURL`, and the two execution profiles do not share a live workspace.
+
+Each Agent can scope its stateful workspace to the signed-in user, the user and Agent together, or the user and conversation. See [Stateful Code Sessions](/docs/features/code_interpreter#stateful-code-sessions) for setup and persistence limitations.
 
 ## Artifacts
 
@@ -1546,6 +1581,52 @@ Configure shared conversation links functionality.
 
 `ALLOW_SHARED_LINKS` is the feature-wide switch. Role permissions now control who can create shared links, share them with authenticated users, or make them visible to everyone; see [`interface.sharedLinks`](/docs/configuration/librechat_yaml/object_structure/interface#sharedlinks). `ALLOW_SHARED_LINKS_PUBLIC` only controls whether publicly shared links can be viewed without authentication. `SHARED_LINKS_SNAPSHOT_FILES` is a global override for shared-link file snapshots and can disable snapshot serving for every link when set to `false`.
 
+## Scheduled Chats
+
+<OptionTable
+  options={[
+    [
+      'SCHEDULES_SINGLE_PROCESS',
+      'boolean',
+      'Allows Scheduled Chats without Redis only when exactly one LibreChat process is running. Never enable this for multiple processes or replicas.',
+      'SCHEDULES_SINGLE_PROCESS=true',
+    ],
+    [
+      'SCHEDULES_DISABLED',
+      'boolean',
+      'Emergency global stop for automatic Scheduled Chat occurrences and Run now. Definitions remain stored. Default: false.',
+      'SCHEDULES_DISABLED=true',
+    ],
+  ]}
+/>
+
+Scheduled Chats are experimental and disabled until [`interface.schedules`](/docs/configuration/librechat_yaml/object_structure/interface#schedules) is configured. Multi-replica deployments require `USE_REDIS_STREAMS=true`; a deployment without shared Redis streams fails schedule writes closed unless it explicitly declares a truly single-process topology with `SCHEDULES_SINGLE_PROCESS=true`. See [Scheduled Chats](/docs/features/scheduled_chats) for setup and runtime behavior.
+
+## Agent Trigger Delivery
+
+<OptionTable
+  options={[
+    [
+      'AGENT_TRIGGERS_SELF_URL',
+      'string',
+      'Base URL used by the trusted Agent trigger execution host to re-enter LibreChat fire, continue, and steer admission. Defaults to the current process bound listener.',
+      '# AGENT_TRIGGERS_SELF_URL=http://127.0.0.1:3080',
+    ],
+    [
+      'ENABLE_SUBAGENT_COMPLETION_WAKEUPS',
+      'boolean',
+      'Automatically continue a saved parent Agent after a detached child settles. Enable only after every API replica has been upgraded. Default: false.',
+      'ENABLE_SUBAGENT_COMPLETION_WAKEUPS=false',
+    ],
+  ]}
+/>
+
+`ENABLE_SUBAGENT_COMPLETION_WAKEUPS=true` lets a detached child result start a new turn on its saved parent Agent and exact initiating branch. The result is persisted before delivery, and duplicate completion events are idempotent. Deploy support with this setting disabled, wait until every API replica is upgraded, then enable it in a later rollout. Cancelled children and ephemeral parent Agents do not trigger a wakeup; manual result collection remains available when automatic delivery cannot run.
+
+Leave `AGENT_TRIGGERS_SELF_URL` unset for the normal in-process path. Set it only when trusted internal trigger admission must traverse another HTTP origin, such as a TLS front door. The value must be an HTTP or HTTPS URL without embedded credentials. It does not expose or configure a public trigger endpoint.
+
+Trusted source adapters enqueue through LibreChat's shared durable trigger service. MongoDB-backed ordering lanes and leases support workers across replicas; successful delivery records expire after 90 days, while dead letters remain until an explicit trusted requeue or removal. Source adapters are responsible for authentication, authorization, target selection, and payload sanitization. See [Trusted Agent Trigger Delivery](/docs/features/agents#trusted-agent-trigger-delivery) for delivery semantics and current boundaries.
+
 ## User System
 
 This section contains the configuration for:
@@ -1554,6 +1635,21 @@ This section contains the configuration for:
 - [Balance/Token Usage](#balance)
 - [Registration and Social Logins](#registration-and-login)
 - [Email Password Reset](#password-reset)
+
+### Admin Insights
+
+<OptionTable
+  options={[
+    [
+      'ENABLE_INSIGHTS',
+      'boolean',
+      'Enables the MongoDB-backed Insights dashboard for administrators with the required capabilities. Default: false.',
+      'ENABLE_INSIGHTS=false',
+    ],
+  ]}
+/>
+
+When enabled, Insights remains restricted to accounts with the `ADMIN` role plus `access:admin` and `read:insights`. Queries are tenant-scoped and expose persisted activity metrics and recent conversation metadata. See [Admin Insights](/docs/features/insights) for metric definitions and access details.
 
 ### Agent Conversation Controls
 
