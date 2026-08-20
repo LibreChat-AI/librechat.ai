@@ -22,7 +22,8 @@ LibreChat's Code Interpreter API provides a secure and hassle-free way to execut
 
 1. Deploy the [code-interpreter](https://github.com/ClickHouse/code-interpreter) service (Docker Compose or Helm, see the repository's README)
 2. Point LibreChat at it with the `LIBRECHAT_CODE_BASEURL` and `LIBRECHAT_CODE_API_KEY` environment variables
-3. Start executing code and generating files securely through LibreChat's Agents or the "Run Code" button
+3. To experiment with stateful Agent sessions, deploy a separate Code Interpreter endpoint with the `stateful` profile and set `LIBRECHAT_CODE_BASEURL_STATEFUL`
+4. Start executing code and generating files securely through LibreChat's Agents or the "Run Code" button
 
 ## Key Features
 
@@ -54,6 +55,8 @@ Programmatic Tool Calling lets LibreChat Agents route selected MCP tools through
 
 The sandbox still does not receive general network access. Tool calls are brokered through the Code Interpreter Tool Call Server and LibreChat's registered tool map, so only tools available to the agent can be called.
 
+Programmatic tools require Code Interpreter on the Agent. Their toggles stay disabled until Code Interpreter is selected, and removing Code Interpreter clears existing Programmatic selections. LibreChat also strips stale programmatic caller options from Agent create, update, duplicate, and version-restore operations when `execute_code` or the Code Interpreter tool is unavailable.
+
 ### Background Code Execution
 
 Background execution lets an Agent dispatch long-running code or shell work, continue the conversation, and retrieve the result later through `check_background_task`. In LibreChat chat, when the work finishes, stdout and generated files appear on the original code call. Generated files are persisted for subsequent turns even if the Agent has not polled the task yet.
@@ -64,13 +67,27 @@ Background task state is process-local and does not survive an app restart or mo
 
 ### Stateful Code Sessions
 
-Stateful code sessions let a LibreChat Agent reuse one Code Interpreter sandbox workspace per conversation. Files, installed packages, and working state usually carry over between executions, making iterative analysis and multi-step file generation more efficient.
+Stateful code sessions let a LibreChat Agent reuse one Code Interpreter sandbox workspace across executions. Files, installed packages, and working state usually carry over, making iterative analysis and multi-step file generation more efficient. Each agent selects one workspace scope:
+
+- **User workspace (recommended):** one workspace for the signed-in user across stateful-enabled agents
+- **Agent + user workspace:** one workspace for each user and agent combination
+- **Conversation workspace:** one workspace for each user and conversation
+
+For newly created Agents, the initial scope comes from **Settings > Data Controls > Code execution > Default stateful workspace**. The personal setting defaults to **User workspace**; changing it does not modify existing Agents or enable stateful sessions. Deployment administrators can restrict selectable scopes with [`statefulCodeSessions.allowedEnvironments`](/docs/configuration/librechat_yaml/object_structure/agents#statefulcodesessions). If a saved personal default becomes unavailable, new Agents use the first allowed scope; an existing enabled Agent with a now-disallowed scope must be reconfigured before it can run.
 
 <Callout type="warning" title="Highly experimental">
   Stateful Code Sessions are in an early experimentation phase. Their behavior, configuration, persistence characteristics, and underlying integration may change substantially. Do not treat the current implementation as a stable production contract.
 </Callout>
 
-This feature is opt-in. Enable `execute_code` and `stateful_code_sessions` in the [Agents endpoint capabilities](/docs/configuration/librechat_yaml/object_structure/agents#capabilities), enable Code Interpreter on the agent, then turn on **Stateful code sessions** in its Advanced settings. The workspace may reset at any time. Save important outputs under `/mnt/data`, and do not otherwise rely on session state as durable storage.
+This feature is opt-in. Enable `execute_code` and `stateful_code_sessions` in the [Agents endpoint capabilities](/docs/configuration/librechat_yaml/object_structure/agents#capabilities), configure a dedicated stateful endpoint with [`LIBRECHAT_CODE_BASEURL_STATEFUL`](/docs/configuration/dotenv#stateful-code-interpreter-endpoint), enable Code Interpreter on the agent, then turn on **Stateful code sessions** and choose a **Stateful environment** in its Advanced settings.
+
+Stateful requests fail closed when the dedicated URL is missing; LibreChat does not send them to `LIBRECHAT_CODE_BASEURL`. Stateless agents continue using the normal endpoint. LibreChat also sends `X-CodeAPI-Expected-Profile: stateful`, so the dedicated service must advertise the `stateful` profile.
+
+Stateful and stateless sessions do not share a live workspace. The stateful workspace may reset at any time, regardless of its selected scope. Save important outputs under `/mnt/data`, and do not otherwise rely on session state as durable storage.
+
+Files authored by stateful `create_file` and `edit_file` calls appear on the assistant message under an expandable **Workspace changes** row. It lists each unique changed path for that response and provides an authenticated download action. Downloads use LibreChat's persisted file flow when available and a secure Code Interpreter fallback otherwise. The row is a record of authored outputs, not a durable workspace snapshot; stateless outputs continue to appear as regular inline attachments.
+
+While an execution is active, expanded code and shell detail panes follow streamed arguments to the bottom. Scrolling upward pauses the follow behavior so you can inspect earlier output without the pane pulling the viewport away.
 
 ## Using the API
 
@@ -86,7 +103,7 @@ The API has first-class support in LibreChat through these main methods:
 
 4. **[Background Tool Calls](/docs/features/agents#background-tool-calls)**: Let an agent dispatch eligible code in the background and continue while it runs.
 
-5. **[Stateful Code Sessions](/docs/features/agents#stateful-code-sessions)**: Experimentally reuse a per-conversation workspace across an agent's code executions.
+5. **[Stateful Code Sessions](/docs/features/agents#stateful-code-sessions)**: Experimentally reuse a user-, agent-and-user-, or conversation-scoped workspace across an agent's code executions.
 
 ![Code Interpreter in LibreChat](/images/agents/run_code.png)
 
@@ -104,7 +121,7 @@ The Code Interpreter API can be integrated into any application using a simple A
 
 ### Self-hosted base URL
 
-Set the `LIBRECHAT_CODE_BASEURL` environment variable to point LibreChat at your self-hosted [code-interpreter](https://github.com/ClickHouse/code-interpreter) instance, along with an API key generated on that deployment, used the same way as above.
+Set the `LIBRECHAT_CODE_BASEURL` environment variable to point LibreChat at your self-hosted [code-interpreter](https://github.com/ClickHouse/code-interpreter) instance, along with an API key generated on that deployment, used the same way as above. Highly experimental stateful Agent sessions require a separate `stateful`-profile deployment configured through [`LIBRECHAT_CODE_BASEURL_STATEFUL`](/docs/configuration/dotenv#stateful-code-interpreter-endpoint).
 
 ## Core Functionality
 

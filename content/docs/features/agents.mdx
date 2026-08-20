@@ -75,13 +75,23 @@ When every required Code Interpreter file from a conversation fails to restore i
 
 #### Stateful Code Sessions
 
-Stateful code sessions let an agent reuse one sandbox workspace per conversation. Files, installed packages, and working state usually carry over between code executions, which is useful for iterative analysis and multi-step file work.
+Stateful code sessions let an agent reuse a sandbox workspace across code executions. Files, installed packages, and working state usually carry over, which is useful for iterative analysis and multi-step file work. In the Agent Builder, the **Stateful environment** selector controls who shares that workspace:
+
+- **User workspace (recommended):** the signed-in user's stateful agents share one workspace
+- **Agent + user workspace:** each user gets a separate workspace for each agent
+- **Conversation workspace:** each user gets a separate workspace for each conversation
+
+New Agents initially use the signed-in user's **Default stateful workspace** from **Settings > Data Controls > Code execution**. The personal default is **User workspace** until changed. Updating this preference does not alter existing Agents or enable Stateful Code Sessions by itself. Administrators can restrict the available scopes with [`statefulCodeSessions.allowedEnvironments`](/docs/configuration/librechat_yaml/object_structure/agents#statefulcodesessions); when a saved personal default is no longer allowed, new Agents use the first permitted scope.
 
 <Callout type="warning" title="Highly experimental">
   Stateful Code Sessions are in an early experimentation phase. Their behavior, configuration, persistence characteristics, and underlying integration may change substantially. Do not treat the current implementation as a stable production contract.
 </Callout>
 
-This feature is opt-in. An administrator must add `stateful_code_sessions` to the [agent capabilities](/docs/configuration/librechat_yaml/object_structure/agents#capabilities), Code Interpreter must be enabled on the agent, and **Stateful code sessions** must be turned on under the agent's Advanced settings. The workspace may reset at any time. Save important outputs under `/mnt/data`, and do not otherwise rely on session state as durable storage.
+This feature is opt-in. An administrator must add `stateful_code_sessions` to the [agent capabilities](/docs/configuration/librechat_yaml/object_structure/agents#capabilities) and configure a dedicated stateful Code Interpreter deployment through [`LIBRECHAT_CODE_BASEURL_STATEFUL`](/docs/configuration/dotenv#stateful-code-interpreter-endpoint). Code Interpreter must be enabled on the agent, and **Stateful code sessions** must be turned on under its Advanced settings.
+
+Stateful requests do not fall back to the normal stateless Code Interpreter endpoint when the dedicated URL is missing or incompatible. Stateful and stateless sessions also do not share live files or installed packages. The stateful workspace may reset at any time, regardless of its scope. Save important outputs under `/mnt/data`, and do not otherwise rely on session state as durable storage.
+
+When stateful `create_file` or `edit_file` tools author files during a response, the assistant message shows a compact **Workspace changes** row. Expand it to review the unique changed paths and download each file through LibreChat's authenticated file flow. This is a per-message record of files authored by those tools, not a durable snapshot of the complete workspace; stateless Code Interpreter outputs continue using the regular inline attachment interface.
 
 ### File Search
 
@@ -173,7 +183,19 @@ Activity groups collapse each contiguous block of Agent reasoning and tool calls
 
 Administrators can independently enable `activityPhaseLabel` to wrap two or more logical activities in a collapsed parent summary before the final answer. This gives long runs a higher-level outline while preserving each child activity. Phase summaries use their own model, endpoint, prompt, and per-run cap, with fallback to the activity-label and run settings.
 
+When [Smooth Streaming](/docs/features/smooth_streaming) is enabled, a newly generated parent summary smoothly folds the visible activities into the collapsed group. Loaded history does not replay this transition, and LibreChat respects the device's reduced-motion preference.
+
 Short progress text remains inside its parent phase. When the Agent begins a substantial answer, LibreChat closes the phase before that text so the user-facing result stays outside the collapsed summary. One run can create multiple parent phases when later reasoning or tools begin another logical activity block. Persisted phase boundaries are rebased when malformed or omitted content parts are compacted, so the grouping remains aligned after reload.
+
+Completed tool cards show the elapsed wall-clock duration recorded for the run step. Stopped, cancelled, failed, and completed steps retain distinct statuses, including after a conversation reload.
+
+While a tool is running, expanded Bash, Execute Code, and File Authoring detail panes follow streamed commands, code, or preview content to the bottom. Scrolling upward pauses that follow behavior so the current reading position is preserved.
+
+### Live Reasoning Labels
+
+Live reasoning labels replace a generic **Thinking** or **Thoughts** heading with a short orientation that evolves as sufficiently long top-level reasoning streams. The label updates the existing reasoning heading in place; it does not add or reorder message parts.
+
+Administrators enable this with `reasoningLabel` and can choose a separate model, endpoint, prompt, update thresholds, and per-run call cap. Each revision is an additional model call whose tokens and cost are recorded. See [Live Reasoning Labels](/docs/configuration/librechat_yaml/object_structure/shared_endpoint_settings#live-reasoning-labels) for defaults, routing precedence, and privacy considerations.
 
 ### Tool Intent Labels
 
@@ -195,6 +217,8 @@ This is useful for multi-step tool workflows such as querying several resources,
 2. Enable Code Interpreter on the agent.
 3. Add MCP tools, expand an MCP server, and toggle **Programmatic** for individual tools or for the full server. Programmatic tools show a code icon.
 
+The Agent Builder keeps Programmatic toggles disabled until Code Interpreter is selected. Removing Code Interpreter immediately clears the agent's Programmatic selections. On create, update, duplicate, and version restore, the server also strips programmatic caller options whenever the `execute_code` capability or Code Interpreter tool is unavailable; this lets older inconsistent Agents be opened and corrected without preserving an unusable configuration.
+
 **Note:** `programmatic_tools` is opt-in and is not included in the default agents capability list. PTC also requires a Code Interpreter deployment with the Tool Call Server component. Only tools registered for the agent can be called from the sandbox; unregistered tool calls are rejected.
 
 ### Background Tool Calls
@@ -210,11 +234,13 @@ These settings allow background execution but do not force it. The model decides
 
 In LibreChat chat, when background code finishes, its stdout and generated files appear on the original code call rather than the later poll. Generated files are also persisted for subsequent turns.
 
-Background task state is currently process-local. Results can be collected in a later turn on the same server process, but they do not survive a restart and are not shared across replicas.
+Generic background task state is currently process-local. Results can be collected in a later turn on the same server process, but they do not survive a restart and are not shared across replicas. Detached Subagents add a durable, view-only child transcript, Redis-routed live controls across replicas, and later Agent-driven continuation; see [Detached Subagent Threads](/docs/features/subagents#detached-subagent-threads).
 
 ### Ask User and Tool Approval
 
-The **Ask User** tool lets an agent pause a run to request missing information, present choices, or confirm how to proceed. One call can group up to four related questions in a single form. Each question accepts a free-form answer or the agent's single- or multi-select choices; the user answers every question and submits once, or skips the form. While the model prepares the call, LibreChat streams the questions into a progress card; the interactive form replaces it when ready. After submission, the same run resumes with the answers. Add **Ask User** from the Tools marketplace; administrators can remove the default `ask_user_question` capability to hide it.
+The **Ask User** tool lets an agent pause a run to request missing information, present choices, or confirm how to proceed. One call can group up to four related questions. LibreChat presents one question at a time with Back, Next, and clickable progress steps; answers remain available while moving between steps, and single-select answers advance automatically without submitting. Submit appears on the final step after every question has an answer, while Skip declines the whole batch from any step. Each question accepts a free-form answer or the agent's single- or multi-select choices. While the model prepares the call, LibreChat streams the questions into a progress card; the interactive form replaces it when ready. After one submission, the same run resumes with the complete answer map. Add **Ask User** from the Tools marketplace; administrators can remove the default `ask_user_question` capability to hide it.
+
+Collapsing a multi-question card returns the composer to its normal steer-or-queue mode while the paused card remains in the thread. The card can still be expanded, answered, skipped, or stopped. A single-question pause continues to use the focused composer answer mode.
 
 Submitted answers are persisted with the resume action, so stopping while the resumed run initializes does not discard accepted answers.
 
@@ -350,7 +376,7 @@ This feature introduces a layered Mixture-of-Agents architecture to LibreChat, w
 
 ### Subagents
 
-Subagents let an agent delegate a focused task to an isolated child run. The child gets its own context window and tool execution flow, then returns a compact result to the parent instead of filling the parent context with every intermediate step.
+Subagents let an agent delegate a focused task to an isolated child run or a saved Agent team. Each child gets isolated context and tool execution, then returns a compact result to the parent instead of filling the parent context with every intermediate step. Detached child work is also preserved as a navigable, view-only thread.
 
 Subagents are different from Agent Chain: chain runs coordinate multiple agents as graph participants, while subagents are spawned by an agent as a tool call for scoped delegation. For setup and limits, see [Subagents](/docs/features/subagents).
 
@@ -441,6 +467,8 @@ The original author and administrators always retain full control regardless of 
 
 Agent cards and landing views show the configured support contact. When none is set, LibreChat can fall back to the first resolvable owner's display name, but does not expose the owner's email address unless it was configured explicitly as the support contact.
 
+Conversation surfaces keep the Agent as the visible identity and do not fall back to its backing model or model-spec label.
+
 For full details on principals, permission bits, and how ACLs compose with role-based feature permissions, see [Access Control](/docs/features/access_control).
 
 ### Administrator Controls
@@ -452,7 +480,7 @@ Administrators have access to global permission settings within the agent builde
 - Manage agent creation rights
 - Configure platform-wide settings
 
-The first account created for your instance is an administrator. If you need to add an additional administrator, you may [access MongoDB](/docs/configuration/mongodb/mongodb_auth) and update the user's profile:
+In an unscoped single-tenant deployment, the first account created for the instance is an administrator. Tenant-scoped deployments do not auto-promote their first registered user; provision tenant administrators through a trusted administrative flow. If you need to add an administrator manually, you may [access MongoDB](/docs/configuration/mongodb/mongodb_auth) and update the user's profile:
 
 ```
 db.users.updateOne(
@@ -497,6 +525,16 @@ Redis-backed multi-replica deployments must complete the [generation protocol v2
   - An agent may leak any attached data, whether instructions or files, through conversation, so make sure your instructions are robust against this before granting Editor/Owner access or making the agent public
 - Only original authors, administrators, and grantees with Owner permission can delete shared agents
 - Agents are private to authors unless shared
+
+## Trusted Agent Trigger Delivery
+
+LibreChat includes a source-neutral delivery layer for trusted asynchronous Agent events. A deployment-owned adapter can normalize a webhook, queue message, MCP event, channel event, or internal product event into a new Agent run (`fire`), a new turn on an existing saved Agent and branch (`continue`), or a mutation of an active run (`steer`). This delivery layer is not a public webhook endpoint: each external adapter remains responsible for authenticating and authorizing its source, selecting the target user and Agent, and sanitizing its payload before enqueueing.
+
+The experimental [Scheduled Chats](/docs/features/scheduled_chats) feature is LibreChat's first built-in producer for this layer. It creates recurring `fire` deliveries for saved Agents and is disabled until an administrator opts in. Detached Subagents can also use `continue` delivery to wake a saved parent Agent after a child settles when [`ENABLE_SUBAGENT_COMPLETION_WAKEUPS`](/docs/configuration/dotenv#agent-trigger-delivery) is enabled.
+
+MongoDB stores bounded versioned envelopes, idempotency keys, ordering lanes, leases, retry history, and dead letters. Workers use at-least-once delivery with fenced claims and bounded exponential backoff; successful receipts expire after 90 days, while dead letters require an explicit trusted requeue. Fire deliveries create a new conversation. Continue deliveries create a new turn on the exact conversation branch and defer while that branch is running, paused, or finalizing. Steer deliveries must identify the existing conversation and generation and use strict admission so ambiguous retries cannot inject the same instruction twice.
+
+The execution host normally calls the current process's bound listener. Configure [`AGENT_TRIGGERS_SELF_URL`](/docs/configuration/dotenv#agent-trigger-delivery) only when this trusted internal admission path must traverse another HTTP origin, such as a TLS front door.
 
 ## Optional Configuration
 

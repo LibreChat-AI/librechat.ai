@@ -12,6 +12,7 @@ endpoints:
   agents:
     recursionLimit: 50
     maxRecursionLimit: 100
+    maxSubagents: 20
     maxToolCallArgBytes: 65536
     maxDeltaEventsPerTurn: 100000
     maxToolCallArgBytesByTool:
@@ -92,6 +93,33 @@ maxRecursionLimit: 100
 ```
 
 For more information about agent steps, see [Max Agent Steps](/docs/features/agents#max-agent-steps).
+
+## maxSubagents
+
+Sets the maximum number of explicit subagents that one parent Agent or model spec can reference. The limit applies to both flat `agent_ids` lists and Agent team graph definitions.
+
+<OptionTable
+  options={[
+    [
+      'maxSubagents',
+      'Number',
+      'Maximum explicit subagents accepted in an Agent or model-spec configuration.',
+      '10',
+    ],
+  ]}
+/>
+
+**Range:** `1-50`. LibreChat enforces a hard ceiling of 50.
+
+Configure this field in the base `librechat.yaml`; request validation uses the process-wide value loaded at startup.
+
+```yaml filename="endpoints / agents / maxSubagents"
+endpoints:
+  agents:
+    maxSubagents: 20
+```
+
+See [Subagents](/docs/features/subagents#limits) for the related runtime graph limits.
 
 ## Stream circuit breakers
 
@@ -241,7 +269,9 @@ allowedProviders:
 
 **Default:** `["deferred_tools", "execute_code", "file_search", "web_search", "artifacts", "subagents", "actions", "context", "skills", "memory", "ask_user_question", "tools", "chain", "ocr"]`
 
-`programmatic_tools`, `stateful_code_sessions`, `run_in_background`, and `tool_intents` are opt-in and must be added explicitly. Programmatic tools and stateful sessions also require `execute_code` and a compatible Code Interpreter deployment. Background code execution requires `run_in_background`, `execute_code`, and Code Interpreter.
+`programmatic_tools`, `stateful_code_sessions`, `run_in_background`, and `tool_intents` are opt-in and must be added explicitly. Programmatic tools and stateful sessions also require `execute_code` and a compatible Code Interpreter deployment. The Agent Builder disables Programmatic MCP selections without Code Interpreter, and the server strips stale programmatic caller options when code execution is unavailable. Background code execution requires `run_in_background`, `execute_code`, and Code Interpreter.
+
+`stateful_code_sessions` is highly experimental. It requires a separate `stateful`-profile Code Interpreter deployment configured with [`LIBRECHAT_CODE_BASEURL_STATEFUL`](/docs/configuration/dotenv#stateful-code-interpreter-endpoint). Stateful requests fail closed instead of falling back to the normal stateless service. In the Agent Builder, each enabled Agent chooses a user, agent-and-user, or conversation workspace scope. New Agents start with the user's personal default from **Settings > Data Controls > Code execution**, which itself defaults to the recommended user scope.
 
 **Example:**
 
@@ -264,7 +294,8 @@ capabilities:
   - 'tools'
   - 'chain'
   - 'ocr'
-  # Optional: reuse one Code Interpreter workspace per conversation.
+  # Optional and highly experimental: reuse a user-, agent-and-user-, or
+  # conversation-scoped workspace. Requires LIBRECHAT_CODE_BASEURL_STATEFUL.
   # - 'stateful_code_sessions'
   # Optional: allow selected eligible MCP and Code Interpreter tools to run as background tasks.
   # - 'run_in_background'
@@ -273,6 +304,30 @@ capabilities:
 ```
 
 **Note:** This field is optional. If omitted, the default behavior is to include all the capabilities listed in the default.
+
+## statefulCodeSessions
+
+Restricts which highly experimental stateful Code Interpreter workspace scopes users can select. Omit this block to allow all three scopes. The allowlist must contain at least one value and is displayed in the stable order `user`, `agent-user`, `conversation`.
+
+<OptionTable
+  options={[
+    [
+      'allowedEnvironments',
+      'Array/List of Strings',
+      'Allowed stateful workspace scopes: `user`, `agent-user`, and/or `conversation`.',
+      '["user", "agent-user", "conversation"]',
+    ],
+  ]}
+/>
+
+```yaml filename="endpoints / agents / statefulCodeSessions"
+statefulCodeSessions:
+  allowedEnvironments:
+    - 'user'
+    - 'agent-user'
+```
+
+The personal default and Agent Builder only permit allowed values. If an administrator tightens the policy, a saved personal default remains visible but disabled, and new Agents use the first allowed scope. Existing enabled Agents retain their saved scope, but a now-disallowed scope fails closed at runtime until the Agent is reconfigured. Disabled stateful sessions and unrelated Agent edits are not silently rewritten.
 
 ## toolApproval
 
@@ -510,7 +565,7 @@ The `capabilities` field allows you to enable or disable specific functionalitie
 - **deferred_tools**: Allows agents to discover deferred MCP tools at runtime instead of loading every tool into context upfront.
 - **programmatic_tools**: Enables Programmatic Tool Calling for MCP tools marked Programmatic in the Agent Builder. Requires `execute_code` and a Code Interpreter deployment with the Tool Call Server component. This capability is opt-in and is not enabled by default.
 - **execute_code**: Allows the agent to execute code.
-- **stateful_code_sessions**: Lets opted-in agents reuse one Code Interpreter workspace per conversation. Requires `execute_code`, a compatible Code Interpreter deployment, and the per-agent Advanced setting. This capability is highly experimental, is not enabled by default, and may change substantially during experimentation; do not treat its current behavior or configuration as a stable production contract.
+- **stateful_code_sessions**: Lets opted-in agents reuse one Code Interpreter workspace at a user, agent-and-user, or conversation scope. Requires `execute_code`, a compatible Code Interpreter deployment, and the per-agent Advanced setting. New Agents use the signed-in user's preferred scope. This capability is highly experimental, is not enabled by default, and may change substantially during experimentation; do not treat its current behavior or configuration as a stable production contract.
 - **file_search**: Enables the agent to search and interact with files. When enabled, citation behavior is controlled by `maxCitations`, `maxCitationsPerFile`, and `minRelevanceScore` settings.
 - **web_search**: Enables web search functionality for agents, allowing them to search and retrieve information from the internet.
 - **artifacts**: Enables the agent to generate interactive artifacts (React components, HTML, Mermaid diagrams).
@@ -706,6 +761,12 @@ The `subagents` field controls which isolated child agents a parent agent can sp
       'Specific agents this agent may spawn. Maximum: 10.',
       'agent_ids: ["agent_researcher"]',
     ],
+    [
+      'graphs',
+      'Array of Objects',
+      'Saved Agent teams that can run as one isolated child graph. Maximum: 10 teams, 32 members per team.',
+      '',
+    ],
   ]}
 />
 
@@ -717,6 +778,8 @@ subagents:
     - 'agent_researcher'
     - 'agent_reviewer'
 ```
+
+Each `graphs` entry requires a unique `type`, `name`, `description`, `agent_ids`, direct `edges`, `entry_agent_id`, and `result_agent_id`. Team definitions must form a connected directed acyclic graph, every member must be visible to the user, and the total configuration is bounded to 50 unique Agent targets and 100 expanded run configurations. See the [saved-team example and runtime behavior](/docs/features/subagents#configure-an-agent).
 
 For user-facing behavior and limits, see [Subagents](/docs/features/subagents).
 

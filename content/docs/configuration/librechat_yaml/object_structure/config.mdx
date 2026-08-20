@@ -35,7 +35,7 @@ icon: Settings
     [
       'langfuse',
       'Object',
-      'Stores the encrypted Langfuse connection managed through LibreChat configuration APIs.',
+      'Configures the encrypted Langfuse connection and deployment-owned request headers.',
       '',
     ],
   ]}
@@ -56,14 +56,31 @@ icon: Settings
       'Selects one deployment-approved Langfuse destination key.',
       '',
     ],
+    [
+      'headers',
+      'Object/Map of Strings',
+      'Deployment-owned headers sent to one configured Langfuse origin for proxy or gateway authentication. Supports `${ENV_VAR}` references.',
+      '',
+    ],
   ]}
 />
 
-Manage this object through **Settings → Langfuse** or an authorized administrator configuration client. The Settings flow verifies the connection and derives `projectId`; authorized administrator writes encrypt `secretKey`, generate `secretKeyPreview`, and redact the secret from reads. Plaintext `secretKey` values placed directly in `librechat.yaml` are not accepted by the runtime connection path. The legacy `displaySecretKey` and `fanout.enabled` fields are no longer part of the schema.
+Manage connection fields through **Settings → Langfuse** or an authorized administrator configuration client. The Settings flow verifies the connection and derives `projectId`; authorized administrator writes encrypt `secretKey`, generate `secretKeyPreview`, and redact the secret from reads. Plaintext `secretKey` values placed directly in `librechat.yaml` are not accepted by the runtime connection path. The legacy `displaySecretKey` and `fanout.enabled` fields are no longer part of the schema.
+
+`headers` is different: it is deployment infrastructure and can only be set in `librechat.yaml`. Admin configuration writes reject both the whole map and individual header paths so gateway credentials are not stored or returned through Mongo-backed configuration. Values support `${ENV_VAR}` interpolation; use environment references instead of literals. LibreChat drops unresolved variables, protected infrastructure-secret references, blank values, and invalid HTTP header names with a warning.
+
+Custom headers are sent on trace and media export, feedback-score requests, project lookup, and admin credential verification only when the deployment resolves exactly one Langfuse origin. If central, tenant, or collector configuration produces multiple origins, LibreChat sends no custom headers and logs a warning because the map cannot safely identify a recipient. They cannot use per-user `{{...}}` placeholders, and the fanout collector forwards only `Authorization` upstream.
+
+```yaml filename="langfuse / headers"
+langfuse:
+  headers:
+    CF-Access-Client-Id: '${CF_ACCESS_CLIENT_ID}'
+    CF-Access-Client-Secret: '${CF_ACCESS_CLIENT_SECRET}'
+```
 
 `langfuse` is a base-configuration-only section. Role, group, and user configuration overrides cannot replace or tombstone it.
 
-See [Langfuse Configuration](/docs/configuration/langfuse) for availability rules, environment-managed credentials, and optional fanout deployment.
+See [Langfuse Configuration](/docs/configuration/langfuse) for availability rules, authenticated proxy setup, environment-managed credentials, and optional fanout deployment.
 
 ## skillSync
 
@@ -571,67 +588,63 @@ see: [Web Search Object Structure](/docs/configuration/librechat_yaml/object_str
     [
       'enabled',
       'Boolean',
-      'Enables or disables client-side image resizing functionality. Default: false.',
+      'When explicitly set, forces client-side resizing on or off for every user and locks the Settings toggle. Omit it to let each user choose in Settings > Chat; the user preference defaults to off.',
       'enabled: true',
     ],
     [
       'maxWidth',
       'Number',
-      'Maximum width in pixels for resized images. Images wider than this will be resized. Default: 1920.',
-      'maxWidth: 1024',
+      'Maximum width in pixels for resized images. Must be at least 1. Default: 1900.',
+      'maxWidth: 1900',
     ],
     [
       'maxHeight',
       'Number',
-      'Maximum height in pixels for resized images. Images taller than this will be resized. Default: 1080.',
-      'maxHeight: 768',
+      'Maximum height in pixels for resized images. Must be at least 1. Default: 1900.',
+      'maxHeight: 1900',
     ],
     [
       'quality',
       'Number',
-      'JPEG compression quality (0.1 to 1.0). Higher values mean better quality but larger file sizes. Default: 0.8.',
-      'quality: 0.9',
-    ],
-    [
-      'compressFormat',
-      'String',
-      'Output format for compressed images. Options: "jpeg", "webp". Default: "jpeg".',
-      'compressFormat: "webp"',
+      'Browser encoder quality from 0 to 1. Higher values usually preserve more detail and produce larger files. Default: 0.92.',
+      'quality: 0.92',
     ],
   ]}
 />
 
 **Description:**
 
-The `clientImageResize` configuration enables automatic client-side image resizing before upload. This feature helps:
+The `clientImageResize` configuration controls client-side downscaling before upload. This feature helps:
 
 - **Prevent upload failures** due to large image files exceeding server limits
 - **Reduce bandwidth usage** by compressing images before transmission
 - **Improve upload performance** with smaller file sizes
 - **Maintain image quality** while optimizing file size
 
-When enabled, images that exceed the specified `maxWidth` or `maxHeight` dimensions are automatically resized on the client side before being uploaded to the server. The resizing maintains the original aspect ratio while ensuring the image fits within the specified bounds.
+When resizing is enabled, supported images that exceed `maxWidth` or `maxHeight` are downscaled in the browser before upload. LibreChat preserves the aspect ratio, never upscales smaller images, and keeps the original file when the encoded result would not be smaller.
+
+If `enabled` is omitted, users can turn **Resize images before upload** on or off under **Settings > Chat**. The preference is stored in that browser and defaults to off. Setting `enabled: true` or `enabled: false` in `librechat.yaml` overrides every user's preference and disables the toggle.
 
 **Example:**
 
 ```yaml filename="clientImageResize"
 fileConfig:
   clientImageResize:
-    enabled: true
-    maxWidth: 1920
-    maxHeight: 1080
-    quality: 0.8
-    compressFormat: 'jpeg'
+    # Omit enabled so each user can choose under Settings > Chat.
+    maxWidth: 1900
+    maxHeight: 1900
+    quality: 0.92
 ```
+
+To enforce one behavior for the deployment, add either `enabled: true` or `enabled: false` to the same block.
 
 **Notes:**
 
-- Only applies to image files (JPEG, PNG, WebP, etc.)
-- Resizing occurs automatically when images exceed the specified dimensions
-- Original aspect ratio is preserved during resizing
-- The feature works with all supported image upload endpoints
-- Quality setting only applies to JPEG and WebP formats
-- Setting quality too low (< 0.5) may result in noticeable image degradation
+- The resize pipeline supports JPEG, PNG, and WebP in browsers with the required Canvas APIs.
+- Animated PNG and WebP files are sent unchanged so resizing does not discard animation.
+- The output keeps the source format. There is no `compressFormat` setting.
+- Browser encoders may ignore `quality` for lossless formats such as PNG.
+- A resize failure falls back to the original file; normal server upload limits still apply.
 
 see: [File Config Object Structure](/docs/configuration/librechat_yaml/object_structure/file_config)
 
