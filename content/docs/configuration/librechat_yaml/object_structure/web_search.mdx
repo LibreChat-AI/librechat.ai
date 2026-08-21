@@ -168,7 +168,9 @@ Engine names must match engines that are enabled on your own instance, and two t
 - SearXNG ignores an engine it does not recognize instead of reporting an error. A typo, or an engine that is disabled on your instance, shows up as fewer results rather than as a failure.
 - The valid names are instance-specific. Check the enabled list at `https://your-instance/config`, which returns JSON including every enabled engine, or open the **Engines** tab of your instance preferences page.
 
-The default is `google,bing,duckduckgo`. DuckDuckGo serves CAPTCHAs to most self-hosted instances. SearXNG still answers with a successful response, just an empty one, so in LibreChat this looks like a search that found nothing. Setting `engines` explicitly and leaving DuckDuckGo out is the usual fix.
+The default is `google,bing,duckduckgo`. SearXNG aggregates whatever the selected engines return, so one blocked engine costs you its share of the results rather than the whole response, and a search only comes back empty when every selected engine fails or returns nothing.
+
+DuckDuckGo is the engine in that default set most likely to be blocked, since it serves CAPTCHAs to most self-hosted instances. With only three engines in the set, losing it at the same time as a rate-limited Google or Bing is a common way to end up with no results at all. Setting `engines` explicitly, leaving DuckDuckGo out, and listing more than three engines all reduce that risk.
 
 Engines that answer quickly and tolerate self-hosted traffic make the best starting set, for example:
 
@@ -636,6 +638,9 @@ webSearch:
   searchProvider: "searxng"
   searxngInstanceUrl: "${SEARXNG_INSTANCE_URL}"
   # searxngApiKey: "${SEARXNG_API_KEY}" # Only if your instance requires authentication
+  # Required: a self-hosted instance is a private destination, so exempt it from the connection guard
+  allowedAddresses:
+    - "localhost:55011"
   searxngSearchOptions:
     engines:
       - google
@@ -653,16 +658,30 @@ SEARXNG_INSTANCE_URL=http://localhost:55011
 # SEARXNG_API_KEY=your_api_key
 ```
 
+<Callout type="warning" title="Private instances need an allowedAddresses entry">
+`localhost:55011` is a loopback address, which LibreChat's [SSRF protection](#ssrf-protection-and-private-providers) blocks at connect time. Without the matching `allowedAddresses` entry the search fails even when SearXNG is healthy. The entry must be the exact `host:port` pair from your instance URL.
+
+When LibreChat itself runs in Docker, `localhost` is the LibreChat container, not the SearXNG one. Use a hostname the container can reach, such as the compose service name, and exempt that instead:
+
+```yaml filename="librechat.yaml"
+webSearch:
+  searxngInstanceUrl: "${SEARXNG_INSTANCE_URL}" # SEARXNG_INSTANCE_URL=http://searxng:8080
+  allowedAddresses:
+    - "searxng:8080"
+```
+</Callout>
+
 See [`searxngSearchOptions`](#searxngsearchoptions) for every subkey this block accepts.
 
 #### Troubleshooting empty results
 
-A SearXNG search that returns nothing is almost always the instance rejecting the request rather than LibreChat dropping results. Work through these in order:
+A SearXNG search that returns nothing is almost always the request never reaching a working instance rather than LibreChat dropping results. Work through these in order:
 
-1. **`json` is missing from `formats`.** LibreChat requests results as JSON. If the `formats` section of your instance settings file does not list `json`, the instance answers with an error page and every search comes back empty. This is step 3 of the Docker setup above.
-2. **DuckDuckGo is serving CAPTCHAs.** It is in the default engine set (`google,bing,duckduckgo`) and blocks most self-hosted instances. Set `searxngSearchOptions.engines` explicitly and leave it out.
-3. **An engine name does not exist on your instance.** SearXNG silently skips engines it does not recognize, so a typo just means fewer results. Compare your list against `https://your-instance/config`.
-4. **The instance is slower than the timeout.** Raise `searxngSearchOptions.timeout` above the default `10000` if your instance queries many engines or sits behind a slow network path.
+1. **The instance is a private address with no `allowedAddresses` entry.** LibreChat blocks loopback and private destinations at connect time, so a self-hosted instance needs its exact `host:port` listed under [`allowedAddresses`](#ssrf-protection-and-private-providers). This blocks the request outright rather than returning an empty result set.
+2. **`json` is missing from `formats`.** LibreChat requests results as JSON. If the `formats` section of your instance settings file does not list `json`, the instance answers with an error page and every search comes back empty. This is step 3 of the Docker setup above.
+3. **Every selected engine failed.** SearXNG merges the engines that did answer, so an empty response means none of them returned anything. DuckDuckGo is in the default set (`google,bing,duckduckgo`) and serves CAPTCHAs to most self-hosted instances, which leaves only two engines to carry the search. Set `searxngSearchOptions.engines` explicitly, leave DuckDuckGo out, and list a few more engines.
+4. **An engine name does not exist on your instance.** SearXNG silently skips engines it does not recognize, so a typo just means fewer results. Compare your list against `https://your-instance/config`.
+5. **The instance is slower than the timeout.** Raise `searxngSearchOptions.timeout` above the default `10000` if your instance queries many engines or sits behind a slow network path.
 
 You can reproduce what LibreChat sends by calling the instance directly:
 
@@ -670,4 +689,4 @@ You can reproduce what LibreChat sends by calling the instance directly:
 curl -s "http://localhost:55011/search?q=librechat&format=json&engines=google,bing,startpage" | head -c 500
 ```
 
-An empty `results` array here confirms the problem is on the SearXNG side.
+This runs from your own machine, so it bypasses LibreChat's connection guard entirely. An empty `results` array here confirms the problem is on the SearXNG side; results here while LibreChat still finds nothing points back at `allowedAddresses`.
