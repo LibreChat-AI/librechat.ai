@@ -2,7 +2,8 @@ name: Cloudflare Cache Purge
 
 # Purges the Cloudflare edge cache for the pages a production deploy actually
 # changed, so a docs edit is visible immediately instead of waiting out the 24h
-# edge TTL (`SHARED_CDN_CACHE` in next.config.mjs). Nothing here changes a TTL.
+# edge TTL (`SHARED_CDN_CACHE` in next.config.mjs). It also clears any cached
+# error responses for current Next.js build assets. Nothing here changes a TTL.
 #
 # WHY PREFIXES, NOT URLS
 # The App Router serves the HTML document and the RSC flight payload at the same
@@ -18,7 +19,9 @@ name: Cloudflare Cache Purge
 #
 # WHY NOT `purge_everything`
 # It also evicts /_next/static/**, which would put every asset on the site into
-# a MISS wave on every deploy.
+# a MISS wave on every deploy. This workflow instead purges the exact build
+# assets referenced by current page shells and their runtime (roughly 100 URLs),
+# leaving historical and unrelated static assets warm.
 #
 # KNOWN, ACCEPTED BEHAVIOURS
 # 1. Prefix matching is a plain string match, so `/docs/features/agents` also
@@ -38,8 +41,10 @@ on:
   # production build and marks it `success` when the build is ready and the
   # production alias points at it. That is a real completion signal, it needs no
   # new credentials, and it arrives when the work is done rather than after a
-  # guessed wait. Verified present on this repo: deployments with
-  # `environment: Production` created by `vercel[bot]`, status `success`.
+  # guessed wait. Verified present on this repo: `Production` deployments whose
+  # successful deployment status is posted by `vercel[bot]`. The deployment
+  # itself is attributed to the human who initiated it, so that creator is not
+  # a reliable integration identifier.
   #
   # Limitations, written down rather than papered over:
   #   - It depends on Vercel's GitHub integration staying enabled. If a deploy
@@ -94,7 +99,7 @@ permissions:
 # its own rate limiting, so letting runs overlap is strictly safer than
 # serialising them and losing one.
 concurrency:
-  group: cache-purge-${{ github.event.deployment.sha || github.run_id }}
+  group: cache-purge-${{ github.event.deployment.id || github.run_id }}
   cancel-in-progress: false
 
 env:
@@ -143,17 +148,15 @@ jobs:
     # Only successful *production* deployments from Vercel. `deployment_status`
     # also fires for pending/failure states and for every preview deployment.
     #
-    # The creator check is not redundant: a job-level `environment: Production`
-    # makes GitHub create a Production deployment too, and translate_docs.yml
-    # (every 30 minutes) and update-screenshots.yml both do that. Those are not
-    # releases. They cannot reach this trigger today, because events raised by
-    # GITHUB_TOKEN do not start workflow runs, but resting on that side effect
-    # would mean a purge on every translation sweep the day it changes.
+    # Check the status creator, not the deployment creator. Vercel attributes
+    # the deployment to the human who initiated it and posts the ready status as
+    # `vercel[bot]`. A job-level `environment: Production` also creates records,
+    # but their statuses are posted by the Actions actor and must stay excluded.
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.deployment_status.state == 'success' &&
        github.event.deployment.environment == 'Production' &&
-       github.event.deployment.creator.login == 'vercel[bot]')
+       github.event.deployment_status.creator.login == 'vercel[bot]')
     runs-on: ubuntu-latest
     steps:
       # Full history: the diff base is the previous deployed commit, which can be
@@ -182,8 +185,6 @@ jobs:
           HEAD_SHA: ${{ github.event.deployment.sha }}
           DEPLOYMENT_ID: ${{ github.event.deployment.id }}
           REPO: ${{ github.repository }}
-          # Only deployments from the Vercel integration count as live releases.
-          VERCEL_CREATOR: 'vercel[bot]'
           PURGE_STATUS_CONTEXT: ${{ env.PURGE_STATUS_CONTEXT }}
         run: |
           set -euo pipefail
@@ -243,21 +244,19 @@ jobs:
               echo "::error::deployment_status payload carried no numeric deployment id."
               exit 1
             fi
-            # Walk production deployments newest-first and take the first one
-            # that succeeded on a *different* commit. Skipping same-sha entries
-            # means a redeploy of the current commit re-purges that commit's
-            # prefixes instead of computing an empty diff.
+            # Walk production deployments newest-first and take the first
+            # deployment-specific successful purge marker on a *different*
+            # commit. Skipping same-sha entries means a redeploy of the current
+            # commit re-purges that commit's prefixes instead of computing an
+            # empty diff.
             #
-            # Two filters keep the baseline honest:
+            # The purge marker proves both that the candidate was a Vercel
+            # success event and that its entire purge completed. This avoids
+            # trusting `deployment.creator`: Vercel records carry the initiating
+            # human there, just like unrelated Actions Production deployments.
             #
-            #   creator == vercel[bot] — a job-level `environment: Production`
-            #   also creates a Production deployment, and translate_docs.yml and
-            #   update-screenshots.yml both do that. Those SHAs were never a live
-            #   build. If a Vercel build for B fails while a translation run
-            #   succeeds on B, taking B as the baseline would silently skip
-            #   everything in A..B.
-            #
-            #   id < this deployment — deployment ids increase monotonically, so
+            # `id < this deployment` is still required. Deployment ids increase
+            # monotonically, so
             #   this is an "older than the event we are processing" test. Without
             #   it, a deploy that finishes while this runner is queued is newer
             #   yet still differs from head, so it would be accepted as the
@@ -275,9 +274,8 @@ jobs:
               deployments=$(gh api \
                 "repos/$REPO/deployments?environment=Production&per_page=100&page=$page")
               [ "$(jq 'length' <<< "$deployments")" -gt 0 ] || break
-              ids=$(jq -r --argjson current "$DEPLOYMENT_ID" --arg creator "$VERCEL_CREATOR" '
+              ids=$(jq -r --argjson current "$DEPLOYMENT_ID" '
                       [ .[]
-                        | select(.creator.login == $creator)
                         | select(.id < $current)
                       ][]
                       | "\(.id) \(.sha)"' <<< "$deployments")
@@ -292,20 +290,21 @@ jobs:
                 [ -n "$id" ] || continue
                 [ -z "$base" ] || break
                 [ "$sha" = "$head" ] && continue
-                # "Has it EVER succeeded", not "is its newest status success".
-                # GitHub appends an `inactive` status to earlier deployments in an
-                # environment once a newer one succeeds (auto_inactive, on by
-                # default). That is not happening on this repo today — the
-                # superseded deployment 5623426305 carries a lone `success` — but
-                # if it ever started, reading only the newest status would reject
-                # every candidate and quietly pin the workflow to broad purges.
-                succeeded=$(gh api "repos/$REPO/deployments/$id/statuses" \
-                  --jq '[.[] | select(.state == "success")] | length')
-                [ "${succeeded:-0}" -gt 0 ] || continue
-                # Keyed to this deployment, not just this commit.
-                purged=$(gh api "repos/$REPO/commits/$sha/statuses" \
-                  --jq "[.[] | select(.context == \"$PURGE_STATUS_CONTEXT/$id\"
-                                      and .state == \"success\")] | length")
+                # Cache commit statuses by SHA. Production deployment history is
+                # dominated by scheduled Actions records, often dozens on one
+                # commit; querying once per deployment would burn the API budget
+                # without learning anything new.
+                status_file="commit-statuses/$sha.json"
+                if [ ! -f "$status_file" ]; then
+                  mkdir -p commit-statuses
+                  gh api --paginate --slurp \
+                    "repos/$REPO/commits/$sha/statuses?per_page=100" > "$status_file"
+                fi
+                # Keyed to this deployment, not merely this commit. Only this
+                # workflow writes the marker, after every Cloudflare call wins.
+                purged=$(jq --arg context "$PURGE_STATUS_CONTEXT/$id" \
+                  '[.[][] | select(.context == $context and .state == "success")] | length' \
+                  "$status_file")
                 if [ "${purged:-0}" -gt 0 ]; then
                   base="$sha"
                   echo "Baseline: $sha (deployment $id) — last commit with a successful purge."
@@ -431,30 +430,81 @@ jobs:
           broad=$(jq -r '.broad' purge.json)
           collapsed=$(jq -r '.collapsed' purge.json)
 
+          echo "mode=$([ "$broad" = "true" ] && echo broad || echo selective)" >> "$GITHUB_OUTPUT"
+          echo "collapsed=$collapsed" >> "$GITHUB_OUTPUT"
+
+      # Vercel posts success as its production alias changes. Let that alias
+      # propagate before reading fresh page shells or purging anything.
+      - name: Wait for the deploy to settle
+        if: ${{ github.event_name == 'deployment_status' }}
+        run: sleep "$SETTLE_SECONDS"
+
+      # A new immutable asset can be requested during the alias transition and
+      # receive a short-lived origin 404. The zone's Cache Rule may retain that
+      # response much longer, independently in each Cloudflare location. Read a
+      # bounded set of fresh page shells plus their runtime's complete lazy-chunk
+      # map, then globally purge those exact current build-asset URLs; a health
+      # check from one runner cannot see poisoned keys in another edge location.
+      - name: Collect current build assets
+        id: assets
+        env:
+          CACHE_PROBE_TOKEN: ${{ github.run_id }}-${{ github.run_attempt }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+
+          probe_log=$(mktemp)
+          if node scripts/cache-build-assets.mjs > build-assets.txt 2> "$probe_log"; then
+            cat "$probe_log" >&2
+          else
+            probe_status=$?
+            if [ "$EVENT" != "workflow_dispatch" ]; then
+              cat "$probe_log" >&2
+              rm -f "$probe_log"
+              exit "$probe_status"
+            fi
+            # Manual dispatch is the escape hatch for a production/cache
+            # outage. Keep its already-computed broad prefixes and public asset
+            # targets usable even if one of the live page probes is unhealthy.
+            sed 's/^::error::/::warning::/' "$probe_log" >&2
+            echo "::warning::Build-asset discovery failed; continuing with the manual recovery targets."
+            : > build-assets.txt
+          fi
+          rm -f "$probe_log"
+
+          cat build-assets.txt >> files.txt
+          sort -u files.txt -o files.txt
+
+          prefix_count=$(wc -l < prefixes.txt)
+          file_count=$(wc -l < files.txt)
+          total=$((prefix_count + file_count))
+          echo "count=$total" >> "$GITHUB_OUTPUT"
+
           {
             echo "### Cloudflare purge plan"
             echo
-            echo "- mode: \`$([ "$broad" = "true" ] && echo broad || echo selective)\`"
-            [ "$collapsed" = "true" ] && echo "- **collapsed to broad**: the diff produced more prefixes than the cap"
-            echo "- prefixes: $(wc -l < prefixes.txt)"
-            echo "- exact URLs: $(wc -l < files.txt)"
+            echo "- mode: \`${{ steps.compute.outputs.mode }}\`"
+            if [ "${{ steps.compute.outputs.collapsed }}" = "true" ]; then
+              echo "- **collapsed to broad**: the diff produced more prefixes than the cap"
+            fi
+            echo "- prefixes: $prefix_count"
+            echo "- exact URLs: $file_count"
+            echo "- current build assets: $(wc -l < build-assets.txt)"
             echo
             echo '```'
             cat prefixes.txt files.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-          echo "count=$(wc -l < prefixes.txt)" >> "$GITHUB_OUTPUT"
-
-      # Nothing mapped means the deploy touched only files that cannot change a
-      # rendered page (.github/**, tests, repo notes). Say so out loud; do not
-      # dress it up as a successful purge.
+      # Defensive only: build-assets.txt normally makes every production deploy
+      # non-empty. Keep a clear no-op result for an explicitly narrowed future
+      # configuration.
       - name: Nothing to purge
-        if: steps.compute.outputs.count == '0'
-        run: echo "::notice::No cached route changed in this deploy — no purge issued."
+        if: steps.assets.outputs.count == '0'
+        run: echo "::notice::No cached route or build asset needs purging."
 
       - name: Dry run
-        if: inputs.dry_run && steps.compute.outputs.count != '0'
+        if: inputs.dry_run && steps.assets.outputs.count != '0'
         run: |
           set -euo pipefail
           echo "DRY RUN — the Cloudflare API is not called. Prefixes:"
@@ -467,7 +517,7 @@ jobs:
       # Fail loudly on missing configuration. A purge that quietly skips is the
       # exact failure this workflow exists to prevent.
       - name: Check credentials
-        if: ${{ !inputs.dry_run && steps.compute.outputs.count != '0' }}
+        if: ${{ !inputs.dry_run && steps.assets.outputs.count != '0' }}
         env:
           CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CF_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
@@ -482,12 +532,8 @@ jobs:
             exit 1
           fi
 
-      - name: Wait for the deploy to settle
-        if: ${{ !inputs.dry_run && steps.compute.outputs.count != '0' && github.event_name == 'deployment_status' }}
-        run: sleep "$SETTLE_SECONDS"
-
       - name: Purge
-        if: ${{ !inputs.dry_run && steps.compute.outputs.count != '0' }}
+        if: ${{ !inputs.dry_run && steps.assets.outputs.count != '0' }}
         env:
           CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CF_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
@@ -600,7 +646,7 @@ jobs:
       # run that fails leaves no marker, so the following run's diff widens to
       # include this one's range instead of stepping over it.
       - name: Record the purge against this commit
-        if: ${{ !inputs.dry_run && steps.compute.outputs.count != '0' && github.event_name == 'deployment_status' }}
+        if: ${{ !inputs.dry_run && steps.assets.outputs.count != '0' && github.event_name == 'deployment_status' }}
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}

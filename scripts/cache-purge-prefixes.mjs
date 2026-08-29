@@ -94,6 +94,7 @@ const INERT = [
   /^e2e\//,
   /^__tests__\//,
   /^scripts\/screenshots\//,
+  /^scripts\/cache-(build-assets|purge-prefixes)\.mjs$/,
   /(^|\/)__tests__\//,
   /\.test\.(ts|tsx|mjs|js)$/,
   /^(README|LICENSE|CONTRIBUTING|SECURITY|CHANGELOG|PURGE-NOTES)(\.md)?$/,
