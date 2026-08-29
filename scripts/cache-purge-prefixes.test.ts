@@ -173,6 +173,55 @@ describe('the workflow feeds the mapper what it needs', () => {
   })
 
   /**
+   * Vercel attributes a deployment to the human who initiated it, then posts
+   * the ready status as vercel[bot]. Checking deployment.creator made every
+   * automatic purge run skip before it reached a step.
+   */
+  it('identifies Vercel by the deployment-status creator', () => {
+    expect(workflow).toContain("github.event.deployment_status.creator.login == 'vercel[bot]'")
+    expect(workflow).not.toContain("github.event.deployment.creator.login == 'vercel[bot]'")
+  })
+
+  /**
+   * Vercel can redeploy the same SHA. Grouping by SHA would let GitHub discard
+   * one of those pending purge runs, even though each deployment needs its own
+   * baseline and marker.
+   */
+  it('keys concurrency by deployment id so same-sha redeployments are distinct', () => {
+    expect(workflow).toContain(
+      'group: cache-purge-${{ github.event.deployment.id || github.run_id }}',
+    )
+    expect(workflow).not.toContain(
+      'group: cache-purge-${{ github.event.deployment.sha || github.run_id }}',
+    )
+  })
+
+  it('adds current build assets before deciding there is nothing to purge', () => {
+    expect(workflow).toContain('node scripts/cache-build-assets.mjs > build-assets.txt')
+    expect(workflow).toContain("if: steps.assets.outputs.count == '0'")
+    expect(workflow).not.toContain('if: steps.compute.outputs.count')
+  })
+
+  /**
+   * An operator uses workflow_dispatch to recover an unhealthy production
+   * site. A failed live probe must not prevent the broad page/public targets
+   * computed earlier in the job from reaching Cloudflare.
+   */
+  it('keeps manual recovery targets when build-asset discovery fails', () => {
+    expect(workflow).toContain('if [ "$EVENT" != "workflow_dispatch" ]; then')
+    expect(workflow).toContain(': > build-assets.txt')
+    expect(workflow).toContain(
+      'Build-asset discovery failed; continuing with the manual recovery targets.',
+    )
+  })
+
+  it('accepts a baseline only when its deployment-specific purge marker exists', () => {
+    expect(workflow).toContain('PURGE_STATUS_CONTEXT/$id')
+    expect(workflow).toContain('select(.context == $context and .state == "success")')
+    expect(workflow).not.toContain('select(.creator.login == $creator)')
+  })
+
+  /**
    * A peer that accepts the connection and then stops responding would otherwise
    * never return, so the retry loop never sees a failure and the job sits until
    * the platform timeout. Runs overlap by design, so several can pile up.
@@ -667,14 +716,17 @@ describe('fallbacks', () => {
     expect(prefixes).toContain('www.librechat.ai/docs/features')
   })
 
-  it.each(['.github/workflows/ci.yml', 'e2e/home.spec.ts', 'README.md', 'lib/i18n/tm.test.ts'])(
-    'purges nothing for %s',
-    (file) => {
-      const result = prefixesForFile(file, locales)
-      expect(result.broad).toBe(false)
-      expect(result.prefixes).toEqual([])
-    },
-  )
+  it.each([
+    '.github/workflows/ci.yml',
+    'e2e/home.spec.ts',
+    'README.md',
+    'lib/i18n/tm.test.ts',
+    'scripts/cache-build-assets.mjs',
+  ])('purges nothing for %s', (file) => {
+    const result = prefixesForFile(file, locales)
+    expect(result.broad).toBe(false)
+    expect(result.prefixes).toEqual([])
+  })
 })
 
 describe('computePurge', () => {
