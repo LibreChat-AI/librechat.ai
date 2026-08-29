@@ -3,10 +3,14 @@ module.exports = {
   siteUrl: 'https://www.librechat.ai',
   generateRobotsTxt: true,
   robotsTxtOptions: {
+    // Content-Signal (https://contentsignals.org) states what crawlers may do
+    // with the pages they fetch. The docs are open-source content and the Terms
+    // (app/tos/page.tsx) already welcome well-behaved AI-training crawlers, so
+    // every signal is opt-in: train on it, index it, ground answers in it.
     transformRobotsTxt: async (_, robotsTxt) =>
       robotsTxt.replace(
         'User-agent: *',
-        'User-agent: *\nContent-Signal: ai-train=no, search=yes, ai-input=yes',
+        'User-agent: *\nContent-Signal: ai-train=yes, search=yes, ai-input=yes',
       ),
   },
   changefreq: 'weekly',
