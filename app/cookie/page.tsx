@@ -6,6 +6,7 @@ import type { Metadata } from 'next'
 
 export const metadata: Metadata = {
   title: 'Cookie Policy',
+  alternates: { canonical: '/cookie' },
   description:
     'How the LibreChat website and documentation use cookies, browser storage, and analytics.',
 }

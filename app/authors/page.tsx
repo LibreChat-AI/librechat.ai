@@ -10,6 +10,7 @@ import type { Metadata } from 'next'
 
 export const metadata: Metadata = {
   title: 'Authors',
+  alternates: { canonical: '/authors' },
   description: 'Meet the people writing, maintaining, and shaping LibreChat.',
   openGraph: {
     title: 'Authors | LibreChat',

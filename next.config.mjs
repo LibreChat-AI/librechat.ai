@@ -36,7 +36,14 @@ const cspHeader = `
   block-all-mixed-content;
 `
 
-const nonPermanentRedirects = [
+/**
+ * Vanity paths and rotating targets. A 307 is the honest status for these: the
+ * source URL is a permanent alias we intend to keep, and the destination is
+ * expected to move. `/roadmap` in particular points at whichever roadmap post
+ * is current — pinning that with a 308 would have browsers cache a link to a
+ * stale year's post indefinitely.
+ */
+const temporaryRedirects = [
   ['/discord', 'https://discord.librechat.ai'],
   ['/demo', 'https://chat.librechat.ai'],
   ['/issue', 'https://github.com/danny-avila/LibreChat/issues/new/choose'],
@@ -45,6 +52,23 @@ const nonPermanentRedirects = [
   ['/gh-support', 'https://github.com/danny-avila/LibreChat/discussions/categories/support'],
   ['/gh-discussions', 'https://github.com/danny-avila/LibreChat/discussions'],
   ['/roadmap', '/blog/2026-02-18_2026_roadmap'],
+]
+
+/**
+ * Content that moved. These were 307s, which tell a search engine the old URL
+ * is still the canonical one — so every link and ranking signal earned by the
+ * pre-move URL stayed stranded there instead of consolidating onto the page
+ * that now holds the content. Search Console counts 162 pages in its "Page with
+ * redirect" bucket. A 308 is what actually transfers those signals.
+ *
+ * The /toolkit aliases used to redirect to /toolkit/<tool>, which was itself a
+ * `redirect()` page into /docs/toolkit/<tool> — two hops, neither permanent.
+ * They now point straight at the destination and the intermediate route files
+ * are gone, which also keeps them out of Next's prerender manifest (and so out
+ * of the sitemap). Keep this table in step with LEGACY_TOOLKIT_HREFS in
+ * lib/localize-href.ts, which canonicalizes the same aliases in internal links.
+ */
+const permanentRedirects = [
   ['/features', '/docs/features'],
   ['/docs/configuration/azure', '/docs/configuration/librechat_yaml/ai_endpoints/azure'],
   ['/docs/user_guides/artifacts', '/docs/features/artifacts'],
@@ -59,8 +83,11 @@ const nonPermanentRedirects = [
   ['/docs/features/plugins', '/docs/features/agents'],
   ['/docs/features/speech-to-text', '/docs/configuration/stt_tts'],
   ['/docs/configuration/librechat_yaml/setup', '/docs/configuration/librechat_yaml'],
-  ['/toolkit/yaml_checker', '/toolkit/yaml-checker'],
-  ['/toolkit/creds_generator', '/toolkit/creds-generator'],
+  ['/toolkit', '/docs/toolkit'],
+  ['/toolkit/yaml-checker', '/docs/toolkit/yaml-validator'],
+  ['/toolkit/yaml_checker', '/docs/toolkit/yaml-validator'],
+  ['/toolkit/creds-generator', '/docs/toolkit/credentials-generator'],
+  ['/toolkit/creds_generator', '/docs/toolkit/credentials-generator'],
 ]
 
 /**
@@ -111,6 +138,38 @@ const SHARED_CDN_CACHE = 'public, s-maxage=86400, stale-while-revalidate=604800'
  */
 const LIVE_DATA_CDN_CACHE = 'public, s-maxage=3600, stale-while-revalidate=86400'
 const LIVE_DATA_PATHS = ['/blog/2026-07-26_clickhouse-analytics']
+
+/**
+ * Endpoints that exist for LLM and agent tooling, not for readers: the raw
+ * Markdown mirror of every docs page, the LLM indexes, and the machine-readable
+ * service descriptions. Each one duplicates a real page's text (or describes the
+ * site) with no navigation, so a search engine that indexes it either shows a
+ * plain-text stub in results or treats it as a near-duplicate of the page it
+ * mirrors. Search Console currently reports 1,334 URLs as crawled and declined.
+ *
+ * Matched on the REQUEST path, which is what makes this safe: `/docs/x` served
+ * as Markdown under `Accept: text/markdown` (proxy.ts rewrites it to
+ * /llms.mdx/docs/x) never matches these sources, so the docs page itself keeps
+ * its indexable HTML. Only URLs that are themselves Markdown endpoints are
+ * marked. Agents fetch them by URL and are unaffected — `noindex` governs
+ * indexing, not access.
+ */
+const NOINDEX_PATHS = [
+  '/llms.txt',
+  '/llms-full.txt',
+  '/llms.mdx/:path*',
+  '/docs/:path*.md',
+  '/docs/:path*.mdx',
+  '/auth.md',
+  '/openapi.json',
+  '/mcp',
+  '/.well-known/:path*',
+]
+
+const noindexHeaders = NOINDEX_PATHS.map((source) => ({
+  source,
+  headers: [{ key: 'X-Robots-Tag', value: 'noindex' }],
+}))
 
 const AGENT_DISCOVERY_LINKS = [
   '</.well-known/api-catalog>; rel="api-catalog"; type="application/linkset+json"',
@@ -322,6 +381,7 @@ const config = {
           },
         ],
       },
+      ...noindexHeaders,
       ...markdownNegotiatedVaryHeaders,
       ...cdnCacheHeaders,
     ]
@@ -339,10 +399,15 @@ const config = {
     ]
   },
   redirects: async () => [
-    ...nonPermanentRedirects.map(([source, destination]) => ({
+    ...temporaryRedirects.map(([source, destination]) => ({
       source,
       destination,
       permanent: false,
+    })),
+    ...permanentRedirects.map(([source, destination]) => ({
+      source,
+      destination,
+      permanent: true,
     })),
   ],
 }

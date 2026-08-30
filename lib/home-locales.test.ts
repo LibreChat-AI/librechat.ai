@@ -30,4 +30,15 @@ describe('localized home locales', () => {
     expect(localizedHomeHref('de')).toBe('/de')
     expect(localizedHomeAlternates()).toMatchObject({ en: '/', de: '/de' })
   })
+
+  it('points x-default at the English home page', () => {
+    // Without x-default a search engine picks its own fallback for readers whose
+    // language matches no alternate, and with 14 equal entries that choice is
+    // arbitrary — an English searcher can be handed /tr.
+    expect(localizedHomeAlternates()).toHaveProperty('x-default', '/')
+  })
+
+  it('advertises exactly one alternate per locale plus x-default', () => {
+    expect(Object.keys(localizedHomeAlternates())).toHaveLength(i18n.languages.length + 1)
+  })
 })

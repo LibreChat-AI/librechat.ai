@@ -6,6 +6,7 @@ import type { Metadata } from 'next'
 
 export const metadata: Metadata = {
   title: 'Privacy Policy — LibreChat Demo',
+  alternates: { canonical: '/demo/privacy' },
   description: 'Privacy Policy for the LibreChat Demo instance at chat.librechat.ai.',
 }
 

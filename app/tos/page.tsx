@@ -6,6 +6,7 @@ import type { Metadata } from 'next'
 
 export const metadata: Metadata = {
   title: 'Terms of Service',
+  alternates: { canonical: '/tos' },
   description:
     'Terms of Service governing access to and use of the LibreChat documentation website (librechat.ai).',
 }

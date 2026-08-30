@@ -187,24 +187,32 @@ export async function generateDocsMetadata(params: DocsRouteParams): Promise<Met
       canonical: page.url,
       // Only advertise an hreflang alternate for locales that actually have a
       // translated file. getPage falls back to English for a missing locale.
-      languages: Object.fromEntries(
-        i18n.languages
-          .filter((locale) => {
-            if (locale === i18n.defaultLanguage) return true
-            const localePage = docsSource.getPage(params.slug, locale)
-            return localePage?.path.endsWith(`.${locale}.mdx`) ?? false
-          })
-          .map((locale) => {
-            const slugPath = (params.slug ?? []).join('/')
-            const href =
-              locale === i18n.defaultLanguage
-                ? englishDocsHref(params.slug)
-                : slugPath
-                  ? `/${locale}/docs/${slugPath}`
-                  : `/${locale}/docs`
-            return [locale, href]
-          }),
-      ),
+      //
+      // `x-default` names the page to serve a reader whose language matches no
+      // alternate. English is the source every translation is derived from, so
+      // it is the fallback; leaving x-default off lets the search engine pick
+      // one of the translations arbitrarily for unmatched languages.
+      languages: {
+        ...Object.fromEntries(
+          i18n.languages
+            .filter((locale) => {
+              if (locale === i18n.defaultLanguage) return true
+              const localePage = docsSource.getPage(params.slug, locale)
+              return localePage?.path.endsWith(`.${locale}.mdx`) ?? false
+            })
+            .map((locale) => {
+              const slugPath = (params.slug ?? []).join('/')
+              const href =
+                locale === i18n.defaultLanguage
+                  ? englishDocsHref(params.slug)
+                  : slugPath
+                    ? `/${locale}/docs/${slugPath}`
+                    : `/${locale}/docs`
+              return [locale, href]
+            }),
+        ),
+        'x-default': englishDocsHref(params.slug),
+      },
     },
     openGraph: {
       title: page.data.title,

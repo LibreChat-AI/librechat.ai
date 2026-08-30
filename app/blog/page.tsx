@@ -8,6 +8,7 @@ import type { Metadata } from 'next'
 
 export const metadata: Metadata = {
   title: 'Blog',
+  alternates: { canonical: '/blog' },
   description: 'Latest news and guides from the LibreChat team.',
 }
 

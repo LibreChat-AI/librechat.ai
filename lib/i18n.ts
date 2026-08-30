@@ -68,10 +68,22 @@ export function localizedHomeHref(lang?: string): string {
   return `/${lang}`
 }
 
+/**
+ * The hreflang set for the home page.
+ *
+ * `x-default` names the URL to serve a reader whose language matches none of
+ * the alternates. Without it a search engine picks one itself, and with 14
+ * equally-weighted entries that choice is arbitrary — an English-language
+ * searcher can be shown `/tr` or `/vi`. English is the source language, so it
+ * is the fallback.
+ */
 export function localizedHomeAlternates(): Record<string, string> {
-  return Object.fromEntries(
-    LOCALIZED_HOME_LOCALES.map((locale) => [locale, localizedHomeHref(locale)]),
-  )
+  return {
+    ...Object.fromEntries(
+      LOCALIZED_HOME_LOCALES.map((locale) => [locale, localizedHomeHref(locale)]),
+    ),
+    'x-default': localizedHomeHref(i18n.defaultLanguage),
+  }
 }
 
 /** Cookie that records an explicit language choice (read by the proxy's auto-detect). */

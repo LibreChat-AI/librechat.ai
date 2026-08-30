@@ -30,6 +30,7 @@ export async function generateMetadata({ params }: AuthorPageProps): Promise<Met
   return {
     title: author.name,
     description: author.bio,
+    alternates: { canonical: `/authors/${id}` },
     openGraph: {
       title: `${author.name} | LibreChat`,
       description: author.bio,

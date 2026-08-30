@@ -25,6 +25,7 @@ import type { Metadata } from 'next'
 
 export const metadata: Metadata = {
   title: 'About LibreChat',
+  alternates: { canonical: '/about' },
   description:
     'LibreChat is a free, open-source AI platform that brings together all your AI conversations in one unified, customizable interface.',
   openGraph: {

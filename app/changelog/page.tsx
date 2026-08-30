@@ -4,6 +4,7 @@ import type { Metadata } from 'next'
 
 export const metadata: Metadata = {
   title: 'Changelog',
+  alternates: { canonical: '/changelog' },
   description: 'Release notes and configuration updates for LibreChat.',
 }
 

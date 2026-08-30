@@ -5,6 +5,7 @@ import SubscribeClient from './client'
 
 export const metadata: Metadata = {
   title: 'Subscribe',
+  alternates: { canonical: '/subscribe' },
   description: 'Subscribe to the LibreChat newsletter',
 }
 

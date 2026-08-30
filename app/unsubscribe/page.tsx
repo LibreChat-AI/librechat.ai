@@ -5,6 +5,7 @@ import UnsubscribeClient from './client'
 
 export const metadata: Metadata = {
   title: 'Unsubscribe',
+  alternates: { canonical: '/unsubscribe' },
   description: 'Unsubscribe from the LibreChat newsletter',
 }
 
