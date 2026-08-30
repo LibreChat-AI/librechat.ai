@@ -1,4 +1,4 @@
-const { lastmodFor } = require('./lib/lastmod.cjs')
+const { contentRoutes, lastmodFor } = require('./lib/lastmod.cjs')
 
 /**
  * Routes that next-sitemap discovers but that must never be submitted for
@@ -64,4 +64,11 @@ module.exports = {
     loc: path,
     lastmod: lastmodFor(path),
   }),
+  /**
+   * Blog and changelog URLs read straight from the content directory, so a post
+   * that renders dynamically is still listed. See contentRoutes() for why the
+   * prerender manifest alone is not enough.
+   */
+  additionalPaths: async (config) =>
+    Promise.all(contentRoutes().map((route) => config.transform(config, route))),
 }

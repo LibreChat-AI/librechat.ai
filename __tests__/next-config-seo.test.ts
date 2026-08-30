@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { pathToRegexp } from 'next/dist/compiled/path-to-regexp'
+import { createRequire } from 'node:module'
 import nextConfig from '../next.config.mjs'
+
+// Next's bundled path-to-regexp ships no types, so require it rather than
+// import it. Using Next's own copy is the point: these assertions then test the
+// matching Next will actually perform on a header rule, not a re-implementation.
+const require = createRequire(import.meta.url)
+const { pathToRegexp } = require('next/dist/compiled/path-to-regexp') as {
+  pathToRegexp: (source: string) => RegExp | { regexp: RegExp }
+}
 
 interface Redirect {
   source: string
@@ -103,14 +111,10 @@ describe('X-Robots-Tag', () => {
     expect(noindexSources()).toContain(source)
   })
 
-  /**
-   * Compiled with Next's own bundled path-to-regexp, so these assertions test
-   * the matching Next will actually perform rather than a re-implementation.
-   */
   const matchesANoindexRule = (requestPath: string) =>
     noindexSources().some((source) => {
       const compiled = pathToRegexp(source)
-      const regexp = (compiled as { regexp?: RegExp }).regexp ?? (compiled as RegExp)
+      const regexp = compiled instanceof RegExp ? compiled : compiled.regexp
       return regexp.test(requestPath)
     })
 

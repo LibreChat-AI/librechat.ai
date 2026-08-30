@@ -3,7 +3,13 @@ import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
 const sitemapConfig = require('../next-sitemap.config.js')
-const { docsFile, frontmatterDate, lastmodFor, sourceFileFor } = require('../lib/lastmod.cjs')
+const {
+  contentRoutes,
+  docsFile,
+  frontmatterDate,
+  lastmodFor,
+  sourceFileFor,
+} = require('../lib/lastmod.cjs')
 
 /**
  * next-sitemap's own exclude matcher: patterns are anchored, case-insensitive,
@@ -164,6 +170,38 @@ describe('lastmod values', () => {
     for (const route of ['/', '/docs', '/docs/quick_start', '/blog', '/changelog']) {
       const value = lastmodFor(route)
       if (value !== undefined) expect(Number.isNaN(Date.parse(value))).toBe(false)
+    }
+  })
+})
+
+describe('content routes', () => {
+  it('lists every blog and changelog entry from the content directory', () => {
+    const routes: string[] = contentRoutes()
+
+    expect(routes).toContain('/blog/2026-07-26_clickhouse-analytics')
+    expect(routes).toContain('/blog/2026-02-18_2026_roadmap')
+    expect(routes.some((route) => route.startsWith('/changelog/'))).toBe(true)
+    expect(routes.every((route) => /^\/(blog|changelog)\/[^/]+$/.test(route))).toBe(true)
+  })
+
+  it('lists the post that renders dynamically and so misses the prerender manifest', async () => {
+    // /blog/2026-07-26_clickhouse-analytics embeds live data via connection(),
+    // which forces dynamic rendering and drops it from Next's prerender
+    // manifest — the sole source next-sitemap would otherwise read.
+    const route = '/blog/2026-07-26_clickhouse-analytics'
+    expect(contentRoutes()).toContain(route)
+
+    const additional = await sitemapConfig.additionalPaths(sitemapConfig)
+    expect(additional.map((entry: { loc: string }) => entry.loc)).toContain(route)
+  })
+
+  it('gives every additional path the same shape as a transformed route', async () => {
+    const additional = await sitemapConfig.additionalPaths(sitemapConfig)
+
+    for (const entry of additional) {
+      expect(entry).toHaveProperty('loc')
+      expect(entry).not.toHaveProperty('changefreq')
+      expect(entry).not.toHaveProperty('priority')
     }
   })
 })
