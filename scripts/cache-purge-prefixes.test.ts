@@ -1,4 +1,5 @@
-import { readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -76,6 +77,33 @@ describe('readLocales', () => {
       rmSync(base, { force: true })
     }
   })
+})
+
+it('reads deployed inputs from the CLI working directory', () => {
+  const deployedRoot = mkdtempSync(join(tmpdir(), 'cache-purge-deployed-'))
+  mkdirSync(join(deployedRoot, 'lib'))
+  mkdirSync(join(deployedRoot, 'public'))
+  writeFileSync(
+    join(deployedRoot, 'lib/i18n.ts'),
+    `export const i18n = { defaultLanguage: 'en', languages: ['en', 'sv'] }`,
+  )
+  writeFileSync(join(deployedRoot, 'public/rollback.txt'), 'deployed asset')
+
+  try {
+    const script = fileURLToPath(new URL('./cache-purge-prefixes.mjs', import.meta.url))
+    const result = spawnSync(process.execPath, [script, '--broad', '--assets', '--json'], {
+      cwd: deployedRoot,
+      encoding: 'utf8',
+    })
+    expect(result.stderr).toBe('')
+    expect(result.status).toBe(0)
+
+    const purge = JSON.parse(result.stdout)
+    expect(purge.prefixes).toContain('www.librechat.ai/sv')
+    expect(purge.files).toContain('https://www.librechat.ai/rollback.txt')
+  } finally {
+    rmSync(deployedRoot, { recursive: true, force: true })
+  }
 })
 
 describe('parseArgs', () => {
@@ -202,7 +230,7 @@ describe('the workflow feeds the mapper what it needs', () => {
     expect(cacheScriptInvocations).toContain('node scripts/cache-purge-event.mjs')
     expect(
       cacheScriptInvocations
-        .filter((command) => !command.endsWith('cache-purge-event.mjs'))
+        .filter((command) => command !== 'node scripts/cache-purge-event.mjs')
         .every((command) => command.startsWith('node ../workflow-source/')),
     ).toBe(true)
   })

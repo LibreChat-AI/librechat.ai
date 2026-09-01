@@ -597,8 +597,9 @@ export function parseArgs(argv) {
 }
 
 async function main(argv) {
+  const repoRoot = process.cwd()
   const { flags, positional } = parseArgs(argv)
-  const locales = readLocales()
+  const locales = readLocales(repoRoot)
 
   // Read the file list even with --broad: recovery runs pass both, so that the
   // broad page set is topped up with the asset URLs and removed locales that
@@ -621,7 +622,7 @@ async function main(argv) {
   const result = computePurge(files, locales, { forceBroad: flags.has('--broad') })
 
   if (flags.has('--assets')) {
-    const assets = assetFallbackTargets()
+    const assets = assetFallbackTargets(repoRoot)
     result.prefixes = dropCoveredPrefixes([...result.prefixes, ...assets.prefixes])
     result.files = [...new Set([...result.files, ...assets.files])].sort()
   }
