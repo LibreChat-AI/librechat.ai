@@ -228,13 +228,13 @@ describe('the workflow feeds the mapper what it needs', () => {
    * exact project, branch, Git SHA, and Vercel deployment id. No GitHub
    * Deployment creator/status inference is needed.
    */
-  it('accepts only this project production promotion event', () => {
+  it('accepts this project production promotions from any branch', () => {
     expect(workflow).toContain("types: ['vercel.deployment.promoted']")
     expect(workflow).toContain("github.event.client_payload.environment == 'production'")
     expect(workflow).toContain(
       "github.event.client_payload.project.id == 'prj_BM0YCOihInl5lqPJidAzwixJPdtj'",
     )
-    expect(workflow).toContain("github.event.client_payload.git.ref == 'main'")
+    expect(workflow).not.toContain("github.event.client_payload.git.ref == 'main'")
     expect(workflow).toContain('node scripts/cache-purge-event.mjs')
     expect(workflow).not.toContain('deployment_status:')
   })
@@ -254,6 +254,17 @@ describe('the workflow feeds the mapper what it needs', () => {
     const cloudflareSecrets = workflow.indexOf('CF_API_TOKEN:')
     expect(trustCheck).toBeGreaterThan(0)
     expect(trustCheck).toBeLessThan(cloudflareSecrets)
+  })
+
+  it('routes non-main production promotions directly to a full-zone purge', () => {
+    expect(workflow).toContain('PROMOTED_REF: ${{ steps.event.outputs.ref }}')
+    expect(workflow).toContain('if [ "$PROMOTED_REF" != "main" ]; then')
+    expect(workflow).toContain('Non-main production deployment')
+
+    const nonMainRecovery = workflow.indexOf('if [ "$PROMOTED_REF" != "main" ]; then')
+    const cloudflareSecrets = workflow.indexOf('CF_API_TOKEN:')
+    expect(nonMainRecovery).toBeGreaterThan(0)
+    expect(nonMainRecovery).toBeLessThan(cloudflareSecrets)
   })
 
   /**
@@ -289,6 +300,12 @@ describe('the workflow feeds the mapper what it needs', () => {
     expect(workflow).not.toContain(
       'group: cache-purge-${{ github.event.client_payload.git.sha || github.run_id }}',
     )
+  })
+
+  it('purges every page route when Vercel redeploys the checkpointed SHA', () => {
+    expect(workflow).toContain('&& [ "$base" = "$head" ]; then')
+    expect(workflow).toContain('emit mode pages')
+    expect(workflow).toContain('[ "$MODE" = "pages" ] && broad_flag="--broad"')
   })
 
   /**

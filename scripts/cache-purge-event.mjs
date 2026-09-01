@@ -5,6 +5,7 @@ export const VERCEL_PROJECT_ID = 'prj_BM0YCOihInl5lqPJidAzwixJPdtj'
 
 const COMMIT_SHA = /^[0-9a-f]{40}$/u
 const DEPLOYMENT_ID = /^dpl_[A-Za-z0-9]+$/u
+const GIT_REF = /^(?!.*(?:^|\/)\.)(?!.*\.\.)(?!.*\/$)[A-Za-z0-9][A-Za-z0-9._/-]*$/u
 const PURGE_LEDGER_DESCRIPTION = /^([1-9]\d*)\|([0-9a-f]{40})\|/u
 const RUN_TITLE = /^cache-purge:([^:]+):([^:]+):([^:]+):([0-9a-f]{40}):(dpl_[A-Za-z0-9]+)$/u
 
@@ -26,8 +27,8 @@ export function validatePromotedDeployment(payload) {
       `Vercel event has an unexpected Vercel project: ${payload.project?.id ?? 'missing'}`,
     )
   }
-  if (payload.git?.ref !== 'main') {
-    throw new Error(`Vercel event is not the production branch: ${payload.git?.ref ?? 'missing'}`)
+  if (!GIT_REF.test(payload.git?.ref ?? '')) {
+    throw new Error(`Vercel event has an invalid Git ref: ${payload.git?.ref ?? 'missing'}`)
   }
   if (!COMMIT_SHA.test(payload.git?.sha ?? '')) {
     throw new Error(`Vercel event has an invalid Git commit SHA: ${payload.git?.sha ?? 'missing'}`)
@@ -39,6 +40,7 @@ export function validatePromotedDeployment(payload) {
   return {
     deploymentId: payload.id,
     head: payload.git.sha,
+    ref: payload.git.ref,
   }
 }
 
@@ -121,7 +123,6 @@ export function selectPurgeState(
       run?.event !== 'repository_dispatch' ||
       metadata?.environment !== 'production' ||
       metadata.projectId !== VERCEL_PROJECT_ID ||
-      metadata.ref !== 'main' ||
       metadata.sha !== entry.sha ||
       metadata.deploymentId !== entry.deploymentId
     ) {
@@ -204,7 +205,10 @@ function main() {
   }
 
   const event = validatePromotedDeployment(payload)
-  appendFileSync(output, `deployment_id=${event.deploymentId}\nhead=${event.head}\n`)
+  appendFileSync(
+    output,
+    `deployment_id=${event.deploymentId}\nhead=${event.head}\nref=${event.ref}\n`,
+  )
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

@@ -120,14 +120,13 @@ env:
 jobs:
   purge:
     name: Purge changed prefixes
-    # Vercel emits this event for previews too. Reject those before a runner is
-    # allocated, then validate the same fields again before Cloudflare secrets
-    # become reachable.
+    # Vercel emits this event for previews too. Reject non-production events
+    # before a runner is allocated, then validate all routing fields before
+    # Cloudflare secrets become reachable.
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.client_payload.environment == 'production' &&
-       github.event.client_payload.project.id == 'prj_BM0YCOihInl5lqPJidAzwixJPdtj' &&
-       github.event.client_payload.git.ref == 'main')
+       github.event.client_payload.project.id == 'prj_BM0YCOihInl5lqPJidAzwixJPdtj')
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -159,20 +158,26 @@ jobs:
         working-directory: workflow-source
         run: node scripts/cache-purge-event.mjs
 
-      # repository_dispatch fields are caller-controlled. The event can select a
-      # deployed tree only after proving that the SHA belongs to protected main.
-      # Older ancestors remain valid, which preserves production rollbacks.
+      # repository_dispatch fields are caller-controlled. The checkout must
+      # match the promoted SHA. Main deployments additionally prove ancestry
+      # before their tree can feed the mapper; non-main promotions never feed
+      # it and route directly to a full-zone purge.
       - name: Validate promoted source
         if: github.event_name == 'repository_dispatch'
         env:
           HEAD_SHA: ${{ steps.event.outputs.head }}
+          PROMOTED_REF: ${{ steps.event.outputs.ref }}
         run: |
           set -euo pipefail
-          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
           if [ "$(git rev-parse HEAD)" != "$HEAD_SHA" ]; then
             echo "::error::The deployed checkout does not match the promoted SHA."
             exit 1
           fi
+          if [ "$PROMOTED_REF" != "main" ]; then
+            echo "::notice::Non-main production deployment will use full-zone recovery."
+            exit 0
+          fi
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
           if ! git merge-base --is-ancestor "$HEAD_SHA" origin/main; then
             echo "::error::The promoted SHA is not part of the current main history."
             exit 1
@@ -195,6 +200,7 @@ jobs:
           INPUT_RANGE: ${{ inputs.range }}
           HEAD_SHA: ${{ steps.event.outputs.head }}
           DEPLOYMENT_ID: ${{ steps.event.outputs.deployment_id }}
+          PROMOTED_REF: ${{ steps.event.outputs.ref }}
           CURRENT_RUN_NUMBER: ${{ github.run_number }}
           REPO: ${{ github.repository }}
           PURGE_STATUS_CONTEXT: ${{ env.PURGE_STATUS_CONTEXT }}
@@ -255,6 +261,11 @@ jobs:
             if ! printf '%s' "${DEPLOYMENT_ID:-}" | grep -Eq '^dpl_[A-Za-z0-9]+$'; then
               echo "::error::Promoted event carried no valid Vercel deployment id."
               exit 1
+            fi
+            if [ "$PROMOTED_REF" != "main" ]; then
+              echo "::warning::Non-main production deployment; purging the full zone."
+              emit mode full
+              exit 0
             fi
 
             # A successful purge is the only known-good cache checkpoint.
@@ -328,6 +339,11 @@ jobs:
           if [ "$EVENT" = "workflow_dispatch" ] && [ "$INPUT_BROAD" = "true" ]; then
             # Broad page coverage, topped up from the range.
             emit mode broad
+          elif [ "$EVENT" = "repository_dispatch" ] && [ "$base" = "$head" ]; then
+            # The Git tree is unchanged, but Vercel environment or build inputs
+            # can still change rendered output. Purge pages without evicting
+            # unchanged public assets or content-addressed generated assets.
+            emit mode pages
           else
             emit mode diff
           fi
@@ -368,6 +384,7 @@ jobs:
             # shared-file change is what avoiding purge_everything is for.
             broad_flag=""
             [ "$MODE" = "broad" ] && broad_flag="--broad --assets"
+            [ "$MODE" = "pages" ] && broad_flag="--broad"
             # --no-renames is load-bearing. Git's rename detection is on by
             # default, and it reports a moved file as its destination alone, so
             # a page moved without edits would never have its old URL purged and

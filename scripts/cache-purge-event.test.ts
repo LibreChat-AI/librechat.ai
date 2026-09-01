@@ -20,11 +20,21 @@ const promoted = {
 }
 
 describe('validatePromotedDeployment', () => {
-  it('returns the trusted routing fields for this project production branch', () => {
+  it('returns the trusted routing fields for this project production deployment', () => {
     expect(validatePromotedDeployment(promoted)).toEqual({
       deploymentId: 'dpl_EnMFpT7NUGsYu5fDXNakPwBfDGSa',
       head: 'e161206fa9fd03294430019666687e8f8e232201',
+      ref: 'main',
     })
+  })
+
+  it('accepts a non-main production promotion for full-zone recovery', () => {
+    expect(
+      validatePromotedDeployment({
+        ...promoted,
+        git: { ...promoted.git, ref: 'feature/manual-promotion' },
+      }),
+    ).toMatchObject({ ref: 'feature/manual-promotion' })
   })
 
   it.each([
@@ -34,9 +44,9 @@ describe('validatePromotedDeployment', () => {
       { project: { id: 'prj_other', name: 'other' } },
       'unexpected Vercel project',
     ],
-    ['different branch', { git: { ...promoted.git, ref: 'docs' } }, 'not the production branch'],
     ['malformed SHA', { git: { ref: 'main', sha: 'main' } }, 'invalid Git commit SHA'],
     ['malformed deployment id', { id: '6204988438' }, 'invalid Vercel deployment ID'],
+    ['malformed branch', { git: { ...promoted.git, ref: '../main' } }, 'invalid Git ref'],
   ])('rejects a %s', (_name, patch, message) => {
     expect(() => validatePromotedDeployment({ ...promoted, ...patch })).toThrow(message)
   })
