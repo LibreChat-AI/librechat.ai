@@ -46,6 +46,26 @@ const WEBPACK_RUNTIME_PATH = /\/static\/chunks\/webpack-[^/]+\.js$/u
 const REQUEST_TIMEOUT_MS = 15_000
 const MAX_CONCURRENCY = 8
 
+// A Vercel alias transition is directly observable: an asset that exists a
+// moment later answers 404 now, and shells fetched mid-flip disagree about
+// which build they came from. Both conditions are retryable. Anything else, an
+// unparseable runtime or a shell carrying no assets at all, is a real failure
+// and must not be retried into a timeout.
+const DISCOVERY_ATTEMPTS = 5
+const DISCOVERY_BACKOFF_MS = 10_000
+
+/** A retryable symptom of the production alias still moving. */
+export class DeploymentSkewError extends Error {
+  constructor(message) {
+    super(message)
+    this.name = 'DeploymentSkewError'
+  }
+}
+
+function isWebpackRuntime(asset) {
+  return WEBPACK_RUNTIME_PATH.test(new URL(asset).pathname)
+}
+
 function decodeAttribute(value) {
   return value.replaceAll('&amp;', '&').replaceAll('&#38;', '&').replaceAll('&#x26;', '&')
 }
@@ -246,21 +266,36 @@ export async function discoverCurrentBuildAssets({
       { method: 'GET' },
     )
     if (!response.ok) {
-      throw new Error(`Fresh page probe failed for ${pageUrl.href}: HTTP ${response.status}`)
+      throw new DeploymentSkewError(
+        `Fresh page probe failed for ${pageUrl.href}: HTTP ${response.status}`,
+      )
     }
     return response.text()
   })
 
-  const shellAssets = [
-    ...new Set(pageResponses.flatMap((html) => extractBuildAssetUrls(html, origin))),
-  ].sort()
+  const shellAssetLists = pageResponses.map((html) => extractBuildAssetUrls(html, origin))
+  const shellAssets = [...new Set(shellAssetLists.flat())].sort()
   if (shellAssets.length === 0) {
     throw new Error('No Next.js build assets were found in the production page shells')
   }
 
-  const runtimes = shellAssets.filter((asset) => WEBPACK_RUNTIME_PATH.test(new URL(asset).pathname))
+  const runtimes = shellAssets.filter(isWebpackRuntime)
   if (runtimes.length === 0) {
     throw new Error('No Webpack runtime was found in the production page shells')
+  }
+
+  // Every shell of one build names the same runtime chunk. More than one answer
+  // across shells fetched together means the alias served two builds during
+  // this pass, so the union mixes both and its newest URLs may not be at the
+  // origin yet. Shells without a runtime are ignored rather than counted as a
+  // third answer.
+  const runtimeSignatures = new Set(
+    shellAssetLists.map((assets) => assets.filter(isWebpackRuntime).join(' ')).filter(Boolean),
+  )
+  if (runtimeSignatures.size > 1) {
+    throw new DeploymentSkewError(
+      `Production page shells disagree on the Webpack runtime (${[...runtimeSignatures].join(' vs ')}); the alias is still transitioning.`,
+    )
   }
 
   const runtimeResponses = await mapConcurrent(runtimes, async (runtime, index) => {
@@ -270,7 +305,9 @@ export async function discoverCurrentBuildAssets({
       { method: 'GET' },
     )
     if (!response.ok) {
-      throw new Error(`Fresh Webpack runtime probe failed for ${runtime}: HTTP ${response.status}`)
+      throw new DeploymentSkewError(
+        `Fresh Webpack runtime probe failed for ${runtime}: HTTP ${response.status}`,
+      )
     }
     return response.text()
   })
@@ -282,6 +319,43 @@ export async function discoverCurrentBuildAssets({
   return assets
 }
 
+/**
+ * Runs discovery, retrying only the symptoms of an in-flight alias swap.
+ *
+ * The first automatic purge after live asset discovery shipped failed exactly
+ * here: a shell fetched 15 seconds after Vercel reported ready still named the
+ * previous build's runtime, which the alias had already stopped serving, and
+ * the run aborted without purging anything. Retrying is what makes the settle
+ * window self-correcting instead of a guess.
+ *
+ * @param {NonNullable<Parameters<typeof discoverCurrentBuildAssets>[0]> & {
+ *   attempts?: number
+ *   backoffMs?: number
+ *   onRetry?: (error: Error, attempt: number) => void
+ *   sleepImpl?: (ms: number) => Promise<unknown>
+ * }} [options]
+ */
+export async function discoverCurrentBuildAssetsWithRetry({
+  attempts = DISCOVERY_ATTEMPTS,
+  backoffMs = DISCOVERY_BACKOFF_MS,
+  onRetry,
+  sleepImpl = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  ...options
+} = {}) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await discoverCurrentBuildAssets({
+        ...options,
+        token: `${options.token ?? Date.now()}-attempt-${attempt}`,
+      })
+    } catch (error) {
+      if (!(error instanceof DeploymentSkewError) || attempt >= attempts) throw error
+      onRetry?.(error, attempt)
+      await sleepImpl(backoffMs * attempt)
+    }
+  }
+}
+
 async function main() {
   const token = process.env.CACHE_PROBE_TOKEN || `${Date.now()}-${process.pid}`
   const probePaths = process.env.CACHE_PROBE_PATHS
@@ -289,7 +363,15 @@ async function main() {
         .map((path) => path.trim())
         .filter(Boolean)
     : DEFAULT_PROBE_PATHS
-  const assets = await discoverCurrentBuildAssets({ probePaths, token })
+  const assets = await discoverCurrentBuildAssetsWithRetry({
+    probePaths,
+    token,
+    onRetry: (error, attempt) => {
+      process.stderr.write(
+        `::warning::Alias still transitioning on attempt ${attempt}: ${error.message} Retrying.\n`,
+      )
+    },
+  })
 
   process.stderr.write(
     `Collected ${assets.length} current build assets from ${probePaths.length} fresh page shells and their Webpack runtime.\n`,

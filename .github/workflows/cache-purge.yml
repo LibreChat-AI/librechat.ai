@@ -449,28 +449,27 @@ jobs:
         id: assets
         env:
           CACHE_PROBE_TOKEN: ${{ github.run_id }}-${{ github.run_attempt }}
-          EVENT: ${{ github.event_name }}
         run: |
           set -euo pipefail
 
           probe_log=$(mktemp)
+          degraded=false
           if node scripts/cache-build-assets.mjs > build-assets.txt 2> "$probe_log"; then
             cat "$probe_log" >&2
           else
-            probe_status=$?
-            if [ "$EVENT" != "workflow_dispatch" ]; then
-              cat "$probe_log" >&2
-              rm -f "$probe_log"
-              exit "$probe_status"
-            fi
-            # Manual dispatch is the escape hatch for a production/cache
-            # outage. Keep its already-computed broad prefixes and public asset
-            # targets usable even if one of the live page probes is unhealthy.
+            # Discovery retries through an alias transition on its own, so a
+            # failure here means the live site is unhealthy rather than mid-flip.
+            # Purging nothing is the worse answer: the broad prefixes and public
+            # asset targets computed above are still correct, and a degraded run
+            # records no purge marker, so the next deploy re-purges this range
+            # instead of stepping over it.
             sed 's/^::error::/::warning::/' "$probe_log" >&2
-            echo "::warning::Build-asset discovery failed; continuing with the manual recovery targets."
+            echo "::warning::Build-asset discovery failed; purging the recovery targets without the current build assets."
             : > build-assets.txt
+            degraded=true
           fi
           rm -f "$probe_log"
+          echo "degraded=$degraded" >> "$GITHUB_OUTPUT"
 
           cat build-assets.txt >> files.txt
           sort -u files.txt -o files.txt
@@ -490,6 +489,9 @@ jobs:
             echo "- prefixes: $prefix_count"
             echo "- exact URLs: $file_count"
             echo "- current build assets: $(wc -l < build-assets.txt)"
+            if [ "$degraded" = "true" ]; then
+              echo "- **degraded**: live discovery failed, no purge marker recorded"
+            fi
             echo
             echo '```'
             cat prefixes.txt files.txt
@@ -645,8 +647,11 @@ jobs:
       # next run picks its baseline from the newest deployment carrying one. A
       # run that fails leaves no marker, so the following run's diff widens to
       # include this one's range instead of stepping over it.
+      # A degraded run is the same case from the other direction: it purged the
+      # recovery targets but could not enumerate the current build assets, so it
+      # must not claim this SHA is known-good.
       - name: Record the purge against this commit
-        if: ${{ !inputs.dry_run && steps.assets.outputs.count != '0' && github.event_name == 'deployment_status' }}
+        if: ${{ !inputs.dry_run && steps.assets.outputs.count != '0' && steps.assets.outputs.degraded != 'true' && github.event_name == 'deployment_status' }}
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}

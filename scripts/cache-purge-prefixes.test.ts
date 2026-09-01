@@ -203,16 +203,21 @@ describe('the workflow feeds the mapper what it needs', () => {
   })
 
   /**
-   * An operator uses workflow_dispatch to recover an unhealthy production
-   * site. A failed live probe must not prevent the broad page/public targets
-   * computed earlier in the job from reaching Cloudflare.
+   * Discovery retries an in-flight alias swap on its own, so a failure that
+   * survives those retries means the live site is unhealthy, not mid-flip.
+   * Every run, automatic or manual, must still send the broad page/public
+   * targets computed earlier in the job to Cloudflare, and a run that could not
+   * enumerate the current build assets must leave no purge marker behind.
    */
-  it('keeps manual recovery targets when build-asset discovery fails', () => {
-    expect(workflow).toContain('if [ "$EVENT" != "workflow_dispatch" ]; then')
+  it('degrades instead of aborting when build-asset discovery fails', () => {
     expect(workflow).toContain(': > build-assets.txt')
+    expect(workflow).toContain('degraded=true')
+    expect(workflow).toContain('echo "degraded=$degraded" >> "$GITHUB_OUTPUT"')
     expect(workflow).toContain(
-      'Build-asset discovery failed; continuing with the manual recovery targets.',
+      'Build-asset discovery failed; purging the recovery targets without the current build assets.',
     )
+    expect(workflow).not.toContain('if [ "$EVENT" != "workflow_dispatch" ]; then')
+    expect(workflow).toContain("steps.assets.outputs.degraded != 'true'")
   })
 
   it('accepts a baseline only when its deployment-specific purge marker exists', () => {

@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   DEFAULT_PROBE_PATHS,
+  DeploymentSkewError,
   discoverCurrentBuildAssets,
+  discoverCurrentBuildAssetsWithRetry,
   extractBuildAssetUrls,
   extractWebpackRuntimeAssetUrls,
   withCacheProbe,
@@ -154,5 +156,84 @@ describe('discoverCurrentBuildAssets', () => {
     await expect(
       discoverCurrentBuildAssets({ fetchImpl, origin, probePaths: ['/'], token: 'test' }),
     ).rejects.toThrow('No Next.js build assets')
+  })
+})
+
+describe('discoverCurrentBuildAssetsWithRetry', () => {
+  const runtimeSource =
+    'r.u=e=>"static/chunks/"+e+"."+({42:"lazyhash"})[e]+".js",' +
+    'r.miniCssF=e=>"static/css/lazy.css",r.g={}'
+
+  it('retries through an alias transition instead of aborting the purge', async () => {
+    let runtimeRequests = 0
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const { pathname } = toUrl(input)
+      if (pathname.startsWith('/_next/')) {
+        runtimeRequests += 1
+        return runtimeRequests === 1
+          ? new Response(null, { status: 404 })
+          : new Response(runtimeSource)
+      }
+      return new Response('<script src="/_next/static/chunks/webpack-new.js"></script>')
+    })
+    const sleepImpl = vi.fn(async () => {})
+    const onRetry = vi.fn()
+
+    await expect(
+      discoverCurrentBuildAssetsWithRetry({
+        fetchImpl,
+        origin,
+        probePaths: ['/'],
+        token: 'test',
+        backoffMs: 1,
+        sleepImpl,
+        onRetry,
+      }),
+    ).resolves.toEqual([
+      `${origin}/_next/static/chunks/42.lazyhash.js`,
+      `${origin}/_next/static/chunks/webpack-new.js`,
+      `${origin}/_next/static/css/lazy.css`,
+    ])
+    expect(onRetry).toHaveBeenCalledTimes(1)
+    expect(sleepImpl).toHaveBeenCalledWith(1)
+  })
+
+  it('treats shells naming different runtimes as a transition, and gives up', async () => {
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const { pathname } = toUrl(input)
+      if (pathname.startsWith('/_next/')) return new Response(runtimeSource)
+      const build = pathname === '/' ? 'old' : 'new'
+      return new Response(`<script src="/_next/static/chunks/webpack-${build}.js"></script>`)
+    })
+
+    const error = await discoverCurrentBuildAssetsWithRetry({
+      fetchImpl,
+      origin,
+      probePaths: ['/', '/docs'],
+      token: 'test',
+      attempts: 2,
+      backoffMs: 1,
+      sleepImpl: async () => {},
+    }).catch((reason: unknown) => reason)
+
+    expect(error).toBeInstanceOf(DeploymentSkewError)
+    expect((error as Error).message).toContain('disagree on the Webpack runtime')
+  })
+
+  it('does not retry a failure a later attempt cannot fix', async () => {
+    const fetchImpl = vi.fn(async () => new Response('<main>No scripts</main>'))
+    const sleepImpl = vi.fn(async () => {})
+
+    await expect(
+      discoverCurrentBuildAssetsWithRetry({
+        fetchImpl,
+        origin,
+        probePaths: ['/'],
+        token: 'test',
+        sleepImpl,
+      }),
+    ).rejects.toThrow('No Next.js build assets')
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    expect(sleepImpl).not.toHaveBeenCalled()
   })
 })
