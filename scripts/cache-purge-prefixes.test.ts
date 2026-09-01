@@ -189,6 +189,25 @@ describe('the workflow feeds the mapper what it needs', () => {
   })
 
   /**
+   * A rollback checks out an older deployed tree. Keep the workflow revision in
+   * a sibling checkout so its validator and mapping scripts cannot disappear.
+   */
+  it('runs workflow-owned scripts outside the promoted source checkout', () => {
+    expect(workflow).toContain('path: workflow-source')
+    expect(workflow).toContain('path: deployed-source')
+    expect(workflow).toContain('working-directory: deployed-source')
+    expect(workflow).toContain('working-directory: workflow-source')
+
+    const cacheScriptInvocations = workflow.match(/node \S*scripts\/cache-[\w-]+\.mjs/g) ?? []
+    expect(cacheScriptInvocations).toContain('node scripts/cache-purge-event.mjs')
+    expect(
+      cacheScriptInvocations
+        .filter((command) => !command.endsWith('cache-purge-event.mjs'))
+        .every((command) => command.startsWith('node ../workflow-source/')),
+    ).toBe(true)
+  })
+
+  /**
    * Vercel can redeploy the same SHA. Grouping by SHA would let GitHub discard
    * one of those pending purge runs, even though each deployment needs its own
    * marker.
@@ -209,7 +228,9 @@ describe('the workflow feeds the mapper what it needs', () => {
    */
   it('discovers current build assets only for manual recovery', () => {
     expect(workflow).toContain('if [ "$EVENT" = "workflow_dispatch" ]; then')
-    expect(workflow).toContain('node scripts/cache-build-assets.mjs > build-assets.txt')
+    expect(workflow).toContain(
+      'node ../workflow-source/scripts/cache-build-assets.mjs > build-assets.txt',
+    )
     expect(workflow).toContain("if: steps.assets.outputs.count == '0'")
     expect(workflow).not.toContain('if: steps.compute.outputs.count')
   })
@@ -227,7 +248,7 @@ describe('the workflow feeds the mapper what it needs', () => {
       'Build-asset discovery failed; purging the recovery targets without the current build assets.',
     )
     expect(workflow).toContain(
-      'node scripts/cache-purge-prefixes.mjs --broad --assets --json > recovery.json',
+      'node ../workflow-source/scripts/cache-purge-prefixes.mjs --broad --assets --json > recovery.json',
     )
     expect(workflow).toContain("jq -r '.prefixes[]' recovery.json >> prefixes.txt")
     expect(workflow).toContain("jq -r '.files[]?' recovery.json >> files.txt")
@@ -235,11 +256,13 @@ describe('the workflow feeds the mapper what it needs', () => {
     expect(workflow).toContain("steps.assets.outputs.degraded != 'true'")
   })
 
-  it('finds the baseline from the latest successful Vercel deployment marker', () => {
-    expect(workflow).toContain('select(.context | startswith($prefix))')
+  it('finds the baseline from the chronological Vercel purge ledger', () => {
+    expect(workflow).toContain('git rev-list --max-parents=0 HEAD')
+    expect(workflow).toContain('cache-purge-event.mjs baseline')
     expect(workflow).toContain('PURGE_STATUS_CONTEXT/$DEPLOYMENT_ID')
+    expect(workflow).toContain('-f description="$SHA|Purged ')
+    expect(workflow).not.toContain('git rev-list --since="$FALLBACK_WINDOW" "${head}^"')
     expect(workflow).not.toContain('deployments?environment=Production')
-    expect(workflow).not.toContain('deployment.creator.login')
   })
 
   /**

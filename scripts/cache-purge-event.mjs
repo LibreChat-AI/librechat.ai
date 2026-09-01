@@ -1,4 +1,4 @@
-import { appendFileSync } from 'node:fs'
+import { appendFileSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 export const VERCEL_PROJECT_ID = 'prj_BM0YCOihInl5lqPJidAzwixJPdtj'
@@ -40,7 +40,55 @@ export function validatePromotedDeployment(payload) {
   }
 }
 
+/**
+ * Selects the most recently recorded successful deployment that differs from
+ * the commit currently being promoted. Statuses live on one stable ledger
+ * commit, so created_at represents promotion order even when production rolls
+ * back from a descendant to an ancestor.
+ */
+export function selectPreviousPurgedCommit(
+  statusPages,
+  currentHead,
+  contextPrefix = 'cache-purge',
+) {
+  if (!COMMIT_SHA.test(currentHead)) {
+    throw new Error(`Current head is not a valid Git commit SHA: ${currentHead}`)
+  }
+
+  const deploymentContext = `${contextPrefix}/dpl_`
+  return (
+    (Array.isArray(statusPages) ? statusPages.flat() : [])
+      .filter(
+        (status) =>
+          status &&
+          typeof status === 'object' &&
+          status.state === 'success' &&
+          typeof status.context === 'string' &&
+          status.context.startsWith(deploymentContext) &&
+          typeof status.created_at === 'string' &&
+          typeof status.description === 'string',
+      )
+      .map((status) => ({
+        createdAt: status.created_at,
+        sha: status.description.slice(0, 40),
+      }))
+      .filter(({ sha }) => COMMIT_SHA.test(sha) && sha !== currentHead)
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]?.sha ?? null
+  )
+}
+
 function main() {
+  if (process.argv[2] === 'baseline') {
+    const [, , , statusFile, currentHead, contextPrefix] = process.argv
+    if (!statusFile || !currentHead) {
+      throw new Error('baseline requires <status-file> <current-head> [context-prefix]')
+    }
+    const statusPages = JSON.parse(readFileSync(statusFile, 'utf8'))
+    const base = selectPreviousPurgedCommit(statusPages, currentHead, contextPrefix)
+    if (base) process.stdout.write(`${base}\n`)
+    return
+  }
+
   const output = process.env.GITHUB_OUTPUT
   if (!output) throw new Error('GITHUB_OUTPUT is required')
 

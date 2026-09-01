@@ -98,10 +98,10 @@ env:
   # second between calls keeps us under every per-second bucket, and 429s are
   # retried with backoff below, which is what makes the floor safe too.
   SLEEP_BETWEEN_CALLS: 1
-  # Commit-status context marking "the cache was successfully purged". The real
-  # context carries the Vercel deployment id (`cache-purge/dpl_...`) because a
-  # SHA is not unique: a rollback or rebuild can promote another deployment from
-  # the same commit. Only a completed Cloudflare purge writes this marker.
+  # Successful purges are written as chronological statuses on one stable
+  # repository-root commit. Each context carries the Vercel deployment id
+  # (`cache-purge/dpl_...`), while the description begins with the promoted SHA.
+  # A single ledger preserves deployment order across rollbacks and rebuilds.
   PURGE_STATUS_CONTEXT: cache-purge
   # How far back a blind recovery reaches when it has no baseline to work from.
   # Only ever an approximation of where to start, so it is paired with the broad
@@ -127,13 +127,26 @@ jobs:
        github.event.client_payload.project.id == 'prj_BM0YCOihInl5lqPJidAzwixJPdtj' &&
        github.event.client_payload.git.ref == 'main')
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: deployed-source
     steps:
-      # Repository-dispatch workflows start from the default-branch SHA. Check
-      # out the commit Vercel actually promoted so the diff and mapper see the
-      # deployed tree.
-      - uses: actions/checkout@v4
+      # Keep the default-branch workflow revision separate from the commit being
+      # deployed. During a rollback, that deployed commit can predate these
+      # scripts and must not replace the validator or mapper implementation.
+      - name: Check out workflow source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          path: workflow-source
+          ref: ${{ github.sha }}
+
+      - name: Check out deployed source
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          path: deployed-source
           ref: ${{ github.event.client_payload.git.sha || github.sha }}
 
       - name: Validate promoted deployment
@@ -141,6 +154,7 @@ jobs:
         id: event
         env:
           CLIENT_PAYLOAD: ${{ toJSON(github.event.client_payload) }}
+        working-directory: workflow-source
         run: node scripts/cache-purge-event.mjs
       # Resolve what to map. Three cases:
       #   dispatch + broad           -> broad set, no diff
@@ -219,34 +233,23 @@ jobs:
               exit 1
             fi
 
-            # The baseline is the newest ancestor carrying a successful marker
-            # from this Vercel-deployment-aware workflow. If B's purge fails and
-            # C deploys, B has no marker, so the diff widens from the last known
-            # good deployment A through C.
-            base=""
-            mkdir -p commit-statuses
-            prefix="$PURGE_STATUS_CONTEXT/dpl_"
-            commits=$(git rev-list --since="$FALLBACK_WINDOW" "${head}^" 2>/dev/null || true)
-            while read -r sha; do
-              [ -n "$sha" ] || continue
-              status_file="commit-statuses/$sha.json"
-              gh api --paginate --slurp \
-                "repos/$REPO/commits/$sha/statuses?per_page=100" > "$status_file"
-              purged=$(jq --arg prefix "$prefix" '
-                [.[][] |
-                  select(.state == "success") |
-                  select(.context | startswith($prefix))
-                ] | length' "$status_file")
-              if [ "${purged:-0}" -gt 0 ]; then
-                base="$sha"
-                echo "Baseline: $sha, newest ancestor with a successful Vercel purge marker."
-                break
-              fi
-            done <<< "$commits"
+            # All successful promotions write to one stable commit-status
+            # ledger. Marker timestamps preserve deployment chronology, unlike
+            # Git ancestry: a rollback from C to ancestor B must diff C..B.
+            # Skip markers for the same SHA so a rebuild still compares against
+            # the previous distinct deployed tree. Only the newest 100 markers
+            # are needed; if they are all rebuilds of one SHA, broad recovery is
+            # safer than an unbounded status-history request.
+            ledger_sha=$(git rev-list --max-parents=0 HEAD | sort | sed -n '1p')
+            status_file="purge-ledger.json"
+            gh api "repos/$REPO/commits/$ledger_sha/statuses?per_page=100" > "$status_file"
+            base=$(node ../workflow-source/scripts/cache-purge-event.mjs baseline "$status_file" "$head" "$PURGE_STATUS_CONTEXT")
 
-            if [ -z "$base" ]; then
-              # Includes the first run after migrating from numeric GitHub
-              # Deployment markers to Vercel `dpl_...` markers.
+            if [ -n "$base" ]; then
+              echo "Baseline: $base, latest successfully purged Vercel deployment."
+            else
+              # Includes the first run after introducing the chronological
+              # deployment ledger.
               echo "No earlier successfully purged Vercel deployment found."
               fallback_range "$head" && exit 0
               echo "::warning::No baseline and no fallback window; purging broadly."
@@ -255,8 +258,13 @@ jobs:
             fi
           fi
 
-          # A force-push or a dropped branch can orphan the base commit. Mapping
-          # nothing would leave the cache stale, so fall back to the broad set.
+          # A force-push or rollback can leave the baseline outside the promoted
+          # commit's ancestry. Fetch main once so a newer prior deployment is
+          # available for a reverse diff, then degrade safely if it is still
+          # unreachable.
+          if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            git fetch --no-tags origin main || true
+          fi
           if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
             echo "Base commit $base is not reachable in this checkout."
             fallback_range "$head" && exit 0
@@ -296,7 +304,7 @@ jobs:
           # because nothing here can tell which asset changed, and these are the
           # runs that exist precisely because something already went wrong.
           if [ "$MODE" = "broad" ] && [ -z "${BASE:-}" ]; then
-            node scripts/cache-purge-prefixes.mjs --broad --assets --json > purge.json
+            node ../workflow-source/scripts/cache-purge-prefixes.mjs --broad --assets --json > purge.json
           else
             # Broad *with* a range still walks the diff, so the broad page set
             # is topped up with changed asset URLs and locales removed in the
@@ -352,7 +360,7 @@ jobs:
 
             # shellcheck disable=SC2086 # broad_flag is intentionally unquoted: empty means no flag.
             TREE_EDITS_FILE=tree-edits.z \
-              node scripts/cache-purge-prefixes.mjs - --json --explain $broad_flag < changed.z > purge.json
+              node ../workflow-source/scripts/cache-purge-prefixes.mjs - --json --explain $broad_flag < changed.z > purge.json
           fi
 
           jq -r '.prefixes[]' purge.json > prefixes.txt
@@ -382,14 +390,14 @@ jobs:
           : > build-assets.txt
           if [ "$EVENT" = "workflow_dispatch" ]; then
             probe_log=$(mktemp)
-            if node scripts/cache-build-assets.mjs > build-assets.txt 2> "$probe_log"; then
+            if node ../workflow-source/scripts/cache-build-assets.mjs > build-assets.txt 2> "$probe_log"; then
               cat "$probe_log" >&2
             else
               # Escalate the selective plan to every page prefix and current public
               # asset while retaining deleted URLs found by the original diff.
               sed 's/^::error::/::warning::/' "$probe_log" >&2
               echo "::warning::Build-asset discovery failed; purging the recovery targets without the current build assets."
-              node scripts/cache-purge-prefixes.mjs --broad --assets --json > recovery.json
+              node ../workflow-source/scripts/cache-purge-prefixes.mjs --broad --assets --json > recovery.json
               jq -r '.prefixes[]' recovery.json >> prefixes.txt
               jq -r '.files[]?' recovery.json >> files.txt
               sort -u prefixes.txt -o prefixes.txt
@@ -570,12 +578,13 @@ jobs:
 
           echo "::notice::Cloudflare purge complete."
 
-      # Only reached when every call above succeeded. The marker means this
-      # Vercel deployment's computed targets were purged. A failed run leaves no
-      # marker, so the following promotion's diff widens to include its range.
+      # Only reached when every call above succeeded. The marker is appended to
+      # a stable commit-status ledger, with the promoted SHA in its description.
+      # That preserves deployment chronology across rollbacks. A failed run
+      # leaves no marker, so the following promotion widens its diff.
       # Manual recovery never writes deployment history, and a degraded recovery
       # cannot claim the cache is known-good.
-      - name: Record the purge against this commit
+      - name: Record the purge in deployment order
         if: ${{ !inputs.dry_run && steps.assets.outputs.count != '0' && steps.assets.outputs.degraded != 'true' && github.event_name == 'repository_dispatch' }}
         env:
           GH_TOKEN: ${{ github.token }}
@@ -585,10 +594,11 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          gh api -X POST "repos/$REPO/statuses/$SHA" \
+          ledger_sha=$(git rev-list --max-parents=0 HEAD | sort | sed -n '1p')
+          gh api -X POST "repos/$REPO/statuses/$ledger_sha" \
             -f state=success \
             -f context="$PURGE_STATUS_CONTEXT/$DEPLOYMENT_ID" \
             -f target_url="$RUN_URL" \
-            -f description="Purged $(wc -l < prefixes.txt) prefixes, $(wc -l < files.txt) URLs" \
+            -f description="$SHA|Purged $(wc -l < prefixes.txt) prefixes, $(wc -l < files.txt) URLs" \
             > /dev/null
-          echo "Marked $SHA as purged."
+          echo "Marked $SHA as purged by $DEPLOYMENT_ID."
