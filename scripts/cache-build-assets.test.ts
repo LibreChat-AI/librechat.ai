@@ -4,6 +4,7 @@ import {
   DeploymentSkewError,
   discoverCurrentBuildAssets,
   discoverCurrentBuildAssetsWithRetry,
+  mapConcurrent,
   extractBuildAssetUrls,
   extractDeploymentId,
   extractWebpackRuntimeAssetUrls,
@@ -231,6 +232,37 @@ describe('discoverCurrentBuildAssetsWithRetry', () => {
     expect(sleepImpl).toHaveBeenCalledWith(1)
   })
 
+  it('drains a failed probe batch before returning its error', async () => {
+    const slowProbe = Promise.withResolvers<void>()
+    const allWorkersStarted = Promise.withResolvers<void>()
+    let started = 0
+    let batchSettled = false
+
+    const batch = mapConcurrent(['fast failure', 'slow probe'], async (item) => {
+      started += 1
+      if (started === 2) allWorkersStarted.resolve()
+      if (item === 'fast failure') throw new Error('probe failed')
+      await slowProbe.promise
+      return item
+    })
+    void batch.then(
+      () => {
+        batchSettled = true
+      },
+      () => {
+        batchSettled = true
+      },
+    )
+
+    await allWorkersStarted.promise
+    await Promise.resolve()
+    expect(batchSettled).toBe(false)
+
+    slowProbe.resolve()
+    await expect(batch).rejects.toThrow('probe failed')
+    expect(batchSettled).toBe(true)
+  })
+
   it('treats shells from different builds as a transition, and gives up', async () => {
     const fetchImpl = vi.fn(async (input: string | URL | Request) => {
       const { pathname } = toUrl(input)
@@ -278,6 +310,67 @@ describe('discoverCurrentBuildAssetsWithRetry', () => {
 
     expect(error).toBeInstanceOf(DeploymentSkewError)
     expect((error as Error).message).toContain('dpl_old vs dpl_new')
+  })
+
+  it('rejects immutable shells without a deployment identity', async () => {
+    const fetchImpl = vi.fn(
+      async () => new Response('<script src="/_next/static/immutable/chunks/page.js"></script>'),
+    )
+
+    const error = await discoverCurrentBuildAssetsWithRetry({
+      fetchImpl,
+      origin,
+      probePaths: ['/'],
+      token: 'test',
+      attempts: 2,
+      backoffMs: 1,
+      sleepImpl: async () => {},
+    }).catch((reason: unknown) => reason)
+
+    expect(error).toBeInstanceOf(DeploymentSkewError)
+    expect((error as Error).message).toContain('no deployment identity')
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not retry a permanent page-probe response', async () => {
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 401 }))
+    const sleepImpl = vi.fn(async () => {})
+
+    await expect(
+      discoverCurrentBuildAssetsWithRetry({
+        fetchImpl,
+        origin,
+        probePaths: ['/'],
+        token: 'test',
+        sleepImpl,
+      }),
+    ).rejects.toThrow('HTTP 401')
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    expect(sleepImpl).not.toHaveBeenCalled()
+  })
+
+  it('does not retry a permanent runtime-probe response', async () => {
+    let runtimeRequests = 0
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      if (toUrl(input).pathname.startsWith('/_next/')) {
+        runtimeRequests += 1
+        return new Response(null, { status: 403 })
+      }
+      return new Response('<script src="/_next/static/chunks/webpack-test.js"></script>')
+    })
+    const sleepImpl = vi.fn(async () => {})
+
+    await expect(
+      discoverCurrentBuildAssetsWithRetry({
+        fetchImpl,
+        origin,
+        probePaths: ['/'],
+        token: 'test',
+        sleepImpl,
+      }),
+    ).rejects.toThrow('HTTP 403')
+    expect(runtimeRequests).toBe(1)
+    expect(sleepImpl).not.toHaveBeenCalled()
   })
 
   it('does not retry a failure a later attempt cannot fix', async () => {

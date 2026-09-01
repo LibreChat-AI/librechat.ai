@@ -124,7 +124,7 @@ describe('parseArgs', () => {
       },
     )
 
-    expect(invocations).toHaveLength(2)
+    expect(invocations).toHaveLength(3)
     for (const argv of invocations) {
       expect(argv.length).toBeGreaterThan(0)
       expect(() => parseArgs(argv)).not.toThrow()
@@ -216,6 +216,11 @@ describe('the workflow feeds the mapper what it needs', () => {
     expect(workflow).toContain(
       'Build-asset discovery failed; purging the recovery targets without the current build assets.',
     )
+    expect(workflow).toContain(
+      'node scripts/cache-purge-prefixes.mjs --broad --assets --json > recovery.json',
+    )
+    expect(workflow).toContain("jq -r '.prefixes[]' recovery.json >> prefixes.txt")
+    expect(workflow).toContain("jq -r '.files[]?' recovery.json >> files.txt")
     expect(workflow).not.toContain('if [ "$EVENT" != "workflow_dispatch" ]; then')
     expect(workflow).toContain("steps.assets.outputs.degraded != 'true'")
   })

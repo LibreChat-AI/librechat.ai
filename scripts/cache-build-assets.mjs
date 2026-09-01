@@ -63,6 +63,18 @@ export class DeploymentSkewError extends Error {
   }
 }
 
+function probeFailure(message, status) {
+  const retryable =
+    status === 404 ||
+    status === 408 ||
+    status === 409 ||
+    status === 425 ||
+    status === 429 ||
+    status >= 500
+  const ErrorType = retryable ? DeploymentSkewError : Error
+  return new ErrorType(message)
+}
+
 function isWebpackRuntime(asset) {
   return WEBPACK_RUNTIME_PATH.test(new URL(asset).pathname)
 }
@@ -244,7 +256,7 @@ async function fetchWithRetry(fetchImpl, url, init) {
   throw lastError
 }
 
-async function mapConcurrent(items, worker) {
+export async function mapConcurrent(items, worker) {
   const results = new Array(items.length)
   let cursor = 0
 
@@ -257,7 +269,9 @@ async function mapConcurrent(items, worker) {
   }
 
   const workers = Array.from({ length: Math.min(MAX_CONCURRENCY, items.length) }, () => run())
-  await Promise.all(workers)
+  const settlements = await Promise.allSettled(workers)
+  const failure = settlements.find((settlement) => settlement.status === 'rejected')
+  if (failure) throw failure.reason
   return results
 }
 
@@ -275,8 +289,9 @@ export async function discoverCurrentBuildAssets({
       { method: 'GET' },
     )
     if (!response.ok) {
-      throw new DeploymentSkewError(
+      throw probeFailure(
         `Fresh page probe failed for ${pageUrl.href}: HTTP ${response.status}`,
+        response.status,
       )
     }
     return response.text()
@@ -293,14 +308,16 @@ export async function discoverCurrentBuildAssets({
   // Two answers across shells fetched together means the alias served two
   // builds during this pass, so the union mixes both and its newest URLs may
   // not be at the origin yet.
-  const buildSignatures = new Set(
-    pageResponses
-      .map(
-        (html, index) =>
-          extractDeploymentId(html) ?? shellAssetLists[index].filter(isWebpackRuntime).join(' '),
-      )
-      .filter(Boolean),
+  const shellSignatures = pageResponses.map(
+    (html, index) =>
+      extractDeploymentId(html) ?? shellAssetLists[index].filter(isWebpackRuntime).join(' '),
   )
+  if (shellSignatures.some((signature) => !signature)) {
+    throw new DeploymentSkewError(
+      'A production page shell has no deployment identity; the alias state cannot be verified.',
+    )
+  }
+  const buildSignatures = new Set(shellSignatures)
   if (buildSignatures.size > 1) {
     throw new DeploymentSkewError(
       `Production page shells came from more than one build (${[...buildSignatures].join(' vs ')}); the alias is still transitioning.`,
@@ -324,8 +341,9 @@ export async function discoverCurrentBuildAssets({
       { method: 'GET' },
     )
     if (!response.ok) {
-      throw new DeploymentSkewError(
+      throw probeFailure(
         `Fresh Webpack runtime probe failed for ${runtime}: HTTP ${response.status}`,
+        response.status,
       )
     }
     return response.text()
