@@ -240,31 +240,21 @@ describe('the workflow feeds the mapper what it needs', () => {
   })
 
   /**
-   * repository_dispatch payload fields are caller-controlled. The checkout may
-   * supply data to trusted mapper code only after its SHA is proven to belong to
-   * the protected production branch.
+   * Automatic invalidation is independent of the promoted tree. Git metadata
+   * may be absent for CLI or deleted-branch deployments, so only manual
+   * recovery checks out a source tree for diff mapping.
    */
-  it('rejects a dispatch SHA outside current main before secrets are exposed', () => {
-    expect(workflow).toContain(
-      'git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main',
-    )
-    expect(workflow).toContain('git merge-base --is-ancestor "$HEAD_SHA" origin/main')
+  it('validates automatic promotions before any optional source checkout', () => {
+    expect(workflow).toContain('- name: Prepare automatic purge workspace')
+    expect(workflow).toContain('- name: Check out manual source')
+    expect(workflow).toContain("if: github.event_name == 'workflow_dispatch'")
+    expect(workflow).toContain('ref: ${{ github.sha }}')
+    expect(workflow).not.toContain('ref: ${{ github.event.client_payload.git.sha || github.sha }}')
 
-    const trustCheck = workflow.indexOf('git merge-base --is-ancestor "$HEAD_SHA" origin/main')
-    const cloudflareSecrets = workflow.indexOf('CF_API_TOKEN:')
-    expect(trustCheck).toBeGreaterThan(0)
-    expect(trustCheck).toBeLessThan(cloudflareSecrets)
-  })
-
-  it('routes non-main production promotions directly to a full-zone purge', () => {
-    expect(workflow).toContain('PROMOTED_REF: ${{ steps.event.outputs.ref }}')
-    expect(workflow).toContain('if [ "$PROMOTED_REF" != "main" ]; then')
-    expect(workflow).toContain('Non-main production deployment')
-
-    const nonMainRecovery = workflow.indexOf('if [ "$PROMOTED_REF" != "main" ]; then')
-    const cloudflareSecrets = workflow.indexOf('CF_API_TOKEN:')
-    expect(nonMainRecovery).toBeGreaterThan(0)
-    expect(nonMainRecovery).toBeLessThan(cloudflareSecrets)
+    const eventValidation = workflow.indexOf('- name: Validate promoted deployment')
+    const manualCheckout = workflow.indexOf('- name: Check out manual source')
+    expect(eventValidation).toBeGreaterThan(0)
+    expect(eventValidation).toBeLessThan(manualCheckout)
   })
 
   /**
@@ -302,10 +292,10 @@ describe('the workflow feeds the mapper what it needs', () => {
     )
   })
 
-  it('purges every page route when Vercel redeploys the checkpointed SHA', () => {
-    expect(workflow).toContain('&& [ "$base" = "$head" ]; then')
-    expect(workflow).toContain('emit mode pages')
-    expect(workflow).toContain('[ "$MODE" = "pages" ] && broad_flag="--broad"')
+  it('purges the full zone for every automatic production promotion', () => {
+    expect(workflow).toContain('if [ "$EVENT" = "repository_dispatch" ]; then')
+    expect(workflow).toContain('Automatic production promotion; purging the full zone.')
+    expect(workflow).toContain('emit mode full')
   })
 
   /**
@@ -340,57 +330,27 @@ describe('the workflow feeds the mapper what it needs', () => {
     expect(workflow).toContain("jq -r '.prefixes[]' recovery.json >> prefixes.txt")
     expect(workflow).toContain("jq -r '.files[]?' recovery.json >> files.txt")
     expect(workflow).not.toContain('if [ "$EVENT" != "workflow_dispatch" ]; then')
-    expect(workflow).toContain("steps.assets.outputs.degraded != 'true'")
   })
 
   /**
-   * A missing promotion payload cannot be recovered from the Actions API. The
-   * workflow may use a successful purge as a selective checkpoint only after
-   * every intervening workflow run is visible and harmless.
+   * Vercel does not provide an authoritative promotion sequence in this event,
+   * and delivery order can differ from alias order. Automatic safety therefore
+   * cannot depend on a cross-run ledger or a Git diff.
    */
-  it('reconciles every lower workflow run before selective planning', () => {
-    expect(workflow).toContain('actions: read')
-    expect(workflow).toContain('run-name: >-')
-    expect(workflow).toContain(
-      "cache-purge:${{ github.event.client_payload.environment || 'manual' }}:${{ github.event.client_payload.project.id || 'manual' }}:${{ github.event.client_payload.git.ref || 'manual' }}:${{ github.event.client_payload.git.sha || github.sha }}:${{ github.event.client_payload.id || github.run_id }}",
-    )
-    expect(workflow).toContain(
-      'gh api --paginate --slurp "repos/$REPO/actions/workflows/cache-purge.yml/runs?per_page=100"',
-    )
-    expect(workflow).toContain('unsafe=$(jq -r \'.unsafe | length\' <<< "$ledger_state")')
-    expect(workflow).toContain('display_title')
-    expect(workflow).toContain('emit mode full')
-    expect(workflow).not.toContain('sleep 10')
+  it('keeps automatic purges stateless', () => {
+    expect(workflow).not.toContain('run-name:')
+    expect(workflow).not.toContain('actions: read')
+    expect(workflow).not.toContain('statuses: write')
+    expect(workflow).not.toContain('PURGE_STATUS_CONTEXT')
+    expect(workflow).not.toContain('gh api')
+    expect(workflow).not.toContain('cache-purge-event.mjs baseline')
+    expect(workflow).not.toContain('- name: Record the purge')
   })
 
-  it('uses successful purges as the only production checkpoints', () => {
-    expect(workflow).not.toContain('PROMOTION_STATUS_CONTEXT')
-    expect(workflow).not.toContain('- name: Record promoted deployment')
-    expect(workflow).toContain('PURGE_STATUS_CONTEXT/$DEPLOYMENT_ID')
-    expect(workflow).toContain('RUN_NUMBER: ${{ github.run_number }}')
-    expect(workflow).toContain('-f description="$RUN_NUMBER|$SHA|')
-    expect(workflow).toContain(
-      "if: ${{ !inputs.dry_run && steps.assets.outputs.degraded != 'true' && github.event_name == 'repository_dispatch' }}",
-    )
-  })
-
-  it('falls back to a full-zone purge when promotion chronology is unresolved', () => {
+  it('uses Cloudflare full-zone invalidation for automatic recovery', () => {
     expect(workflow).toContain('if [ "$MODE" = "full" ]; then')
     expect(workflow).toContain('payload=\'{"purge_everything":true}\'')
     expect(workflow).toContain('purge_call purge_everything /dev/null')
-  })
-
-  it('finds the baseline from the promotion-ordered Vercel purge ledger', () => {
-    expect(workflow).toContain('git rev-list --max-parents=0 HEAD')
-    expect(workflow).toContain('cache-purge-event.mjs baseline')
-    expect(workflow).not.toContain('git rev-list --since="$FALLBACK_WINDOW" "${head}^"')
-    expect(workflow).not.toContain('deployments?environment=Production')
-  })
-
-  it('paginates the root-commit status ledger', () => {
-    expect(workflow).toContain(
-      'gh api --paginate --slurp "repos/$REPO/commits/$ledger_sha/statuses?per_page=100"',
-    )
   })
 
   /**

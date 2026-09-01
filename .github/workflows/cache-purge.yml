@@ -1,6 +1,4 @@
 name: Cloudflare Cache Purge
-run-name: >-
-  cache-purge:${{ github.event.client_payload.environment || 'manual' }}:${{ github.event.client_payload.project.id || 'manual' }}:${{ github.event.client_payload.git.ref || 'manual' }}:${{ github.event.client_payload.git.sha || github.sha }}:${{ github.event.client_payload.id || github.run_id }}
 
 # Purges the Cloudflare edge cache for the pages a production deploy actually
 # changed, so a docs edit is visible immediately instead of waiting out the 24h
@@ -18,11 +16,11 @@ run-name: >-
 # Prefix is therefore the only usable unit. Note the format: `hostname/path`,
 # no scheme, no query string.
 #
-# WHY NOT `purge_everything`
-# It also evicts /_next/static/**, which would put every asset on the site into
-# a MISS wave on every deploy. Generated assets are content-addressed, and the
-# zone bypasses every 4xx response, so they cannot retain a poisoned negative
-# entry. Historical and unrelated static assets stay warm.
+# WHY AUTOMATIC PROMOTIONS PURGE THE FULL ZONE
+# Vercel can promote deployments without repository Git metadata, and dispatch
+# delivery order is not guaranteed to match production alias order. No Git diff
+# or workflow ledger can then prove which URLs were previously live. Automatic
+# promotions use full-zone invalidation; manual recovery remains prefix-based.
 #
 # KNOWN, ACCEPTED BEHAVIOURS
 # 1. Prefix matching is a plain string match, so `/docs/features/agents` also
@@ -38,10 +36,10 @@ on:
   # would immediately refill every purged entry from the old origin build and
   # re-pin it for another 24h.
   #
-  # Vercel's enriched `deployment.promoted` event fires after the deployment
-  # starts serving production traffic and carries the exact project, branch,
-  # commit, and Vercel deployment id. Vercel recommends this event over the
-  # older GitHub `deployment_status` inference.
+  # Vercel's enriched `deployment.promoted` event fires after a deployment
+  # starts serving production traffic and carries the exact project and Vercel
+  # deployment id. Git metadata is present for normal connected deployments but
+  # is not required for CLI, fork, or deleted-branch promotions.
   #
   # Repository-dispatch workflows only run from the file on the default branch,
   # so this trigger cannot be exercised until it is merged to main. The manual
@@ -68,10 +66,7 @@ on:
         required: false
 
 permissions:
-  actions: read
   contents: read
-  # Successful automatic purges are durable known-good checkpoints.
-  statuses: write
 
 # Keyed per Vercel deployment, NOT a single shared group. GitHub keeps at most
 # one pending run per concurrency group: "any existing pending job or workflow
@@ -100,11 +95,6 @@ env:
   # second between calls keeps us under every per-second bucket, and 429s are
   # retried with backoff below, which is what makes the floor safe too.
   SLEEP_BETWEEN_CALLS: 1
-  # Successful purges are written as statuses on one stable repository-root
-  # commit. Each context carries the Vercel deployment id
-  # (`cache-purge/dpl_...`), while the description begins with the workflow run
-  # number and promoted SHA. The sequence survives overlap, rollback, and rerun.
-  PURGE_STATUS_CONTEXT: cache-purge
   # How far back a blind recovery reaches when it has no baseline to work from.
   # Only ever an approximation of where to start, so it is paired with the broad
   # page set; its job is to surface deletions, which a range-less run cannot see.
@@ -133,22 +123,15 @@ jobs:
         shell: bash
         working-directory: deployed-source
     steps:
-      # Keep the default-branch workflow revision separate from the commit being
-      # deployed. During a rollback, that deployed commit can predate these
-      # scripts and must not replace the validator or mapper implementation.
+      # Trusted workflow code always comes from the default-branch revision.
+      # Automatic purges need no deployed checkout; the full-zone operation is
+      # deliberately independent of Git metadata and repository reachability.
       - name: Check out workflow source
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
           path: workflow-source
           ref: ${{ github.sha }}
-
-      - name: Check out deployed source
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          path: deployed-source
-          ref: ${{ github.event.client_payload.git.sha || github.sha }}
 
       - name: Validate promoted deployment
         if: github.event_name == 'repository_dispatch'
@@ -158,66 +141,47 @@ jobs:
         working-directory: workflow-source
         run: node scripts/cache-purge-event.mjs
 
-      # repository_dispatch fields are caller-controlled. The checkout must
-      # match the promoted SHA. Main deployments additionally prove ancestry
-      # before their tree can feed the mapper; non-main promotions never feed
-      # it and route directly to a full-zone purge.
-      - name: Validate promoted source
+      - name: Prepare automatic purge workspace
         if: github.event_name == 'repository_dispatch'
-        env:
-          HEAD_SHA: ${{ steps.event.outputs.head }}
-          PROMOTED_REF: ${{ steps.event.outputs.ref }}
-        run: |
-          set -euo pipefail
-          if [ "$(git rev-parse HEAD)" != "$HEAD_SHA" ]; then
-            echo "::error::The deployed checkout does not match the promoted SHA."
-            exit 1
-          fi
-          if [ "$PROMOTED_REF" != "main" ]; then
-            echo "::notice::Non-main production deployment will use full-zone recovery."
-            exit 0
-          fi
-          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
-          if ! git merge-base --is-ancestor "$HEAD_SHA" origin/main; then
-            echo "::error::The promoted SHA is not part of the current main history."
-            exit 1
-          fi
+        working-directory: .
+        run: mkdir -p deployed-source
 
-      # Resolve what to map. Three cases:
-      #   dispatch + broad           -> broad set, no diff
-      #   dispatch + explicit range  -> that range
-      #   Vercel promotion           -> last known-good purge .. this commit
-      #
-      # Automatic runs reconcile every intervening workflow run before using a
-      # selective range. Run names capture Vercel routing data when GitHub
-      # creates the run, so queued and cancelled predecessors stay visible.
+      # Manual recovery still uses diffs, current public assets, and trusted
+      # workflow scripts. It needs the full default-branch history.
+      - name: Check out manual source
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          path: deployed-source
+          ref: ${{ github.sha }}
+
+      # Automatic promotions are stateless full-zone invalidations. Manual
+      # dispatch keeps the precise broad/range mapper for operator recovery.
       - name: Resolve diff range
         id: range
         env:
-          GH_TOKEN: ${{ github.token }}
           EVENT: ${{ github.event_name }}
           INPUT_BROAD: ${{ inputs.broad_pages }}
           INPUT_RANGE: ${{ inputs.range }}
-          HEAD_SHA: ${{ steps.event.outputs.head }}
-          DEPLOYMENT_ID: ${{ steps.event.outputs.deployment_id }}
-          PROMOTED_REF: ${{ steps.event.outputs.ref }}
-          CURRENT_RUN_NUMBER: ${{ github.run_number }}
-          REPO: ${{ github.repository }}
-          PURGE_STATUS_CONTEXT: ${{ env.PURGE_STATUS_CONTEXT }}
         run: |
           set -euo pipefail
 
           emit() { echo "$1=$2" >> "$GITHUB_OUTPUT"; }
 
-          # Last resort before giving up on a range entirely.
+          if [ "$EVENT" = "repository_dispatch" ]; then
+            echo "::notice::Automatic production promotion; purging the full zone."
+            emit mode full
+            exit 0
+          fi
+
+          # Last resort before giving up on a manual range entirely.
           #
           # A range-less purge is blind to deletions: every target is enumerated
-          # from the deployed checkout, so a file removed in the meantime has no
-          # entry anywhere and its old URL survives at the edge. A time-boxed
-          # range is approximate about *where* to start, but it is a real diff,
-          # so removals inside it come through as `D` and get purged like any
-          # other change. Strictly better than nothing; still paired with the
-          # broad page set, because the window may not reach far enough back.
+          # from the checkout, so a file removed in the meantime has no entry
+          # anywhere and its old URL survives at the edge. A time-boxed range is
+          # approximate about where to start, but it is a real diff, so removals
+          # inside it come through as `D` and get purged like any other change.
           fallback_range() {
             local since ref
             ref="${1:-}"
@@ -233,92 +197,33 @@ jobs:
             return 1
           }
 
-          if [ "$EVENT" = "workflow_dispatch" ]; then
-            if [ "$INPUT_BROAD" = "true" ] && [ -z "${INPUT_RANGE:-}" ]; then
-              # Pages only. Cannot reach changed asset URLs or a locale that was
-              # removed, because both are discovered from a diff — supply a range
-              # as well to recover those.
-              echo "Manual dispatch: broad page purge, no range given."
-              fallback_range && exit 0
-              echo "::warning::No range and no fallback window; deletions in the meantime cannot be discovered."
-              emit mode broad
-              exit 0
-            fi
-            if [ -z "${INPUT_RANGE:-}" ]; then
-              echo "::error::broad_pages=false requires a 'range' input (e.g. abc1234..def5678)."
-              exit 1
-            fi
-            # Constrain the shape before it reaches git, so a value like
-            # `--upload-pack=...` can't be read as an option.
-            if ! printf '%s' "$INPUT_RANGE" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._/-]*\.\.[A-Za-z0-9][A-Za-z0-9._/-]*$'; then
-              echo "::error::Invalid range '$INPUT_RANGE'. Expected <base>..<head>."
-              exit 1
-            fi
-            base="${INPUT_RANGE%%..*}"
-            head="${INPUT_RANGE##*..}"
-          else
-            head="$HEAD_SHA"
-            if ! printf '%s' "${DEPLOYMENT_ID:-}" | grep -Eq '^dpl_[A-Za-z0-9]+$'; then
-              echo "::error::Promoted event carried no valid Vercel deployment id."
-              exit 1
-            fi
-            if [ "$PROMOTED_REF" != "main" ]; then
-              echo "::warning::Non-main production deployment; purging the full zone."
-              emit mode full
-              exit 0
-            fi
-
-            # A successful purge is the only known-good cache checkpoint.
-            # `run-name` records each dispatch before a runner starts, and the
-            # Actions API exposes it as `display_title`. Any intervening
-            # production run, missing run number, or malformed title means an
-            # earlier production tree may still be cached. Fail closed to one
-            # exceptional full purge rather than guess a selective range.
-            ledger_sha=$(git rev-list --max-parents=0 HEAD | sort | sed -n '1p')
-            status_file="purge-ledger.json"
-            workflow_runs_file="purge-workflow-runs.json"
-            if ! gh api --paginate --slurp "repos/$REPO/commits/$ledger_sha/statuses?per_page=100" > "$status_file"; then
-              echo "::warning::Could not read the purge checkpoint ledger; purging the full zone."
-              emit mode full
-              exit 0
-            fi
-            if ! gh api --paginate --slurp "repos/$REPO/actions/workflows/cache-purge.yml/runs?per_page=100" > "$workflow_runs_file"; then
-              echo "::warning::Could not reconcile earlier cache-purge runs; purging the full zone."
-              emit mode full
-              exit 0
-            fi
-
-            ledger_state=$(node ../workflow-source/scripts/cache-purge-event.mjs baseline "$status_file" "$workflow_runs_file" "$head" "$CURRENT_RUN_NUMBER" "$PURGE_STATUS_CONTEXT")
-            base=$(jq -r '.base // empty' <<< "$ledger_state")
-            unsafe=$(jq -r '.unsafe | length' <<< "$ledger_state")
-
-            if [ "$unsafe" -ne 0 ]; then
-              unsafe_runs=$(jq -r '.unsafe | join(", ")' <<< "$ledger_state")
-              echo "::warning::Earlier workflow run(s) $unsafe_runs may represent an unpurged production transition; purging the full zone."
-              emit mode full
-              exit 0
-            fi
-            if [ -z "$base" ]; then
-              echo "::warning::No known-good automatic purge checkpoint exists; purging the full zone."
-              emit mode full
-              exit 0
-            fi
-            echo "Baseline: $base, latest known-good automatic purge."
+          if [ "$INPUT_BROAD" = "true" ] && [ -z "${INPUT_RANGE:-}" ]; then
+            # Pages only. Cannot reach changed asset URLs or a locale that was
+            # removed, because both are discovered from a diff. Supply a range
+            # as well to recover those.
+            echo "Manual dispatch: broad page purge, no range given."
+            fallback_range && exit 0
+            echo "::warning::No range and no fallback window; deletions in the meantime cannot be discovered."
+            emit mode broad
+            exit 0
           fi
+          if [ -z "${INPUT_RANGE:-}" ]; then
+            echo "::error::broad_pages=false requires a 'range' input (e.g. abc1234..def5678)."
+            exit 1
+          fi
+          # Constrain the shape before it reaches git, so a value like
+          # `--upload-pack=...` cannot be read as an option.
+          if ! printf '%s' "$INPUT_RANGE" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._/-]*\.\.[A-Za-z0-9][A-Za-z0-9._/-]*$'; then
+            echo "::error::Invalid range '$INPUT_RANGE'. Expected <base>..<head>."
+            exit 1
+          fi
+          base="${INPUT_RANGE%%..*}"
+          head="${INPUT_RANGE##*..}"
 
-          # A force-push or rollback can leave the baseline outside the promoted
-          # commit's ancestry. Fetch main once so a newer prior deployment is
-          # available for a reverse diff. An automatic run with no reachable
-          # checkpoint cannot prove which assets were previously live.
           if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
             git fetch --no-tags origin main || true
           fi
           if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
-            if [ "$EVENT" = "repository_dispatch" ]; then
-              echo "::warning::Known-good checkpoint $base is unreachable; purging the full zone."
-              emit mode full
-              exit 0
-            fi
             echo "Base commit $base is not reachable in this checkout."
             fallback_range "$head" && exit 0
             echo "::warning::No fallback window either; purging broadly."
@@ -326,24 +231,13 @@ jobs:
             exit 0
           fi
           if ! git cat-file -e "${head}^{commit}" 2>/dev/null; then
-            if [ "$EVENT" = "repository_dispatch" ]; then
-              echo "::warning::Promoted commit $head is unreachable; purging the full zone."
-              emit mode full
-            else
-              echo "::warning::Head commit $head is not reachable; purging broadly."
-              emit mode broad
-            fi
+            echo "::warning::Head commit $head is not reachable; purging broadly."
+            emit mode broad
             exit 0
           fi
 
-          if [ "$EVENT" = "workflow_dispatch" ] && [ "$INPUT_BROAD" = "true" ]; then
-            # Broad page coverage, topped up from the range.
+          if [ "$INPUT_BROAD" = "true" ]; then
             emit mode broad
-          elif [ "$EVENT" = "repository_dispatch" ] && [ "$base" = "$head" ]; then
-            # The Git tree is unchanged, but Vercel environment or build inputs
-            # can still change rendered output. Purge pages without evicting
-            # unchanged public assets or content-addressed generated assets.
-            emit mode pages
           else
             emit mode diff
           fi
@@ -363,9 +257,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          # A chronology hole has no recoverable promoted SHA. Use Cloudflare's
-          # explicit full-zone operation rather than pretending the current tree
-          # can enumerate assets that existed only in that missing deployment.
+          # Automatic promotions use Cloudflare's explicit full-zone operation
+          # and never need a deployed tree. Manual runs continue through the
+          # prefix mapper below.
           if [ "$MODE" = "full" ]; then
             jq -n '{prefixes: [], files: [], broad: true, collapsed: false}' > purge.json
           # No range to work from: a manual run without one or an unreachable
@@ -378,13 +272,12 @@ jobs:
             # is topped up with changed asset URLs and locales removed in the
             # range. --assets rides along for the same reason it applies to a
             # range-less run: broad means the diff is not trusted to be
-            # complete, and the window may not reach back far enough. A run that
-            # escalates to broad from a *trusted* diff does not get it — there we
-            # know exactly which assets changed, and evicting every image on any
-            # shared-file change is what avoiding purge_everything is for.
+            # complete, and the window may not reach back far enough. A manual
+            # run escalated from a trusted diff does not get it. There we know
+            # exactly which assets changed, and evicting every image on any
+            # shared-file change would defeat precise manual recovery.
             broad_flag=""
             [ "$MODE" = "broad" ] && broad_flag="--broad --assets"
-            [ "$MODE" = "pages" ] && broad_flag="--broad"
             # --no-renames is load-bearing. Git's rename detection is on by
             # default, and it reports a moved file as its destination alone, so
             # a page moved without edits would never have its old URL purged and
@@ -396,9 +289,9 @@ jobs:
             # renders, so the mapper widens the purge for them.
             # -z, not the default text format. Git prints pathnames verbatim
             # under it, so there is no C-quoting to decode and no whitespace to
-            # tell apart from a delimiter — the two things that silently
-            # mismapped `café.png` and `logo.png ` before. NUL cannot occur in a
-            # filename, so the framing is unambiguous by construction.
+            # tell apart from a delimiter. Those two issues silently mismapped
+            # `café.png` and `logo.png ` before. NUL cannot occur in a filename,
+            # so the framing is unambiguous by construction.
             #
             # --no-renames keeps a move reported as delete + add: git's rename
             # detection would otherwise name only the destination and the old URL
@@ -446,13 +339,10 @@ jobs:
           fi
           echo "collapsed=$collapsed" >> "$GITHUB_OUTPUT"
 
-      # Automatic promotions purge only the changed HTML/RSC prefixes and
-      # changed public files. Generated assets are content-addressed, and the
-      # zone's 4xx no-store rule prevents negative entries, so probing 21 fresh
-      # page shells on every deploy would add Vercel cost without adding safety.
-      #
-      # Manual recovery keeps live discovery: an operator may be clearing
-      # poisoned entries created before the no-store rule existed.
+      # Automatic promotions already have a complete full-zone plan and make no
+      # cache-busted Vercel page requests. Manual recovery keeps live discovery:
+      # an operator may be clearing poisoned entries created before the no-store
+      # rule existed.
       - name: Finalize purge plan
         id: assets
         env:
@@ -670,34 +560,3 @@ jobs:
           fi
 
           echo "::notice::Cloudflare purge complete."
-
-      # A successful full, selective, or no-op automatic run becomes the next
-      # known-good checkpoint. Recording no-ops matters: otherwise their run
-      # numbers look like chronology holes to a later promotion. A failed or
-      # degraded run leaves no marker and forces the next run to recover fully.
-      - name: Record the purge in deployment order
-        if: ${{ !inputs.dry_run && steps.assets.outputs.degraded != 'true' && github.event_name == 'repository_dispatch' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          SHA: ${{ steps.event.outputs.head }}
-          DEPLOYMENT_ID: ${{ steps.event.outputs.deployment_id }}
-          RUN_NUMBER: ${{ github.run_number }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          ledger_sha=$(git rev-list --max-parents=0 HEAD | sort | sed -n '1p')
-          if [ "${{ steps.compute.outputs.full }}" = "true" ]; then
-            detail="Purged full zone"
-          elif [ "${{ steps.assets.outputs.count }}" = "0" ]; then
-            detail="No cache changes"
-          else
-            detail="Purged $(wc -l < prefixes.txt) prefixes, $(wc -l < files.txt) URLs"
-          fi
-          gh api -X POST "repos/$REPO/statuses/$ledger_sha" \
-            -f state=success \
-            -f context="$PURGE_STATUS_CONTEXT/$DEPLOYMENT_ID" \
-            -f target_url="$RUN_URL" \
-            -f description="$RUN_NUMBER|$SHA|$detail" \
-            > /dev/null
-          echo "Marked $SHA as purged by $DEPLOYMENT_ID."
