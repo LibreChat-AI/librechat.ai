@@ -173,43 +173,53 @@ describe('the workflow feeds the mapper what it needs', () => {
   })
 
   /**
-   * Vercel attributes a deployment to the human who initiated it, then posts
-   * the ready status as vercel[bot]. Checking deployment.creator made every
-   * automatic purge run skip before it reached a step.
+   * Vercel's enriched promotion event is the alias-ready signal and carries the
+   * exact project, branch, Git SHA, and Vercel deployment id. No GitHub
+   * Deployment creator/status inference is needed.
    */
-  it('identifies Vercel by the deployment-status creator', () => {
-    expect(workflow).toContain("github.event.deployment_status.creator.login == 'vercel[bot]'")
-    expect(workflow).not.toContain("github.event.deployment.creator.login == 'vercel[bot]'")
+  it('accepts only this project production promotion event', () => {
+    expect(workflow).toContain("types: ['vercel.deployment.promoted']")
+    expect(workflow).toContain("github.event.client_payload.environment == 'production'")
+    expect(workflow).toContain(
+      "github.event.client_payload.project.id == 'prj_BM0YCOihInl5lqPJidAzwixJPdtj'",
+    )
+    expect(workflow).toContain("github.event.client_payload.git.ref == 'main'")
+    expect(workflow).toContain('node scripts/cache-purge-event.mjs')
+    expect(workflow).not.toContain('deployment_status:')
   })
 
   /**
    * Vercel can redeploy the same SHA. Grouping by SHA would let GitHub discard
    * one of those pending purge runs, even though each deployment needs its own
-   * baseline and marker.
+   * marker.
    */
-  it('keys concurrency by deployment id so same-sha redeployments are distinct', () => {
+  it('keys concurrency by Vercel deployment id so same-sha redeployments are distinct', () => {
     expect(workflow).toContain(
-      'group: cache-purge-${{ github.event.deployment.id || github.run_id }}',
+      'group: cache-purge-${{ github.event.client_payload.id || github.run_id }}',
     )
     expect(workflow).not.toContain(
-      'group: cache-purge-${{ github.event.deployment.sha || github.run_id }}',
+      'group: cache-purge-${{ github.event.client_payload.git.sha || github.run_id }}',
     )
   })
 
-  it('adds current build assets before deciding there is nothing to purge', () => {
+  /**
+   * The static-asset rule now makes every 4xx response BYPASS Cloudflare, so
+   * immutable assets cannot be poisoned. Automatic deployment purges should not
+   * issue 21 cache-busted Vercel page requests just to enumerate those assets.
+   */
+  it('discovers current build assets only for manual recovery', () => {
+    expect(workflow).toContain('if [ "$EVENT" = "workflow_dispatch" ]; then')
     expect(workflow).toContain('node scripts/cache-build-assets.mjs > build-assets.txt')
     expect(workflow).toContain("if: steps.assets.outputs.count == '0'")
     expect(workflow).not.toContain('if: steps.compute.outputs.count')
   })
 
   /**
-   * Discovery retries an in-flight alias swap on its own, so a failure that
-   * survives those retries means the live site is unhealthy, not mid-flip.
-   * Every run, automatic or manual, must still send the broad page/public
-   * targets computed earlier in the job to Cloudflare, and a run that could not
-   * enumerate the current build assets must leave no purge marker behind.
+   * A manual dispatch is the recovery path for an already unhealthy site. Its
+   * broad prefixes and public asset targets remain valid even when live asset
+   * discovery fails.
    */
-  it('degrades instead of aborting when build-asset discovery fails', () => {
+  it('degrades manual recovery instead of aborting when discovery fails', () => {
     expect(workflow).toContain(': > build-assets.txt')
     expect(workflow).toContain('degraded=true')
     expect(workflow).toContain('echo "degraded=$degraded" >> "$GITHUB_OUTPUT"')
@@ -225,10 +235,11 @@ describe('the workflow feeds the mapper what it needs', () => {
     expect(workflow).toContain("steps.assets.outputs.degraded != 'true'")
   })
 
-  it('accepts a baseline only when its deployment-specific purge marker exists', () => {
-    expect(workflow).toContain('PURGE_STATUS_CONTEXT/$id')
-    expect(workflow).toContain('select(.context == $context and .state == "success")')
-    expect(workflow).not.toContain('select(.creator.login == $creator)')
+  it('finds the baseline from the latest successful Vercel deployment marker', () => {
+    expect(workflow).toContain('select(.context | startswith($prefix))')
+    expect(workflow).toContain('PURGE_STATUS_CONTEXT/$DEPLOYMENT_ID')
+    expect(workflow).not.toContain('deployments?environment=Production')
+    expect(workflow).not.toContain('deployment.creator.login')
   })
 
   /**
