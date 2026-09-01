@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   VERCEL_PROJECT_ID,
-  selectPreviousPurgedCommit,
+  selectPurgeState,
   validatePromotedDeployment,
 } from './cache-purge-event.mjs'
 
@@ -42,12 +42,18 @@ describe('validatePromotedDeployment', () => {
   })
 })
 
-describe('selectPreviousPurgedCommit', () => {
-  const status = (sha: string, runNumber: string, createdAt: string) => ({
-    context: 'cache-purge/dpl_test',
+describe('selectPurgeState', () => {
+  const status = (
+    kind: 'cache-promotion' | 'cache-purge',
+    sha: string,
+    runNumber: string,
+    createdAt: string,
+    state = 'success',
+  ) => ({
+    context: `${kind}/dpl_test`,
     created_at: createdAt,
-    description: `${runNumber}|${sha}|Purged 3 prefixes, 1 URLs`,
-    state: 'success',
+    description: `${runNumber}|${sha}|${kind}`,
+    state,
   })
 
   it('uses promotion chronology when the current deployment rolls back', () => {
@@ -56,57 +62,96 @@ describe('selectPreviousPurgedCommit', () => {
     const olderDeployed = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 
     expect(
-      selectPreviousPurgedCommit(
+      selectPurgeState(
         [
           // The older promotion finishes last. Completion timestamps must not
           // override the workflow run numbers assigned at event delivery.
-          [status(olderDeployed, '10', '2026-09-01T13:00:00Z')],
-          [status(latestDeployed, '11', '2026-09-01T12:00:00Z')],
+          [
+            status('cache-promotion', olderDeployed, '10', '2026-09-01T13:00:00Z'),
+            status('cache-purge', olderDeployed, '10', '2026-09-01T13:00:00Z'),
+          ],
+          [
+            status('cache-promotion', latestDeployed, '11', '2026-09-01T12:00:00Z'),
+            status('cache-purge', latestDeployed, '11', '2026-09-01T12:00:00Z'),
+          ],
         ],
         rollbackHead,
+        '12',
       ),
-    ).toBe(latestDeployed)
+    ).toEqual({ base: latestDeployed, previous: latestDeployed })
   })
 
-  it('skips a prior deployment of the same commit', () => {
+  it('keeps the same-commit predecessor but skips it as a diff baseline', () => {
     const currentHead = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
     const previousHead = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 
     expect(
-      selectPreviousPurgedCommit(
+      selectPurgeState(
         [
           [
-            status(currentHead, '12', '2026-09-01T13:00:00Z'),
-            status(previousHead, '11', '2026-09-01T12:00:00Z'),
+            status('cache-promotion', currentHead, '12', '2026-09-01T13:00:00Z'),
+            status('cache-purge', currentHead, '12', '2026-09-01T13:00:00Z'),
+            status('cache-promotion', previousHead, '11', '2026-09-01T12:00:00Z'),
+            status('cache-purge', previousHead, '11', '2026-09-01T12:00:00Z'),
           ],
         ],
         currentHead,
+        '13',
       ),
-    ).toBe(previousHead)
+    ).toEqual({ base: previousHead, previous: currentHead })
   })
 
-  it('ignores failed and malformed ledger entries', () => {
+  it('retains an unpurged predecessor separately from the last success', () => {
     const currentHead = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+    const unpurgedHead = 'cccccccccccccccccccccccccccccccccccccccc'
+    const successfulHead = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+
     expect(
-      selectPreviousPurgedCommit(
+      selectPurgeState(
         [
           [
-            {
-              ...status('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', '10', '2026-09-01T12:00:00Z'),
-              state: 'failure',
-            },
-            { ...status('not-a-sha', '11', '2026-09-01T13:00:00Z') },
-            {
-              ...status(
-                'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-                'not-a-run',
-                '2026-09-01T14:00:00Z',
-              ),
-            },
+            status('cache-promotion', unpurgedHead, '11', '2026-09-01T13:00:00Z'),
+            status('cache-promotion', successfulHead, '10', '2026-09-01T12:00:00Z'),
+            status('cache-purge', successfulHead, '10', '2026-09-01T12:05:00Z'),
           ],
         ],
         currentHead,
+        '12',
       ),
-    ).toBeNull()
+    ).toEqual({ base: successfulHead, previous: unpurgedHead })
+  })
+
+  it('ignores future, failed, and malformed ledger entries', () => {
+    const currentHead = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+    expect(
+      selectPurgeState(
+        [
+          [
+            status(
+              'cache-purge',
+              'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+              '10',
+              '2026-09-01T12:00:00Z',
+              'failure',
+            ),
+            status('cache-promotion', 'not-a-sha', '11', '2026-09-01T13:00:00Z'),
+            status(
+              'cache-promotion',
+              'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+              'not-a-run',
+              '2026-09-01T14:00:00Z',
+            ),
+            status(
+              'cache-promotion',
+              'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+              '13',
+              '2026-09-01T15:00:00Z',
+            ),
+          ],
+        ],
+        currentHead,
+        '12',
+      ),
+    ).toEqual({ base: null, previous: null })
   })
 })

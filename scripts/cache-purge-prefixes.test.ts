@@ -301,6 +301,31 @@ describe('the workflow feeds the mapper what it needs', () => {
     expect(workflow).toContain("steps.assets.outputs.degraded != 'true'")
   })
 
+  /**
+   * Purge success alone cannot describe production chronology: a failed C
+   * promotion still has to be removed when production rolls back to B.
+   */
+  it('records each trusted promotion before purge planning', () => {
+    expect(workflow).toContain('PROMOTION_STATUS_CONTEXT: cache-promotion')
+    expect(workflow).toContain('-f context="$PROMOTION_STATUS_CONTEXT/$DEPLOYMENT_ID"')
+    expect(workflow).toContain('-f description="$RUN_NUMBER|$SHA|Promoted"')
+
+    const promotionMarker = workflow.indexOf('- name: Record promoted deployment')
+    const rangeResolution = workflow.indexOf('- name: Resolve diff range')
+    const purge = workflow.indexOf('- name: Purge')
+    expect(promotionMarker).toBeGreaterThan(0)
+    expect(promotionMarker).toBeLessThan(rangeResolution)
+    expect(rangeResolution).toBeLessThan(purge)
+  })
+
+  it('broadens an unpurged non-forward transition from the prior promotion', () => {
+    expect(workflow).toContain('CURRENT_RUN_NUMBER: ${{ github.run_number }}')
+    expect(workflow).toContain('PROMOTION_STATUS_CONTEXT: ${{ env.PROMOTION_STATUS_CONTEXT }}')
+    expect(workflow).toContain('git merge-base --is-ancestor "$previous" "$head"')
+    expect(workflow).toContain('emit base "$previous"')
+    expect(workflow).toContain('Previous promotion was not purged and is not an ancestor')
+  })
+
   it('finds the baseline from the promotion-ordered Vercel purge ledger', () => {
     expect(workflow).toContain('git rev-list --max-parents=0 HEAD')
     expect(workflow).toContain('cache-purge-event.mjs baseline')

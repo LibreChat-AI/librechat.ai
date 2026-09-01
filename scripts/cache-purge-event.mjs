@@ -42,58 +42,100 @@ export function validatePromotedDeployment(payload) {
 }
 
 /**
- * Selects the latest successful promotion that differs from the commit
- * currently being promoted. GitHub assigns `run_number` when each workflow run
- * is created and keeps it stable on reruns, so it preserves event order even
- * when overlapping purges finish in the opposite order.
+ * Returns two independent facts from the deployment ledger:
+ * - `base`: latest successful purge from a different commit
+ * - `previous`: commit from the immediately preceding trusted promotion
+ *
+ * `run_number` is assigned when each workflow run is created and stays stable
+ * on reruns, so it preserves event order when overlapping purges finish in the
+ * opposite order.
  */
-export function selectPreviousPurgedCommit(
+export function selectPurgeState(
   statusPages,
   currentHead,
-  contextPrefix = 'cache-purge',
+  currentRunNumber,
+  purgeContextPrefix = 'cache-purge',
+  promotionContextPrefix = 'cache-promotion',
 ) {
   if (!COMMIT_SHA.test(currentHead)) {
     throw new Error(`Current head is not a valid Git commit SHA: ${currentHead}`)
   }
+  if (!/^[1-9]\d*$/u.test(currentRunNumber)) {
+    throw new Error(`Current run number is invalid: ${currentRunNumber}`)
+  }
 
-  const deploymentContext = `${contextPrefix}/dpl_`
-  const deployments = []
+  const currentRun = BigInt(currentRunNumber)
+  const purgeContext = `${purgeContextPrefix}/dpl_`
+  const promotionContext = `${promotionContextPrefix}/dpl_`
+  let base
+  let previous
+
   for (const status of Array.isArray(statusPages) ? statusPages.flat() : []) {
     if (
       !status ||
       typeof status !== 'object' ||
       status.state !== 'success' ||
       typeof status.context !== 'string' ||
-      !status.context.startsWith(deploymentContext) ||
       typeof status.description !== 'string'
     ) {
       continue
     }
 
     const marker = status.description.match(PURGE_LEDGER_DESCRIPTION)
-    if (!marker || marker[2] === currentHead) continue
-    deployments.push({
+    if (!marker) continue
+    const entry = {
       runNumber: BigInt(marker[1]),
       sha: marker[2],
-    })
+    }
+    if (entry.runNumber >= currentRun) continue
+
+    if (
+      status.context.startsWith(promotionContext) &&
+      (!previous || entry.runNumber > previous.runNumber)
+    ) {
+      previous = entry
+    }
+    if (
+      status.context.startsWith(purgeContext) &&
+      entry.sha !== currentHead &&
+      (!base || entry.runNumber > base.runNumber)
+    ) {
+      base = entry
+    }
   }
 
-  deployments.sort((left, right) => {
-    if (left.runNumber === right.runNumber) return 0
-    return left.runNumber > right.runNumber ? -1 : 1
-  })
-  return deployments[0]?.sha ?? null
+  return {
+    base: base?.sha ?? null,
+    previous: previous?.sha ?? null,
+  }
 }
 
 function main() {
   if (process.argv[2] === 'baseline') {
-    const [, , , statusFile, currentHead, contextPrefix] = process.argv
-    if (!statusFile || !currentHead) {
-      throw new Error('baseline requires <status-file> <current-head> [context-prefix]')
+    const [
+      ,
+      ,
+      ,
+      statusFile,
+      currentHead,
+      currentRunNumber,
+      purgeContextPrefix,
+      promotionContextPrefix,
+    ] = process.argv
+    if (!statusFile || !currentHead || !currentRunNumber) {
+      throw new Error(
+        'baseline requires <status-file> <current-head> <current-run-number> [purge-context] [promotion-context]',
+      )
     }
     const statusPages = JSON.parse(readFileSync(statusFile, 'utf8'))
-    const base = selectPreviousPurgedCommit(statusPages, currentHead, contextPrefix)
-    if (base) process.stdout.write(`${base}\n`)
+    const state = selectPurgeState(
+      statusPages,
+      currentHead,
+      currentRunNumber,
+      purgeContextPrefix,
+      promotionContextPrefix,
+    )
+    process.stdout.write(`${JSON.stringify(state)}\n`)
     return
   }
 

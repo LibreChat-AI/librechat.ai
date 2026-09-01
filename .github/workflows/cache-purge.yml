@@ -67,8 +67,8 @@ on:
 
 permissions:
   contents: read
-  # Writing the "this Vercel deployment was purged" marker that the next run
-  # baselines from, so a failed purge is retried rather than skipped past.
+  # Recording trusted production promotions and completed purges. Separate
+  # markers preserve rollback history even when a purge fails.
   statuses: write
 
 # Keyed per Vercel deployment, NOT a single shared group. GitHub keeps at most
@@ -103,6 +103,8 @@ env:
   # (`cache-purge/dpl_...`), while the description begins with the workflow run
   # number and promoted SHA. The sequence survives overlap, rollback, and rerun.
   PURGE_STATUS_CONTEXT: cache-purge
+  # Written as soon as a trusted event is accepted, before purge planning.
+  PROMOTION_STATUS_CONTEXT: cache-promotion
   # How far back a blind recovery reaches when it has no baseline to work from.
   # Only ever an approximation of where to start, so it is paired with the broad
   # page set; its job is to surface deletions, which a range-less run cannot see.
@@ -175,6 +177,28 @@ jobs:
             echo "::error::The promoted SHA is not part of the current main history."
             exit 1
           fi
+
+      # Promotion and purge success are separate facts. Record the trusted
+      # production transition before planning so a failed or cancelled purge
+      # still leaves enough chronology for a later rollback to recover safely.
+      - name: Record promoted deployment
+        if: github.event_name == 'repository_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ steps.event.outputs.head }}
+          DEPLOYMENT_ID: ${{ steps.event.outputs.deployment_id }}
+          RUN_NUMBER: ${{ github.run_number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          ledger_sha=$(git rev-list --max-parents=0 HEAD | sort | sed -n '1p')
+          gh api -X POST "repos/$REPO/statuses/$ledger_sha" \
+            -f state=success \
+            -f context="$PROMOTION_STATUS_CONTEXT/$DEPLOYMENT_ID" \
+            -f target_url="$RUN_URL" \
+            -f description="$RUN_NUMBER|$SHA|Promoted" \
+            > /dev/null
       # Resolve what to map. Three cases:
       #   dispatch + broad           -> broad set, no diff
       #   dispatch + explicit range  -> that range
@@ -191,8 +215,10 @@ jobs:
           INPUT_RANGE: ${{ inputs.range }}
           HEAD_SHA: ${{ steps.event.outputs.head }}
           DEPLOYMENT_ID: ${{ steps.event.outputs.deployment_id }}
+          CURRENT_RUN_NUMBER: ${{ github.run_number }}
           REPO: ${{ github.repository }}
           PURGE_STATUS_CONTEXT: ${{ env.PURGE_STATUS_CONTEXT }}
+          PROMOTION_STATUS_CONTEXT: ${{ env.PROMOTION_STATUS_CONTEXT }}
         run: |
           set -euo pipefail
 
@@ -252,24 +278,42 @@ jobs:
               exit 1
             fi
 
-            # All successful promotions write to one stable commit-status
-            # ledger. Workflow run numbers are assigned at event delivery, so
-            # they preserve promotion order when concurrent purges finish out of
-            # order. Git ancestry cannot do that for a rollback from C to B.
-            # Skip markers for the same SHA so a rebuild still compares against
-            # the previous distinct deployed tree. Only the newest 100 markers
-            # are needed; otherwise broad recovery is safer than an unbounded
-            # status-history request.
+            # Promotion markers describe what served production. Purge markers
+            # describe which diff was successfully cleared. Run numbers order
+            # both facts at event delivery, even when concurrent jobs complete
+            # in the opposite order.
             ledger_sha=$(git rev-list --max-parents=0 HEAD | sort | sed -n '1p')
             status_file="purge-ledger.json"
             gh api "repos/$REPO/commits/$ledger_sha/statuses?per_page=100" > "$status_file"
-            base=$(node ../workflow-source/scripts/cache-purge-event.mjs baseline "$status_file" "$head" "$PURGE_STATUS_CONTEXT")
+            ledger_state=$(node ../workflow-source/scripts/cache-purge-event.mjs baseline "$status_file" "$head" "$CURRENT_RUN_NUMBER" "$PURGE_STATUS_CONTEXT" "$PROMOTION_STATUS_CONTEXT")
+            base=$(jq -r '.base // empty' <<< "$ledger_state")
+            previous=$(jq -r '.previous // empty' <<< "$ledger_state")
 
             if [ -n "$base" ]; then
               echo "Baseline: $base, latest successfully purged Vercel deployment."
-            else
-              # Includes the first run after introducing the chronological
-              # deployment ledger.
+            fi
+
+            # A forward deployment can widen from the last successful purge and
+            # cover failed intermediate runs. A non-forward transition cannot:
+            # its prior production tree may contain routes absent from both the
+            # successful baseline and current checkout. Diff that predecessor
+            # while broad recovery covers the current tree.
+            if [ -n "$previous" ] && [ "$previous" != "$base" ]; then
+              if ! git cat-file -e "${previous}^{commit}" 2>/dev/null; then
+                echo "::warning::Previous promotion $previous is unreachable; purging broadly."
+                emit mode broad
+                exit 0
+              fi
+              if ! git merge-base --is-ancestor "$previous" "$head"; then
+                echo "::warning::Previous promotion was not purged and is not an ancestor of this deployment; purging broad recovery targets plus $previous..$head."
+                emit mode broad
+                emit base "$previous"
+                emit head "$head"
+                exit 0
+              fi
+            fi
+
+            if [ -z "$base" ]; then
               echo "No earlier successfully purged Vercel deployment found."
               fallback_range "$head" && exit 0
               echo "::warning::No baseline and no fallback window; purging broadly."
