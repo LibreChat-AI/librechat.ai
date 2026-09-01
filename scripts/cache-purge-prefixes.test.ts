@@ -217,6 +217,23 @@ describe('the workflow feeds the mapper what it needs', () => {
   })
 
   /**
+   * repository_dispatch payload fields are caller-controlled. The checkout may
+   * supply data to trusted mapper code only after its SHA is proven to belong to
+   * the protected production branch.
+   */
+  it('rejects a dispatch SHA outside current main before secrets are exposed', () => {
+    expect(workflow).toContain(
+      'git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main',
+    )
+    expect(workflow).toContain('git merge-base --is-ancestor "$HEAD_SHA" origin/main')
+
+    const trustCheck = workflow.indexOf('git merge-base --is-ancestor "$HEAD_SHA" origin/main')
+    const cloudflareSecrets = workflow.indexOf('CF_API_TOKEN:')
+    expect(trustCheck).toBeGreaterThan(0)
+    expect(trustCheck).toBeLessThan(cloudflareSecrets)
+  })
+
+  /**
    * A rollback checks out an older deployed tree. Keep the workflow revision in
    * a sibling checkout so its validator and mapping scripts cannot disappear.
    */
