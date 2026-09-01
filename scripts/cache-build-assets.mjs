@@ -1,6 +1,6 @@
 /**
- * Discovers build assets referenced by the current production page shells and
- * their Webpack runtime.
+ * Discovers build assets referenced by the current production page shells, plus
+ * the lazy-chunk map of their Webpack runtime when the build has one.
  *
  * A Vercel alias transition can briefly return a 404 for a new immutable
  * `/_next/static/**` URL. Cloudflare's cache rule may retain that 404 in one
@@ -43,6 +43,7 @@ export const DEFAULT_PROBE_PATHS = [
 const CACHE_PROBE_PARAM = '__librechat_cache_probe'
 const STATIC_PREFIX = '/_next/static/'
 const WEBPACK_RUNTIME_PATH = /\/static\/chunks\/webpack-[^/]+\.js$/u
+const DEPLOYMENT_ID_ATTRIBUTE = /<html\b[^>]*\bdata-dpl-id="([^"]+)"/iu
 const REQUEST_TIMEOUT_MS = 15_000
 const MAX_CONCURRENCY = 8
 
@@ -64,6 +65,14 @@ export class DeploymentSkewError extends Error {
 
 function isWebpackRuntime(asset) {
   return WEBPACK_RUNTIME_PATH.test(new URL(asset).pathname)
+}
+
+/**
+ * The deployment that rendered a shell, as published by Next.js when Skew
+ * Protection is on. Layout-independent, unlike the Webpack runtime name.
+ */
+export function extractDeploymentId(html) {
+  return html.match(DEPLOYMENT_ID_ATTRIBUTE)?.[1] ?? null
 }
 
 function decodeAttribute(value) {
@@ -279,23 +288,33 @@ export async function discoverCurrentBuildAssets({
     throw new Error('No Next.js build assets were found in the production page shells')
   }
 
-  const runtimes = shellAssets.filter(isWebpackRuntime)
-  if (runtimes.length === 0) {
-    throw new Error('No Webpack runtime was found in the production page shells')
+  // Every shell of one build reports the same identity: the Skew Protection
+  // deployment id when it is enabled, and otherwise the Webpack runtime chunk.
+  // Two answers across shells fetched together means the alias served two
+  // builds during this pass, so the union mixes both and its newest URLs may
+  // not be at the origin yet.
+  const buildSignatures = new Set(
+    pageResponses
+      .map(
+        (html, index) =>
+          extractDeploymentId(html) ?? shellAssetLists[index].filter(isWebpackRuntime).join(' '),
+      )
+      .filter(Boolean),
+  )
+  if (buildSignatures.size > 1) {
+    throw new DeploymentSkewError(
+      `Production page shells came from more than one build (${[...buildSignatures].join(' vs ')}); the alias is still transitioning.`,
+    )
   }
 
-  // Every shell of one build names the same runtime chunk. More than one answer
-  // across shells fetched together means the alias served two builds during
-  // this pass, so the union mixes both and its newest URLs may not be at the
-  // origin yet. Shells without a runtime are ignored rather than counted as a
-  // third answer.
-  const runtimeSignatures = new Set(
-    shellAssetLists.map((assets) => assets.filter(isWebpackRuntime).join(' ')).filter(Boolean),
-  )
-  if (runtimeSignatures.size > 1) {
-    throw new DeploymentSkewError(
-      `Production page shells disagree on the Webpack runtime (${[...runtimeSignatures].join(' vs ')}); the alias is still transitioning.`,
-    )
+  // Turbopack builds serve `/_next/static/immutable/**` and ship no Webpack
+  // runtime, so there is no lazy-chunk map to expand. The shells still name
+  // every eagerly loaded chunk, which is the set a deploy must purge; lazily
+  // loaded chunks rely on the zone's no-store rule for 4xx responses instead of
+  // on enumeration.
+  const runtimes = shellAssets.filter(isWebpackRuntime)
+  if (runtimes.length === 0) {
+    return shellAssets
   }
 
   const runtimeResponses = await mapConcurrent(runtimes, async (runtime, index) => {
@@ -373,9 +392,17 @@ async function main() {
     },
   })
 
-  process.stderr.write(
-    `Collected ${assets.length} current build assets from ${probePaths.length} fresh page shells and their Webpack runtime.\n`,
-  )
+  if (assets.some(isWebpackRuntime)) {
+    process.stderr.write(
+      `Collected ${assets.length} current build assets from ${probePaths.length} fresh page shells and their Webpack runtime.\n`,
+    )
+  } else {
+    // Loud on purpose: this build's lazily loaded chunks are not in the purge
+    // set, so they depend entirely on the zone never caching a 4xx.
+    process.stderr.write(
+      `::warning::Collected ${assets.length} eagerly referenced build assets from ${probePaths.length} fresh page shells. This build ships no Webpack runtime, so its lazy-chunk map could not be expanded.\n`,
+    )
+  }
   process.stdout.write(`${assets.join('\n')}\n`)
 }
 

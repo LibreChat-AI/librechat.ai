@@ -5,6 +5,7 @@ import {
   discoverCurrentBuildAssets,
   discoverCurrentBuildAssetsWithRetry,
   extractBuildAssetUrls,
+  extractDeploymentId,
   extractWebpackRuntimeAssetUrls,
   withCacheProbe,
 } from './cache-build-assets.mjs'
@@ -57,6 +58,13 @@ describe('extractBuildAssetUrls', () => {
       'https://www.librechat.ai/_next/static/chunks/webpack-123.js',
       'https://www.librechat.ai/_next/static/css/app.css?x=1&y=2',
     ])
+  })
+})
+
+describe('extractDeploymentId', () => {
+  it('reads the deployment id Next.js publishes on the html element', () => {
+    expect(extractDeploymentId('<html data-dpl-id="dpl_abc" lang="en">')).toBe('dpl_abc')
+    expect(extractDeploymentId('<html lang="en">')).toBeNull()
   })
 })
 
@@ -157,6 +165,31 @@ describe('discoverCurrentBuildAssets', () => {
       discoverCurrentBuildAssets({ fetchImpl, origin, probePaths: ['/'], token: 'test' }),
     ).rejects.toThrow('No Next.js build assets')
   })
+
+  /**
+   * A Turbopack build serves `/_next/static/immutable/**` and ships no Webpack
+   * runtime, so there is no lazy-chunk map. Discovery must return the eager
+   * shell assets rather than failing, and must not invent a runtime request.
+   */
+  it('accepts a Turbopack build with no Webpack runtime', async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(
+          '<html data-dpl-id="dpl_test">' +
+            '<link href="/_next/static/immutable/chunks/style.css" rel="stylesheet">' +
+            '<script src="/_next/static/immutable/chunks/page.js"></script>' +
+            '</html>',
+        ),
+    )
+
+    await expect(
+      discoverCurrentBuildAssets({ fetchImpl, origin, probePaths: ['/'], token: 'test' }),
+    ).resolves.toEqual([
+      `${origin}/_next/static/immutable/chunks/page.js`,
+      `${origin}/_next/static/immutable/chunks/style.css`,
+    ])
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('discoverCurrentBuildAssetsWithRetry', () => {
@@ -198,7 +231,7 @@ describe('discoverCurrentBuildAssetsWithRetry', () => {
     expect(sleepImpl).toHaveBeenCalledWith(1)
   })
 
-  it('treats shells naming different runtimes as a transition, and gives up', async () => {
+  it('treats shells from different builds as a transition, and gives up', async () => {
     const fetchImpl = vi.fn(async (input: string | URL | Request) => {
       const { pathname } = toUrl(input)
       if (pathname.startsWith('/_next/')) return new Response(runtimeSource)
@@ -217,7 +250,34 @@ describe('discoverCurrentBuildAssetsWithRetry', () => {
     }).catch((reason: unknown) => reason)
 
     expect(error).toBeInstanceOf(DeploymentSkewError)
-    expect((error as Error).message).toContain('disagree on the Webpack runtime')
+    expect((error as Error).message).toContain('came from more than one build')
+  })
+
+  /**
+   * Turbopack builds carry no Webpack runtime, so the deployment id published
+   * by Skew Protection is the only shell identity available mid-transition.
+   */
+  it('detects a transition from disagreeing deployment ids', async () => {
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const { pathname } = toUrl(input)
+      const id = pathname === '/' ? 'dpl_old' : 'dpl_new'
+      return new Response(
+        `<html data-dpl-id="${id}"><script src="/_next/static/immutable/chunks/a.js"></script></html>`,
+      )
+    })
+
+    const error = await discoverCurrentBuildAssetsWithRetry({
+      fetchImpl,
+      origin,
+      probePaths: ['/', '/docs'],
+      token: 'test',
+      attempts: 2,
+      backoffMs: 1,
+      sleepImpl: async () => {},
+    }).catch((reason: unknown) => reason)
+
+    expect(error).toBeInstanceOf(DeploymentSkewError)
+    expect((error as Error).message).toContain('dpl_old vs dpl_new')
   })
 
   it('does not retry a failure a later attempt cannot fix', async () => {
