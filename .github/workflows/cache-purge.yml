@@ -1,4 +1,6 @@
 name: Cloudflare Cache Purge
+run-name: >-
+  cache-purge:${{ github.event.client_payload.environment || 'manual' }}:${{ github.event.client_payload.project.id || 'manual' }}:${{ github.event.client_payload.git.ref || 'manual' }}:${{ github.event.client_payload.git.sha || github.sha }}:${{ github.event.client_payload.id || github.run_id }}
 
 # Purges the Cloudflare edge cache for the pages a production deploy actually
 # changed, so a docs edit is visible immediately instead of waiting out the 24h
@@ -66,9 +68,9 @@ on:
         required: false
 
 permissions:
+  actions: read
   contents: read
-  # Recording trusted production promotions and completed purges. Separate
-  # markers preserve rollback history even when a purge fails.
+  # Successful automatic purges are durable known-good checkpoints.
   statuses: write
 
 # Keyed per Vercel deployment, NOT a single shared group. GitHub keeps at most
@@ -103,8 +105,6 @@ env:
   # (`cache-purge/dpl_...`), while the description begins with the workflow run
   # number and promoted SHA. The sequence survives overlap, rollback, and rerun.
   PURGE_STATUS_CONTEXT: cache-purge
-  # Written as soon as a trusted event is accepted, before purge planning.
-  PROMOTION_STATUS_CONTEXT: cache-promotion
   # How far back a blind recovery reaches when it has no baseline to work from.
   # Only ever an approximation of where to start, so it is paired with the broad
   # page set; its job is to surface deletions, which a range-less run cannot see.
@@ -178,34 +178,14 @@ jobs:
             exit 1
           fi
 
-      # Promotion and purge success are separate facts. Record the trusted
-      # production transition before planning so a failed or cancelled purge
-      # still leaves enough chronology for a later rollback to recover safely.
-      - name: Record promoted deployment
-        if: github.event_name == 'repository_dispatch'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          SHA: ${{ steps.event.outputs.head }}
-          DEPLOYMENT_ID: ${{ steps.event.outputs.deployment_id }}
-          RUN_NUMBER: ${{ github.run_number }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          ledger_sha=$(git rev-list --max-parents=0 HEAD | sort | sed -n '1p')
-          gh api -X POST "repos/$REPO/statuses/$ledger_sha" \
-            -f state=success \
-            -f context="$PROMOTION_STATUS_CONTEXT/$DEPLOYMENT_ID" \
-            -f target_url="$RUN_URL" \
-            -f description="$RUN_NUMBER|$SHA|Promoted" \
-            > /dev/null
       # Resolve what to map. Three cases:
       #   dispatch + broad           -> broad set, no diff
       #   dispatch + explicit range  -> that range
-      #   Vercel promotion           -> last successfully purged commit .. this one
+      #   Vercel promotion           -> last known-good purge .. this commit
       #
-      # Diffing promotion-to-promotion covers every commit that actually shipped,
-      # including commits whose intermediate Vercel builds were superseded.
+      # Automatic runs reconcile every intervening workflow run before using a
+      # selective range. Run names capture Vercel routing data when GitHub
+      # creates the run, so queued and cancelled predecessors stay visible.
       - name: Resolve diff range
         id: range
         env:
@@ -218,7 +198,6 @@ jobs:
           CURRENT_RUN_NUMBER: ${{ github.run_number }}
           REPO: ${{ github.repository }}
           PURGE_STATUS_CONTEXT: ${{ env.PURGE_STATUS_CONTEXT }}
-          PROMOTION_STATUS_CONTEXT: ${{ env.PROMOTION_STATUS_CONTEXT }}
         run: |
           set -euo pipefail
 
@@ -278,58 +257,57 @@ jobs:
               exit 1
             fi
 
-            # Promotion markers describe what served production. Purge markers
-            # describe which diff was successfully cleared. Run numbers order
-            # both facts at event delivery, even when concurrent jobs complete
-            # in the opposite order.
+            # A successful purge is the only known-good cache checkpoint.
+            # `run-name` records each dispatch before a runner starts, and the
+            # Actions API exposes it as `display_title`. Any intervening
+            # production run, missing run number, or malformed title means an
+            # earlier production tree may still be cached. Fail closed to one
+            # exceptional full purge rather than guess a selective range.
             ledger_sha=$(git rev-list --max-parents=0 HEAD | sort | sed -n '1p')
             status_file="purge-ledger.json"
-            gh api "repos/$REPO/commits/$ledger_sha/statuses?per_page=100" > "$status_file"
-            ledger_state=$(node ../workflow-source/scripts/cache-purge-event.mjs baseline "$status_file" "$head" "$CURRENT_RUN_NUMBER" "$PURGE_STATUS_CONTEXT" "$PROMOTION_STATUS_CONTEXT")
-            base=$(jq -r '.base // empty' <<< "$ledger_state")
-            previous=$(jq -r '.previous // empty' <<< "$ledger_state")
-
-            if [ -n "$base" ]; then
-              echo "Baseline: $base, latest successfully purged Vercel deployment."
-            fi
-
-            # A forward deployment can widen from the last successful purge and
-            # cover failed intermediate runs. A non-forward transition cannot:
-            # its prior production tree may contain routes absent from both the
-            # successful baseline and current checkout. Diff that predecessor
-            # while broad recovery covers the current tree.
-            if [ -n "$previous" ] && [ "$previous" != "$base" ]; then
-              if ! git cat-file -e "${previous}^{commit}" 2>/dev/null; then
-                echo "::warning::Previous promotion $previous is unreachable; purging broadly."
-                emit mode broad
-                exit 0
-              fi
-              if ! git merge-base --is-ancestor "$previous" "$head"; then
-                echo "::warning::Previous promotion was not purged and is not an ancestor of this deployment; purging broad recovery targets plus $previous..$head."
-                emit mode broad
-                emit base "$previous"
-                emit head "$head"
-                exit 0
-              fi
-            fi
-
-            if [ -z "$base" ]; then
-              echo "No earlier successfully purged Vercel deployment found."
-              fallback_range "$head" && exit 0
-              echo "::warning::No baseline and no fallback window; purging broadly."
-              emit mode broad
+            workflow_runs_file="purge-workflow-runs.json"
+            if ! gh api --paginate --slurp "repos/$REPO/commits/$ledger_sha/statuses?per_page=100" > "$status_file"; then
+              echo "::warning::Could not read the purge checkpoint ledger; purging the full zone."
+              emit mode full
               exit 0
             fi
+            if ! gh api --paginate --slurp "repos/$REPO/actions/workflows/cache-purge.yml/runs?per_page=100" > "$workflow_runs_file"; then
+              echo "::warning::Could not reconcile earlier cache-purge runs; purging the full zone."
+              emit mode full
+              exit 0
+            fi
+
+            ledger_state=$(node ../workflow-source/scripts/cache-purge-event.mjs baseline "$status_file" "$workflow_runs_file" "$head" "$CURRENT_RUN_NUMBER" "$PURGE_STATUS_CONTEXT")
+            base=$(jq -r '.base // empty' <<< "$ledger_state")
+            unsafe=$(jq -r '.unsafe | length' <<< "$ledger_state")
+
+            if [ "$unsafe" -ne 0 ]; then
+              unsafe_runs=$(jq -r '.unsafe | join(", ")' <<< "$ledger_state")
+              echo "::warning::Earlier workflow run(s) $unsafe_runs may represent an unpurged production transition; purging the full zone."
+              emit mode full
+              exit 0
+            fi
+            if [ -z "$base" ]; then
+              echo "::warning::No known-good automatic purge checkpoint exists; purging the full zone."
+              emit mode full
+              exit 0
+            fi
+            echo "Baseline: $base, latest known-good automatic purge."
           fi
 
           # A force-push or rollback can leave the baseline outside the promoted
           # commit's ancestry. Fetch main once so a newer prior deployment is
-          # available for a reverse diff, then degrade safely if it is still
-          # unreachable.
+          # available for a reverse diff. An automatic run with no reachable
+          # checkpoint cannot prove which assets were previously live.
           if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
             git fetch --no-tags origin main || true
           fi
           if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            if [ "$EVENT" = "repository_dispatch" ]; then
+              echo "::warning::Known-good checkpoint $base is unreachable; purging the full zone."
+              emit mode full
+              exit 0
+            fi
             echo "Base commit $base is not reachable in this checkout."
             fallback_range "$head" && exit 0
             echo "::warning::No fallback window either; purging broadly."
@@ -337,8 +315,13 @@ jobs:
             exit 0
           fi
           if ! git cat-file -e "${head}^{commit}" 2>/dev/null; then
-            echo "::warning::Head commit $head is not reachable in this checkout; purging broadly."
-            emit mode broad
+            if [ "$EVENT" = "repository_dispatch" ]; then
+              echo "::warning::Promoted commit $head is unreachable; purging the full zone."
+              emit mode full
+            else
+              echo "::warning::Head commit $head is not reachable; purging broadly."
+              emit mode broad
+            fi
             exit 0
           fi
 
@@ -360,14 +343,19 @@ jobs:
           MODE: ${{ steps.range.outputs.mode }}
           BASE: ${{ steps.range.outputs.base }}
           HEAD: ${{ steps.range.outputs.head }}
+          FALLBACK_I18N_FILE: ../workflow-source/lib/i18n.ts
         run: |
           set -euo pipefail
 
-          # No range to work from: a manual run without one, an unreachable base,
-          # or no previously purged deployment. --assets covers public/ wholesale
-          # because nothing here can tell which asset changed, and these are the
-          # runs that exist precisely because something already went wrong.
-          if [ "$MODE" = "broad" ] && [ -z "${BASE:-}" ]; then
+          # A chronology hole has no recoverable promoted SHA. Use Cloudflare's
+          # explicit full-zone operation rather than pretending the current tree
+          # can enumerate assets that existed only in that missing deployment.
+          if [ "$MODE" = "full" ]; then
+            jq -n '{prefixes: [], files: [], broad: true, collapsed: false}' > purge.json
+          # No range to work from: a manual run without one or an unreachable
+          # input. --assets covers public/ wholesale because a range-less mapper
+          # cannot tell which asset changed.
+          elif [ "$MODE" = "broad" ] && [ -z "${BASE:-}" ]; then
             node ../workflow-source/scripts/cache-purge-prefixes.mjs --broad --assets --json > purge.json
           else
             # Broad *with* a range still walks the diff, so the broad page set
@@ -432,7 +420,13 @@ jobs:
           broad=$(jq -r '.broad' purge.json)
           collapsed=$(jq -r '.collapsed' purge.json)
 
-          echo "mode=$([ "$broad" = "true" ] && echo broad || echo selective)" >> "$GITHUB_OUTPUT"
+          if [ "$MODE" = "full" ]; then
+            echo "mode=full" >> "$GITHUB_OUTPUT"
+            echo "full=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=$([ "$broad" = "true" ] && echo broad || echo selective)" >> "$GITHUB_OUTPUT"
+            echo "full=false" >> "$GITHUB_OUTPUT"
+          fi
           echo "collapsed=$collapsed" >> "$GITHUB_OUTPUT"
 
       # Automatic promotions purge only the changed HTML/RSC prefixes and
@@ -447,6 +441,7 @@ jobs:
         env:
           CACHE_PROBE_TOKEN: ${{ github.run_id }}-${{ github.run_attempt }}
           EVENT: ${{ github.event_name }}
+          FULL: ${{ steps.compute.outputs.full }}
         run: |
           set -euo pipefail
 
@@ -479,6 +474,7 @@ jobs:
           prefix_count=$(wc -l < prefixes.txt)
           file_count=$(wc -l < files.txt)
           total=$((prefix_count + file_count))
+          [ "$FULL" = "true" ] && total=1
           echo "count=$total" >> "$GITHUB_OUTPUT"
 
           {
@@ -510,11 +506,15 @@ jobs:
         if: inputs.dry_run && steps.assets.outputs.count != '0'
         run: |
           set -euo pipefail
-          echo "DRY RUN — the Cloudflare API is not called. Prefixes:"
-          cat prefixes.txt
-          if [ -s files.txt ]; then
-            echo "Exact URLs:"
-            cat files.txt
+          if [ "${{ steps.compute.outputs.full }}" = "true" ]; then
+            echo "DRY RUN: the Cloudflare API would purge the full zone."
+          else
+            echo "DRY RUN: the Cloudflare API is not called. Prefixes:"
+            cat prefixes.txt
+            if [ -s files.txt ]; then
+              echo "Exact URLs:"
+              cat files.txt
+            fi
           fi
 
       # Fail loudly on missing configuration. A purge that quietly skips is the
@@ -540,24 +540,28 @@ jobs:
         env:
           CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CF_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          PURGE_MODE: ${{ steps.compute.outputs.mode }}
         run: |
           set -euo pipefail
 
           endpoint="https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/purge_cache"
 
-          # One purge call. Fails the job on a non-200 *or* on `success: false`
-          # in the body — Cloudflare returns 200 with success:false for things
-          # like an unauthorised prefix, and treating that as a win is how a
-          # cache silently stays stale. Never `|| true`.
+          # One purge call. Fails the job on a non-200 or on `success: false`
+          # in the body. Cloudflare returns 200 with success:false for failures
+          # such as an unauthorised prefix, and treating that as a win silently
+          # leaves stale cache entries. Never `|| true`.
           purge_call() {
             local field="$1" payload_file="$2" attempt=1 max_attempts=5 delay=5
             local body http
 
-            # `files` and `prefixes` are mutually exclusive in the API, so each
-            # kind goes in its own call.
+            # `files`, `prefixes`, and `purge_everything` are mutually exclusive.
             local payload
-            payload=$(jq -Rs --arg field "$field" \
-              'split("\n") | map(select(length > 0)) | {($field): .}' < "$payload_file")
+            if [ "$field" = "purge_everything" ]; then
+              payload='{"purge_everything":true}'
+            else
+              payload=$(jq -Rs --arg field "$field" \
+                'split("\n") | map(select(length > 0)) | {($field): .}' < "$payload_file")
+            fi
 
             local headers
             while :; do
@@ -570,7 +574,11 @@ jobs:
                 --data "$payload") || http=000
 
               if [ "$http" = "200" ] && [ "$(jq -r '.success' "$body")" = "true" ]; then
-                echo "  purged $(jq -r --arg f "$field" '.[$f] | length' <<< "$payload") $field (id $(jq -r '.result.id // "n/a"' "$body"))"
+                if [ "$field" = "purge_everything" ]; then
+                  echo "  purged the full zone (id $(jq -r '.result.id // "n/a"' "$body"))"
+                else
+                  echo "  purged $(jq -r --arg f "$field" '.[$f] | length' <<< "$payload") $field (id $(jq -r '.result.id // "n/a"' "$body"))"
+                fi
                 rm -f "$body" "$headers"
                 return 0
               fi
@@ -635,20 +643,23 @@ jobs:
             rm -rf "$chunkdir"
           }
 
-          purge_all prefixes prefixes.txt
-          # The homepage has no usable prefix — `www.librechat.ai/` prefixes the
-          # whole zone, static assets included — so it is purged by exact URL.
-          purge_all files files.txt
+          if [ "$PURGE_MODE" = "full" ]; then
+            purge_call purge_everything /dev/null
+          else
+            purge_all prefixes prefixes.txt
+            # The homepage has no usable prefix. `www.librechat.ai/` prefixes the
+            # whole zone, static assets included, so purge it by exact URL.
+            purge_all files files.txt
+          fi
 
           echo "::notice::Cloudflare purge complete."
 
-      # Only reached when every call above succeeded. The marker is appended to
-      # a stable commit-status ledger with the workflow run number and promoted
-      # SHA. A failed run leaves no marker, so the following promotion widens its
-      # diff. Manual recovery never writes deployment history, and a degraded
-      # recovery cannot claim the cache is known-good.
+      # A successful full, selective, or no-op automatic run becomes the next
+      # known-good checkpoint. Recording no-ops matters: otherwise their run
+      # numbers look like chronology holes to a later promotion. A failed or
+      # degraded run leaves no marker and forces the next run to recover fully.
       - name: Record the purge in deployment order
-        if: ${{ !inputs.dry_run && steps.assets.outputs.count != '0' && steps.assets.outputs.degraded != 'true' && github.event_name == 'repository_dispatch' }}
+        if: ${{ !inputs.dry_run && steps.assets.outputs.degraded != 'true' && github.event_name == 'repository_dispatch' }}
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -659,10 +670,17 @@ jobs:
         run: |
           set -euo pipefail
           ledger_sha=$(git rev-list --max-parents=0 HEAD | sort | sed -n '1p')
+          if [ "${{ steps.compute.outputs.full }}" = "true" ]; then
+            detail="Purged full zone"
+          elif [ "${{ steps.assets.outputs.count }}" = "0" ]; then
+            detail="No cache changes"
+          else
+            detail="Purged $(wc -l < prefixes.txt) prefixes, $(wc -l < files.txt) URLs"
+          fi
           gh api -X POST "repos/$REPO/statuses/$ledger_sha" \
             -f state=success \
             -f context="$PURGE_STATUS_CONTEXT/$DEPLOYMENT_ID" \
             -f target_url="$RUN_URL" \
-            -f description="$RUN_NUMBER|$SHA|Purged $(wc -l < prefixes.txt) prefixes, $(wc -l < files.txt) URLs" \
+            -f description="$RUN_NUMBER|$SHA|$detail" \
             > /dev/null
           echo "Marked $SHA as purged by $DEPLOYMENT_ID."

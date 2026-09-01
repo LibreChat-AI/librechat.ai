@@ -77,6 +77,29 @@ describe('readLocales', () => {
       rmSync(base, { force: true })
     }
   })
+
+  it('unions base and trusted fallback locales when the deployed config predates i18n', () => {
+    const deployedRoot = mkdtempSync(join(tmpdir(), 'cache-purge-old-deploy-'))
+    const base = join(tmpdir(), `purge-base-old-i18n-${process.pid}.ts`)
+    const fallback = join(tmpdir(), `purge-fallback-i18n-${process.pid}.ts`)
+    mkdirSync(join(deployedRoot, 'lib'))
+    writeFileSync(
+      base,
+      `export const i18n = { defaultLanguage: 'en', languages: ['en', 'zh', 'sv'] }`,
+    )
+    writeFileSync(
+      fallback,
+      `export const i18n = { defaultLanguage: 'en', languages: ['en', 'zh', 'fr'] }`,
+    )
+
+    try {
+      expect(readLocales(deployedRoot, base, fallback)).toEqual(['zh', 'sv', 'fr'])
+    } finally {
+      rmSync(deployedRoot, { recursive: true, force: true })
+      rmSync(base, { force: true })
+      rmSync(fallback, { force: true })
+    }
+  })
 })
 
 it('reads deployed inputs from the CLI working directory', () => {
@@ -250,6 +273,8 @@ describe('the workflow feeds the mapper what it needs', () => {
         .filter((command) => command !== 'node scripts/cache-purge-event.mjs')
         .every((command) => command.startsWith('node ../workflow-source/')),
     ).toBe(true)
+
+    expect(workflow).toContain('FALLBACK_I18N_FILE: ../workflow-source/lib/i18n.ts')
   })
 
   /**
@@ -302,38 +327,53 @@ describe('the workflow feeds the mapper what it needs', () => {
   })
 
   /**
-   * Purge success alone cannot describe production chronology: a failed C
-   * promotion still has to be removed when production rolls back to B.
+   * A missing promotion payload cannot be recovered from the Actions API. The
+   * workflow may use a successful purge as a selective checkpoint only after
+   * every intervening workflow run is visible and harmless.
    */
-  it('records each trusted promotion before purge planning', () => {
-    expect(workflow).toContain('PROMOTION_STATUS_CONTEXT: cache-promotion')
-    expect(workflow).toContain('-f context="$PROMOTION_STATUS_CONTEXT/$DEPLOYMENT_ID"')
-    expect(workflow).toContain('-f description="$RUN_NUMBER|$SHA|Promoted"')
-
-    const promotionMarker = workflow.indexOf('- name: Record promoted deployment')
-    const rangeResolution = workflow.indexOf('- name: Resolve diff range')
-    const purge = workflow.indexOf('- name: Purge')
-    expect(promotionMarker).toBeGreaterThan(0)
-    expect(promotionMarker).toBeLessThan(rangeResolution)
-    expect(rangeResolution).toBeLessThan(purge)
+  it('reconciles every lower workflow run before selective planning', () => {
+    expect(workflow).toContain('actions: read')
+    expect(workflow).toContain('run-name: >-')
+    expect(workflow).toContain(
+      "cache-purge:${{ github.event.client_payload.environment || 'manual' }}:${{ github.event.client_payload.project.id || 'manual' }}:${{ github.event.client_payload.git.ref || 'manual' }}:${{ github.event.client_payload.git.sha || github.sha }}:${{ github.event.client_payload.id || github.run_id }}",
+    )
+    expect(workflow).toContain(
+      'gh api --paginate --slurp "repos/$REPO/actions/workflows/cache-purge.yml/runs?per_page=100"',
+    )
+    expect(workflow).toContain('unsafe=$(jq -r \'.unsafe | length\' <<< "$ledger_state")')
+    expect(workflow).toContain('display_title')
+    expect(workflow).toContain('emit mode full')
+    expect(workflow).not.toContain('sleep 10')
   })
 
-  it('broadens an unpurged non-forward transition from the prior promotion', () => {
-    expect(workflow).toContain('CURRENT_RUN_NUMBER: ${{ github.run_number }}')
-    expect(workflow).toContain('PROMOTION_STATUS_CONTEXT: ${{ env.PROMOTION_STATUS_CONTEXT }}')
-    expect(workflow).toContain('git merge-base --is-ancestor "$previous" "$head"')
-    expect(workflow).toContain('emit base "$previous"')
-    expect(workflow).toContain('Previous promotion was not purged and is not an ancestor')
+  it('uses successful purges as the only production checkpoints', () => {
+    expect(workflow).not.toContain('PROMOTION_STATUS_CONTEXT')
+    expect(workflow).not.toContain('- name: Record promoted deployment')
+    expect(workflow).toContain('PURGE_STATUS_CONTEXT/$DEPLOYMENT_ID')
+    expect(workflow).toContain('RUN_NUMBER: ${{ github.run_number }}')
+    expect(workflow).toContain('-f description="$RUN_NUMBER|$SHA|')
+    expect(workflow).toContain(
+      "if: ${{ !inputs.dry_run && steps.assets.outputs.degraded != 'true' && github.event_name == 'repository_dispatch' }}",
+    )
+  })
+
+  it('falls back to a full-zone purge when promotion chronology is unresolved', () => {
+    expect(workflow).toContain('if [ "$MODE" = "full" ]; then')
+    expect(workflow).toContain('payload=\'{"purge_everything":true}\'')
+    expect(workflow).toContain('purge_call purge_everything /dev/null')
   })
 
   it('finds the baseline from the promotion-ordered Vercel purge ledger', () => {
     expect(workflow).toContain('git rev-list --max-parents=0 HEAD')
     expect(workflow).toContain('cache-purge-event.mjs baseline')
-    expect(workflow).toContain('PURGE_STATUS_CONTEXT/$DEPLOYMENT_ID')
-    expect(workflow).toContain('RUN_NUMBER: ${{ github.run_number }}')
-    expect(workflow).toContain('-f description="$RUN_NUMBER|$SHA|Purged ')
     expect(workflow).not.toContain('git rev-list --since="$FALLBACK_WINDOW" "${head}^"')
     expect(workflow).not.toContain('deployments?environment=Production')
+  })
+
+  it('paginates the root-commit status ledger', () => {
+    expect(workflow).toContain(
+      'gh api --paginate --slurp "repos/$REPO/commits/$ledger_sha/statuses?per_page=100"',
+    )
   })
 
   /**

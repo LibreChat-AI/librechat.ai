@@ -61,26 +61,45 @@ function parseLocales(src, label) {
   return locales
 }
 
-export function readLocales(repoRoot = REPO_ROOT, basePath = process.env.BASE_I18N_FILE) {
-  const locales = parseLocales(
-    readFileSync(resolve(repoRoot, 'lib/i18n.ts'), 'utf8'),
-    'lib/i18n.ts',
-  )
-  if (!basePath) return locales
+export function readLocales(
+  repoRoot = REPO_ROOT,
+  basePath = process.env.BASE_I18N_FILE,
+  fallbackPath = process.env.FALLBACK_I18N_FILE,
+) {
+  const deployedPath = resolve(repoRoot, 'lib/i18n.ts')
+  let locales = []
+
+  try {
+    locales = parseLocales(readFileSync(deployedPath, 'utf8'), 'lib/i18n.ts')
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error
+    process.stderr.write(
+      `::warning::The deployed tree has no lib/i18n.ts; using trusted rollback locale data.\n`,
+    )
+  }
 
   // A locale dropped in this deploy still has cached pages under /<locale>, but
   // the deployed file no longer names it, so `broadPrefixes()` would not purge
-  // them and that language would sit there until the TTL. Union with the file as
-  // it was at the diff base. A base that cannot be read or parsed (the range
-  // predates i18n, say) is not fatal: warn and carry on with what deployed.
-  try {
-    const baseSrc = readFileSync(basePath, 'utf8')
-    if (!baseSrc.trim()) return locales
-    return [...new Set([...locales, ...parseLocales(baseSrc, basePath)])]
-  } catch (error) {
-    process.stderr.write(`::warning::Could not read locales from ${basePath}: ${error.message}\n`)
-    return locales
+  // them and that language would sit there until the TTL. Union with both the
+  // diff base and trusted workflow revision. Old rollback trees can predate the
+  // locale config entirely, in which case those two sources are the only safe
+  // route inventory.
+  for (const localePath of new Set([basePath, fallbackPath].filter(Boolean))) {
+    try {
+      const source = readFileSync(localePath, 'utf8')
+      if (!source.trim()) continue
+      locales = [...new Set([...locales, ...parseLocales(source, localePath)])]
+    } catch (error) {
+      process.stderr.write(
+        `::warning::Could not read locales from ${localePath}: ${error.message}\n`,
+      )
+    }
   }
+
+  if (locales.length === 0) {
+    throw new Error('Could not read locales from the deployed, base, or trusted workflow config')
+  }
+  return locales
 }
 
 /**

@@ -43,115 +43,151 @@ describe('validatePromotedDeployment', () => {
 })
 
 describe('selectPurgeState', () => {
-  const status = (
-    kind: 'cache-promotion' | 'cache-purge',
-    sha: string,
-    runNumber: string,
-    createdAt: string,
-    state = 'success',
-  ) => ({
-    context: `${kind}/dpl_test`,
-    created_at: createdAt,
-    description: `${runNumber}|${sha}|${kind}`,
+  const status = (sha: string, runNumber: string, state = 'success') => ({
+    context: 'cache-purge/dpl_test',
+    description: `${runNumber}|${sha}|Purged`,
     state,
   })
 
-  it('uses promotion chronology when the current deployment rolls back', () => {
-    const rollbackHead = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
-    const latestDeployed = 'cccccccccccccccccccccccccccccccccccccccc'
-    const olderDeployed = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+  const runTitle = ({
+    environment = 'production',
+    projectId = VERCEL_PROJECT_ID,
+    ref = 'main',
+    sha = 'cccccccccccccccccccccccccccccccccccccccc',
+  } = {}) => `cache-purge:${environment}:${projectId}:${ref}:${sha}:dpl_test`
 
-    expect(
-      selectPurgeState(
-        [
-          // The older promotion finishes last. Completion timestamps must not
-          // override the workflow run numbers assigned at event delivery.
-          [
-            status('cache-promotion', olderDeployed, '10', '2026-09-01T13:00:00Z'),
-            status('cache-purge', olderDeployed, '10', '2026-09-01T13:00:00Z'),
-          ],
-          [
-            status('cache-promotion', latestDeployed, '11', '2026-09-01T12:00:00Z'),
-            status('cache-purge', latestDeployed, '11', '2026-09-01T12:00:00Z'),
-          ],
-        ],
-        rollbackHead,
-        '12',
-      ),
-    ).toEqual({ base: latestDeployed, previous: latestDeployed })
+  const run = (
+    runNumber: number,
+    {
+      displayTitle = runTitle(),
+      event = 'repository_dispatch',
+    }: { displayTitle?: string; event?: string } = {},
+  ) => ({
+    display_title: displayTitle,
+    event,
+    run_number: runNumber,
   })
 
-  it('keeps the same-commit predecessor but skips it as a diff baseline', () => {
+  it('selects the latest successful purge checkpoint across status pages', () => {
     const currentHead = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
-    const previousHead = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+    const latestPurged = 'cccccccccccccccccccccccccccccccccccccccc'
+    const olderPurged = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 
     expect(
       selectPurgeState(
+        [[status(olderPurged, '10')], [status(latestPurged, '11'), status(currentHead, '13')]],
         [
-          [
-            status('cache-promotion', currentHead, '12', '2026-09-01T13:00:00Z'),
-            status('cache-purge', currentHead, '12', '2026-09-01T13:00:00Z'),
-            status('cache-promotion', previousHead, '11', '2026-09-01T12:00:00Z'),
-            status('cache-purge', previousHead, '11', '2026-09-01T12:00:00Z'),
-          ],
-        ],
-        currentHead,
-        '13',
-      ),
-    ).toEqual({ base: previousHead, previous: currentHead })
-  })
-
-  it('retains an unpurged predecessor separately from the last success', () => {
-    const currentHead = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
-    const unpurgedHead = 'cccccccccccccccccccccccccccccccccccccccc'
-    const successfulHead = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-
-    expect(
-      selectPurgeState(
-        [
-          [
-            status('cache-promotion', unpurgedHead, '11', '2026-09-01T13:00:00Z'),
-            status('cache-promotion', successfulHead, '10', '2026-09-01T12:00:00Z'),
-            status('cache-purge', successfulHead, '10', '2026-09-01T12:05:00Z'),
-          ],
+          {
+            workflow_runs: [
+              run(10, { displayTitle: runTitle({ sha: olderPurged }) }),
+              run(11, { displayTitle: runTitle({ sha: latestPurged }) }),
+            ],
+          },
         ],
         currentHead,
         '12',
       ),
-    ).toEqual({ base: successfulHead, previous: unpurgedHead })
+    ).toEqual({ base: latestPurged, unsafe: [] })
   })
 
-  it('ignores future, failed, and malformed ledger entries', () => {
+  it('uses a same-commit purge as the known-good checkpoint', () => {
     const currentHead = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+
     expect(
       selectPurgeState(
+        [[status(currentHead, '11')]],
+        [{ workflow_runs: [run(11, { displayTitle: runTitle({ sha: currentHead }) })] }],
+        currentHead,
+        '12',
+      ),
+    ).toEqual({ base: currentHead, unsafe: [] })
+  })
+
+  it('rejects a lower production promotion before its runner starts', () => {
+    const currentHead = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+    const checkpoint = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+
+    expect(
+      selectPurgeState(
+        [[status(checkpoint, '10')]],
         [
-          [
-            status(
-              'cache-purge',
-              'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-              '10',
-              '2026-09-01T12:00:00Z',
-              'failure',
-            ),
-            status('cache-promotion', 'not-a-sha', '11', '2026-09-01T13:00:00Z'),
-            status(
-              'cache-promotion',
-              'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-              'not-a-run',
-              '2026-09-01T14:00:00Z',
-            ),
-            status(
-              'cache-promotion',
-              'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-              '13',
-              '2026-09-01T15:00:00Z',
-            ),
-          ],
+          {
+            workflow_runs: [run(10, { displayTitle: runTitle({ sha: checkpoint }) }), run(11)],
+          },
         ],
         currentHead,
         '12',
       ),
-    ).toEqual({ base: null, previous: null })
+    ).toEqual({ base: checkpoint, unsafe: ['11'] })
+  })
+  it('rejects an uncheckpointed production run but ignores previews and manual runs', () => {
+    const currentHead = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+    const checkpoint = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+
+    expect(
+      selectPurgeState(
+        [[status(checkpoint, '10')]],
+        [
+          {
+            workflow_runs: [
+              run(10, { displayTitle: runTitle({ sha: checkpoint }) }),
+              run(11),
+              run(12, { displayTitle: runTitle({ environment: 'preview' }) }),
+              run(13, { event: 'workflow_dispatch' }),
+            ],
+          },
+        ],
+        currentHead,
+        '14',
+      ),
+    ).toEqual({ base: checkpoint, unsafe: ['11'] })
+  })
+
+  it('treats a lower run missing from the API snapshot as unsafe', () => {
+    const currentHead = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+    const checkpoint = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+
+    expect(
+      selectPurgeState(
+        [[status(checkpoint, '10')]],
+        [{ workflow_runs: [run(10, { displayTitle: runTitle({ sha: checkpoint }) })] }],
+        currentHead,
+        '12',
+      ),
+    ).toEqual({ base: checkpoint, unsafe: ['11'] })
+  })
+
+  it('rejects a purge marker that does not match its run title', () => {
+    const currentHead = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+    const checkpoint = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+
+    expect(
+      selectPurgeState(
+        [[status(checkpoint, '10')]],
+        [{ workflow_runs: [run(10)] }],
+        currentHead,
+        '11',
+      ),
+    ).toEqual({ base: null, unsafe: [] })
+  })
+
+  it('ignores failed, malformed, and future purge markers', () => {
+    const currentHead = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+
+    expect(
+      selectPurgeState(
+        [
+          [
+            status('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', '10', 'failure'),
+            status('not-a-sha', '11'),
+            status('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'not-a-run'),
+            status('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', '13'),
+          ],
+        ],
+        [{ workflow_runs: [] }],
+        currentHead,
+        '12',
+      ),
+    ).toEqual({ base: null, unsafe: [] })
   })
 })

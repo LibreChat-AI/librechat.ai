@@ -6,6 +6,7 @@ export const VERCEL_PROJECT_ID = 'prj_BM0YCOihInl5lqPJidAzwixJPdtj'
 const COMMIT_SHA = /^[0-9a-f]{40}$/u
 const DEPLOYMENT_ID = /^dpl_[A-Za-z0-9]+$/u
 const PURGE_LEDGER_DESCRIPTION = /^([1-9]\d*)\|([0-9a-f]{40})\|/u
+const RUN_TITLE = /^cache-purge:([^:]+):([^:]+):([^:]+):([0-9a-f]{40}):(dpl_[A-Za-z0-9]+)$/u
 
 /**
  * Validates the enriched payload Vercel sends with
@@ -41,21 +42,35 @@ export function validatePromotedDeployment(payload) {
   }
 }
 
+function parseCachePurgeRunTitle(value) {
+  if (typeof value !== 'string') return null
+  const match = value.match(RUN_TITLE)
+  if (!match) return null
+  return {
+    environment: match[1],
+    projectId: match[2],
+    ref: match[3],
+    sha: match[4],
+    deploymentId: match[5],
+  }
+}
+
 /**
- * Returns two independent facts from the deployment ledger:
- * - `base`: latest successful purge from a different commit
- * - `previous`: commit from the immediately preceding trusted promotion
+ * Finds the latest known-good purge checkpoint and proves that no workflow run
+ * between it and the current event can hide an unpurged production transition.
  *
- * `run_number` is assigned when each workflow run is created and stays stable
- * on reruns, so it preserves event order when overlapping purges finish in the
- * opposite order.
+ * `run-name` is evaluated when GitHub creates a run, before a runner starts,
+ * and the REST API exposes it as `display_title`. It carries the immutable
+ * Vercel routing fields even for queued, failed, or cancelled runs. A current
+ * project production run after the checkpoint is therefore unsafe to skip;
+ * previews and manual recovery runs do not change this production history.
  */
 export function selectPurgeState(
   statusPages,
+  workflowRunPages,
   currentHead,
   currentRunNumber,
   purgeContextPrefix = 'cache-purge',
-  promotionContextPrefix = 'cache-promotion',
 ) {
   if (!COMMIT_SHA.test(currentHead)) {
     throw new Error(`Current head is not a valid Git commit SHA: ${currentHead}`)
@@ -65,75 +80,114 @@ export function selectPurgeState(
   }
 
   const currentRun = BigInt(currentRunNumber)
-  const purgeContext = `${purgeContextPrefix}/dpl_`
-  const promotionContext = `${promotionContextPrefix}/dpl_`
-  let base
-  let previous
+  const runsByNumber = new Map()
+  for (const page of Array.isArray(workflowRunPages) ? workflowRunPages : []) {
+    for (const run of Array.isArray(page?.workflow_runs) ? page.workflow_runs : []) {
+      if (!/^[1-9]\d*$/u.test(String(run?.run_number ?? ''))) continue
+      const runNumber = BigInt(run.run_number)
+      if (runNumber >= currentRun) continue
+      runsByNumber.set(String(runNumber), run)
+    }
+  }
 
+  const purgeContext = `${purgeContextPrefix}/`
+  let checkpoint
   for (const status of Array.isArray(statusPages) ? statusPages.flat() : []) {
     if (
       !status ||
       typeof status !== 'object' ||
       status.state !== 'success' ||
       typeof status.context !== 'string' ||
+      !status.context.startsWith(purgeContext) ||
       typeof status.description !== 'string'
     ) {
       continue
     }
 
+    const deploymentId = status.context.slice(purgeContext.length)
     const marker = status.description.match(PURGE_LEDGER_DESCRIPTION)
-    if (!marker) continue
+    if (!DEPLOYMENT_ID.test(deploymentId) || !marker) continue
+
     const entry = {
+      deploymentId,
       runNumber: BigInt(marker[1]),
       sha: marker[2],
     }
     if (entry.runNumber >= currentRun) continue
 
+    const run = runsByNumber.get(String(entry.runNumber))
+    const metadata = parseCachePurgeRunTitle(run?.display_title)
     if (
-      status.context.startsWith(promotionContext) &&
-      (!previous || entry.runNumber > previous.runNumber)
+      run?.event !== 'repository_dispatch' ||
+      metadata?.environment !== 'production' ||
+      metadata.projectId !== VERCEL_PROJECT_ID ||
+      metadata.ref !== 'main' ||
+      metadata.sha !== entry.sha ||
+      metadata.deploymentId !== entry.deploymentId
     ) {
-      previous = entry
+      continue
     }
-    if (
-      status.context.startsWith(purgeContext) &&
-      entry.sha !== currentHead &&
-      (!base || entry.runNumber > base.runNumber)
-    ) {
-      base = entry
+    if (!checkpoint || entry.runNumber > checkpoint.runNumber) {
+      checkpoint = entry
     }
   }
 
+  if (!checkpoint) {
+    return { base: null, unsafe: [] }
+  }
+
+  const unsafe = []
+  for (let runNumber = checkpoint.runNumber + 1n; runNumber < currentRun; runNumber += 1n) {
+    const key = String(runNumber)
+    const run = runsByNumber.get(key)
+    if (!run) {
+      unsafe.push(key)
+      continue
+    }
+    if (run.event === 'workflow_dispatch') continue
+    if (run.event !== 'repository_dispatch') {
+      unsafe.push(key)
+      continue
+    }
+
+    const metadata = parseCachePurgeRunTitle(run.display_title)
+    if (!metadata) {
+      unsafe.push(key)
+      continue
+    }
+    if (metadata.environment !== 'production' || metadata.projectId !== VERCEL_PROJECT_ID) {
+      continue
+    }
+
+    // The normal production branch and a manually promoted non-main deployment
+    // both changed what the zone served. The current job validates main events;
+    // either kind is a chronology hole until a successful purge checkpoints it.
+    unsafe.push(key)
+  }
+
   return {
-    base: base?.sha ?? null,
-    previous: previous?.sha ?? null,
+    base: checkpoint.sha,
+    unsafe,
   }
 }
 
 function main() {
   if (process.argv[2] === 'baseline') {
-    const [
-      ,
-      ,
-      ,
-      statusFile,
-      currentHead,
-      currentRunNumber,
-      purgeContextPrefix,
-      promotionContextPrefix,
-    ] = process.argv
-    if (!statusFile || !currentHead || !currentRunNumber) {
+    const [, , , statusFile, workflowRunsFile, currentHead, currentRunNumber, purgeContextPrefix] =
+      process.argv
+    if (!statusFile || !workflowRunsFile || !currentHead || !currentRunNumber) {
       throw new Error(
-        'baseline requires <status-file> <current-head> <current-run-number> [purge-context] [promotion-context]',
+        'baseline requires <status-file> <workflow-runs-file> <current-head> <current-run-number> [purge-context]',
       )
     }
     const statusPages = JSON.parse(readFileSync(statusFile, 'utf8'))
+    const workflowRunPages = JSON.parse(readFileSync(workflowRunsFile, 'utf8'))
     const state = selectPurgeState(
       statusPages,
+      workflowRunPages,
       currentHead,
       currentRunNumber,
       purgeContextPrefix,
-      promotionContextPrefix,
     )
     process.stdout.write(`${JSON.stringify(state)}\n`)
     return
