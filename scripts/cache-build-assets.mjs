@@ -256,8 +256,14 @@ async function fetchWithRetry(fetchImpl, url, init) {
   throw lastError
 }
 
+/**
+ * @template T, R
+ * @param {T[]} items
+ * @param {(item: T, index: number) => Promise<R>} worker
+ * @returns {Promise<R[]>}
+ */
 export async function mapConcurrent(items, worker) {
-  const results = new Array(items.length)
+  const results = /** @type {R[]} */ (new Array(items.length))
   let cursor = 0
 
   async function run() {
