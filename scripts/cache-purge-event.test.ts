@@ -43,10 +43,10 @@ describe('validatePromotedDeployment', () => {
 })
 
 describe('selectPreviousPurgedCommit', () => {
-  const status = (sha: string, createdAt: string) => ({
+  const status = (sha: string, runNumber: string, createdAt: string) => ({
     context: 'cache-purge/dpl_test',
     created_at: createdAt,
-    description: `${sha}|Purged 3 prefixes, 1 URLs`,
+    description: `${runNumber}|${sha}|Purged 3 prefixes, 1 URLs`,
     state: 'success',
   })
 
@@ -58,8 +58,10 @@ describe('selectPreviousPurgedCommit', () => {
     expect(
       selectPreviousPurgedCommit(
         [
-          [status(olderDeployed, '2026-08-30T12:00:00Z')],
-          [status(latestDeployed, '2026-09-01T12:00:00Z')],
+          // The older promotion finishes last. Completion timestamps must not
+          // override the workflow run numbers assigned at event delivery.
+          [status(olderDeployed, '10', '2026-09-01T13:00:00Z')],
+          [status(latestDeployed, '11', '2026-09-01T12:00:00Z')],
         ],
         rollbackHead,
       ),
@@ -74,8 +76,8 @@ describe('selectPreviousPurgedCommit', () => {
       selectPreviousPurgedCommit(
         [
           [
-            status(currentHead, '2026-09-01T13:00:00Z'),
-            status(previousHead, '2026-09-01T12:00:00Z'),
+            status(currentHead, '12', '2026-09-01T13:00:00Z'),
+            status(previousHead, '11', '2026-09-01T12:00:00Z'),
           ],
         ],
         currentHead,
@@ -90,10 +92,17 @@ describe('selectPreviousPurgedCommit', () => {
         [
           [
             {
-              ...status('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', '2026-09-01T12:00:00Z'),
+              ...status('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', '10', '2026-09-01T12:00:00Z'),
               state: 'failure',
             },
-            { ...status('not-a-sha', '2026-09-01T13:00:00Z') },
+            { ...status('not-a-sha', '11', '2026-09-01T13:00:00Z') },
+            {
+              ...status(
+                'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                'not-a-run',
+                '2026-09-01T14:00:00Z',
+              ),
+            },
           ],
         ],
         currentHead,

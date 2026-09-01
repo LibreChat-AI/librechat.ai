@@ -98,10 +98,10 @@ env:
   # second between calls keeps us under every per-second bucket, and 429s are
   # retried with backoff below, which is what makes the floor safe too.
   SLEEP_BETWEEN_CALLS: 1
-  # Successful purges are written as chronological statuses on one stable
-  # repository-root commit. Each context carries the Vercel deployment id
-  # (`cache-purge/dpl_...`), while the description begins with the promoted SHA.
-  # A single ledger preserves deployment order across rollbacks and rebuilds.
+  # Successful purges are written as statuses on one stable repository-root
+  # commit. Each context carries the Vercel deployment id
+  # (`cache-purge/dpl_...`), while the description begins with the workflow run
+  # number and promoted SHA. The sequence survives overlap, rollback, and rerun.
   PURGE_STATUS_CONTEXT: cache-purge
   # How far back a blind recovery reaches when it has no baseline to work from.
   # Only ever an approximation of where to start, so it is paired with the broad
@@ -253,12 +253,13 @@ jobs:
             fi
 
             # All successful promotions write to one stable commit-status
-            # ledger. Marker timestamps preserve deployment chronology, unlike
-            # Git ancestry: a rollback from C to ancestor B must diff C..B.
+            # ledger. Workflow run numbers are assigned at event delivery, so
+            # they preserve promotion order when concurrent purges finish out of
+            # order. Git ancestry cannot do that for a rollback from C to B.
             # Skip markers for the same SHA so a rebuild still compares against
             # the previous distinct deployed tree. Only the newest 100 markers
-            # are needed; if they are all rebuilds of one SHA, broad recovery is
-            # safer than an unbounded status-history request.
+            # are needed; otherwise broad recovery is safer than an unbounded
+            # status-history request.
             ledger_sha=$(git rev-list --max-parents=0 HEAD | sort | sed -n '1p')
             status_file="purge-ledger.json"
             gh api "repos/$REPO/commits/$ledger_sha/statuses?per_page=100" > "$status_file"
@@ -598,11 +599,10 @@ jobs:
           echo "::notice::Cloudflare purge complete."
 
       # Only reached when every call above succeeded. The marker is appended to
-      # a stable commit-status ledger, with the promoted SHA in its description.
-      # That preserves deployment chronology across rollbacks. A failed run
-      # leaves no marker, so the following promotion widens its diff.
-      # Manual recovery never writes deployment history, and a degraded recovery
-      # cannot claim the cache is known-good.
+      # a stable commit-status ledger with the workflow run number and promoted
+      # SHA. A failed run leaves no marker, so the following promotion widens its
+      # diff. Manual recovery never writes deployment history, and a degraded
+      # recovery cannot claim the cache is known-good.
       - name: Record the purge in deployment order
         if: ${{ !inputs.dry_run && steps.assets.outputs.count != '0' && steps.assets.outputs.degraded != 'true' && github.event_name == 'repository_dispatch' }}
         env:
@@ -610,6 +610,7 @@ jobs:
           REPO: ${{ github.repository }}
           SHA: ${{ steps.event.outputs.head }}
           DEPLOYMENT_ID: ${{ steps.event.outputs.deployment_id }}
+          RUN_NUMBER: ${{ github.run_number }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
@@ -618,6 +619,6 @@ jobs:
             -f state=success \
             -f context="$PURGE_STATUS_CONTEXT/$DEPLOYMENT_ID" \
             -f target_url="$RUN_URL" \
-            -f description="$SHA|Purged $(wc -l < prefixes.txt) prefixes, $(wc -l < files.txt) URLs" \
+            -f description="$RUN_NUMBER|$SHA|Purged $(wc -l < prefixes.txt) prefixes, $(wc -l < files.txt) URLs" \
             > /dev/null
           echo "Marked $SHA as purged by $DEPLOYMENT_ID."

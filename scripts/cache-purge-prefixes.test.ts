@@ -301,11 +301,12 @@ describe('the workflow feeds the mapper what it needs', () => {
     expect(workflow).toContain("steps.assets.outputs.degraded != 'true'")
   })
 
-  it('finds the baseline from the chronological Vercel purge ledger', () => {
+  it('finds the baseline from the promotion-ordered Vercel purge ledger', () => {
     expect(workflow).toContain('git rev-list --max-parents=0 HEAD')
     expect(workflow).toContain('cache-purge-event.mjs baseline')
     expect(workflow).toContain('PURGE_STATUS_CONTEXT/$DEPLOYMENT_ID')
-    expect(workflow).toContain('-f description="$SHA|Purged ')
+    expect(workflow).toContain('RUN_NUMBER: ${{ github.run_number }}')
+    expect(workflow).toContain('-f description="$RUN_NUMBER|$SHA|Purged ')
     expect(workflow).not.toContain('git rev-list --since="$FALLBACK_WINDOW" "${head}^"')
     expect(workflow).not.toContain('deployments?environment=Production')
   })

@@ -5,6 +5,7 @@ export const VERCEL_PROJECT_ID = 'prj_BM0YCOihInl5lqPJidAzwixJPdtj'
 
 const COMMIT_SHA = /^[0-9a-f]{40}$/u
 const DEPLOYMENT_ID = /^dpl_[A-Za-z0-9]+$/u
+const PURGE_LEDGER_DESCRIPTION = /^([1-9]\d*)\|([0-9a-f]{40})\|/u
 
 /**
  * Validates the enriched payload Vercel sends with
@@ -41,10 +42,10 @@ export function validatePromotedDeployment(payload) {
 }
 
 /**
- * Selects the most recently recorded successful deployment that differs from
- * the commit currently being promoted. Statuses live on one stable ledger
- * commit, so created_at represents promotion order even when production rolls
- * back from a descendant to an ancestor.
+ * Selects the latest successful promotion that differs from the commit
+ * currently being promoted. GitHub assigns `run_number` when each workflow run
+ * is created and keeps it stable on reruns, so it preserves event order even
+ * when overlapping purges finish in the opposite order.
  */
 export function selectPreviousPurgedCommit(
   statusPages,
@@ -56,25 +57,32 @@ export function selectPreviousPurgedCommit(
   }
 
   const deploymentContext = `${contextPrefix}/dpl_`
-  return (
-    (Array.isArray(statusPages) ? statusPages.flat() : [])
-      .filter(
-        (status) =>
-          status &&
-          typeof status === 'object' &&
-          status.state === 'success' &&
-          typeof status.context === 'string' &&
-          status.context.startsWith(deploymentContext) &&
-          typeof status.created_at === 'string' &&
-          typeof status.description === 'string',
-      )
-      .map((status) => ({
-        createdAt: status.created_at,
-        sha: status.description.slice(0, 40),
-      }))
-      .filter(({ sha }) => COMMIT_SHA.test(sha) && sha !== currentHead)
-      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]?.sha ?? null
-  )
+  const deployments = []
+  for (const status of Array.isArray(statusPages) ? statusPages.flat() : []) {
+    if (
+      !status ||
+      typeof status !== 'object' ||
+      status.state !== 'success' ||
+      typeof status.context !== 'string' ||
+      !status.context.startsWith(deploymentContext) ||
+      typeof status.description !== 'string'
+    ) {
+      continue
+    }
+
+    const marker = status.description.match(PURGE_LEDGER_DESCRIPTION)
+    if (!marker || marker[2] === currentHead) continue
+    deployments.push({
+      runNumber: BigInt(marker[1]),
+      sha: marker[2],
+    })
+  }
+
+  deployments.sort((left, right) => {
+    if (left.runNumber === right.runNumber) return 0
+    return left.runNumber > right.runNumber ? -1 : 1
+  })
+  return deployments[0]?.sha ?? null
 }
 
 function main() {
