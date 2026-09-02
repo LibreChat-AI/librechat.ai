@@ -45,6 +45,8 @@ LibreChat restores referenced conversation files into the current Code Interpret
 
 When conversation inputs would mount at the same sandbox destination, LibreChat resolves the collision before execution. Shared conversation files are assigned before Agent-private files; within each scope, the newest content write keeps the original destination. Conflicting paths are flattened when needed or receive an identity-derived suffix, and the resolved `/mnt/data/...` paths are included in the Agent's file context. This also covers an upload and a generated output that share a filename, so one collision does not reject every later Code Interpreter run in the conversation. Duplicate seed references that still resolve to an already-claimed destination are skipped instead of failing the complete request.
 
+Sandbox images are transferred in bounded windows. Set [`LIBRECHAT_CODE_SANDBOX_OUTPUT_MAX_SIZE`](/docs/configuration/dotenv#code-interpreter) to match the worker's `SANDBOX_OUTPUT_MAX_SIZE`; LibreChat derives the largest safe image window from that budget and can learn a smaller per-service limit after one failed read. Use `LIBRECHAT_CODE_IMAGE_CHUNK_BYTES` only when an exact window override is required. Previously downloaded generated artifacts are reused within the request when possible, avoiding another sandbox read.
+
 In a multi-Agent graph, give files private to different Agents distinct filenames. Each Agent resolves its private file paths before the graph combines their inputs, so genuinely different private files that independently claim the same destination cannot yet be renamed consistently at merge time; the first seeded destination wins.
 
 ### Security & Convenience
@@ -86,6 +88,7 @@ The workspace scope is separate from its execution backend. When administrators 
 
 - **Managed:** a stateful Code API operated by the deployment
 - **Attached:** a compatible Code API remote bridge that leases work to an outbound `@librechat/code` worker, such as an operator-managed VM
+- **Personal:** an owner-bound `@librechat/code` worker paired by an authorized user through LibreChat settings
 - **Deployment default:** the one configured environment marked as the default
 
 <Callout type="warning" title="Highly experimental">
@@ -104,9 +107,13 @@ Files authored by stateful `create_file` and `edit_file` calls appear on the ass
 
 Attached environments require a matching experimental Code Interpreter remote-bridge build. The bridge remains LibreChat's authenticated policy, queue, and result boundary, while the `@librechat/code` worker connects outbound from the attached machine; the machine does not need an inbound public worker port. LibreChat does not prewarm attached environments.
 
-An operator may configure pairing metadata for a deployment-owned attached environment. `pairing.workerId` identifies the worker and `pairing.tokenEnv` names the environment variable that contains the administrator bootstrap token; the secret itself never belongs in YAML. LibreChat uses the deployment's base configuration for this control plane, requires HTTPS outside loopback development, and returns only a short-lived one-time pairing response to an authorized administrator.
+An operator can pin a deployment-owned attached environment to one worker with `workerId`, and can add `pairing.workerId` when LibreChat should issue an administrator pairing code for that same route. `pairing.tokenEnv` names the environment variable containing the bridge administrator token; the secret itself never belongs in YAML. Paired control planes require HTTPS outside loopback development.
 
-LibreChat can also register principal-owned environments against a deployment-approved attached control plane through its authenticated Code Environments API. Creation requires code-environment management permission, accepts the approved control-plane ID rather than an arbitrary client URL, and grants access through the Code Environment ACL. These request-scoped entries cannot override a deployment environment with the same ID.
+For self-service workers, configure a deployment-owned attached control plane with `pairing.allowPrincipalWorkers: true` and `pairing.tokenEnv`. It may omit both worker IDs and exist only as an enrollment control plane; such an entry is not selectable for execution and cannot be the deployment default.
+
+Users with Code Environment management permission can then open **Settings > Code environments**, name an environment, choose an approved control plane, and select **Connect VM**. LibreChat shows a short-lived, one-time `librechat-code pair ...` command. Run it on the user's VM, then start `@librechat/code` with `LIBRECHAT_CODE_SANDBOX_ENDPOINT` pointing to that machine's sandbox service. The UI lists the user's environments and can revoke and remove them later; sandbox files remain on the VM.
+
+Personal environments are bound to the authenticated user and tenant, protected by Code Environment ACLs, and assigned only server-validated IDs and approved base URLs. LibreChat does not expose the bridge administrator token or arbitrary operator URLs to the client. Removing an environment revokes its worker credential before deleting the registry entry, and user deletion schedules the same revocation and cleanup with background reconciliation for interrupted attempts. The selected worker route applies consistently to Code Interpreter, shell, generated-file access, and Programmatic Tool Calling.
 
 Pairing authenticates the remote worker transport; it is not a sandbox boundary. Keep the worker's local execution endpoint on loopback or a private network and use an appropriate isolation mode for untrusted code.
 
