@@ -59,8 +59,21 @@ const nonPermanentRedirects = [
   ['/docs/features/plugins', '/docs/features/agents'],
   ['/docs/features/speech-to-text', '/docs/configuration/stt_tts'],
   ['/docs/configuration/librechat_yaml/setup', '/docs/configuration/librechat_yaml'],
-  ['/toolkit/yaml_checker', '/toolkit/yaml-checker'],
-  ['/toolkit/creds_generator', '/toolkit/creds-generator'],
+  // The toolkit pages live under /docs/toolkit; these are the pre-Fumadocs URLs
+  // still linked from older posts and bookmarks. In-page links are canonicalized
+  // at render time by lib/localize-href.ts, but a direct hit only has these, so
+  // both spellings of each slug have to land on the real page rather than on the
+  // other spelling.
+  ['/toolkit', '/docs/toolkit'],
+  ['/toolkit/yaml_checker', '/docs/toolkit/yaml-validator'],
+  ['/toolkit/yaml-checker', '/docs/toolkit/yaml-validator'],
+  ['/toolkit/creds_generator', '/docs/toolkit/credentials-generator'],
+  ['/toolkit/creds-generator', '/docs/toolkit/credentials-generator'],
+  // Nav-only folder: the section's landing page is the Config Structure reference.
+  [
+    '/docs/configuration/librechat_yaml/object_structure',
+    '/docs/configuration/librechat_yaml/object_structure/config',
+  ],
 ]
 
 /**
