@@ -1,6 +1,6 @@
 /**
- * Discovers build assets referenced by the current production page shells and
- * their Webpack runtime.
+ * Discovers build assets referenced by the current production page shells, plus
+ * the lazy-chunk map of their Webpack runtime when the build has one.
  *
  * A Vercel alias transition can briefly return a 404 for a new immutable
  * `/_next/static/**` URL. Cloudflare's cache rule may retain that 404 in one
@@ -43,8 +43,49 @@ export const DEFAULT_PROBE_PATHS = [
 const CACHE_PROBE_PARAM = '__librechat_cache_probe'
 const STATIC_PREFIX = '/_next/static/'
 const WEBPACK_RUNTIME_PATH = /\/static\/chunks\/webpack-[^/]+\.js$/u
+const DEPLOYMENT_ID_ATTRIBUTE = /<html\b[^>]*\bdata-dpl-id="([^"]+)"/iu
 const REQUEST_TIMEOUT_MS = 15_000
 const MAX_CONCURRENCY = 8
+
+// A Vercel alias transition is directly observable: an asset that exists a
+// moment later answers 404 now, and shells fetched mid-flip disagree about
+// which build they came from. Both conditions are retryable. Anything else, an
+// unparseable runtime or a shell carrying no assets at all, is a real failure
+// and must not be retried into a timeout.
+const DISCOVERY_ATTEMPTS = 5
+const DISCOVERY_BACKOFF_MS = 10_000
+
+/** A retryable symptom of the production alias still moving. */
+export class DeploymentSkewError extends Error {
+  constructor(message) {
+    super(message)
+    this.name = 'DeploymentSkewError'
+  }
+}
+
+function probeFailure(message, status) {
+  const retryable =
+    status === 404 ||
+    status === 408 ||
+    status === 409 ||
+    status === 425 ||
+    status === 429 ||
+    status >= 500
+  const ErrorType = retryable ? DeploymentSkewError : Error
+  return new ErrorType(message)
+}
+
+function isWebpackRuntime(asset) {
+  return WEBPACK_RUNTIME_PATH.test(new URL(asset).pathname)
+}
+
+/**
+ * The deployment that rendered a shell, as published by Next.js when Skew
+ * Protection is on. Layout-independent, unlike the Webpack runtime name.
+ */
+export function extractDeploymentId(html) {
+  return html.match(DEPLOYMENT_ID_ATTRIBUTE)?.[1] ?? null
+}
 
 function decodeAttribute(value) {
   return value.replaceAll('&amp;', '&').replaceAll('&#38;', '&').replaceAll('&#x26;', '&')
@@ -215,8 +256,14 @@ async function fetchWithRetry(fetchImpl, url, init) {
   throw lastError
 }
 
-async function mapConcurrent(items, worker) {
-  const results = new Array(items.length)
+/**
+ * @template T, R
+ * @param {T[]} items
+ * @param {(item: T, index: number) => Promise<R>} worker
+ * @returns {Promise<R[]>}
+ */
+export async function mapConcurrent(items, worker) {
+  const results = /** @type {R[]} */ (new Array(items.length))
   let cursor = 0
 
   async function run() {
@@ -228,7 +275,9 @@ async function mapConcurrent(items, worker) {
   }
 
   const workers = Array.from({ length: Math.min(MAX_CONCURRENCY, items.length) }, () => run())
-  await Promise.all(workers)
+  const settlements = await Promise.allSettled(workers)
+  const failure = settlements.find((settlement) => settlement.status === 'rejected')
+  if (failure) throw failure.reason
   return results
 }
 
@@ -246,21 +295,49 @@ export async function discoverCurrentBuildAssets({
       { method: 'GET' },
     )
     if (!response.ok) {
-      throw new Error(`Fresh page probe failed for ${pageUrl.href}: HTTP ${response.status}`)
+      throw probeFailure(
+        `Fresh page probe failed for ${pageUrl.href}: HTTP ${response.status}`,
+        response.status,
+      )
     }
     return response.text()
   })
 
-  const shellAssets = [
-    ...new Set(pageResponses.flatMap((html) => extractBuildAssetUrls(html, origin))),
-  ].sort()
+  const shellAssetLists = pageResponses.map((html) => extractBuildAssetUrls(html, origin))
+  const shellAssets = [...new Set(shellAssetLists.flat())].sort()
   if (shellAssets.length === 0) {
     throw new Error('No Next.js build assets were found in the production page shells')
   }
 
-  const runtimes = shellAssets.filter((asset) => WEBPACK_RUNTIME_PATH.test(new URL(asset).pathname))
+  // Every shell of one build reports the same identity: the Skew Protection
+  // deployment id when it is enabled, and otherwise the Webpack runtime chunk.
+  // Two answers across shells fetched together means the alias served two
+  // builds during this pass, so the union mixes both and its newest URLs may
+  // not be at the origin yet.
+  const shellSignatures = pageResponses.map(
+    (html, index) =>
+      extractDeploymentId(html) ?? shellAssetLists[index].filter(isWebpackRuntime).join(' '),
+  )
+  if (shellSignatures.some((signature) => !signature)) {
+    throw new DeploymentSkewError(
+      'A production page shell has no deployment identity; the alias state cannot be verified.',
+    )
+  }
+  const buildSignatures = new Set(shellSignatures)
+  if (buildSignatures.size > 1) {
+    throw new DeploymentSkewError(
+      `Production page shells came from more than one build (${[...buildSignatures].join(' vs ')}); the alias is still transitioning.`,
+    )
+  }
+
+  // Turbopack builds serve `/_next/static/immutable/**` and ship no Webpack
+  // runtime, so there is no lazy-chunk map to expand. The shells still name
+  // every eagerly loaded chunk, which is the set a deploy must purge; lazily
+  // loaded chunks rely on the zone's no-store rule for 4xx responses instead of
+  // on enumeration.
+  const runtimes = shellAssets.filter(isWebpackRuntime)
   if (runtimes.length === 0) {
-    throw new Error('No Webpack runtime was found in the production page shells')
+    return shellAssets
   }
 
   const runtimeResponses = await mapConcurrent(runtimes, async (runtime, index) => {
@@ -270,7 +347,10 @@ export async function discoverCurrentBuildAssets({
       { method: 'GET' },
     )
     if (!response.ok) {
-      throw new Error(`Fresh Webpack runtime probe failed for ${runtime}: HTTP ${response.status}`)
+      throw probeFailure(
+        `Fresh Webpack runtime probe failed for ${runtime}: HTTP ${response.status}`,
+        response.status,
+      )
     }
     return response.text()
   })
@@ -282,6 +362,43 @@ export async function discoverCurrentBuildAssets({
   return assets
 }
 
+/**
+ * Runs discovery, retrying only the symptoms of an in-flight alias swap.
+ *
+ * The first automatic purge after live asset discovery shipped failed exactly
+ * here: a shell fetched 15 seconds after Vercel reported ready still named the
+ * previous build's runtime, which the alias had already stopped serving, and
+ * the run aborted without purging anything. Retrying is what makes the settle
+ * window self-correcting instead of a guess.
+ *
+ * @param {NonNullable<Parameters<typeof discoverCurrentBuildAssets>[0]> & {
+ *   attempts?: number
+ *   backoffMs?: number
+ *   onRetry?: (error: Error, attempt: number) => void
+ *   sleepImpl?: (ms: number) => Promise<unknown>
+ * }} [options]
+ */
+export async function discoverCurrentBuildAssetsWithRetry({
+  attempts = DISCOVERY_ATTEMPTS,
+  backoffMs = DISCOVERY_BACKOFF_MS,
+  onRetry,
+  sleepImpl = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  ...options
+} = {}) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await discoverCurrentBuildAssets({
+        ...options,
+        token: `${options.token ?? Date.now()}-attempt-${attempt}`,
+      })
+    } catch (error) {
+      if (!(error instanceof DeploymentSkewError) || attempt >= attempts) throw error
+      onRetry?.(error, attempt)
+      await sleepImpl(backoffMs * attempt)
+    }
+  }
+}
+
 async function main() {
   const token = process.env.CACHE_PROBE_TOKEN || `${Date.now()}-${process.pid}`
   const probePaths = process.env.CACHE_PROBE_PATHS
@@ -289,11 +406,27 @@ async function main() {
         .map((path) => path.trim())
         .filter(Boolean)
     : DEFAULT_PROBE_PATHS
-  const assets = await discoverCurrentBuildAssets({ probePaths, token })
+  const assets = await discoverCurrentBuildAssetsWithRetry({
+    probePaths,
+    token,
+    onRetry: (error, attempt) => {
+      process.stderr.write(
+        `::warning::Alias still transitioning on attempt ${attempt}: ${error.message} Retrying.\n`,
+      )
+    },
+  })
 
-  process.stderr.write(
-    `Collected ${assets.length} current build assets from ${probePaths.length} fresh page shells and their Webpack runtime.\n`,
-  )
+  if (assets.some(isWebpackRuntime)) {
+    process.stderr.write(
+      `Collected ${assets.length} current build assets from ${probePaths.length} fresh page shells and their Webpack runtime.\n`,
+    )
+  } else {
+    // Loud on purpose: this build's lazily loaded chunks are not in the purge
+    // set, so they depend entirely on the zone never caching a 4xx.
+    process.stderr.write(
+      `::warning::Collected ${assets.length} eagerly referenced build assets from ${probePaths.length} fresh page shells. This build ships no Webpack runtime, so its lazy-chunk map could not be expanded.\n`,
+    )
+  }
   process.stdout.write(`${assets.join('\n')}\n`)
 }
 
