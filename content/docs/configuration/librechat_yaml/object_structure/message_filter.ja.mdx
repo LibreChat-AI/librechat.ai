@@ -1,15 +1,120 @@
 ---
-title: メッセージフィルターオブジェクトの構造
+title: コンテンツフィルターオブジェクトの構造
 icon: ShieldAlert
 ---
 
 ## 概要 [#overview]
 
-`messageFilter` オブジェクトは、サーバーサイドのメッセージフィルターを設定します。サポートされているフィルタータイプは `messageFilter.pii` です。
+LibreChatは、2つのサーバーサイドフィルター設定を提供しています：
 
-`messageFilter.pii` は、送信されたメッセージテキストがモデレーション、モデルへのリクエスト、またはメッセージの永続化に到達する前に、認証情報のような形式のパターンやオペレーターが定義した正規表現に一致する場合、そのテキストを拒否します。
+- `filters` は、メッセージ、プロンプト、エージェント、ファイル、スキル、メモリ、ツール、およびその他の再利用可能なコンテンツ全体にわたって、選択されたフィールドにソースを認識するポリシーを適用します。
+- `messageFilter` はレガシーなメッセージテキストフィルターです。既存のデプロイメントでは、`filters.messages` へ移行する間、引き続きこれを使用できます。
 
-## 例 [#example]
+どちらもオプトインです。両方が設定されている場合、両方のポリシーが適用されます。
+
+<Callout type="warning" title="基本設定のみ">
+  `filters` はベースとなる `librechat.yaml` からのみ読み込まれます。データベース、ロール、グループ、およびユーザーによるオーバーライドで追加、変更、削除を行うことはできません。マルチレプリカ環境でデプロイする場合は、すべてのレプリカを同時にロールアウトまたは再起動し、ポリシーを有効とみなす前に、各レプリカが同じベース設定を読み込んだことを確認してください。
+</Callout>
+
+## ソース認識フィルター [#source-aware-filters]
+
+各ソースにはオプションの `pii` ポリシーがあります。`filters`、ソース、またはその `pii` ブロックを省略すると、そのスコープは無効になります。
+
+```yaml filename="librechat.yaml"
+filters:
+  messages:
+    unattributedAssistantContent: model_output
+    pii:
+      action: audit
+      fields: [text, summary, attachment_reference]
+      starterPatterns: [sk_prefix, bearer_header, api_key_header]
+      customPatterns:
+        - id: organization_identifier
+          label: Organization identifier
+          regex: 'ORG-[A-Z0-9]{12}'
+  files:
+    pii:
+      fields: [name, content, extracted_text, transcript]
+      uninspectable: block
+  skills:
+    pii:
+      fields: [name, description, instructions, imported_text, file_text]
+```
+
+### パターン設定 [#pattern-configuration]
+
+有効化された各ソースについて：
+
+- `action` を省略するか `block` に設定すると、一致した内容を拒否します。`action: audit` に設定すると、コンテンツの拒否、変更、編集を行わずに結果を記録するシャドウロールアウト（試験的運用）が実行されます。
+- `fields` を省略すると、そのソースでサポートされているすべてのフィールドを検査します。明示的なリストには、1から256個のサポートされているフィールド名を含める必要があります。
+- `starterPatterns` を省略すると、すべてのスターターカタログが有効になります。`[]` に設定すると、スターターパターンは無効になりますが、`customPatterns` は保持されます。
+- `id`、ユーザー向けの `label`、および `regex` を使用して `customPatterns` を設定します。
+
+監査モードは、設定されたすべてのフラグメントとルールを評価するため、オペレーターは適用前に検出結果を測定できます。各情報レベルの監査レコードは、アクション、検出器、ルール、ラベル、ソース、フィールド、および来歴を識別しますが、一致したテキストやソースコンテンツは一切含まれません。監査モードは編集（redaction）機能を提供しません。サポートされていないアクション値は、設定の読み込み時に拒否されます。
+
+Actionsはソースごとに個別に設定されるため、あるソースで監査（audit）を行い、別のソースでブロック（block）するといった設定が可能です。`filters.files.pii.uninspectable: block` は、特定のソースのパターンアクションが `audit` に設定されている場合であっても、内容が不明瞭またはサイズが大きすぎる選択済みファイルに対しては、独立したフェイルクローズ（fail-closed）ルールとして機能し続けます。
+
+組み込みのスターターパターンIDは以下の通りです：
+
+- `sk_prefix`: `sk-`形式のトークンプレフィックス。
+- `bearer_header`: テキスト内のベアラートークン。
+- `api_key_header`: `api-key` ヘッダー形式のテキスト。
+
+カスタムパターンは、RE2JSの制限付き線形時間正規表現構文を使用します。後方参照と先読み・後読みはサポートされておらず、一部のエスケープはJavaScriptの正規表現と異なります。LibreChatは、設定の読み込み時に無効またはサポートされていないパターンを拒否します。
+
+### サポートされているソースとフィールド [#supported-sources-and-fields]
+
+| ソース | サポートされているフィールド |
+| --- | --- |
+| `messages` | `name`, `text`, `summary`, `quote`, `answer`, `decision_response`, `decision_reason`, `content_part`, `attachment_reference`, `assembled_context` |
+| `prompts` | `name`, `description`, `oneliner`, `category`, `command`, `text`, `preset_text`, `system`, `context`, `instructions`, `additional_instructions`, `greeting`, `example_input`, `example_output` |
+| `agentInstructions` | `name`, `category`, `description`, `instructions`, `additional_instructions`, `edge_description`, `edge_prompt`, `edge_prompt_key`, `artifacts`, `support_contact_name`, `support_contact_email` |
+| `conversationStarters` | `text` |
+| `conversationTitles` | `title` |
+| `feedback` | `text` |
+| `skills` | `name`, `display_title`, `description`, `category`, `frontmatter`, `instructions`, `imported_text`, `file_name`, `file_text` |
+| `memories` | `key`, `value`, `summary` |
+| `files` | `name`, `content`, `extracted_text`, `transcript`, `uri` |
+| `toolArguments` | `name`, `arguments`, `output` |
+| `modelParameters` | `stop`, `request_fields`, `response_format`, `metadata` |
+| `actionMetadata` | `raw_spec`, `domain`, `privacy_policy_url`, `authorization_type`, `custom_auth_header`, `authorization_content_type`, `authorization_url`, `client_url`, `scope`, `token_exchange_method`, `api_key`, `oauth_client_id`, `oauth_client_secret` |
+
+### メッセージの由来 (Message Provenance) [#message-provenance]
+
+`filters.messages.unattributedAssistantContent` は、由来が不明なレガシーアシスタントコンテンツをどのように分類するかを制御します：
+
+- `model_output` (デフォルト): 帰属のないアシスタントのコンテンツをモデル出力として扱うことで、従来の動作を維持します。
+- `inspect`: 帰属先が指定されていないアシスタントのコンテンツ（選択された添付ファイルのプロジェクションを含む）を、送信されたコンテンツとして扱います。モデルの出力として明示的にマークされたアシスタントのコンテンツは、引き続き対象外となります。
+
+この分類は、`filters.messages.pii` が省略されている場合でも、有効化されたレガシーな `messageFilter.pii` ポリシーに影響を与える可能性があります。遡及的な検査に依存する前に、古いレコードのインベントリ作成や移行を行ってください。
+
+### 検査不可能なファイル [#uninspectable-files]
+
+`filters.files.pii.uninspectable` は、LibreChat が検査できない選択されたファイルの内容（不透明なコンテンツやサイズが大きすぎるコンテンツなど）を制御します。
+
+- `allow` (デフォルト): 互換性を維持し、コンテンツを許可します。
+- `block`: プロバイダーやストレージ側の副作用が発生する前にそれを拒否します。
+
+`block` は慎重に展開してください。検査可能なテキストが存在するまで、古いファイルが再利用できなくなる可能性があります。
+
+### 保存および再利用されるコンテンツ [#stored-and-reused-content]
+
+ポリシーの有効化や変更を行っても、保存済みのレコードが書き換えられたり削除されたりすることはありません。LibreChatは、保護されたコンテンツが送信、コピー、共有、再利用された場合、またはモデルにバインドされた場合に、現在のポリシーを適用します。
+
+安全なメタデータの編集は引き続き成功するため、ブロックされたレコードは修復可能な状態が維持されます。管理ビューでは、ブロックされたプロンプトやプリセットのフィールドは `contentFilterBlocked: true` となり空欄になる場合があります。ブロックされたプロンプトグループを直接取得しようとするとエラーが返され、コレクションや再利用のレスポンスからは除外されます。拒否されたバックグラウンドメモリの更新はスキップされ、メインのチャットレスポンスは継続されます。
+
+ソースを認識したテキストの一致をブロックすると、HTTP `400` と `content_filter_block` が返されます。検査不可能なファイルの拒否には `content_filter_uninspectable` が使用されます。
+
+### 制限 [#limits]
+
+- ソースごとに最大256個のフィールド、スターターパターン、またはカスタムパターン。
+- 設定全体で最大256個のカスタムパターン。
+- パターンIDは最大256文字、ラベルは最大512文字、正規表現は最大512文字までです。
+- 最大8,192文字の正規表現および8,192個のコンパイル済みフィルター命令。
+
+## レガシーな `messageFilter` [#legacy-messagefilter]
+
+`messageFilter.pii` は、モデレーション、モデルへのリクエスト、または永続化の前に、呼び出し元から提供されたメッセージテキストが一致した場合に `message_filter_pii_block` を使用して拒否します。これはブロック専用であり、`action` を受け付けません。ファイルの内容や、`filters` でカバーされているその他の再利用可能なソースは検査しません。
 
 ```yaml filename="librechat.yaml"
 messageFilter:
@@ -24,63 +129,4 @@ messageFilter:
         regex: 'sk-ant-[A-Za-z0-9_-]{20,}'
 ```
 
-## フィールド [#fields]
-
-### messageFilter.pii
-
-<OptionTable
-  options={[
-    [
-      'pii.starterPatterns',
-      'Array of Strings',
-      '有効にする組み込みスターターパターンのオプションのサブセットID。すべてを有効にする場合は省略してください。',
-      'starterPatterns: [sk_prefix, bearer_header]',
-    ],
-    [
-      'pii.customPatterns',
-      'Array of Objects',
-      'オペレーター定義のパターン。各エントリには `id`、`label`、`regex` が必要です。',
-      '',
-    ],
-  ]}
-/>
-
-**組み込みのスターターパターンID:**
-
-- `sk_prefix`: `sk-` スタイルのトークンプレフィックスと一致します。
-- `bearer_header`: テキスト内のベアラートークンと一致します。
-- `api_key_header`: `api-key` ヘッダー形式のテキストと一致します。
-
-### customPatterns
-
-<OptionTable
-  options={[
-    ['id', 'String', 'ログおよびデバッグに使用される安定したパターンID。', 'id: anthropic_api_key'],
-    [
-      'label',
-      'String',
-      '拒否メッセージに表示される人間が読み取れるラベル。',
-      'label: Anthropic API key',
-    ],
-    [
-      'regex',
-      'String',
-      'RE2正規表現。LibreChatは設定読み込み時にこれを検証し、グローバルに適用します。',
-      "regex: 'sk-ant-[A-Za-z0-9_-]{20,}'",
-    ],
-  ]}
-/>
-
-カスタムパターンは線形時間のRE2エンジンを使用します。後方参照と先読み・戻り読みはサポートされておらず、一部のエスケープはJavaScriptの正規表現と異なります。LibreChatは、設定の読み込み時にRE2がコンパイルできないパターンを拒否します。
-
-## 動作 [#behavior]
-
-送信されたメッセージテキストが設定済みのPIIパターンと一致した場合、LibreChatは `message_filter_pii_block` とともにHTTP `400` エラーを返し、呼び出し元に対して一致した認証情報の種類を削除するよう求めるメッセージを表示します。
-
-フィルターのチェック項目:
-
-- LibreChat UIを通じて送信されたチャットルートのユーザーテキスト。
-- OpenAI互換のChat Completionsリクエストにおける、すべての呼び出し元から提供されたメッセージロールにわたるテキストコンテンツ。
-- OpenAI互換のResponsesリクエストにおける、すべての呼び出し元が提供するメッセージロールにわたるテキストコンテンツ。
-
-このフィルターは、リクエストボディで提供されたテキストを評価します。ファイルの内容はスキャンしません。
+レガシーフィルターは、OpenAI互換のChat CompletionsおよびResponsesリクエストにおけるすべてのロールにわたり、chat-routeのユーザーテキストと呼び出し元が提供したテキストをチェックします。これは、前述の組み込みIDおよび線形時間のカスタム正規表現ルールと同じものを使用します。

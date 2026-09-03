@@ -11,6 +11,7 @@ Subagents 允许 LibreChat Agent 衍生出一个独立的子运行（child run�
 - 研究可能生成长中间输出的子任务
 - 使用专门的智能体进行审查通过
 - 需要保留在父上下文之外的工具密集型工作
+- 应在单个委托任务后执行的多智能体团队工作流
 - 并行式分解，由父级进行协调和总结
 
 ## Subagents 与 Agent Chain 的区别 [#how-subagents-differ-from-agent-chain]
@@ -54,6 +55,27 @@ endpoints:
 - **Allow self-spawn**：允许智能体在隔离的上下文中生成自身的全新副本。当启用子智能体（subagents）时，此功能默认开启。
 - **Additional subagents**：选择父代理可以生成的特定代理。
 
+已保存的 Agent 团队作为 `subagents.graphs` 嵌入在 Agent 创建或更新的负载中。当前的 Agent Builder 在您编辑自生成（self-spawn）和单个 Agent 设置时会保留这些定义，但它不会创建图定义。每个团队都命名了一个有界有向无环图、其入口 Agent 以及结果返回给父级的 Agent：
+
+```yaml filename="agent saved-team subagent"
+subagents:
+  enabled: true
+  allowSelf: false
+  graphs:
+    - type: 'research_team'
+      name: 'Research team'
+      description: 'Researches a topic and reviews the findings'
+      agent_ids:
+        - 'agent_researcher'
+        - 'agent_reviewer'
+      entry_agent_id: 'agent_researcher'
+      result_agent_id: 'agent_reviewer'
+      edges:
+        - from: 'agent_researcher'
+          to: 'agent_reviewer'
+          edgeType: 'direct'
+```
+
 等效智能体形态：
 
 ```yaml filename="agent subagents"
@@ -83,7 +105,7 @@ modelSpecs:
         model: 'gpt-4o'
 ```
 
-只有 `enabled` 和 `allowSelf` 会在启动配置中发送给客户端。`agent_ids` 白名单保留在服务器端，并根据有效的子智能体（subagents）限制进行验证，该限制默认为 10，可通过 [`endpoints.agents.maxSubagents`](/docs/configuration/librechat_yaml/object_structure/agents#maxsubagents) 进行配置。客户端请求负载无法提供或覆盖 Model Specs 子智能体配置。
+只有 `enabled` 和 `allowSelf` 会在启动配置中发送给客户端。`agent_ids` 白名单保留在服务器端，并根据有效的 Subagent 限制进行验证，该限制默认为 10，可通过 [`endpoints.agents.maxSubagents`](/docs/configuration/librechat_yaml/object_structure/agents#maxsubagents) 进行配置。客户端请求负载无法提供或覆盖 Model Specs 的 Subagent 配置。
 
 ## 运行时行为 [#runtime-behavior]
 
@@ -91,10 +113,54 @@ modelSpecs:
 
 - `self`，当 `allowSelf` 不为 false 时
 - 在 `agent_ids` 中配置的任何子智能体
+- `graphs` 中任何完整的已保存 Agent 团队
 
-子智能体在隔离的上下文中运行。父级工具搜索状态和累积的上下文不会被复制到子运行中。子运行的模型使用量会计入父级交易，并包含在父级的使用总量中。UI 将子运行显示为一个可展开的智能体活动部分，包含状态、实时更新以及完整的最终结果，其中包括在子运行流式传输时增量交付的结果文本。
+子智能体在隔离的上下文中运行。父级工具搜索状态和累积的上下文不会被复制到子运行中。前台子模型的使用情况会包含在父级事务和使用总量中；在父级请求关闭后完成的独立（detached）子调用将单独记录使用情况。紧凑的子卡片为前台、图表、旧版和独立运行打开一个统一的活动侧边栏，显示适用于该传输方式的受限生命周期、推理、工具、审批和结果详情。
 
 显式子代理作为轻量级描述符向父代理进行通告，仅在被选中时才会完全初始化。未使用的子代理不会加载其模型、工具、MCP 服务器、文件或 Skills。在调用时，LibreChat 会重新检查查看权限以及子代理的版本化配置标识；如果访问权限已被撤销，或者保存的配置在运行期间发生了更改，子代理将执行失败并关闭，而不是执行过时的设置。
+
+当并行分支引用同一个子 Agent 时，LibreChat 会针对每条遍历路径独立评估循环和深度限制。因此，一条分支上的循环不会导致另一条分支上有效的嵌套 Agent 链接被丢弃。
+
+已保存的团队遵循与单个子代理相同的惰性解析和访问检查机制。当被选中时，每个成员都保留其各自的模型、指令、工具、MCP 凭据、技能、文件、记忆、代码解释器配置和计费身份。LibreChat 将该团队作为一个隔离的子图执行，流式传输感知成员的进度，并返回配置的结果代理的输出。如果任何已持久化的成员缺失、无法访问或无效，LibreChat 将跳过整个团队，而不是运行部分图。
+
+在后续的对话轮次中，LibreChat 会以结构化的工具调用形式保留来自可达子工具和团队工具的先前调用，并在需要时包含已解析的 MCP 服务器标识。不再可达的工具不会仅仅因为出现在历史记录中就被添加到当前的运行中。
+
+## 分离式子代理线程 (Detached Subagent Threads) [#detached-subagent-threads]
+
+当为 Agents endpoint 启用 `run_in_background` 时，父级 Agent 可以分离子 Agent 的工作并继续执行，而无需等待其完成。LibreChat 会持久化每个分离的子进程，并保留私有的执行谱系和规范的转录内容。子线程不会出现在正常的对话导航和搜索中，也无法被直接读取；授权的父级视图仅展示受限的子活动。
+
+子线程是只读的执行记录。用户无法在原位编辑或删除规范的子线程。对于已完成的持久化直接 Agent 子线程，**Continue in a new chat**（在新的对话中继续）会将已完成的分支精确分叉为一个独立的、可写的 Agent 对话，同时保留原始子线程为隐藏且只读的状态。活动面板在整个运行期间以及跨传入的任务交付过程中保持一个编辑器挂载，从而在加载新任务视图时保留焦点和未输入完成的指导内容。在任务能够接受控制之前，提交功能保持不可用。结算后输入的文本会被带入分叉中，如果分叉失败，则会恢复面板中的草稿。此操作对于正在运行的、图形化的、匿名 Agent 的以及共享的视图不可用。删除父线程会级联删除其子线程谱系。父 Agent 可以通过其任务工具轮询、引导、排队、中断、取消、收集并稍后继续规范的子线程；基于 Mongo 的租约会在 API 副本之间序列化这些延续操作。
+
+活动面板将所选子项的轮次呈现为一条具备分支感知能力的历史记录。使用 **Load earlier activity** 可向后翻页，在某轮次上使用 **Show full activity** 可显示其完整的边界运行详情。工具调用、批准、结果、控件以及用户可见的推理内容均可在此显示。推理文本与投影的其余部分一样受到边界限制，并在被截断时进行标记；旧版本服务器持久化的活动可能仅显示推理标记。普通持久化活动使用与私有子项活动相同的单项限制，并将连续的最旧后缀放入 64 KB 的序列化活动预算中，因此缩短通知仅在省略了有意义的内容时才会出现。当历史记录被截断或不可用时，面板会进行提示，而不是将部分视图呈现为完整视图。新的事件轮次会固定在历史记录底部，运行中的轮次会显示已用时间，参与者行使用固定位置的状态点，因此状态更改不会导致布局偏移。紧凑的浮动标题允许历史记录在其下方滚动，而编辑器则遵循主聊天的尺寸。运行中的工作通过其流式活动而非单独的运行状态标签来传达；异常的终止状态将保持标注。
+
+启用 Redis 后，LibreChat 会记录活跃的执行所有者，并通过有界且会过期的请求/回复消息，将来自任何 API 副本的轮询（poll）、列表（list）、引导（steer）、队列（queue）、中断（interrupt）、取消（cancel）和收集（collect）请求路由至该进程。打开的活动面板也会接收任务范围内的实时更新；对于错过的事件、重新连接或 Redis 中断，两秒的持久化查询将作为后备方案。单进程和非 Redis 部署使用内存中的快速路径。当活跃执行者的所有者进程重启或消失后，该执行者不会被迁移，但由 MongoDB 支持的子记录（child transcript）、终端状态、使用情况、历史记录以及后续由 Agent 驱动的延续将独立存续。这并不会将分离的任务转变为公共后台作业 API。
+
+### 控制正在运行的子进程 [#control-a-running-child]
+
+在已验证身份的父对话中，打开 Subagent 活动面板并选择一个持久的子任务。当该任务运行时，输入指导并提交以默认进行引导。在支持悬停的桌面设备上，发送控件的操作菜单提供 **Steer**（引导）、**Queue**（排队）和 **Interrupt**（中断），并仅显示在用户当前键盘设置下处于活动状态的快捷键。在触摸设备和模态面板中，排队和中断功能以图标控件的形式保留。若未输入任何指导，发送控件将变为 **Cancel task**（取消任务）。
+
+- **Steer** 在子节点的下一个安全边界处添加引导。
+- **Queue** 保存了子任务后续轮次的指导信息。
+- **Interrupt** 会在安全边界处停止子进程当前的工作并应用新的指导。
+- **Cancel task** 请求取消任务，且不发送指导。
+
+已接受的控制项会显示在特定任务的历史记录中，状态包括发送中 (sending)、等待中 (waiting)、已应用 (applied)、未应用 (not applied) 或失败 (failed)，并在可用时提供原因。选择 **Withdraw** 可在子任务应用前移除已排队的指导。指导内容限制为 4 KB。每个任务最多存储 64 条权威回执，而活动面板最多显示 32 条；较旧的已完成历史记录会在活跃的已接受控制项之前被省略，UI 会标记出被省略的历史记录或为显示而缩短的指导内容。
+
+当子对话稳定后，运行中的控件会关闭，同一组合器会切换到在新的聊天中继续进行符合条件的子对话。LibreChat 会在每次请求时验证已登录用户对父对话和子对话的访问权限、它们的父子关系以及租户所有权，并将配置的内容过滤器和审核检查应用于指导。重复发送相同的已接受控件将返回其权威回执，而不会重复执行该指令。共享对话保持只读状态，且不会暴露这些控件。
+
+共享对话仅能显示已包含在共享负载中的限定活动。其视图为只读，省略了审批控件和持久化子选择器，且从不开启经过身份验证的子线程查询路径。
+
+### 事件驱动的子活动 [#event-driven-child-activity]
+
+通过 [Agents API 事件绑定](/docs/features/agents_api#event-driven-child-agents) 继续执行的子智能体（Child Agents）并非源自 `subagent` 工具卡片。在已认证的父对话中，LibreChat 会在拥有该绑定的消息下方添加一个紧凑的执行者（actor）行。打开该行将复用子智能体活动面板，其中包含用于选择执行者及其轮次（turns）的选择器，以及实时的运行步骤、工具、消息和推理标记活动。外部事件触发器会渲染为普通的触发者行，并带有可展开的事件类型、来源、发生时间和预期操作详情。当新的交付在同一个子线程中选择另一个任务时，现有的轮次保持可见，同时加载新任务并仅追加其流式占位符；任务特定的状态和控件绝不会从保留的视图中借用。较早的页面和每轮次的完整活动使用相同的有界、只读的子历史记录。
+
+父级投影经过了刻意的边界限制：它最多返回 64 个子线程，从共享的有限源窗口中为每个子线程保留最多 20 个最近的任务，并将响应限制在 96 KB 以内。UI 会报告历史记录已被截断，而不是暗示超限视图是完整的。开启新的一轮对话会将较早的参与者提升到最近子线程窗口中。这些子线程在普通导航中保持隐藏状态，且无法从其他父级或租户中被发现。
+
+### 自动父级延续 [#automatic-parent-continuation]
+
+当一个分离的子任务完成后，LibreChat 会持久化其终端结果或错误，并默认向启动该任务的父 Agent 的确切分支发送一个幂等延续（idempotent continuation）。交付过程会等待父分支处于运行、暂停或完成状态。恢复后的父任务会接收到一个相关的同级任务清单，而不是通过忙轮询（busy-polling）来获取，聊天界面会在一个可折叠的任务卡片中呈现唤醒状态。
+
+当 [`endpoints.agents.backgroundTasks.completionWakeups`](/docs/configuration/librechat_yaml/object_structure/agents#backgroundtasks) 被省略或设置为 `true` 时，将启用自动完成交付。将其设置为 `false` 可使分离的子任务仅保持轮询模式。已取消的子任务将被忽略，且不支持临时父 Agent，因为没有保存的配置可供恢复。分离的子任务执行拥有其独立的运行上下文，因此结算或中止原始父请求不会取消独立拥有的工作。父任务仍然可以通过其任务工具收集持久的子任务结果。
 
 ## 限制 [#limits]
 
@@ -103,10 +169,16 @@ LibreChat 强制执行这些限制以保持子代理图（subagent graphs）在�
 <OptionTable
   options={[
     [
-      'MAX_SUBAGENTS',
+      'endpoints.agents.maxSubagents',
       'Number',
-      '每个父智能体允许的最大显式子智能体数量。可通过 `endpoints.agents.maxSubagents` 配置，上限为 50。',
+      '每个父级 Agent `agent_ids` 或 `graphs` 列表中的最大条目数。可配置范围为 1 到 50。',
       '10',
+    ],
+    [
+      'MAX_GRAPH_SUBAGENT_MEMBERS',
+      'Number',
+      '单个已保存 Agent 团队中的最大成员数。',
+      '32',
     ],
     ['MAX_SUBAGENT_DEPTH', 'Number', '来自根代理的最大显式子代理跳数。', '5'],
     [
@@ -132,15 +204,16 @@ endpoints:
     maxSubagents: 20
 ```
 
-配置的值适用于智能体创建、更新和复制请求，适用于 Model Specs `subagents.agent_ids` 允许列表，以及智能体构建器（Agent Builder）中的子智能体选择器。有关完整参考，请参阅 [maxSubagents](/docs/configuration/librechat_yaml/object_structure/agents#maxsubagents)。上述深度、图节点和运行配置限制是固定的。
+配置的值适用于 Agent 的创建、更新和复制请求（针对 `subagents.agent_ids` 和 `subagents.graphs`），适用于 Model Specs 的 `subagents.agent_ids` 允许列表，以及 Agent Builder 中的子 Agent 选择器。请参阅 [maxSubagents](/docs/configuration/librechat_yaml/object_structure/agents#maxsubagents) 获取完整参考。上述针对每位团队成员、深度、图节点和运行配置的限制是固定的。
 
 ## 访问控制 [#access-control]
 
-配置的子智能体必须对用户可见。如果用户缺乏对所引用智能体的查看权限，LibreChat 将跳过该子智能体。对于创建和更新请求，无效或未经授权的 `subagents.agent_ids` 条目将被拒绝。
+已配置的子 Agent 和每个已保存的团队成员必须对用户可见。如果用户缺乏对某个被引用的 Agent 的查看权限，LibreChat 将跳过该子 Agent。已保存的团队是“全有或全无”的，如果其中任何成员不可用，则整个团队将被跳过。创建和更新请求会拒绝缺失或未经授权的引用、重复的生成类型、循环或断开连接的团队图、无效的入口或结果成员，以及超过上述限制的配置。
 
 ## 设计技巧 [#design-tips]
 
 - 当父 Agent 的范围已经界定明确，且仅需为子任务提供全新的上下文时，启用自我生成（self-spawn）。
 - 当任务需要不同的模型、指令集、工具集或技能白名单时，请添加特定的子智能体（child agents）。
+- 当多个 Agent 需要作为一个委派工作流运行并向父级返回单个结果时，请使用已保存的团队（Team）。
 - 保持子项描述清晰。父项会使用每个子项的名称和描述来选择正确的委派目标。
 - 使用子代理（subagents）来处理需要返回简洁结果的中间工作，而不是将其作为永久移交给另一个对话路径的手段。

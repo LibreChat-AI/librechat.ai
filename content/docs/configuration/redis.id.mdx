@@ -14,10 +14,11 @@ Panduan ini membahas cara mengonfigurasi Redis untuk caching dan penyimpanan ses
 - [Tipe Koneksi](#connection-types)
 - [Konfigurasi Keamanan](#security-configuration)
 - [Opsi Lanjutan](#advanced-options)
+- [Pemulihan Failover Replika](#replica-failover-recovery)
 - [Penyesuaian Performa](#performance-tuning)
 - [Contoh Konfigurasi](#configuration-examples)
 - [Resumable Streams](#resumable-streams)
-- [Peluncuran Protokol Generasi](#generation-protocol-rollout)
+- [Kompatibilitas Protokol Generasi](#generation-protocol-compatibility)
 - [Stream Delta Coalescing](#stream-delta-coalescing)
 - [Koordinasi Katalog MCP](#mcp-catalog-coordination)
 
@@ -212,6 +213,18 @@ REDIS_PING_INTERVAL=300
 - Interval ditentukan dalam detik dan berlaku untuk klien IoRedis maupun Keyv Redis.
 - Nilai contoh: `300` (5 menit), `600` (10 menit), `60` (1 menit)
 
+### Pemulihan Failover Replikasi [#replica-failover-recovery]
+
+Selama failover Sentinel, replika Redis yang diturunkan statusnya dapat tetap membuka soket yang ada sambil menolak penulisan dengan `READONLY`. LibreChat mendeteksi respons ini pada klien Keyv non-cluster, memutus koneksi yang sudah kedaluwarsa, dan melakukan koneksi ulang sehingga primary saat ini dapat diselesaikan tanpa perlu memulai ulang aplikasi.
+
+```bash
+# Minimum interval between forced recovery attempts, in milliseconds
+# Default: 5000
+REDIS_READONLY_RECOVERY_INTERVAL=5000
+```
+
+Interval ini melakukan debounce pada upaya penyambungan kembali selama lonjakan penulisan yang gagal. Klien Redis Cluster dikecualikan karena mereka menggunakan topologi klaster asli dan penanganan pengalihan.
+
 ### Selective In-Memory Caching [#selective-in-memory-caching]
 
 Paksa namespace cache tertentu untuk menggunakan penyimpanan in-memory meskipun Redis diaktifkan:
@@ -327,27 +340,22 @@ REDIS_URI=redis://127.0.0.1:6379
 # USE_REDIS_STREAMS=true  # Enabled by default when USE_REDIS=true
 ```
 
-### Peluncuran Protokol Generasi [#generation-protocol-rollout]
+### Kompatibilitas Protokol Generasi [#generation-protocol-compatibility]
 
-Protokol generasi v2 menambahkan antrean persisten, interupsi, jeda/lanjutkan, dan jaminan pemulihan yang digunakan oleh proses Agent saat ini. Deployment yang didukung Redis sengaja tetap menggunakan protokol v1 saat `GENERATION_PROTOCOL_VERSION` tidak diatur agar replika yang menjalankan versi LibreChat berbeda dapat hidup berdampingan selama peningkatan bertahap (rolling upgrade).
+Klien LibreChat saat ini menegosiasikan protokol generasi v2 secara otomatis dengan setiap penyimpanan generasi bawaan. Tidak diperlukan pengaturan deployment. Generasi yang sudah ada dengan penanda protokol-v1 yang eksplisit atau tersimpan akan tetap mempertahankan perilaku v1 yang tidak dapat diubah melalui steering, pause/resume, retry, dan recovery hingga selesai.
 
-Gunakan peluncuran dua tahap:
+Untuk pembaruan bergulir (rolling upgrade), setiap image API dan worker yang berjalan harus menyertakan jembatan kompatibilitas v2:
 
-1. Deploy image LibreChat yang mendukung v2 ke **setiap** replika dengan `GENERATION_PROTOCOL_VERSION` yang tidak disetel atau disetel ke `1`.
-2. Tunggu hingga generasi aktif yang dimiliki oleh gambar sebelumnya selesai atau dikosongkan.
-3. Atur `GENERATION_PROTOCOL_VERSION=2` dan luncurkan kembali image yang sama.
+- Setiap image API dan worker menjalankan LibreChat `v0.8.8-rc1` atau yang lebih baru.
+- Helm chart `2.0.8` atau yang lebih baru memilih image default yang kompatibel; penggantian image kustom tetap harus memenuhi persyaratan image di atas.
 
-```bash filename=".env"
-USE_REDIS=true
-USE_REDIS_STREAMS=true
-GENERATION_PROTOCOL_VERSION=2
-```
+Saat melakukan peningkatan dari rilis yang lebih lama, lakukan *cold handoff*: hentikan setiap replika API dan worker yang lama sebelum memulai image yang baru. Hal ini mencegah biner pra-v2 dan v2 otomatis berbagi status generasi di Redis.
 
 <Callout type="warning" title="Keamanan deployment bergulir">
-  Jangan aktifkan protokol v2 sampai setiap replika mendukungnya. Setelah generasi v2 dimulai, jangan lakukan *rollback* ke *image* LibreChat pra-v2 sampai generasi tersebut habis; replika yang lebih lama tidak dapat beroperasi dengan aman pada *state* Redis mereka.
+  Jangan menjalankan rilis yang lebih lama dari `v0.8.8-rc1` terhadap status generasi Redis yang sama dengan replika saat ini. Sebelum melakukan rollback di bawah batas kompatibilitas tersebut, pastikan terlebih dahulu bahwa replika saat ini dan generasi protocol-v2 telah dikosongkan (drained).
 </Callout>
 
-Aliran pembuatan dalam memori (in-memory generation streams) tidak membagikan status di seluruh replika dan menggunakan protokol v2 secara default, sehingga tidak memerlukan peralihan ini.
+Aliran pembuatan dalam memori (in-memory generation streams) juga menegosiasikan protokol v2 secara otomatis dan tidak membagikan status pembuatan di seluruh proses.
 
 ### Penggabungan Delta Stream [#stream-delta-coalescing]
 

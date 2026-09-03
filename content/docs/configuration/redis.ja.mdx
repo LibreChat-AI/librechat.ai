@@ -12,10 +12,11 @@ description: LibreChatにおけるキャッシュ、セッションストレー�
 - [接続タイプ](#connection-types)
 - [セキュリティ設定](#security-configuration)
 - [高度なオプション](#advanced-options)
+- [レプリカフェイルオーバーリカバリ](#replica-failover-recovery)
 - [パフォーマンスチューニング](#performance-tuning)
 - [設定例](#configuration-examples)
 - [再開可能なストリーム](#resumable-streams)
-- [Generation Protocol Rollout](#generation-protocol-rollout)
+- [Generation Protocol Compatibility](#generation-protocol-compatibility)
 - [ストリームデルタの結合](#stream-delta-coalescing)
 - [MCP Catalog Coordination](#mcp-catalog-coordination)
 
@@ -210,6 +211,18 @@ REDIS_PING_INTERVAL=300
 - 間隔は秒単位で指定され、IoRedisとKeyv Redisの両方のクライアントに適用されます。
 - 設定値の例: `300` (5分), `600` (10分), `60` (1分)
 
+### レプリカフェイルオーバーリカバリ [#replica-failover-recovery]
+
+Sentinelのフェイルオーバー中、降格したRedisレプリカは既存のソケットを開いたまま、`READONLY`で書き込みを拒否することがあります。LibreChatは非クラスターのKeyvクライアントでこの応答を検出し、古い接続を破棄して再接続を行うことで、アプリケーションを再起動することなく現在のプライマリを解決します。
+
+```bash
+# Minimum interval between forced recovery attempts, in milliseconds
+# Default: 5000
+REDIS_READONLY_RECOVERY_INTERVAL=5000
+```
+
+この間隔は、書き込み失敗が連続して発生した際の再接続試行をデバウンス（抑制）します。Redis Clusterクライアントは、ネイティブのクラスター・トポロジーとリダイレクト処理を使用するため、対象外となります。
+
 ### 選択的インメモリキャッシング [#selective-in-memory-caching]
 
 Redisが有効な場合でも、特定のキャッシュ名前空間でインメモリストレージを使用するように強制します：
@@ -325,27 +338,22 @@ REDIS_URI=redis://127.0.0.1:6379
 # USE_REDIS_STREAMS=true  # Enabled by default when USE_REDIS=true
 ```
 
-### Generation Protocol Rollout [#generation-protocol-rollout]
+### Generation Protocol Compatibility [#generation-protocol-compatibility]
 
-v2生成プロトコルは、現在のAgent実行で使用される永続キュー、中断、一時停止/再開、およびリカバリ保証を追加します。`GENERATION_PROTOCOL_VERSION`が設定されていない場合、Redisベースのデプロイメントは意図的にプロトコルv1のままとなります。これは、ローリングアップグレード中に異なるLibreChatバージョンを実行しているレプリカが共存できるようにするためです。
+現在のLibreChatクライアントは、すべての組み込み生成ストアと自動的に生成プロトコルv2をネゴシエートします。デプロイメント設定は不要です。明示的または保存されたprotocol-v1マーカーを持つ既存の生成は、完了するまで、ステアリング、一時停止/再開、再試行、およびリカバリを通じて、不変のv1動作を維持します。
 
-2段階のロールアウトを使用してください：
+ローリングアップグレードを行うには、実行中のすべてのAPIおよびworkerイメージにv2互換ブリッジが含まれている必要があります：
 
-1. `GENERATION_PROTOCOL_VERSION` が設定されていない、または `1` に設定されている**すべて**のレプリカに対して、v2 対応の LibreChat イメージをデプロイします。
-2. 前の画像が所有するアクティブな生成が完了するか、ドレインされるのを待機します。
-3. `GENERATION_PROTOCOL_VERSION=2` を設定し、同じイメージを再度ロールアウトしてください。
+- すべてのAPIおよびワーカーイメージは、LibreChat `v0.8.8-rc1` 以降を実行しています。
+- Helm chart `2.0.8` 以降では互換性のあるデフォルトイメージが選択されますが、カスタムイメージで上書きする場合は、上記のイメージ要件を依然として満たす必要があります。
 
-```bash filename=".env"
-USE_REDIS=true
-USE_REDIS_STREAMS=true
-GENERATION_PROTOCOL_VERSION=2
-```
+古いリリースからアップグレードする場合は、コールドハンドオフを実行してください。新しいイメージを起動する前に、すべての古いAPIおよびワーカーレプリカを停止します。これにより、v2以前のバイナリと自動v2バイナリがRedis内の生成状態を共有することを防ぎます。
 
 <Callout type="warning" title="ローリングデプロイの安全性">
-  すべてのレプリカがサポートするまで、プロトコルv2を有効にしないでください。v2の生成が開始された後は、それらの生成が完了（ドレイン）するまで、v2以前のLibreChatイメージにロールバックしないでください。古いレプリカは、Redisの状態を安全に操作できません。
+  現在のレプリカと同じRedis生成状態に対して、`v0.8.8-rc1` より古いリリースを実行しないでください。その互換性の下限より前にロールバックする場合は、まず現在のレプリカとprotocol-v2の世代がドレイン（排出）されていることを確認してください。
 </Callout>
 
-インメモリ生成ストリームはレプリカ間で状態を共有せず、デフォルトでプロトコルv2を使用するため、この切り替えは必要ありません。
+インメモリ生成ストリームもプロトコルv2を自動的にネゴシエートし、プロセス間で生成状態を共有しません。
 
 ### ストリームデルタの結合 (Stream Delta Coalescing) [#stream-delta-coalescing]
 

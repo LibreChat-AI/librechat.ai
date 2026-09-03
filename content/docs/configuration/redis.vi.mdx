@@ -14,10 +14,11 @@ Hướng dẫn này bao gồm cách cấu hình Redis để lưu trữ bộ nh�
 - [Các loại kết nối](#connection-types)
 - [Cấu hình bảo mật](#security-configuration)
 - [Tùy chọn nâng cao](#advanced-options)
+- [Khôi phục sau lỗi chuyển đổi dự phòng bản sao](#replica-failover-recovery)
 - [Tối ưu hóa hiệu năng](#performance-tuning)
 - [Các ví dụ về cấu hình](#configuration-examples)
 - [Luồng có thể tiếp tục](#resumable-streams)
-- [Triển khai Giao thức Tạo (Generation Protocol Rollout)](#generation-protocol-rollout)
+- [Khả năng tương thích với giao thức tạo (Generation Protocol Compatibility)](#generation-protocol-compatibility)
 - [Hợp nhất Stream Delta](#stream-delta-coalescing)
 - [Điều phối Danh mục MCP](#mcp-catalog-coordination)
 
@@ -212,6 +213,18 @@ REDIS_PING_INTERVAL=300
 - Khoảng thời gian được chỉ định bằng giây và áp dụng cho cả hai client IoRedis và Keyv Redis.
 - Các giá trị ví dụ: `300` (5 phút), `600` (10 phút), `60` (1 phút)
 
+### Khôi phục chuyển đổi dự phòng bản sao (Replica Failover Recovery) [#replica-failover-recovery]
+
+Trong quá trình chuyển đổi dự phòng (failover) của Sentinel, một bản sao Redis bị hạ cấp có thể vẫn giữ kết nối socket hiện có trong khi từ chối các lệnh ghi với thông báo `READONLY`. LibreChat phát hiện phản hồi này trên client Keyv không thuộc cluster, ngắt kết nối cũ và kết nối lại để có thể phân giải primary hiện tại mà không cần khởi động lại ứng dụng.
+
+```bash
+# Minimum interval between forced recovery attempts, in milliseconds
+# Default: 5000
+REDIS_READONLY_RECOVERY_INTERVAL=5000
+```
+
+Khoảng thời gian này giúp debounce (chống rung) các nỗ lực kết nối lại trong một đợt ghi thất bại. Các client Redis Cluster được loại trừ vì chúng sử dụng cấu trúc liên kết cụm (cluster topology) và cơ chế xử lý chuyển hướng (redirect handling) gốc.
+
 ### Bộ nhớ đệm trong bộ nhớ có chọn lọc (Selective In-Memory Caching) [#selective-in-memory-caching]
 
 Buộc các namespace bộ nhớ đệm cụ thể sử dụng bộ nhớ trong (in-memory) ngay cả khi Redis đã được bật:
@@ -327,27 +340,22 @@ REDIS_URI=redis://127.0.0.1:6379
 # USE_REDIS_STREAMS=true  # Enabled by default when USE_REDIS=true
 ```
 
-### Triển khai Giao thức Tạo (Generation Protocol Rollout) [#generation-protocol-rollout]
+### Khả năng tương thích với Giao thức Tạo (Generation Protocol) [#generation-protocol-compatibility]
 
-Giao thức thế hệ v2 bổ sung hàng đợi bền vững (durable queue), ngắt, tạm dừng/tiếp tục và các đảm bảo khôi phục được sử dụng bởi các lần chạy Agent hiện tại. Các triển khai dựa trên Redis cố ý giữ nguyên giao thức v1 khi `GENERATION_PROTOCOL_VERSION` không được thiết lập để các bản sao chạy các phiên bản LibreChat khác nhau có thể cùng tồn tại trong quá trình nâng cấp luân phiên (rolling upgrade).
+Các client LibreChat hiện tại tự động thương lượng giao thức tạo v2 với mọi kho lưu trữ tạo nội dung tích hợp sẵn. Không cần cài đặt triển khai nào. Các nội dung đã tạo trước đó có đánh dấu protocol-v1 rõ ràng hoặc được lưu trữ sẽ giữ nguyên hành vi v1 bất biến của chúng thông qua việc điều hướng, tạm dừng/tiếp tục, thử lại và khôi phục cho đến khi hoàn tất.
 
-Sử dụng quy trình triển khai hai giai đoạn:
+Để thực hiện nâng cấp luân phiên (rolling upgrade), mọi image API và worker đang chạy phải bao gồm v2 compatibility bridge:
 
-1. Triển khai image LibreChat hỗ trợ v2 cho **mọi** bản sao (replica) có `GENERATION_PROTOCOL_VERSION` chưa được thiết lập hoặc được đặt thành `1`.
-2. Đợi các thế hệ đang hoạt động thuộc về hình ảnh trước đó hoàn tất hoặc giải phóng.
-3. Đặt `GENERATION_PROTOCOL_VERSION=2` và triển khai lại cùng một image đó.
+- Mọi image API và worker đều chạy LibreChat `v0.8.8-rc1` hoặc mới hơn.
+- Helm chart `2.0.8` hoặc mới hơn sẽ chọn một image mặc định tương thích; việc ghi đè image tùy chỉnh vẫn phải đáp ứng yêu cầu về image ở trên.
 
-```bash filename=".env"
-USE_REDIS=true
-USE_REDIS_STREAMS=true
-GENERATION_PROTOCOL_VERSION=2
-```
+Khi nâng cấp từ một bản phát hành cũ hơn, hãy thực hiện chuyển giao nguội (cold handoff): dừng mọi bản sao API và worker cũ trước khi khởi chạy image mới. Điều này giúp ngăn chặn các tệp nhị phân tiền-v2 và tự động-v2 chia sẻ trạng thái thế hệ trong Redis.
 
 <Callout type="warning" title="An toàn triển khai cuốn chiếu">
-  Không bật protocol v2 cho đến khi mọi bản sao (replica) đều hỗ trợ nó. Sau khi các thế hệ v2 bắt đầu, không được quay lại phiên bản LibreChat tiền-v2 cho đến khi các thế hệ đó đã được giải phóng; các bản sao cũ hơn không thể vận hành an toàn trên trạng thái Redis của chúng.
+  Không chạy phiên bản cũ hơn `v0.8.8-rc1` với cùng trạng thái thế hệ Redis như các bản sao (replica) hiện tại. Trước khi quay lui (rollback) xuống dưới ngưỡng tương thích đó, hãy đảm bảo rằng các bản sao hiện tại và các thế hệ protocol-v2 đã được giải phóng (drain).
 </Callout>
 
-Các luồng tạo nội dung trong bộ nhớ (in-memory generation streams) không chia sẻ trạng thái giữa các bản sao và sử dụng giao thức v2 theo mặc định, vì vậy chúng không yêu cầu quá trình chuyển đổi này.
+Các luồng tạo nội dung trong bộ nhớ (in-memory generation streams) cũng tự động thương lượng giao thức v2 và không chia sẻ trạng thái tạo nội dung giữa các tiến trình.
 
 ### Hợp nhất Stream Delta [#stream-delta-coalescing]
 

@@ -2,24 +2,25 @@
 title: API Agents (Beta)
 icon: Plug
 description: >-
-  Truy cập các tác nhân LibreChat theo chương trình thông qua các endpoint API
-  tương thích với OpenAI và Open Responses
+  Chạy các tác nhân LibreChat và gửi các sự kiện đã xác thực thông qua các API
+  lập trình
 ---
 
 <Callout type="warning" title="Tính năng Beta">
 Agents API hiện đang trong giai đoạn beta. Các endpoint, định dạng yêu cầu/phản hồi và hành vi có thể thay đổi khi chúng tôi tiếp tục cải thiện để hướng tới một bản phát hành ổn định.
 </Callout>
 
-LibreChat cung cấp các tác nhân của bạn thông qua hai giao diện tương thích với API, cho phép các ứng dụng, tập lệnh và dịch vụ bên ngoài tương tác với các tác nhân của bạn theo chương trình.
+LibreChat cung cấp các tác nhân (agents) cho các ứng dụng, tập lệnh và dịch vụ bên ngoài thông qua các API suy luận và phân phối sự kiện.
 
 ## Tổng quan [#overview]
 
-Agents API cung cấp hai giao diện:
+Agents API cung cấp hai giao diện suy luận và phân phối sự kiện được xác thực:
 
 - **Hoàn tất trò chuyện tương thích với OpenAI** — `POST /api/agents/v1/chat/completions`
 - **API Phản hồi Mở** — `POST /api/agents/v1/responses`
+- **Sự kiện Tác nhân (Agent Events)** — `POST /api/agents/v1/events`
 
-Cả hai đều được xác thực thông qua API keys và hỗ trợ phản hồi dạng streaming, giúp việc tích hợp các tác nhân LibreChat vào các quy trình làm việc hiện có đang sử dụng OpenAI SDK hoặc các công cụ tương tự trở nên dễ dàng.
+Các giao diện suy luận hỗ trợ xác thực bằng API-key, xác thực OIDC tùy chọn và phản hồi dạng streaming. Các Agent Events sử dụng xác thực API-key của Remote Agents để LibreChat có thể liên kết mỗi lần gửi với một định danh nguồn ổn định.
 
 LibreChat đang áp dụng [Open Responses](https://www.openresponses.org/) làm khung API chính để phục vụ các tác nhân (agents). Mặc dù endpoint Chat Completions cung cấp khả năng tương thích ngược với các công cụ tương thích với OpenAI hiện có, nhưng endpoint Open Responses đại diện cho định hướng phát triển trong tương lai.
 
@@ -88,6 +89,10 @@ curl -X POST https://your-librechat-instance/api/agents/v1/responses \
 </Callout>
 
 Xem [Agents Endpoint - remoteApi](/docs/configuration/librechat_yaml/object_structure/agents#remoteapi) để biết tất cả các tùy chọn cấu hình.
+
+<Callout type="warning" title="Các sự kiện Agent yêu cầu một API key">
+  Xác thực chỉ bằng OIDC không được hỗ trợ cho các endpoint Agent Events. Hãy sử dụng khóa API Remote Agents khi tạo binding, xếp hàng sự kiện và thăm dò trạng thái gửi.
+</Callout>
 
 ## Endpoints [#endpoints]
 
@@ -158,9 +163,144 @@ curl -X POST https://your-librechat-instance/api/agents/v1/responses \
   }'
 ```
 
+## Các sự kiện của Agent [#agent-events]
+
+Agent Events cho phép một bộ điều khiển hoặc bộ chuyển đổi nguồn đã xác thực gửi công việc bền vững đến một Agent. Việc gửi sự kiện là một tính năng beta và hành vi yêu cầu, phản hồi cũng như thời gian chạy của nó có thể thay đổi.
+
+Các endpoint sử dụng người dùng đã xác thực, tenant và API key; Agent mục tiêu phải hiển thị với người dùng đó theo các quyền Remote Agents hiện có. Các yêu cầu Agent Event cũng sử dụng bucket chuyên dụng [`rateLimits.agentEvents`](/docs/configuration/librechat_yaml/object_structure/config#ratelimits).
+
+### Gửi một Sự kiện [#deliver-an-event]
+
+```http
+POST /api/agents/v1/events
+Authorization: Bearer <REMOTE_AGENTS_API_KEY>
+Idempotency-Key: webhook-42-resource-7
+Content-Type: application/json
+
+{
+  "mode": "fire",
+  "event": {
+    "id": "resource-7-ready-3",
+    "type": "resource.ready",
+    "occurredAt": 1786967999000,
+    "payload": { "resourceId": "resource-7" }
+  },
+  "target": { "agentId": "agent_abc123" },
+  "input": "Resource resource-7 is ready. Inspect it and report the result.",
+  "orderingKey": "resource-7"
+}
+```
+
+Gửi chính xác một header `Idempotency-Key` và sử dụng lại nó khi thử lại cùng một quá trình phân phối từ nguồn đến đích. Khóa phải chứa 1-256 chữ cái, số hoặc các ký tự `._~:/+=-`. Việc sử dụng lại một khóa với nội dung phân phối khác sẽ trả về lỗi xung đột.
+
+Người gọi cung cấp `id`, `type`, `occurredAt` và `payload` đã được làm sạch của sự kiện. LibreChat thay thế bất kỳ `event.source` nào do người gọi cung cấp bằng danh tính khóa API đã xác thực và xác định người dùng, đối tượng thuê (tenant), ID yêu cầu và thời gian nhận. Không đặt thông tin xác thực hoặc bí mật truyền tải vào payload của sự kiện vì các dữ liệu được chấp nhận sẽ được lưu trữ.
+
+`orderingKey` là tùy chọn. Hãy sử dụng một giá trị ổn định khi các lượt phân phối từ các nguồn khác nhau cần phải duy trì thứ tự cho cùng một tài nguyên.
+
+Một yêu cầu thành công sẽ trả về `202 Accepted`, một `id` phân phối mờ, trạng thái hiện tại của nó và một header `Location`. Hãy thực hiện poll tại vị trí đó:
+
+```http
+GET /api/agents/v1/events/{delivery_id}
+Authorization: Bearer <SAME_REMOTE_AGENTS_API_KEY>
+```
+
+Việc phân phối có thể ở trạng thái `pending`, `leased`, `succeeded` hoặc `dead`. Phản hồi trạng thái bao gồm các lần thử và dấu thời gian cùng với kết quả hoặc lỗi công khai khi đã hoàn tất; nó không hiển thị payload đã lưu trữ, khóa thứ tự, lịch sử thử lại hoặc danh tính worker. Quyền truy cập trạng thái được giới hạn trong cùng một người dùng, tenant và nguồn API key.
+
+Đối với một `continue` bị ràng buộc, `succeeded` có nghĩa là lượt của Agent đã được chấp nhận, chứ không phải công việc được yêu cầu đã hoàn thành. Do đó, trạng thái của nó cũng hiển thị một vòng đời `handling` bền vững: `started`, theo sau đó là chính xác một trong các trạng thái `applied`, `completed_no_action`, `failed`, hoặc `cancelled`.
+
+Các nguồn nhận biết hành động (action-aware) có thể bao gồm một `expectedAction` với tên công cụ và tập hợp con đối số tùy chọn. LibreChat chỉ báo cáo `applied` khi quá trình tạo đó kết thúc với bằng chứng công cụ được máy chủ quan sát khớp với hợp đồng; văn bản do mô hình tạo ra không bao giờ được chấp nhận làm bằng chứng. Các lệnh phân phối `fire`, `steer` và `continue` không bị ràng buộc sẽ từ chối `expectedAction`.
+
+Các kết quả `fire` thành công bao gồm danh tính của cuộc trò chuyện và quá trình tạo mà một sự kiện `steer` sau đó có thể nhắm mục tiêu tới.
+
+### Các Child Agent dựa trên sự kiện (Event-Driven) [#event-driven-child-agents]
+
+Một hệ thống bên ngoài có thể liên kết một tác nhân nguồn (source actor) với một Agent con trực tiếp, sau đó tiếp tục cuộc hội thoại con đó xuyên suốt các sự kiện. Các phần tiếp nối của Agent con đã liên kết sẽ tự động diễn ra sau khi các bước kiểm tra về định danh API-key, quyền sở hữu liên kết, mối quan hệ cha-con và ủy quyền Agent thành công; không có tính năng bật/tắt riêng biệt nào cho việc này.
+
+Đăng ký actor với cùng khóa API sẽ thực hiện các lượt phản hồi sau đó của nó:
+
+```http
+POST /api/agents/v1/events/bindings
+Authorization: Bearer <REMOTE_AGENTS_API_KEY>
+Idempotency-Key: championship-7-player-hanae
+Content-Type: application/json
+
+{
+  "actorId": "hanae-kobayashi",
+  "parentConversationId": "director-conversation-id",
+  "parentMessageId": "director-message-id",
+  "target": { "agentId": "agent_hanae" }
+}
+```
+
+`actorId` có thể chứa tối đa 128 ký tự. Parent phải là một cuộc hội thoại Agent thông thường và target phải được cấu hình là một trong những Subagent trực tiếp của Agent đó hoặc một self-spawn được cho phép. Một binding mới sẽ trả về `201`; một lần phát lại idempotent sẽ trả về `200`. Cả hai phản hồi đều bao gồm `id`, `actorId`, `agentId` và `threadId`.
+
+Gửi các lượt tiếp theo với ID liên kết đã trả về:
+
+```http
+POST /api/agents/v1/events
+Authorization: Bearer <SAME_REMOTE_AGENTS_API_KEY>
+Idempotency-Key: game-12-ply-17-hanae
+Content-Type: application/json
+
+{
+  "mode": "continue",
+  "bindingId": "evtbind_...",
+  "event": {
+    "id": "game-12-ply-17",
+    "type": "chess.turn.ready",
+    "occurredAt": 1786968000000,
+    "payload": { "gameId": "game-12", "expectedPly": 17 }
+  },
+  "input": "Your clock is running. Read the position and submit one legal move.",
+  "expectedAction": {
+    "tool": "submit_move",
+    "arguments": { "gameId": "game-12" }
+  }
+}
+```
+
+LibreChat giải quyết Agent con, luồng, nhánh lá mới nhất và làn thứ tự từ liên kết ngay trước khi gửi đi. Các trường đích và thứ tự do người gọi cung cấp không thể chuyển hướng một sự tiếp nối đã được liên kết. `Idempotency-Key` của yêu cầu trở thành danh tính công khai ổn định cho lượt con đó trong suốt quá trình thử lại gửi, cho thuê tạo, tin nhắn được lưu trữ, hoạt động trực tiếp và việc tiếp tục HITL sau đó.
+
+Mỗi binding đều có một hộp thư bền vững tự động. Sự kiện tiếp theo của nó vẫn được xếp hàng đợi cho đến khi lượt hiện tại đạt trạng thái `applied`, `completed_no_action`, `failed` hoặc `cancelled`; các binding khác nhau vẫn độc lập và có thể chạy song song. Việc tiếp tục từ checkpoint chỉ được thử nghiệm đối với một lượt đã khởi tạo tương thích. Nếu checkpoint bị thiếu hoặc không thể khôi phục, LibreChat sẽ quay lại sử dụng lịch sử tin nhắn bền vững mà không làm suy yếu các kiểm tra về việc đã nhận, ủy quyền hoặc hành động dự kiến.
+
+Một bound actor có thể tạm dừng để chờ Ask User hoặc phê duyệt công cụ. LibreChat lưu giữ chính xác trạng thái tạm dừng đã ký trước khi hiển thị hành động đang chờ xử lý, và hộp thư của binding vẫn bị chặn cho đến khi cùng một actor invocation đó tiếp tục hoặc kết thúc. Event Actors yêu cầu checkpointer MongoDB bền vững; `type: memory` không tương thích. LibreChat đàm phán giao thức tạo v2 và tự động chọn checkpoint hoặc tiếp tục lịch sử. Các công việc theo giao thức v1 hiện có vẫn nằm trên đường dẫn durable-history cho đến khi hoàn tất. Xem [Generation Protocol Compatibility](/docs/configuration/redis#generation-protocol-compatibility) để biết các yêu cầu triển khai phiên bản hỗn hợp.
+
+### Hợp nhất các sự kiện quan sát [#coalescing-observational-events]
+
+Các nguồn có thể chứng minh rằng một số sự kiện `continue` bị ràng buộc là các quan sát có thể thay thế cho nhau có thể gán cho chúng cùng một `coalesce.key` do nguồn xác định:
+
+```json
+{
+  "mode": "continue",
+  "bindingId": "evtbind_...",
+  "event": {
+    "id": "championship-7-game-12-move-18",
+    "type": "chess.move.completed",
+    "occurredAt": 1786968000750,
+    "payload": { "gameId": "game-12", "ply": 18 }
+  },
+  "input": "A tournament game advanced.",
+  "coalesce": { "key": "championship-commentary" }
+}
+```
+
+LibreChat thu thập các sự kiện tương thích trong tối đa 750 ms, với tối đa 8 sự kiện và 512 KiB tổng các phong bì (envelopes). Child nhận được một tài liệu batch xác định, nhưng mỗi sự kiện nguồn vẫn giữ `Idempotency-Key`, bản ghi phân phối và biên nhận riêng của nó.
+
+Chỉ sử dụng coalescing cho các quan sát không cần hành động. Nó bị từ chối đối với `fire`, `steer`, `continue` không bị ràng buộc và các phân phối có `expectedAction`; không sử dụng nó cho các lệnh, phê duyệt, yêu cầu HITL, hàng rào (fences) hoặc các sự kiện mà thời điểm cụ thể của chúng là quan trọng.
+
+Trong cuộc hội thoại gốc đã xác thực, mỗi tác nhân được liên kết sẽ xuất hiện bên dưới tin nhắn gốc sở hữu nó. Bảng điều khiển Subagent có thể chuyển đổi giữa các tác nhân và các lượt hội thoại, tải hoạt động trước đó và mở rộng một lượt để hiển thị toàn bộ hoạt động được liên kết của nó. Chi tiết sự kiện bao gồm loại, nguồn, thời gian xảy ra và hành động dự kiến. Các bước chạy, công cụ, tin nhắn và các dấu hiệu suy luận có thể nhìn thấy được bao gồm mà không có văn bản suy luận thô. Chỉ mục gốc trả về tối đa 64 luồng con và 20 tác vụ gần đây cho mỗi luồng con từ một cửa sổ nguồn bị giới hạn, báo cáo việc cắt bớt thay vì ngụ ý sự đầy đủ và giới hạn phản hồi ở mức 96 KB. Nó được ủy quyền theo gốc, người dùng và đối tượng thuê; các liên kết, ID khóa nguồn, mã thông báo thuê và trạng thái worker không được bao gồm trong dự báo.
+
+Luồng con (child thread) vẫn bị ẩn khỏi điều hướng hội thoại thông thường và ở chế độ chỉ đọc đối với các tuyến trò chuyện của người dùng, kế thừa chính sách tạm thời hoặc hết hạn của luồng cha, và bị giới hạn ở một cấp con trực tiếp. Chỉ riêng ID liên kết (binding ID) không cấp quyền truy cập; các phần tiếp nối (continuations) được giới hạn trong phạm vi người dùng, đối tượng thuê (tenant) và API key đã tạo ra nó.
+
+### Các hành động của Detached Event Actor [#detached-event-actor-actions]
+
+Các lượt Event Actor có thể tách các Action đủ điều kiện và hoàn tất chúng một cách bền vững. Việc phân phối vẫn nằm trong vòng đời xử lý của nó trong khi Action đang chạy; bằng chứng kết thúc bền vững sẽ tiếp tục quá trình gọi actor đã ký ban đầu, và chỉ bằng chứng công cụ do máy chủ quan sát được mới có thể thỏa mãn `expectedAction`. Các bản phát lại và các bản sao cạnh tranh không thể khởi chạy cùng một Action đã đặt trước hai lần. Nếu LibreChat không thể xác định liệu một tác dụng phụ bên ngoài đã bắt đầu hay chưa, nó sẽ cách ly quá trình khởi chạy thay vì thử lại một cách mù quáng.
+
+LibreChat tự động kích hoạt công việc hoàn tất nội bộ này khi kho lưu trữ tạo (generation store) tích hợp được chọn thông báo hỗ trợ. Kho lưu trữ trong bộ nhớ (in-memory store) chạy các tác vụ khởi chạy, hoàn tất và tiếp tục trong cùng một tiến trình và không thể khôi phục công việc đó sau khi tiến trình thoát. Các luồng tạo Redis bổ sung khả năng khôi phục sau khi khởi động lại và chuyển giao bản sao một cách bền vững. Các bản ghi phân phối và khôi phục thuộc sở hữu của khả năng (capability-owned) vẫn không hiển thị với các trình yêu cầu (claimers) cũ hơn trong quá trình rút cạn phiên bản hỗn hợp; không có cờ nhà sản xuất do người vận hành quản lý.
+
 ## Theo dõi mức sử dụng Token [#token-usage-tracking]
 
-Tất cả các yêu cầu API của Agents đều theo dõi mức sử dụng token dựa trên số dư của người dùng (khi tính năng chi tiêu token được cấu hình). Cả token đầu vào và đầu ra đều được tính, bao gồm cả các token bộ nhớ đệm (cache tokens) đối với các nhà cung cấp hỗ trợ tính năng này (OpenAI, Anthropic).
+Tất cả các yêu cầu suy luận API của Agent đều theo dõi mức sử dụng token dựa trên số dư của người dùng khi cấu hình chi tiêu token được thiết lập. Cả phản hồi dạng streaming và không streaming đều tổng hợp mọi lệnh gọi model của Agent chính và Subagent được tính phí vào tổng số cấp cao nhất. Phản hồi cũng bao gồm bảng phân tích token `primary` và `subagent` không chứa thông tin định danh. Chi tiết về cache và token suy luận (reasoning-token) sẽ được bao gồm nếu nhà cung cấp báo cáo các thông tin đó.
 
 ## Lộ trình [#roadmap]
 
@@ -170,6 +310,8 @@ Tất cả các yêu cầu API của Agents đều theo dõi mức sử dụng t
 ## Tài liệu liên quan [#related-documentation]
 
 - [Agents](/docs/features/agents) — Tạo và cấu hình các agent
+- [Subagents](/docs/features/subagents) — Cấu hình các Agent con trực tiếp
+- [Cấu hình endpoint Agents](/docs/configuration/librechat_yaml/object_structure/agents) — Các thiết lập về runtime sự kiện và xác thực
 - [Cấu hình giao diện — remoteAgents](/docs/configuration/librechat_yaml/object_structure/interface#remoteagents) — Các thiết lập kiểm soát truy cập
 - [Token Usage](/docs/configuration/token_usage) — Cấu hình chi tiêu và số dư token
 - [Open Responses Specification](https://www.openresponses.org/) — Tiêu chuẩn suy luận mở

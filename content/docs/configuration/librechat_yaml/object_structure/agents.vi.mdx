@@ -12,6 +12,7 @@ endpoints:
   agents:
     recursionLimit: 50
     maxRecursionLimit: 100
+    maxSubagents: 20
     maxToolCallArgBytes: 65536
     maxDeltaEventsPerTurn: 100000
     maxToolCallArgBytesByTool:
@@ -29,9 +30,34 @@ endpoints:
     activityModel: gpt-4.1-nano
     activityPhaseLabel: true
     activityPhaseMaxPerRun: 5
-    maxSubagents: 10 # Maximum explicit subagents per agent (1-50)
     skills:
       maxCatalogSkills: 20
+    statefulCodeSessions:
+      allowedEnvironments: ['user', 'agent-user', 'conversation']
+      environments:
+        - id: managed-default
+          name: Managed Code API
+          type: managed
+          baseURL: https://code.example.com/v1
+          default: true
+        - id: engineering-vm
+          name: Engineering VM
+          type: attached
+          baseURL: https://code-bridge.example.com/v1
+          pairing:
+            workerId: engineering-vm
+            tokenEnv: CODE_BRIDGE_ADMIN_TOKEN
+        - id: personal-workers
+          name: Personal Code Workers
+          type: attached
+          baseURL: https://code-bridge.example.com/v1
+          pairing:
+            allowPrincipalWorkers: true
+            tokenEnv: CODE_BRIDGE_ADMIN_TOKEN
+    # eventDriven:
+    #   selfUrl: https://librechat.internal
+    backgroundTasks:
+      completionWakeups: true
     toolApproval:
       enabled: true
       mode: default
@@ -56,7 +82,7 @@ endpoints:
       'recursionLimit',
       'Number',
       'Thiết lập số bước mặc định mà một agent có thể thực hiện trong một lần chạy.',
-      'Controls recursion depth to prevent infinite loops. When limit is reached, raises GraphRecursionError. This value can be configured from the UI up to the maxRecursionLimit.',
+      'Controls recursion depth to prevent infinite loops. When the limit is reached, LibreChat preserves the partial turn and offers Keep going or Answer now. This value can be configured from the UI up to maxRecursionLimit.',
     ],
   ]}
 />
@@ -242,7 +268,9 @@ allowedProviders:
 
 **Mặc định:** `["deferred_tools", "execute_code", "file_search", "web_search", "artifacts", "subagents", "actions", "context", "skills", "memory", "ask_user_question", "tools", "chain", "ocr"]`
 
-`programmatic_tools`, `stateful_code_sessions`, `run_in_background`, và `tool_intents` là các tính năng tùy chọn (opt-in) và phải được thêm một cách rõ ràng. Các công cụ lập trình (programmatic tools) và phiên làm việc có trạng thái (stateful sessions) cũng yêu cầu `execute_code` và một triển khai Code Interpreter tương thích. Việc thực thi mã trong nền (background code execution) yêu cầu `run_in_background`, `execute_code` và Code Interpreter.
+`programmatic_tools`, `stateful_code_sessions`, `run_in_background`, và `tool_intents` là các tính năng tùy chọn và phải được thêm một cách rõ ràng. Các công cụ lập trình (programmatic tools) và phiên làm việc có trạng thái (stateful sessions) cũng yêu cầu `execute_code` và một triển khai Code Interpreter tương thích. Agent Builder sẽ vô hiệu hóa các lựa chọn MCP lập trình nếu không có Code Interpreter, và máy chủ sẽ loại bỏ các tùy chọn gọi lập trình cũ khi tính năng thực thi mã không khả dụng. `run_in_background` giúp các công cụ Code Interpreter đủ điều kiện theo mặc định và cho phép tùy chọn chọn tham gia cho từng công cụ đối với các công cụ MCP, Plugin và Action đủ điều kiện; việc thực thi mã trong nền cũng yêu cầu `execute_code` và Code Interpreter.
+
+`stateful_code_sessions` hiện đang ở giai đoạn thử nghiệm cao. Tính năng này yêu cầu một tuyến đường Code Interpreter có cấu hình `stateful`-profile riêng biệt thông qua [`LIBRECHAT_CODE_BASEURL_STATEFUL`](/docs/configuration/dotenv#stateful-code-interpreter-endpoint) hoặc [`statefulCodeSessions.environments`](#statefulcodesessions). Các yêu cầu stateful sẽ thất bại thay vì tự động chuyển sang dịch vụ stateless thông thường. Trong Agent Builder, mỗi Agent được kích hoạt sẽ chọn phạm vi không gian làm việc là user, agent-and-user, hoặc conversation và, khi các backend được đặt tên được cấu hình, sẽ chọn một môi trường thực thi. Các Agent mới bắt đầu với phạm vi mặc định cá nhân của người dùng và môi trường thực thi mặc định của bản triển khai.
 
 **Ví dụ:**
 
@@ -265,9 +293,11 @@ capabilities:
   - 'tools'
   - 'chain'
   - 'ocr'
-  # Optional: reuse one Code Interpreter workspace per conversation.
+  # Optional and highly experimental: reuse a user-, agent-and-user-, or
+  # conversation-scoped workspace. Requires LIBRECHAT_CODE_BASEURL_STATEFUL
+  # or a named statefulCodeSessions environment.
   # - 'stateful_code_sessions'
-  # Optional: allow selected eligible MCP and Code Interpreter tools to run as background tasks.
+  # Optional: allow eligible Code Interpreter, MCP, Plugin, and Action tools to run as background tasks.
   # - 'run_in_background'
   # Optional: show live model-written intent labels for native and selected MCP tools.
   # - 'tool_intents'
@@ -275,13 +305,152 @@ capabilities:
 
 **Lưu ý:** Trường này là tùy chọn. Nếu bỏ qua, hành vi mặc định là bao gồm tất cả các khả năng được liệt kê trong phần mặc định.
 
-## toolApproval
+## statefulCodeSessions
 
-Kiểm soát việc con người xem xét các lệnh gọi công cụ của Agent. Tính năng này bị vô hiệu hóa theo mặc định. Khi được bật, các lệnh gọi khớp sẽ tạm dừng cho đến khi người dùng gửi quyết định cho phép, chẳng hạn như phê duyệt, từ chối hoặc chỉnh sửa các đối số.
+Cấu hình phạm vi chia sẻ và các backend thực thi tùy chọn cho các không gian làm việc Code Interpreter có trạng thái mang tính thử nghiệm cao.
+
+<Callout type="warning" title="Rất thử nghiệm">
+  Stateful Code Sessions, các môi trường thực thi được đặt tên, worker đính kèm và tính năng ghép nối đang trong giai đoạn thử nghiệm sớm. Hành vi, cấu hình, đặc điểm duy trì và giao thức tích hợp của chúng có thể thay đổi đáng kể.
+</Callout>
 
 <OptionTable
   options={[
-    ['enabled', 'Boolean', 'Cho phép phê duyệt công cụ cho endpoint Agents.', 'false'],
+    [
+      'allowedEnvironments',
+      'Array/List of Strings',
+      'Các phạm vi workspace có trạng thái được cho phép: `user`, `agent-user`, và/hoặc `conversation`.',
+      '["user", "agent-user", "cuộc trò chuyện"]',
+    ],
+    [
+      'environments',
+      'Array of Objects',
+      'Các môi trường Code API được quản lý hoặc đính kèm có tên tùy chọn hiển thị trong Agent Builder.',
+      'Unset; LIBRECHAT_CODE_BASEURL_STATEFUL remains the stateful endpoint',
+    ],
+  ]}
+/>
+
+```yaml filename="endpoints / agents / statefulCodeSessions"
+statefulCodeSessions:
+  allowedEnvironments:
+    - 'user'
+    - 'agent-user'
+    - 'conversation'
+  environments:
+    - id: managed-default
+      name: Managed Code API
+      type: managed
+      baseURL: https://code.example.com/v1
+      default: true
+    - id: engineering-vm
+      name: Engineering VM
+      type: attached
+      baseURL: https://code-bridge.example.com/v1
+      owner: deployment
+      pairing:
+        workerId: engineering-vm
+        tokenEnv: CODE_BRIDGE_ADMIN_TOKEN
+    - id: personal-workers
+      name: Personal Code Workers
+      type: attached
+      baseURL: https://code-bridge.example.com/v1
+      owner: deployment
+      configSchema:
+        permissions:
+          fileWrite:
+            allowed: [allow, ask, deny]
+            default: ask
+          commandExecution:
+            allowed: [ask, deny]
+            default: ask
+      pairing:
+        allowPrincipalWorkers: true
+        tokenEnv: CODE_BRIDGE_ADMIN_TOKEN
+```
+
+`allowedEnvironments` là bắt buộc bất cứ khi nào khối này xuất hiện và phải bao gồm ít nhất một phạm vi workspace. Hãy bỏ qua toàn bộ khối này để cho phép cả ba phạm vi và tiếp tục định tuyến công việc có trạng thái thông qua [`LIBRECHAT_CODE_BASEURL_STATEFUL`](/docs/configuration/dotenv#stateful-code-interpreter-endpoint). Mặc định cá nhân và Agent Builder chỉ cho phép các giá trị được cho phép. Nếu quản trị viên thắt chặt chính sách, mặc định cá nhân đã lưu vẫn hiển thị nhưng bị vô hiệu hóa, và các Agent mới sẽ sử dụng phạm vi được cho phép đầu tiên. Các Agent đã được kích hoạt hiện có vẫn giữ nguyên phạm vi đã lưu của chúng, nhưng một phạm vi không còn được cho phép sẽ bị chặn tại thời điểm chạy cho đến khi Agent được cấu hình lại.
+
+Khi `environments` không trống, mỗi mục nhập yêu cầu một `id` duy nhất, một `name` hiển thị, một `type` là `managed` hoặc `attached`, và một `baseURL` HTTP(S) không chứa chuỗi truy vấn hoặc đoạn mã (fragment). Nếu danh sách chứa các môi trường có thể thực thi, chính xác một trong các mục nhập đó phải đặt `default: true`. Agent Builder sau đó sẽ thêm bộ chọn **Execution environment**; việc để ở chế độ **Deployment default** sẽ sử dụng mục nhập mặc định đó. Một danh sách chỉ chứa các control plane ghép nối tự phục vụ (self-service pairing) thì không cần mặc định. Một Agent chỉ định một môi trường sau đó bị xóa hoặc không còn truy cập được sẽ thất bại ở trạng thái đóng (fails closed) thay vì chuyển sang một backend khác.
+
+- `managed` trỏ trực tiếp đến một Code API có trạng thái do operator quản lý.
+- `attached` trỏ đến một backend `remote-bridge` của Code API tương thích, thực hiện cấp phát công việc cho một worker `@librechat/code` gửi đi. Worker này không yêu cầu cổng công khai gửi đến, nhưng endpoint thực thi cục bộ của nó vẫn cần sự cô lập thích hợp.
+- `workerId` tùy chọn định tuyến một môi trường được đính kèm đến một worker gửi đi. Nó chỉ dành cho máy chủ và không được hiển thị thông qua cấu hình khởi động của client.
+- `owner` mặc định là `deployment`. Các môi trường do chủ sở hữu quản lý được tạo thông qua Code Environments API đã xác thực của LibreChat, được bảo vệ bởi ACL và chỉ được hợp nhất cho các yêu cầu được ủy quyền; không đặt các URL do khách hàng cung cấp vào tệp deployment YAML.
+- `pairing` là tùy chọn và chỉ hợp lệ cho các mục `attached` thuộc quyền sở hữu của quá trình triển khai. `pairing.workerId` xác định một worker do người vận hành quản lý để đăng ký, trong khi `pairing.allowPrincipalWorkers: true` cho phép người dùng được ủy quyền đăng ký các worker bị ràng buộc với chủ sở hữu vào control plane đó. Ít nhất một trong các trường này là bắt buộc khi `pairing` xuất hiện.
+- `pairing.tokenEnv` đặt tên cho biến môi trường chứa mã thông báo quản trị viên bridge; nó không bao giờ chứa chính mã thông báo đó. Việc ghép nối yêu cầu HTTPS ngoại trừ đối với quá trình phát triển loopback.
+- `configSchema.permissions` cho phép tùy chọn các chủ sở hữu được ủy quyền chọn chính sách `fileWrite` và `commandExecution` cho các môi trường cá nhân trong **Settings > Code environments**. Mỗi trường yêu cầu một danh sách `allowed` không trống chứa `allow`, `ask` và/hoặc `deny`; `default` sẽ là `ask` khi bị bỏ qua và phải xuất hiện trong `allowed`. LibreChat sẽ từ chối các giá trị được lưu trữ nằm ngoài danh sách của quản trị viên.
+- Không cấu hình `settings` trong YAML triển khai. LibreChat cung cấp trường có phạm vi yêu cầu đó từ các tùy chọn ưu tiên đã được máy chủ xác thực của chủ sở hữu.
+- Chỉ có chính sách ghi tệp và thực thi lệnh là người dùng có thể cấu hình. Các thiết lập về cô lập, mạng, mount, thực thi đặc quyền, ingress, egress và secrets vẫn do quản trị viên kiểm soát.
+- Nếu cả `workerId` cấp cao nhất và `pairing.workerId` đều hiện diện, chúng phải khớp nhau. Một mục có `allowPrincipalWorkers: true` và không có worker ID nào là chỉ dành cho ghép nối (pairing-only): nó sẽ bị loại khỏi các bộ chọn thực thi và không thể đặt `default: true`.
+
+Thực thi đính kèm tự động kích hoạt cơ sở phê duyệt an toàn: các thao tác ghi tệp và thực thi lệnh hoặc mã sẽ yêu cầu xác nhận, trong khi các thao tác chỉ đọc và tìm kiếm vẫn tiếp tục theo chính sách công cụ thông thường. Cơ sở này được giới hạn phạm vi cho Agent sử dụng môi trường đính kèm. Nếu không có cài đặt người dùng nào khả dụng, LibreChat sẽ sử dụng `ask`; [`toolApproval.enabled: false`](#toolapproval) là ghi đè khẩn cấp của quản trị viên giúp vô hiệu hóa cơ sở môi trường đính kèm này. Các trình gọi không có hỗ trợ phê duyệt và tiếp tục sẽ bị từ chối trừ khi ghi đè rõ ràng đó được thiết lập.
+
+Việc thực thi đính kèm yêu cầu một bản dựng experimental Code Interpreter remote-bridge tương ứng. Việc ghép nối sẽ xác thực kết nối worker gửi đi; nó không thay thế sandbox hoặc cách ly VM. Người dùng có quyền quản lý Code Environment sẽ thực hiện ghép nối, định cấu hình chính sách công cụ được phép và thu hồi các worker cá nhân trong **Settings > Code environments**. Xem [Stateful Code Sessions](/docs/features/code_interpreter#stateful-code-sessions).
+
+## eventDriven
+
+Cấu hình nguồn gốc nội bộ đáng tin cậy được sử dụng bởi quá trình phân phối sự kiện Agent. Hầu hết các bản triển khai nên bỏ qua khối này và sử dụng trình lắng nghe (listener) được liên kết của tiến trình hiện tại.
+
+<OptionTable
+  options={[
+    [
+      'selfUrl',
+      'URL',
+      'Ghi đè trình lắng nghe bị ràng buộc với tiến trình hiện tại cho việc chấp nhận kích hoạt nội bộ đáng tin cậy. Chỉ sử dụng khi việc phân phối phải đi qua một nguồn gốc HTTP đáng tin cậy khác.',
+      '',
+    ],
+  ]}
+/>
+
+```yaml filename="endpoints / agents / eventDriven"
+endpoints:
+  agents:
+    eventDriven:
+      selfUrl: https://librechat.internal
+```
+
+Các phần tiếp nối con (child continuations) được liên kết là tự động. Các trường cũ `childTurns`, `completionWakeups`, `coalescing`, `actorMailbox`, `checkpointForks` và `durableReceipts` trong `eventDriven` không còn là các tùy chọn cấu hình và nên được loại bỏ. Runtime hiện áp dụng trực tiếp các đảm bảo phân phối đó. Trường riêng biệt [`backgroundTasks.completionWakeups`](#backgroundtasks) kiểm soát việc phân phối hội thoại cho các công cụ nền đã hoàn thành và các Subagent tách rời.
+
+Để `selfUrl` ở trạng thái không thiết lập cho đường dẫn bound-listener thông thường. Chỉ thiết lập nó khi việc tiếp nhận trigger nội bộ đáng tin cậy phải đi qua một origin HTTP(S) khác, chẳng hạn như TLS front door. `AGENT_TRIGGERS_SELF_URL` vẫn là phương án dự phòng tương thích khi trường này bị bỏ qua. Xem [Agents API events](/docs/features/agents_api#agent-events) và [Automatic Parent Continuation](/docs/features/subagents#automatic-parent-continuation).
+
+Event Actor detached Action completion được chọn tự động từ kho lưu trữ generation tích hợp sẵn. Việc thực thi trong bộ nhớ (in-memory) là cục bộ theo tiến trình; các luồng generation của Redis bổ sung khả năng khôi phục sau khi khởi động lại và chuyển giao bản sao một cách bền vững. Không cần chuyển đổi `librechat.yaml` hoặc cờ tính năng môi trường. Xem [Agent Event Runtime](/docs/configuration/dotenv#agent-event-runtime).
+
+## backgroundTasks
+
+Kiểm soát việc liệu các công cụ nền đã hoàn thành được hỗ trợ và các Subagent tách rời có tự động tiếp tục chạy Agent cha đã lưu của chúng hay không.
+
+<OptionTable
+  options={[
+    [
+      'completionWakeups',
+      'Boolean',
+      'Tự động gửi các hoàn thành tác vụ nền được hỗ trợ dưới dạng tiếp nối. Đặt thành false để chỉ sử dụng hành vi thăm dò (poll-only).',
+      'true',
+    ],
+  ]}
+/>
+
+```yaml filename="endpoints / agents / backgroundTasks"
+backgroundTasks:
+  completionWakeups: true
+```
+
+Tính năng phân phối hoàn tất tự động được bật ngay cả khi khối này bị bỏ qua. Hãy đặt `completionWakeups: false` để yêu cầu Agent thu thập mọi kết quả thông qua `check_background_task`.
+
+Việc thực thi công cụ nền thông thường vẫn nằm trong phạm vi tiến trình cục bộ và sẽ không tồn tại sau khi tiến trình worker bị mất. Khi một kết quả terminal chỉ chứa nội dung đã được lưu trữ, việc phân phối kết quả đó sẽ bền vững và có thể tiếp tục trên một bản sao khác. Các tác vụ có artifact trực tiếp vẫn yêu cầu thăm dò (polling) trên run sở hữu. Các Subagent tách rời (Detached Subagents) giữ lại bản ghi bền vững và đường dẫn kết quả terminal riêng biệt của chúng. Việc thăm dò thủ công vẫn khả dụng cho trạng thái, điều khiển và khôi phục ở cả hai chế độ. Xem [Background Tool Calls](/docs/features/agents#background-tool-calls) và [Automatic Parent Continuation](/docs/features/subagents#automatic-parent-continuation).
+
+## toolApproval
+
+Kiểm soát việc con người xem xét các lệnh gọi công cụ của Agent. Chính sách trên toàn bộ quá trình triển khai sẽ bị vô hiệu hóa khi khối này bị lược bỏ. Một Agent sử dụng môi trường Code đính kèm là trường hợp ngoại lệ: LibreChat kích hoạt chính sách an toàn mặc định theo phạm vi trừ khi quản trị viên đặt `enabled: false` một cách rõ ràng. Khi việc xem xét được áp dụng, các lệnh gọi khớp với điều kiện sẽ tạm dừng cho đến khi người dùng gửi quyết định cho phép, chẳng hạn như phê duyệt, từ chối hoặc chỉnh sửa các đối số.
+
+<OptionTable
+  options={[
+    [
+      'enabled',
+      'Boolean',
+      'Cho phép phê duyệt công cụ trên toàn bộ quá trình triển khai. Giá trị false rõ ràng cũng sẽ vô hiệu hóa cơ sở an toàn của môi trường Code đính kèm.',
+      'Omitted',
+    ],
     [
       'mode',
       'String',
@@ -306,7 +475,7 @@ Kiểm soát việc con người xem xét các lệnh gọi công cụ của Age
   ]}
 />
 
-Các mẫu sử dụng đối sánh glob. Các công cụ MCP có thể được giới hạn phạm vi bằng `mcp:<server>:<tool>`; ví dụ: `mcp:github:*` khớp với mọi công cụ từ máy chủ `github`. Việc đánh giá ưu tiên `deny` cao nhất, bao gồm cả ở chế độ `bypass`.
+Các mẫu sử dụng đối sánh glob. Các công cụ MCP có thể được giới hạn phạm vi bằng `mcp:<server>:<tool>`; ví dụ: `mcp:github:*` khớp với mọi công cụ từ máy chủ `github`. LibreChat áp dụng các quy tắc tĩnh và trình khớp hook cho tên thời gian chạy MCP và các bí danh hướng mô hình, bao gồm cả các công cụ có thể truy cập thông qua Subagents lồng nhau. Các quy tắc tĩnh được đánh giá theo thứ tự `deny`, `ask`, sau đó là `allow` trước khi chế độ đã chọn cung cấp dự phòng. Do đó, quy tắc từ chối (deny) luôn được ưu tiên, kể cả trong chế độ `bypass`.
 
 ```yaml filename="endpoints / agents / toolApproval"
 toolApproval:
@@ -554,7 +723,7 @@ Trường `capabilities` cho phép bạn bật hoặc tắt các chức năng c�
 - **deferred_tools**: Cho phép các agent khám phá các MCP tool bị trì hoãn (deferred) tại thời điểm chạy thay vì tải mọi tool vào ngữ cảnh ngay từ đầu.
 - **programmatic_tools**: Cho phép Gọi Công cụ Lập trình (Programmatic Tool Calling) đối với các công cụ MCP được đánh dấu là Programmatic trong Agent Builder. Yêu cầu `execute_code` và một triển khai Code Interpreter với thành phần Tool Call Server. Tính năng này là tùy chọn và không được bật theo mặc định.
 - **execute_code**: Cho phép tác nhân (agent) thực thi mã.
-- **stateful_code_sessions**: Cho phép các agent đã chọn sử dụng lại một không gian làm việc Code Interpreter cho mỗi cuộc trò chuyện. Yêu cầu `execute_code`, một triển khai Code Interpreter tương thích và cài đặt Advanced cho từng agent. Tính năng này mang tính thử nghiệm cao, không được bật theo mặc định và có thể thay đổi đáng kể trong quá trình thử nghiệm; đừng coi hành vi hoặc cấu hình hiện tại của nó là một hợp đồng sản xuất ổn định.
+- **stateful_code_sessions**: Cho phép các agent đã chọn tham gia sử dụng lại một workspace Code Interpreter theo phạm vi người dùng, agent-và-người dùng, hoặc cuộc hội thoại. Yêu cầu `execute_code`, một triển khai Code Interpreter tương thích và cài đặt Advanced cho từng agent. Các Agent mới sử dụng phạm vi ưu tiên của người dùng đã đăng nhập. Tính năng này mang tính thử nghiệm cao, không được bật theo mặc định và có thể thay đổi đáng kể trong quá trình thử nghiệm; đừng coi hành vi hoặc cấu hình hiện tại của nó là một hợp đồng sản xuất ổn định.
 - **file_search**: Cho phép agent tìm kiếm và tương tác với các tệp tin. Khi được bật, hành vi trích dẫn sẽ được kiểm soát bởi các cài đặt `maxCitations`, `maxCitationsPerFile` và `minRelevanceScore`.
 - **web_search**: Kích hoạt chức năng tìm kiếm web cho các tác nhân (agents), cho phép chúng tìm kiếm và truy xuất thông tin từ internet.
 - **artifacts**: Cho phép tác nhân tạo ra các artifacts tương tác (các thành phần React, HTML, sơ đồ Mermaid).
@@ -567,7 +736,7 @@ Trường `capabilities` cho phép bạn bật hoặc tắt các chức năng c�
 - **tools**: Cấp cho tác nhân quyền truy cập vào các công cụ khác nhau.
 - **chain**: Kích hoạt tính năng Beta cho việc tạo chuỗi tác nhân (agent chaining), còn được gọi là quy trình làm việc Mixture-of-Agents (MoA).
 - **ocr**: Tùy chọn nâng cao tính năng "Tải lên dưới dạng văn bản" (Upload as Text) trong trò chuyện và "Ngữ cảnh tệp" (File Context) cho các tác nhân (agents), cho phép tải tệp lên và xử lý bằng OCR. **Yêu cầu phải cấu hình một dịch vụ OCR.**
-- **run_in_background**: Cho phép thực thi Code Interpreter và các công cụ shell chạy ngầm theo mặc định và kích hoạt tùy chọn chạy ngầm cho từng công cụ MCP. Một agent có thể chủ động từ chối Code Interpreter. Cài đặt này cho phép thực thi chạy ngầm; mô hình sẽ quyết định cho mỗi lần gọi xem có sử dụng tính năng này hay không. Yêu cầu `execute_code` và một triển khai Code Interpreter đã được cấu hình cho mã nguồn. Khả năng này không được bật theo mặc định.
+- **run_in_background**: Cho phép thực thi Code Interpreter và các công cụ shell chạy ngầm theo mặc định, đồng thời kích hoạt tùy chọn chạy ngầm cho từng công cụ đối với các công cụ MCP, Plugin và Action đủ điều kiện. Một công tắc ở cấp độ Action sẽ chọn tham gia cho mọi thao tác đủ điều kiện; các OAuth Action và các thao tác đã xác định tham số `run_in_background` sẽ bị loại trừ. Một tác nhân (agent) có thể chọn không sử dụng Code Interpreter một cách rõ ràng. Cài đặt này cho phép thực thi ngầm; mô hình sẽ quyết định việc có sử dụng tính năng này hay không cho mỗi lần gọi. Yêu cầu `execute_code` và một triển khai Code Interpreter đã được cấu hình cho mã nguồn. Khả năng này không được bật theo mặc định.
 - **tool_intents**: Thêm các nhãn ý định (intent labels) do mô hình viết trực tiếp vào các lệnh gọi công cụ đủ điều kiện. Các công cụ gốc, bao gồm cả công cụ Code Interpreter, sẽ tự động tham gia; các công cụ MCP có thể được bật riêng lẻ hoặc hàng loạt trong Agent Builder. Model specs sử dụng `describeIntent`. Tính năng này không được bật theo mặc định.
 
 Bằng cách chỉ định các capabilities, bạn có thể kiểm soát các tính năng khả dụng cho người dùng khi tương tác với các agent.
@@ -589,7 +758,7 @@ endpoints:
       # Optional: enables Programmatic Tool Calling for MCP tools marked Programmatic in the Agent Builder.
       # - 'programmatic_tools'
       - 'execute_code'
-      # Optional: makes Code Interpreter background-eligible and enables selected MCP tools.
+      # Optional: makes Code Interpreter background-eligible and enables selected MCP, Plugin, and Action tools.
       # - 'run_in_background'
       # Optional: enables live intent labels for native and selected MCP tools.
       # - 'tool_intents'
@@ -610,7 +779,7 @@ Trong ví dụ này:
 - Chỉ các nguồn có độ liên quan từ 60% trở lên mới được bao gồm
 - Các Agent của LibreChat có quyền truy cập vào thực thi mã, tìm kiếm tệp (có trích dẫn), Skills, Subagents, actions, artifacts, ngữ cảnh tệp, các dịch vụ ocr nếu được cấu hình và khả năng tìm kiếm web.
 - Programmatic Tool Calling vẫn bị vô hiệu hóa trừ khi bạn thêm khả năng `programmatic_tools` cùng với `execute_code`
-- Các lệnh gọi công cụ trong nền vẫn bị vô hiệu hóa trừ khi bạn thêm `run_in_background`; các công cụ Code Interpreter sau đó sẽ mặc định đủ điều kiện, trong khi các công cụ MCP vẫn yêu cầu phải chọn từng công cụ một.
+- Các lệnh gọi công cụ trong nền vẫn bị vô hiệu hóa trừ khi bạn thêm `run_in_background`; các công cụ Code Interpreter sau đó sẽ mặc định trở nên đủ điều kiện, trong khi các công cụ MCP, Plugin và Action đủ điều kiện vẫn yêu cầu phải được chọn.
 - Các nhãn ý định công cụ (tool intent labels) vẫn bị vô hiệu hóa trừ khi bạn thêm `tool_intents`; các công cụ gốc (native tools) sau đó sẽ tự động chọn tham gia, trong khi các công cụ MCP vẫn yêu cầu lựa chọn cho từng công cụ.
 
 ## remoteApi
@@ -748,6 +917,12 @@ Trường `subagents` kiểm soát các tác nhân con biệt lập mà một t�
       'Các agent cụ thể mà agent này có thể tạo ra. Được giới hạn bởi `maxSubagents`, mặc định là 10.',
       'agent_ids: ["agent_researcher"]',
     ],
+    [
+      'graphs',
+      'Array of Objects',
+      'Các nhóm Agent đã lưu có thể chạy như một đồ thị con biệt lập. Danh sách này được giới hạn bởi `maxSubagents` (mặc định: 10); mỗi nhóm có thể chứa tối đa 32 thành viên.',
+      '',
+    ],
   ]}
 />
 
@@ -759,6 +934,8 @@ subagents:
     - 'agent_researcher'
     - 'agent_reviewer'
 ```
+
+Mỗi mục `graphs` yêu cầu một `type`, `name`, `description`, `agent_ids`, `edges` trực tiếp, `entry_agent_id` và `result_agent_id` duy nhất. Các định nghĩa nhóm phải tạo thành một đồ thị có hướng không chu trình (DAG) được kết nối, mọi thành viên phải hiển thị với người dùng và tổng cấu hình bị giới hạn ở 50 mục tiêu Agent duy nhất và 100 cấu hình chạy mở rộng. Xem [ví dụ về saved-team và hành vi thời gian chạy](/docs/features/subagents#configure-an-agent).
 
 Để biết về hành vi và giới hạn đối với người dùng, hãy xem [Subagents](/docs/features/subagents).
 

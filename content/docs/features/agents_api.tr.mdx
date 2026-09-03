@@ -2,24 +2,25 @@
 title: Agents API (Beta)
 icon: Plug
 description: >-
-  LibreChat aracılarına OpenAI uyumlu ve Open Responses API endpoint'leri
-  aracılığıyla programatik olarak erişin
+  LibreChat ajanlarını çalıştırın ve programatik API'ler aracılığıyla kimliği
+  doğrulanmış etkinlikler sunun
 ---
 
 <Callout type="warning" title="Beta Özelliği">
 Agents API şu anda beta aşamasındadır. Kararlı bir sürüme doğru ilerlerken endpoint'ler, istek/yanıt formatları ve davranışlar değişebilir.
 </Callout>
 
-LibreChat, ajanlarınızı iki adet API uyumlu arayüz üzerinden sunarak harici uygulamaların, betiklerin ve servislerin ajanlarınızla programatik olarak etkileşime girmesine olanak tanır.
+LibreChat, çıkarım (inference) ve olay iletimi (event-delivery) API'leri aracılığıyla ajanları harici uygulamalara, betiklere ve servislere açar.
 
 ## Genel Bakış [#overview]
 
-Agents API iki arayüz sunar:
+Agents API, iki çıkarım arayüzü ve kimlik doğrulamalı olay teslimi sağlar:
 
 - **OpenAI ile uyumlu Chat Completions** — `POST /api/agents/v1/chat/completions`
 - **Open Responses API** — `POST /api/agents/v1/responses`
+- **Ajan Etkinlikleri** — `POST /api/agents/v1/events`
 
-Her ikisi de API anahtarları aracılığıyla doğrulanır ve yanıt akışını (streaming) destekler; bu da LibreChat aracılarını, halihazırda OpenAI SDK'lerini veya benzer araçları kullanan mevcut iş akışlarına entegre etmeyi kolaylaştırır.
+Çıkarım arayüzleri, API anahtarı kimlik doğrulamasını, isteğe bağlı OIDC kimlik doğrulamasını ve akış yanıtlarını destekler. Agent Events, LibreChat'in her teslimatı kararlı bir kaynak kimliğine bağlayabilmesi için Remote Agents API anahtarı kimlik doğrulamasını kullanır.
 
 LibreChat, ajanlara hizmet vermek için birincil API çerçevesi olarak [Open Responses](https://www.openresponses.org/) sistemini benimsiyor. Chat Completions endpoint'i, mevcut OpenAI uyumlu araçlarla geriye dönük uyumluluk sağlasa da, Open Responses endpoint'i gelecekteki yönü temsil etmektedir.
 
@@ -88,6 +89,10 @@ curl -X POST https://your-librechat-instance/api/agents/v1/responses \
 </Callout>
 
 Tüm yapılandırma seçenekleri için [Agents Endpoint - remoteApi](/docs/configuration/librechat_yaml/object_structure/agents#remoteapi) bölümüne bakın.
+
+<Callout type="warning" title="Agent Events bir API anahtarı gerektirir">
+  Yalnızca OIDC kimlik doğrulaması, Agent Events uç noktaları için desteklenmemektedir. Bağlamalar oluştururken, olayları kuyruğa alırken ve teslimat durumunu sorgularken bir Remote Agents API anahtarı kullanın.
+</Callout>
 
 ## Endpoints [#endpoints]
 
@@ -158,9 +163,144 @@ curl -X POST https://your-librechat-instance/api/agents/v1/responses \
   }'
 ```
 
+## Agent Events [#agent-events]
+
+Agent Events, kimliği doğrulanmış bir denetleyicinin veya kaynak bağdaştırıcısının bir Agent'a kalıcı iş iletmesini sağlar. Event teslimi beta aşamasında bir özelliktir ve istek, yanıt ve çalışma zamanı davranışı değişebilir.
+
+Uç noktalar (endpoints) kimliği doğrulanmış kullanıcıyı, kiracıyı (tenant) ve API anahtarını kullanır; hedef Agent, mevcut Remote Agents izinleri kapsamında o kullanıcı tarafından görülebilir olmalıdır. Agent Event istekleri ayrıca özel [`rateLimits.agentEvents`](/docs/configuration/librechat_yaml/object_structure/config#ratelimits) havuzunu kullanır.
+
+### Bir Etkinlik Sunun [#deliver-an-event]
+
+```http
+POST /api/agents/v1/events
+Authorization: Bearer <REMOTE_AGENTS_API_KEY>
+Idempotency-Key: webhook-42-resource-7
+Content-Type: application/json
+
+{
+  "mode": "fire",
+  "event": {
+    "id": "resource-7-ready-3",
+    "type": "resource.ready",
+    "occurredAt": 1786967999000,
+    "payload": { "resourceId": "resource-7" }
+  },
+  "target": { "agentId": "agent_abc123" },
+  "input": "Resource resource-7 is ready. Inspect it and report the result.",
+  "orderingKey": "resource-7"
+}
+```
+
+Tam olarak bir `Idempotency-Key` başlığı gönderin ve aynı kaynak-olay-hedef teslimatını yeniden denerken bunu tekrar kullanın. Anahtar 1-256 arası harf, rakam veya `._~:/+=-` karakterlerini içermelidir. Farklı teslimat içeriğiyle bir anahtarın yeniden kullanılması çakışma döndürür.
+
+Arayan taraf `id`, `type`, `occurredAt` ve temizlenmiş `payload` değerlerini sağlar. LibreChat, arayan tarafın sağladığı tüm `event.source` değerlerini kimliği doğrulanmış API anahtarı kimliğiyle değiştirir ve kullanıcıyı, kiracıyı, istek kimliğini ve alınma zamanını türetir. Kabul edilen teslimatlar kalıcı hale getirildiğinden, etkinlik yüklerine (payloads) kimlik bilgileri veya taşıma sırları yerleştirmeyin.
+
+`orderingKey` isteğe bağlıdır. Farklı kaynaklardan gelen teslimatların aynı kaynak için sıralı kalması gerektiğinde sabit bir değer kullanın.
+
+Başarılı bir istek `202 Accepted` yanıtını, opak bir teslimat `id` değerini, mevcut durumunu ve bir `Location` başlığını döndürür. Bu konumu sorgulayın:
+
+```http
+GET /api/agents/v1/events/{delivery_id}
+Authorization: Bearer <SAME_REMOTE_AGENTS_API_KEY>
+```
+
+Teslimat `pending`, `leased`, `succeeded` veya `dead` durumunda olabilir. Durum yanıtı, denemeleri ve zaman damgalarını, ayrıca sonuçlandığında bir sonucu veya genel bir hatayı içerir; depolanan yükü, sıralama anahtarını, yeniden deneme geçmişini veya çalışan kimliğini açığa çıkarmaz. Durum erişimi aynı kullanıcı, kiracı ve API anahtarı kaynağı ile sınırlandırılmıştır.
+
+Bağlı bir `continue` için `succeeded`, istenen işin bittiği anlamına değil, Ajan turunun kabul edildiği anlamına gelir. Bu nedenle durumu, kalıcı bir `handling` yaşam döngüsünü de açığa çıkarır: `started` ve ardından `applied`, `completed_no_action`, `failed` veya `cancelled` durumlarından tam olarak biri.
+
+Eylem farkındalığına sahip kaynaklar, bir araç adı ve isteğe bağlı bağımsız değişken alt kümesi içeren bir `expectedAction` içerebilir. LibreChat, `applied` durumunu yalnızca o tam üretim, ana bilgisayar tarafından gözlemlenen ve sözleşmeyle eşleşen araç kanıtlarıyla tamamlandığında bildirir; model tarafından oluşturulan metinler asla kanıt olarak kabul edilmez. `fire`, `steer` ve sınırsız `continue` teslimleri `expectedAction` öğesini reddeder.
+
+Başarılı `fire` sonuçları, daha sonraki bir `steer` etkinliğinin hedefleyebileceği konuşma ve üretim kimliğini içerir.
+
+### Olay Güdümlü Alt Temsilciler (Event-Driven Child Agents) [#event-driven-child-agents]
+
+Harici bir sistem, bir kaynak aktörü doğrudan bir alt Agent'a bağlayabilir ve ardından aynı alt konuşmayı olaylar boyunca sürdürebilir. Bağlı alt devamlılıklar; API anahtarı kimliği, bağlama sahipliği, üst ilişki ve Agent yetkilendirme kontrolleri başarılı olduktan sonra otomatik olarak gerçekleşir; bunun için ayrı bir özellik açma/kapama anahtarı yoktur.
+
+Aktörü, sonraki sıralarını iletecek olan aynı API anahtarıyla kaydedin:
+
+```http
+POST /api/agents/v1/events/bindings
+Authorization: Bearer <REMOTE_AGENTS_API_KEY>
+Idempotency-Key: championship-7-player-hanae
+Content-Type: application/json
+
+{
+  "actorId": "hanae-kobayashi",
+  "parentConversationId": "director-conversation-id",
+  "parentMessageId": "director-message-id",
+  "target": { "agentId": "agent_hanae" }
+}
+```
+
+`actorId` 128 karaktere kadar içerebilir. Ebeveyn, sıradan bir Agent konuşması olmalı ve hedef, o Agent'ın doğrudan Subagent'larından biri veya izin verilen bir self-spawn olarak yapılandırılmış olmalıdır. Yeni bir bağlama (binding) `201` döndürür; idempotent bir tekrar `200` döndürür. Her iki yanıt da `id`, `actorId`, `agentId` ve `threadId` içerir.
+
+Döndürülen bağlama kimliği (binding ID) ile sonraki turları gönderin:
+
+```http
+POST /api/agents/v1/events
+Authorization: Bearer <SAME_REMOTE_AGENTS_API_KEY>
+Idempotency-Key: game-12-ply-17-hanae
+Content-Type: application/json
+
+{
+  "mode": "continue",
+  "bindingId": "evtbind_...",
+  "event": {
+    "id": "game-12-ply-17",
+    "type": "chess.turn.ready",
+    "occurredAt": 1786968000000,
+    "payload": { "gameId": "game-12", "expectedPly": 17 }
+  },
+  "input": "Your clock is running. Read the position and submit one legal move.",
+  "expectedAction": {
+    "tool": "submit_move",
+    "arguments": { "gameId": "game-12" }
+  }
+}
+```
+
+LibreChat, alt Agent, thread, en son dal yaprağı ve sıralama şeridini gönderimden hemen önce bağlamadan çözer. Çağıran tarafından sağlanan hedef ve sıralama alanları, bağlı bir devamı yeniden yönlendiremez. İsteğin `Idempotency-Key` değeri; teslimat yeniden denemeleri, nesil kiralama, kalıcı mesajlar, canlı etkinlik ve daha sonraki bir HITL devam ettirme süreci boyunca bu alt tur için kararlı genel kimlik haline gelir.
+
+Her binding'in otomatik ve dayanıklı bir posta kutusu vardır. Bir sonraki etkinliği, mevcut tur `applied`, `completed_no_action`, `failed` veya `cancelled` durumuna ulaşana kadar kuyrukta bekletilir; farklı binding'ler birbirinden bağımsız kalır ve paralel olarak çalışabilir. Checkpoint devamlılığı yalnızca uyumlu ve başlatılmış bir tur için denenir. Eğer bir checkpoint eksikse veya geri yüklenemiyorsa, LibreChat; teslim alma, yetkilendirme veya beklenen eylem kontrollerini zayıflatmadan dayanıklı mesaj geçmişine geri döner.
+
+Bağlı bir aktör, Kullanıcıya Sor (Ask User) veya araç onayı için duraklayabilir. LibreChat, bekleyen eylemi ortaya çıkarmadan önce tam imzalı askıya alma işlemini kalıcı hale getirir ve bağlamanın posta kutusu, aynı aktör çağrısı devam edene veya sonuçlanana kadar engellenmiş kalır. Event Actors, kalıcı MongoDB kontrol noktası (checkpointer) gerektirir; `type: memory` uyumlu değildir. LibreChat, nesil protokolü v2'yi müzakere eder ve kontrol noktası veya geçmiş devamlılığını otomatik olarak seçer. Mevcut protocol-v1 çalışmaları, tükenene kadar kalıcı geçmiş yolunda kalmaya devam eder. Karma sürüm dağıtım gereksinimleri için [Generation Protocol Compatibility](/docs/configuration/redis#generation-protocol-compatibility) bölümüne bakın.
+
+### Gözlemsel Olayların Birleştirilmesi [#coalescing-observational-events]
+
+Birkaç bağlı `continue` olayının birbirinin yerine geçebilen gözlemler olduğunu kanıtlayabilen kaynaklar, onlara aynı kaynak tanımlı `coalesce.key` değerini verebilir:
+
+```json
+{
+  "mode": "continue",
+  "bindingId": "evtbind_...",
+  "event": {
+    "id": "championship-7-game-12-move-18",
+    "type": "chess.move.completed",
+    "occurredAt": 1786968000750,
+    "payload": { "gameId": "game-12", "ply": 18 }
+  },
+  "input": "A tournament game advanced.",
+  "coalesce": { "key": "championship-commentary" }
+}
+```
+
+LibreChat, uyumlu etkinlikleri 750 ms'ye kadar, en fazla 8 etkinlik ve toplam 512 KiB zarf olacak şekilde toplar. Alt öğe tek bir deterministik toplu belge alır, ancak her kaynak etkinlik kendi `Idempotency-Key` değerini, teslimat kaydını ve makbuzunu korur.
+
+Yalnızca işlem gerektirmeyen gözlemler için birleştirme (coalescing) kullanın. `fire`, `steer`, sınırlandırılmamış `continue` ve `expectedAction` içeren teslimatlar için reddedilir; komutlar, onaylar, HITL istekleri, çitler (fences) veya bireysel zamanlaması önemli olan olaylar için kullanmayın.
+
+Kimliği doğrulanmış ana konuşmada, her bağlı aktör kendi sahibi olan ana mesajın altında görünür. Subagent paneli, aktörler ve sıralar arasında geçiş yapabilir, önceki etkinlikleri yükleyebilir ve tam bağlı etkinliği göstermek için bir sırayı genişletebilir. Etkinlik detayları; türü, kaynağı, gerçekleşme zamanını ve beklenen eylemi içerir. Görünür çalışma adımları, araçlar, mesajlar ve mantık yürütme işaretleri, ham mantık yürütme metni olmadan dahil edilir. Ana dizin, sınırlı bir kaynak penceresinden çocuk başına en fazla 64 alt iş parçacığı ve 20 güncel görev döndürür, tamlık ima etmek yerine kesilmeyi bildirir ve yanıtı 96 KB ile sınırlar. Bu süreç ana, kullanıcı ve kiracı yetkilidir; bağlamalar, kaynak anahtar kimlikleri, kiralama belirteçleri ve çalışan durumu projeksiyona dahil edilmez.
+
+Alt iş parçacığı, normal konuşma gezintisinde gizli kalır ve insan sohbet rotaları için salt okunurdur; üst öğenin geçici veya sona erme politikasını devralır ve bir doğrudan alt seviye ile sınırlıdır. Yalnızca bir bağlama kimliği (binding ID) erişim sağlamaz; devamlılıklar, onu oluşturan kullanıcı, kiracı ve API anahtarı ile kapsamlandırılmıştır.
+
+### Ayrık Olay Aktörü Eylemleri [#detached-event-actor-actions]
+
+Event Actor dönüşleri, uygun Eylemleri ayırabilir ve bunları kalıcı olarak tamamlayabilir. Eylem çalışırken teslimat, işleme yaşam döngüsü içinde kalır; kalıcı terminal kanıtı, orijinal imzalı actor çağrısını devam ettirir ve yalnızca sonuçta ortaya çıkan, ana bilgisayar tarafından gözlemlenen araç kanıtı `expectedAction` değerini karşılayabilir. Yeniden oynatmalar ve rakip kopyalar, aynı ayrılmış Eylemi iki kez başlatamaz. LibreChat, harici bir yan etkinin başlayıp başlamadığını belirleyemezse, başlatma işlemini körü körüne yeniden denemek yerine karantinaya alır.
+
+LibreChat, seçilen yerleşik üretim deposu destek sunduğunda bu dahili tamamlama işlemini otomatik olarak etkinleştirir. Bellek içi depo; başlatma, tamamlama ve devam ettirme işlemlerini tek bir süreçte çalıştırır ve süreç sonlandıktan sonra bu çalışmaları kurtaramaz. Redis üretim akışları, dayanıklı yeniden başlatma kurtarma ve kopya devri ekler. Yetenek sahipliğindeki teslimat ve kurtarma kayıtları, karma sürümlü bir boşaltma sırasında eski talep sahipleri için görünmez kalır; operatör tarafından yönetilen bir üretici bayrağı yoktur.
+
 ## Token Kullanım Takibi [#token-usage-tracking]
 
-Tüm Agents API istekleri, (token harcaması yapılandırıldığında) kullanıcının bakiyesine göre token kullanımını takip eder. Hem giriş hem de çıkış tokenları, bunları destekleyen sağlayıcılar (OpenAI, Anthropic) için önbellek (cache) tokenları da dahil olmak üzere sayılır.
+Tüm Agent API çıkarım istekleri, token harcaması yapılandırıldığında kullanıcının bakiyesine karşı token kullanımını takip eder. Hem akış (streaming) hem de akış olmayan yanıtlar, faturalandırılan her bir birincil Agent ve Subagent model çağrısını en üst düzey toplamlar altında birleştirir. Yanıt ayrıca kimlik içermeyen `primary` ve `subagent` token dökümlerini de içerir. Sağlayıcı tarafından bildirildiği durumlarda önbellek (cache) ve muhakeme (reasoning) token detayları da dahil edilir.
 
 ## Yol Haritası [#roadmap]
 
@@ -170,6 +310,8 @@ Tüm Agents API istekleri, (token harcaması yapılandırıldığında) kullanı
 ## İlgili Dokümantasyon [#related-documentation]
 
 - [Agents](/docs/features/agents) — Ajan oluşturma ve yapılandırma
+- [Subagents](/docs/features/subagents) — Doğrudan alt Agent'ları yapılandırma
+- [Agents Endpoint Configuration](/docs/configuration/librechat_yaml/object_structure/agents) — Event runtime ve kimlik doğrulama ayarları
 - [Arayüz Yapılandırması — remoteAgents](/docs/configuration/librechat_yaml/object_structure/interface#remoteagents) — Erişim denetimi ayarları
 - [Token Usage](/docs/configuration/token_usage) — Token harcamasını ve bakiyesini yapılandırma
 - [Open Responses Specification](https://www.openresponses.org/) — Açık çıkarım standardı

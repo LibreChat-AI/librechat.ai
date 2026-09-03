@@ -12,10 +12,11 @@ description: 在 LibreChat 中设置 Redis 以实现缓存、会话存储和水�
 - [连接类型](#connection-types)
 - [安全配置](#security-configuration)
 - [高级选项](#advanced-options)
+- [副本故障转移恢复](#replica-failover-recovery)
 - [性能调优](#performance-tuning)
 - [配置示例](#configuration-examples)
 - [可恢复流](#resumable-streams)
-- [生成协议发布](#generation-protocol-rollout)
+- [生成协议兼容性](#generation-protocol-compatibility)
 - [流式增量合并](#stream-delta-coalescing)
 - [MCP Catalog Coordination](#mcp-catalog-coordination)
 
@@ -210,6 +211,18 @@ REDIS_PING_INTERVAL=300
 - 该间隔以秒为单位指定，并同时适用于 IoRedis 和 Keyv Redis 客户端。
 - 示例值：`300`（5 分钟），`600`（10 分钟），`60`（1 分钟）
 
+### 副本故障转移恢复 [#replica-failover-recovery]
+
+在 Sentinel 故障转移期间，降级的 Redis 副本可能会保持现有的套接字连接，同时通过 `READONLY` 拒绝写入。LibreChat 会在非集群 Keyv 客户端上检测到此响应，断开陈旧连接并重新连接，从而在无需重启应用程序的情况下解析出当前的主节点。
+
+```bash
+# Minimum interval between forced recovery attempts, in milliseconds
+# Default: 5000
+REDIS_READONLY_RECOVERY_INTERVAL=5000
+```
+
+该间隔会对突发写入失败期间的重连尝试进行去抖动处理。Redis Cluster 客户端不在此列，因为它们使用原生的集群拓扑和重定向处理机制。
+
 ### 选择性内存缓存 [#selective-in-memory-caching]
 
 强制特定的缓存命名空间使用内存存储，即使在启用了 Redis 的情况下：
@@ -325,27 +338,22 @@ REDIS_URI=redis://127.0.0.1:6379
 # USE_REDIS_STREAMS=true  # Enabled by default when USE_REDIS=true
 ```
 
-### 生成协议发布 [#generation-protocol-rollout]
+### 生成协议兼容性 [#generation-protocol-compatibility]
 
-v2 生成协议增加了当前 Agent 运行所使用的持久队列、中断、暂停/恢复以及恢复保证。当 `GENERATION_PROTOCOL_VERSION` 未设置时，基于 Redis 的部署将有意保留在协议 v1 上，以便在滚动升级期间运行不同 LibreChat 版本的副本可以共存。
+当前的 LibreChat 客户端会自动与每个内置生成存储协商生成协议 v2。无需任何部署设置。现有的带有显式或已存储协议 v1 标记的生成内容，在通过引导、暂停/恢复、重试和恢复直至完成的过程中，将保持其不可变的 v1 行为。
 
-使用两阶段发布：
+对于滚动升级，每个正在运行的 API 和 worker 镜像都必须包含 v2 兼容性桥接：
 
-1. 将支持 v2 的 LibreChat 镜像部署到 `GENERATION_PROTOCOL_VERSION` 未设置或设置为 `1` 的**每一个**副本中。
-2. 等待由上一个镜像拥有的活跃生成任务完成或排空。
-3. 设置 `GENERATION_PROTOCOL_VERSION=2` 并再次部署相同的镜像。
+- 每个 API 和 worker 镜像均运行 LibreChat `v0.8.8-rc1` 或更高版本。
+- Helm chart `2.0.8` 或更高版本会选择一个兼容的默认镜像；自定义镜像覆盖仍必须满足上述镜像要求。
 
-```bash filename=".env"
-USE_REDIS=true
-USE_REDIS_STREAMS=true
-GENERATION_PROTOCOL_VERSION=2
-```
+从旧版本升级时，请执行冷切换：在启动新镜像之前，停止所有旧的 API 和 worker 副本。这可以防止 v2 之前版本和自动 v2 版本的二进制文件在 Redis 中共享生成状态。
 
 <Callout type="warning" title="滚动部署安全性">
-  在所有副本都支持协议 v2 之前，请勿启用协议 v2。在 v2 生成开始后，请勿回滚到 v2 之前的 LibreChat 镜像，直到这些生成任务处理完毕；旧版本的副本无法安全地操作其 Redis 状态。
+  不要在与当前副本相同的 Redis 生成状态下运行早于 `v0.8.8-rc1` 的版本。在回滚到该兼容性基准以下之前，请先确保当前副本和 protocol-v2 生成已排空。
 </Callout>
 
-内存中生成流不会在副本之间共享状态，且默认使用协议 v2，因此不需要进行此切换。
+内存中生成流也会自动协商 v2 协议，且不会在进程间共享生成状态。
 
 ### 流式增量合并 (Stream Delta Coalescing) [#stream-delta-coalescing]
 

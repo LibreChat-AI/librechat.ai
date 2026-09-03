@@ -13,6 +13,7 @@ Alt temsilciler (Subagents), bir LibreChat Temsilcisinin odaklanmış çalışma
 - Uzun ara çıktılar üretebilecek araştırma alt görevleri
 - Özel bir ajan ile geçişleri incele
 - Üst bağlamın dışında kalması gereken araç ağırlıklı işler
+- Tek bir delege edilmiş görev arkasında yürütülmesi gereken çoklu ajan ekip iş akışları
 - Ebeveynin koordine ettiği ve özetlediği paralel tarzda ayrıştırma
 
 ## Alt Temsilciler (Subagents), Temsilci Zincirinden (Agent Chain) Nasıl Farklılaşır? [#how-subagents-differ-from-agent-chain]
@@ -56,6 +57,27 @@ Kullanılabilir ayarlar:
 - **Allow self-spawn**: ajanın kendisinin yeni bir kopyasını izole bir bağlamda oluşturmasına izin verir. Alt ajanlar (subagents) etkinleştirildiğinde bu özellik varsayılan olarak etkindir.
 - **Ek alt temsilciler**: üst öğenin oluşturabileceği belirli temsilcileri seçer.
 
+Kaydedilmiş Agent ekipleri, Agent oluşturma veya güncelleme yüklerinde `subagents.graphs` olarak gömülüdür. Mevcut Agent Builder, siz self-spawn ve bireysel Agent ayarlarını düzenlerken bu tanımları korur, ancak grafik tanımlarını oluşturmaz. Her ekip, sınırlı bir yönlü döngüsüz grafiği (DAG), onun giriş Agent'ını ve sonucu ebeveyne döndürülen Agent'ı adlandırır:
+
+```yaml filename="agent saved-team subagent"
+subagents:
+  enabled: true
+  allowSelf: false
+  graphs:
+    - type: 'research_team'
+      name: 'Research team'
+      description: 'Researches a topic and reviews the findings'
+      agent_ids:
+        - 'agent_researcher'
+        - 'agent_reviewer'
+      entry_agent_id: 'agent_researcher'
+      result_agent_id: 'agent_reviewer'
+      edges:
+        - from: 'agent_researcher'
+          to: 'agent_reviewer'
+          edgeType: 'direct'
+```
+
 Eşdeğer ajan şekli:
 
 ```yaml filename="agent subagents"
@@ -85,7 +107,7 @@ modelSpecs:
         model: 'gpt-4o'
 ```
 
-Başlangıç yapılandırmasında istemcilere yalnızca `enabled` ve `allowSelf` gönderilir. `agent_ids` izin listesi sunucu tarafında kalır ve varsayılan olarak 10 olan ve [`endpoints.agents.maxSubagents`](/docs/configuration/librechat_yaml/object_structure/agents#maxsubagents) ile yapılandırılabilen etkin alt aracı (subagent) sınırı üzerinden doğrulanır. İstemci istek yükleri, Model Specs Alt Aracı yapılandırmasını sağlayamaz veya geçersiz kılamaz.
+Başlangıç yapılandırmasında istemcilere yalnızca `enabled` ve `allowSelf` gönderilir. `agent_ids` izin listesi sunucu tarafında kalır ve varsayılan değeri 10 olan ve [`endpoints.agents.maxSubagents`](/docs/configuration/librechat_yaml/object_structure/agents#maxsubagents) ile yapılandırılan etkin Subagent sınırı ile doğrulanır. İstemci istek yükleri, model-spec Subagent yapılandırmasını sağlayamaz veya geçersiz kılamaz.
 
 ## Çalışma Zamanı Davranışı [#runtime-behavior]
 
@@ -93,10 +115,54 @@ Alt aracılar (subagents) etkinleştirildiğinde, ana aracı bir `subagent` arac
 
 - `self`, when `allowSelf` is not false
 - `agent_ids` içinde yapılandırılmış herhangi bir alt ajan
+- `graphs` içindeki kaydedilmiş herhangi bir tam Agent ekibi
 
-Alt temsilciler izole edilmiş bir bağlamla çalışır. Üst araç arama durumu ve birikmiş bağlam, alt çalışmaya kopyalanmaz. Alt çalışma model kullanımı, üst işleme faturalandırılır ve üst kullanım toplamlarına dahil edilir. Arayüz, alt çalışmayı; durum, sayaç güncellemeleri ve alt çalışma akış halindeyken sunulan sonuç metni dahil olmak üzere eksiksiz nihai sonuçla birlikte genişletilebilir bir temsilci etkinliği parçası olarak gösterir.
+Alt temsilciler izole edilmiş bir bağlamla çalışır. Üst araç arama durumu ve birikmiş bağlam, alt çalışmaya kopyalanmaz. Ön plan alt model kullanımı, üst işlem ve kullanım toplamlarına dahil edilir; üst istek kapandıktan sonra tamamlanan ayrık alt çağrılar, kullanımı bağımsız olarak kaydeder. Kompakt alt kart; ön plan, grafik, eski ve ayrık çalıştırmalar için birleşik bir etkinlik yan paneli açar ve bu taşıma türüne uygun sınırlı yaşam döngüsü, muhakeme, araç, onay ve sonuç ayrıntılarını gösterir.
 
 Açık alt temsilciler, üst temsilciye hafif tanımlayıcılar olarak duyurulur ve yalnızca seçildiklerinde tam olarak başlatılırlar. Kullanılmayan alt temsilciler; modellerini, araçlarını, MCP sunucularını, dosyalarını veya Yeteneklerini yüklemezler. Çağırma sırasında LibreChat, görüntüleme iznini ve alt temsilcinin sürümlü yapılandırma kimliğini yeniden kontrol eder; eğer erişim iptal edilmişse veya kaydedilen yapılandırma çalışma sırasında değişmişse, alt temsilci eski ayarları yürütmek yerine güvenli bir şekilde başarısız olur (fail closed).
+
+Paralel dallar aynı alt Agent'a başvurduğunda, LibreChat her bir geçiş yolu için döngü ve derinlik sınırlarını bağımsız olarak değerlendirir. Bu nedenle, bir daldaki döngü, diğer daldaki geçerli iç içe geçmiş Agent bağlantılarını geçersiz kılmaz.
+
+Kaydedilmiş ekipler, bireysel alt öğelerle aynı tembel çözümleme (lazy resolution) ve erişim denetimlerini izler. Seçildiklerinde, her üye kendi modelini, talimatlarını, araçlarını, MCP kimlik bilgilerini, Yeteneklerini (Skills), dosyalarını, belleğini, Code Interpreter profilini ve faturalandırma kimliğini korur. LibreChat, ekibi izole edilmiş tek bir alt grafik olarak yürütür, üye farkındalıklı ilerlemeyi yayınlar ve yapılandırılmış sonuç Ajanının çıktısını döndürür. Kaydedilmiş herhangi bir üye eksik, erişilemez veya geçersizse, LibreChat kısmi bir grafik çalıştırmak yerine tüm ekibi atlar.
+
+Sonraki turlarda LibreChat, erişilebilir alt ve ekip araçlarından gelen önceki çağrıları, gerektiğinde çözümlenmiş MCP sunucu kimliği de dahil olmak üzere yapılandırılmış araç çağrısı biçiminde tutar. Artık erişilemeyen araçlar, yalnızca geçmişte göründükleri için aktif çalışmaya eklenmezler.
+
+## Ayrık Alt Ajan İş Parçacıkları (Detached Subagent Threads) [#detached-subagent-threads]
+
+Agents endpoint için `run_in_background` etkinleştirildiğinde, bir üst Agent alt agent işlerini ayırabilir ve beklemeden devam edebilir. LibreChat, her ayrılmış alt öğeyi özel bir yürütme soyu ve kanonik bir döküm ile kalıcı hale getirir. Alt iş parçacıkları normal konuşma gezintisi ve aramanın dışında kalır ve doğrudan okunamaz; yetkilendirilmiş üst görünüm yalnızca sınırlandırılmış alt etkinlikleri gösterir.
+
+Alt iş parçacıkları (child threads), yalnızca görüntüleme amaçlı yürütme kayıtlarıdır. Bir kullanıcı, kurallı alt öğeyi (canonical child) yerinde düzenleyemez veya silemez. Tamamlanmış, kalıcı bir doğrudan-Ajan (durable direct-Agent) alt öğesi için, **Continue in a new chat** (Yeni bir sohbette devam et) seçeneği, tamamlanmış dalı tam olarak ayrı, yazılabilir normal bir Ajan sohbetine çatallarken, orijinal alt öğeyi gizli ve salt okunur olarak bırakır. Etkinlik paneli, çalışma boyunca ve gelen görev teslimatları arasında tek bir oluşturucuyu (composer) bağlı tutarak, yeni bir görev görünümü yüklenirken odağı ve yarım bırakılmış rehberliği korur. Görev kontrolleri kabul edene kadar gönderim kullanılamaz. Yerleşimden sonra girilen metin çatala aktarılır ve başarısız bir çatal, paneldeki taslağı geri yükler. Bu eylem; çalışan, grafik, anonim-Ajan ve paylaşılan görünümler için kullanılamaz. Üst öğeyi silmek, alt öğe silsilesini de siler. Üst Ajan; kurallı alt öğeyi görev araçları aracılığıyla sorgulayabilir, yönlendirebilir, sıraya alabilir, kesintiye uğratabilir, iptal edebilir, toplayabilir ve daha sonra devam ettirebilir; Mongo destekli kiralamalar (leases), bu devamlılıkları API kopyaları arasında serileştirir.
+
+Etkinlik paneli, seçilen alt öğenin dönüşlerini dal farkındalıklı bir geçmiş olarak sunar. Geriye doğru sayfalamak için **Load earlier activity** (Daha önceki etkinliği yükle) seçeneğini ve tam sınırlı çalışma detayını ortaya çıkarmak için bir dönüş üzerinde **Show full activity** (Tüm etkinliği göster) seçeneğini kullanın. Araç çağrıları, onaylar, sonuçlar, kontroller ve kullanıcı tarafından görülebilen muhakeme süreçleri görünebilir. Muhakeme metni, projeksiyonun geri kalanı gibi sınırlandırılmıştır ve kısaltıldığında işaretlenir; eski sunucular tarafından kalıcı hale getirilen etkinlikler yalnızca bir muhakeme işareti gösterebilir. Sıradan kalıcı etkinlikler, özel alt etkinliklerle aynı öğe başı sınırlarını kullanır ve bitişik en yeni soneki 64 KB'lık serileştirilmiş bir etkinlik bütçesine sığdırır, bu nedenle kısaltma bildirimi yalnızca anlamlı içerik atlandığında görünür. Geçmiş kısaltıldığında veya kullanılamadığında, panel kısmi bir görünümü eksiksizmiş gibi sunmak yerine durumu belirtir. Yeni etkinlik dönüşleri geçmişin en altına yerleşir, devam eden dönüşler geçen süreyi gösterir ve aktör satırları sabit konumlu durum noktaları kullanır, böylece durum değişiklikleri düzeni kaydırmaz. Kompakt ve yüzen bir başlık, geçmişin altında kaydırılmasına olanak tanırken, oluşturucu ana sohbetin boyutlarını takip eder. Devam eden çalışma, ayrı bir çalışma durumu çipi yerine akış etkinliği ile iletilir; anormal terminal durumları etiketli kalmaya devam eder.
+
+Redis etkinleştirildiğinde, LibreChat aktif yürütme sahibini kaydeder ve yoklama (poll), listeleme, yönlendirme (steer), kuyruğa alma, kesme, iptal etme ve toplama isteklerini herhangi bir API kopyasından o sürece, sınırlı ve süresi dolan istek/yanıt mesajları aracılığıyla yönlendirir. Açık etkinlik paneli ayrıca görev kapsamlı canlı güncellemeleri alır; iki saniyelik dayanıklı bir sorgu, kaçırılan etkinlikler, yeniden bağlantılar veya Redis kesintileri için yedek mekanizma olarak kalmaya devam eder. Tek süreçli ve Redis olmayan dağıtımlar, bellek içi hızlı yolu kullanır. Canlı bir yürütücü, sahibi olan süreç yeniden başlatıldıktan veya kaybolduktan sonra taşınmaz, ancak MongoDB destekli alt döküm, terminal durumu, kullanım, geçmiş ve daha sonra Ajan tarafından yönlendirilen devamlılık bağımsız olarak varlığını sürdürür. Bu, ayrılmış görevleri genel bir arka plan işi API'sine dönüştürmez.
+
+### Çalışan Bir Alt Süreci Kontrol Etme [#control-a-running-child]
+
+Kimliği doğrulanmış bir üst konuşmada, Subagent etkinlik panelini açın ve kalıcı bir alt görev seçin. Bu görev çalışırken, varsayılan olarak yönlendirmek için rehberlik yazın ve gönderin. Fareyle üzerine gelme özelliği olan bir masaüstü bilgisayarda, gönderim kontrolünün eylem menüsü **Steer**, **Queue** ve **Interrupt** seçeneklerini sunar ve yalnızca kullanıcının mevcut klavye ayarları altında aktif olan kısayolları gösterir. Dokunmatik cihazlarda ve modal panelde, kuyruğa alma ve kesintiye uğratma simge kontrolleri olarak kullanılabilir kalmaya devam eder. Herhangi bir rehberlik girilmediğinde, gönderim kontrolü **Cancel task** haline gelir.
+
+- **Steer**, çocuğun bir sonraki güvenli sınırında rehberlik ekler.
+- **Queue**, alt görevdeki sonraki bir sıra için rehberlik bilgilerini tutar.
+- **Interrupt**, alt öğenin mevcut çalışmasını güvenli bir sınırda durdurur ve yeni yönergeleri uygular.
+- **Görevi iptal et** (Cancel task), herhangi bir yönlendirme göndermeden iptal talebinde bulunur.
+
+Kabul edilen kontroller, göreve özel bir geçmişte gönderiliyor, bekleniyor, uygulandı, uygulanmadı veya başarısız oldu şeklinde, mümkün olduğunda bir neden belirtilerek görünür. Kuyruğa alınan rehberliği, alt öğe uygulamadan önce kaldırmak için **Withdraw** seçeneğini belirleyin. Rehberlik 4 KB ile sınırlıdır. Her görev 64 adede kadar yetkili makbuz saklarken, etkinlik paneli 32 adede kadarını görüntüler; daha eski tamamlanmış geçmiş, aktif kabul edilen kontrollerden önce atlanır ve kullanıcı arayüzü, atlanan geçmişi veya görüntüleme için kısaltılmış rehberliği etiketler.
+
+Çalışan kontroller, alt öğe yerleştiğinde kapanır ve aynı besteci, uygun bir alt öğeyi yeni bir sohbette devam ettirmek için geçiş yapar. LibreChat, her istekte oturum açmış kullanıcının üst ve alt öğeye erişimini, üst-alt ilişkisini ve kiracı sahipliğini doğrular; ayrıca rehberlik için yapılandırılmış içerik filtrelerini ve denetim kontrollerini uygular. Aynı kabul edilen kontrolün tekrar tekrar iletilmesi, talimatı iki kez uygulamak yerine yetkili makbuzunu döndürür. Paylaşılan konuşmalar salt okunur kalır ve bu kontrolleri açığa çıkarmaz.
+
+Paylaşılan konuşmalar, yalnızca paylaşım yüküne dahil edilmiş sınırlı etkinliği görüntüleyebilir. Bu görünümler salt okunurdur, onay kontrollerini ve kalıcı alt seçicileri içermez ve kimliği doğrulanmış alt iş parçacığı sorgu yolunu asla açmaz.
+
+### Olay Güdümlü Alt Etkinlik [#event-driven-child-activity]
+
+[Agents API event binding](/docs/features/agents_api#event-driven-child-agents) aracılığıyla devam eden Alt Temsilciler (Child Agents), bir `subagent` araç kartından kaynaklanmaz. LibreChat, kimliği doğrulanmış ana konuşmada, bunun yerine bağlamayı sahiplenen iletinin altına tek bir kompakt aktör satırı ekler. Bu satırın açılması, aktör ve onun dönüşleri için seçicilerin yanı sıra canlı çalıştırma adımı, araç, ileti ve muhakeme işareti etkinliği ile birlikte Alt Temsilci (Subagent) etkinlik panelini yeniden kullanır. Harici olay tetikleyicileri, genişletilebilir olay türü, kaynak, oluşum zamanı ve beklenen eylem detaylarıyla normal kullanıcı tetikleyici satırları olarak oluşturulur. Yeni bir teslimat aynı alt iş parçacığında başka bir görev seçtiğinde, mevcut dönüşler görünür kalmaya devam ederken yeni görev yüklenir ve yalnızca onun akış yer tutucusu eklenir; göreve özel durum ve kontroller, tutulan görünümden asla ödünç alınmaz. Önceki sayfalar ve dönüş başına tam etkinlik, aynı sınırlı, salt okunur alt geçmişi kullanır.
+
+Üst öğe projeksiyonu kasıtlı olarak sınırlandırılmıştır: en fazla 64 alt iş parçacığı döndürür, paylaşılan sınırlı bir kaynak penceresinden her çocuk için en fazla 20 güncel görevi tutar ve yanıtı 96 KB ile sınırlar. Kullanıcı arayüzü, limit aşımı olan bir görünümün tam olduğunu ima etmek yerine kesilmiş geçmişi bildirir. Başka bir tur başlatmak, daha eski bir aktörü güncel çocuk penceresine taşır. Bu alt iş parçacıkları normal gezinmede gizli kalır ve başka bir üst öğeden veya kiracıdan keşfedilemez.
+
+### Otomatik Üst Devamlılık [#automatic-parent-continuation]
+
+Ayrılmış bir alt süreç tamamlandıktan sonra, LibreChat terminal sonucunu veya hatasını kalıcı hale getirir ve varsayılan olarak, onu başlatan tam dal üzerindeki kayıtlı üst Agent'a eşdeğer (idempotent) bir devam mesajı gönderir. Teslimat, o üst dal çalışırken, duraklatılmışken veya sonlandırılırken bekler. Devam eden üst süreç, kardeş görevleri sürekli sorgulamak (busy-polling) yerine, ilgili görevlerin sınırlı bir özetini alır ve sohbet, bu uyandırma işlemini daraltılabilir bir görev kartı içinde sunar.
+
+Otomatik tamamlama teslimi, [`endpoints.agents.backgroundTasks.completionWakeups`](/docs/configuration/librechat_yaml/object_structure/agents#backgroundtasks) atlandığında veya `true` olarak ayarlandığında etkinleştirilir. Ayrık çocuk süreçleri yalnızca yoklama (poll-only) modunda tutmak için bunu `false` olarak ayarlayın. İptal edilen çocuklar göz ardı edilir ve geçici (ephemeral) üst Agent'lar desteklenmez çünkü geri yüklenecek kayıtlı bir yapılandırma yoktur. Ayrık çocuk yürütme süreci kendi çalışma bağlamına sahiptir, bu nedenle orijinal üst isteğin sonuçlandırılması veya durdurulması, bağımsız olarak sahip olunan işi iptal etmez. Üst süreç, kalıcı çocuk sonuçlarını görev araçları aracılığıyla toplamaya devam edebilir.
 
 ## Sınırlar [#limits]
 
@@ -105,10 +171,16 @@ LibreChat, alt aracı (subagent) grafiklerini sınırlı tutmak için bu limitle
 <OptionTable
   options={[
     [
-      'MAX_SUBAGENTS',
+      'endpoints.agents.maxSubagents',
       'Number',
-      'Ebeveyn ajan başına maksimum açık alt ajan sayısı. `endpoints.agents.maxSubagents` aracılığıyla 50\'ye kadar yapılandırılabilir.',
+      'Her bir üst Agent `agent_ids` veya `graphs` listesindeki maksimum girdi sayısı. 1 ile 50 arasında yapılandırılabilir.',
       '10',
+    ],
+    [
+      'MAX_GRAPH_SUBAGENT_MEMBERS',
+      'Number',
+      'Bir kayıtlı Agent ekibindeki maksimum üye sayısı.',
+      '32',
     ],
     ['MAX_SUBAGENT_DEPTH', 'Number', 'Bir kök aracıdan yapılabilecek maksimum açık alt aracı sıçraması.', '5'],
     [
@@ -134,15 +206,16 @@ endpoints:
     maxSubagents: 20
 ```
 
-Yapılandırılan değer; temsilci oluşturma, güncelleme ve kopyalama istekleri, `subagents.agent_ids` izin listeleri için Model Specs ve Temsilci Oluşturucu'daki (Agent Builder) alt temsilci seçici için geçerlidir. Tam referans için [maxSubagents](/docs/configuration/librechat_yaml/object_structure/agents#maxsubagents) bölümüne bakın. Yukarıdaki derinlik, grafik düğümü ve çalıştırma yapılandırması sınırları sabittir.
+Yapılandırılan değer, hem `subagents.agent_ids` hem de `subagents.graphs` için Temsilci (Agent) oluşturma, güncelleme ve kopyalama istekleri, Model Specs `subagents.agent_ids` izin listeleri ve Temsilci Oluşturucu'daki (Agent Builder) alt temsilci seçici için geçerlidir. Tam referans için [maxSubagents](/docs/configuration/librechat_yaml/object_structure/agents#maxsubagents) bölümüne bakın. Yukarıdaki ekip üyesi başına, derinlik, grafik düğümü ve çalıştırma yapılandırma sınırları sabittir.
 
 ## Erişim Kontrolü [#access-control]
 
-Yapılandırılmış alt temsilciler (child agents) kullanıcı tarafından görülebilir olmalıdır. Eğer kullanıcının referans verilen bir temsilciye görüntüleme erişimi yoksa, LibreChat bu alt temsilciyi atlar. Oluşturma ve güncelleme istekleri için, geçersiz veya yetkisiz `subagents.agent_ids` girdileri reddedilir.
+Yapılandırılmış alt temsilciler ve kaydedilmiş her ekip üyesi kullanıcı tarafından görülebilir olmalıdır. Kullanıcının referans verilen belirli bir Agent'a görüntüleme erişimi yoksa, LibreChat bu alt temsilciyi atlar. Kaydedilmiş bir ekip "ya hep ya hiç" prensibiyle çalışır ve herhangi bir üye kullanılamaz durumdaysa ekip atlanır. Oluşturma ve güncelleme istekleri; eksik veya yetkisiz referansları, yinelenen oluşturma (spawn) türlerini, döngüsel veya bağlantısız ekip grafiklerini, geçersiz giriş veya sonuç üyelerini ve yukarıdaki sınırları aşan yapılandırmaları reddeder.
 
 ## Tasarım İpuçları [#design-tips]
 
 - Ebeveyn ajan zaten iyi bir kapsam belirlemişse ve yalnızca bir alt görev için yeni bir bağlama ihtiyaç duyuyorsa self-spawn özelliğini etkinleştirin.
 - Görev farklı bir model, talimat seti, araç seti veya yetenek izin listesi gerektirdiğinde belirli alt temsilciler (child agents) ekleyin.
+- Birden fazla Agent'ın, tek bir sonuç ana öğeye (parent) döndürülecek şekilde tek bir delege edilmiş iş akışı olarak çalışması gerektiğinde kayıtlı bir ekip (team) kullanın.
 - Alt öğe açıklamalarını net tutun. Ebeveyn, doğru yetkilendirme hedefini seçmek için her bir alt öğe adını ve açıklamasını kullanır.
 - Kalıcı bir konuşma yoluna devretmek için değil, kompakt bir sonuç döndürmesi gereken ara işler için alt temsilcileri (subagents) kullanın.

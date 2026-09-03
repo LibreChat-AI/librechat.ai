@@ -21,8 +21,10 @@ LibreChat의 Code Interpreter API는 간단한 API 인터페이스를 통해 코
 ## 시작하기 [#getting-started]
 
 1. [code-interpreter](https://github.com/ClickHouse/code-interpreter) 서비스를 배포하세요(Docker Compose 또는 Helm 사용, 저장소의 README 참조)
-2. `LIBRECHAT_CODE_BASEURL` 및 `LIBRECHAT_CODE_API_KEY` 환경 변수를 사용하여 LibreChat이 해당 위치를 가리키도록 설정하세요.
-3. LibreChat의 에이전트 또는 "Run Code" 버튼을 통해 안전하게 코드를 실행하고 파일을 생성하세요.
+2. `LIBRECHAT_CODE_BASEURL`을 사용하여 LibreChat이 해당 경로를 가리키도록 설정하세요.
+3. 현재 오픈 소스 서비스를 위해 [LibreChat JWT authentication](#self-hosted-jwt-authentication)을 구성하거나, API 키 호환 배포를 위해 `LIBRECHAT_CODE_API_KEY`를 설정하세요.
+4. 상태 유지(stateful) 에이전트 세션을 실험하려면 별도의 `stateful` 프로필 Code Interpreter 경로를 배포하고 `LIBRECHAT_CODE_BASEURL_STATEFUL` 또는 명명된 [`statefulCodeSessions.environments`](/docs/configuration/librechat_yaml/object_structure/agents#statefulcodesessions)를 구성하세요.
+5. LibreChat의 에이전트 또는 "Run Code" 버튼을 통해 안전하게 코드를 실행하고 파일을 생성하세요.
 
 ## 주요 기능 [#key-features]
 
@@ -41,6 +43,12 @@ LibreChat의 Code Interpreter API는 간단한 API 인터페이스를 통해 코
 
 LibreChat은 에이전트 실행 전에 참조된 대화 파일을 현재 Code Interpreter 환경으로 복원합니다. 필요한 모든 Code Interpreter 파일 복구에 실패하면, 실행은 모델 호출 전에 중단되며, 오래된 참조로 계속 진행하는 대신 사용자에게 파일을 다시 첨부하도록 요청합니다.
 
+대화 입력이 동일한 샌드박스 대상에 마운트될 때, LibreChat은 실행 전에 충돌을 해결합니다. 공유 대화 파일은 에이전트 전용 파일보다 먼저 할당되며, 각 범위 내에서 가장 최신 콘텐츠 쓰기가 원래 대상을 유지합니다. 충돌하는 경로는 필요에 따라 평탄화되거나 식별자 기반의 접미사가 추가되며, 해결된 `/mnt/data/...` 경로는 에이전트의 파일 컨텍스트에 포함됩니다. 이는 동일한 파일 이름을 공유하는 업로드와 생성된 출력에도 적용되므로, 하나의 충돌로 인해 대화 내의 이후 모든 Code Interpreter 실행이 거부되지 않습니다. 이미 점유된 대상으로 확인되는 중복 시드 참조는 전체 요청을 실패하게 만드는 대신 건너뜁니다.
+
+샌드박스 이미지는 제한된 윈도우 내에서 전송됩니다. [`LIBRECHAT_CODE_SANDBOX_OUTPUT_MAX_SIZE`](/docs/configuration/dotenv#code-interpreter)를 워커의 `SANDBOX_OUTPUT_MAX_SIZE`와 일치하도록 설정하세요. LibreChat은 해당 예산에서 가장 안전한 최대 이미지 윈도우를 도출하며, 읽기 실패가 한 번 발생하면 더 작은 서비스별 제한을 학습할 수 있습니다. 정확한 윈도우 재정의가 필요한 경우에만 `LIBRECHAT_CODE_IMAGE_CHUNK_BYTES`를 사용하세요. 이전에 다운로드한 생성 아티팩트는 가능한 경우 요청 내에서 재사용되어, 샌드박스를 다시 읽는 과정을 방지합니다.
+
+다중 에이전트 그래프(multi-Agent graph)에서는 서로 다른 에이전트가 사용하는 비공개 파일에 고유한 파일 이름을 지정하십시오. 각 에이전트는 그래프가 입력을 결합하기 전에 자신의 비공개 파일 경로를 확인하므로, 독립적으로 동일한 대상 경로를 사용하는 서로 다른 비공개 파일은 병합 시점에 일관되게 이름을 변경할 수 없습니다. 따라서 먼저 시드(seeded)된 대상 경로가 우선권을 갖습니다.
+
 ### 보안 및 편의성 [#security--convenience]
 
 - 안전한 샌드박스 실행 환경
@@ -52,25 +60,72 @@ LibreChat은 에이전트 실행 전에 참조된 대화 파일을 현재 Code I
 
 Programmatic Tool Calling을 사용하면 LibreChat 에이전트가 선택된 MCP 도구를 Code Interpreter 샌드박스를 통해 라우팅할 수 있습니다. 모델에게 각 도구를 직접 호출하도록 요청하는 대신, LibreChat은 Code Interpreter 기반의 오케스트레이션 도구를 제공합니다. 생성된 샌드박스 코드는 등록된 도구 스텁을 호출하고, 루프와 조건문을 사용하며, 중간 결과를 처리하고, 최종 답변을 반환할 수 있습니다.
 
-샌드박스는 여전히 일반적인 네트워크 액세스를 수신하지 않습니다. 도구 호출은 Code Interpreter Tool Call Server와 LibreChat에 등록된 도구 맵을 통해 중개되므로, 에이전트가 사용할 수 있는 도구만 호출할 수 있습니다.
+샌드박스는 여전히 일반적인 네트워크 액세스를 수신하지 않습니다. 도구 호출은 Code Interpreter Tool Call Server를 통해 중개됩니다. LibreChat은 실시간 호출자 기능 프로젝션을 신뢰할 수 있는 레지스트리와 교차 검사하므로, 에이전트에 이미 등록된 활성 프로그래밍 도구만 호출할 수 있으며 요청이 자체적으로 액세스 권한을 확장할 수는 없습니다.
+
+프로그래밍 방식 도구(Programmatic tools)를 사용하려면 에이전트에서 Code Interpreter가 활성화되어 있어야 합니다. Code Interpreter를 선택하기 전까지 해당 토글은 비활성화 상태로 유지되며, Code Interpreter를 제거하면 기존에 선택된 프로그래밍 방식 도구 설정이 초기화됩니다. 또한 LibreChat은 `execute_code` 또는 Code Interpreter 도구를 사용할 수 없는 경우, 에이전트 생성, 업데이트, 복제 및 버전 복원 작업에서 유효하지 않은 프로그래밍 방식 호출자 옵션을 제거합니다.
+
+프로그래밍 방식의 실행 중에 Code Interpreter 카드를 확장하면, 제한된 인수 미리보기, 상태, 지속 시간 및 실패가 포함된 내부 도구 호출의 실시간 터미널 스타일 추적을 확인할 수 있습니다. 이 추적은 프로그램이 실행되는 동안 프로그램을 검사하는 데 도움이 되지만, 페이지를 새로 고치면 유지되지 않습니다.
 
 ### Background Code Execution [#background-code-execution]
 
-백그라운드 실행을 통해 에이전트는 오래 걸리는 코드나 셸 작업을 전달하고, 대화를 계속하며, 나중에 `check_background_task`를 통해 결과를 검색할 수 있습니다. LibreChat 채팅에서 작업이 완료되면, 표준 출력(stdout)과 생성된 파일이 원래 코드 호출 위치에 나타납니다. 생성된 파일은 에이전트가 아직 작업을 폴링하지 않았더라도 이후 턴을 위해 유지됩니다.
+백그라운드 실행을 통해 에이전트는 장시간 실행되는 코드나 셸 작업을 전달하고 대화를 계속할 수 있습니다. 저장된 에이전트의 경우, 지원되는 콘텐츠 전용 완료는 기본적으로 후속 연속 대화를 통해 자동으로 전달됩니다. `check_background_task`는 명시적인 상태 확인, 제어, 실시간 아티팩트 및 복구를 위해 계속 사용할 수 있습니다. LibreChat 채팅에서 작업이 완료되면, 표준 출력(stdout)과 생성된 파일이 원래 코드 호출에 나타나며 이후 턴을 위해 유지됩니다.
 
 이 기능은 배포 수준에서 선택적으로 사용할 수 있습니다. [Agents endpoint capabilities](/docs/configuration/librechat_yaml/object_structure/agents#capabilities)의 `execute_code`와 함께 `run_in_background`를 추가한 다음, 에이전트에서 Code Interpreter를 활성화하세요. 코드 실행 및 셸 호출은 자동으로 백그라운드 실행 대상이 됩니다. 에이전트가 이를 사용하지 않도록 하려면 Code Interpreter 도구 설정에서 **Background execution**을 끄십시오. 모델은 여전히 호출 시마다 적격한 작업을 백그라운드에서 처리할지 여부를 결정합니다.
 
-백그라운드 작업 상태는 프로세스 로컬이며, 앱 재시작이나 복제본 간 이동 시 유지되지 않습니다. 또한 백그라운드 디스패치는 Code Interpreter 서비스의 실행 제한을 연장하지 않으며, 배포의 일반적인 서버 측 타임아웃이 그대로 적용됩니다.
+일반적인 백그라운드 실행은 프로세스 로컬 상태로 유지되며 앱 워커가 종료되면 함께 소멸합니다. 콘텐츠 전용 터미널 결과가 영구 저장되면 해당 자동 전달은 내구성을 갖게 되며 다른 복제본에서 계속될 수 있습니다. 라이브 아티팩트가 포함된 작업은 여전히 소유 실행(owning run)에 대한 폴링이 필요합니다. 모든 결과에 대해 폴링을 요구하려면 [`endpoints.agents.backgroundTasks.completionWakeups: false`](/docs/configuration/librechat_yaml/object_structure/agents#backgroundtasks)를 설정하십시오. 백그라운드 디스패치는 Code Interpreter 서비스의 실행 제한을 확장하지 않으며, 배포의 일반적인 서버 측 타임아웃이 여전히 적용됩니다.
 
 ### 상태 유지 코드 세션 (Stateful Code Sessions) [#stateful-code-sessions]
 
-Stateful code sessions을 사용하면 LibreChat Agent가 대화당 하나의 Code Interpreter 샌드박스 작업 공간을 재사용할 수 있습니다. 파일, 설치된 패키지 및 작업 상태가 일반적으로 실행 간에 유지되므로 반복적인 분석과 다단계 파일 생성이 더욱 효율적으로 이루어집니다.
+Stateful code sessions을 사용하면 LibreChat Agent가 실행 간에 하나의 Code Interpreter 샌드박스 작업 공간을 재사용할 수 있습니다. 파일, 설치된 패키지 및 작업 상태가 일반적으로 유지되므로 반복적인 분석과 다단계 파일 생성이 더 효율적입니다. 각 에이전트는 다음 중 하나의 작업 공간 범위를 선택합니다:
+
+- **사용자 작업 공간(권장):** 상태 유지(stateful)가 활성화된 에이전트 전반에서 로그인한 사용자를 위한 단일 작업 공간
+- **에이전트 + 사용자 작업 공간:** 각 사용자와 에이전트 조합을 위한 하나의 작업 공간
+- **대화 작업 공간:** 각 사용자와 대화마다 하나의 작업 공간
+
+새로 생성된 Agent의 경우, 초기 범위는 **Settings > Data Controls > Code execution > Default stateful workspace**에서 설정됩니다. 개인 설정의 기본값은 **User workspace**이며, 이를 변경해도 기존 Agent가 수정되거나 상태 저장 세션이 활성화되지는 않습니다. 배포 관리자는 [`statefulCodeSessions.allowedEnvironments`](/docs/configuration/librechat_yaml/object_structure/agents#statefulcodesessions)를 사용하여 선택 가능한 범위를 제한할 수 있습니다. 저장된 개인 기본값을 사용할 수 없게 되면, 새 Agent는 허용된 첫 번째 범위를 사용합니다. 허용되지 않는 범위로 설정된 기존 활성 Agent는 실행하기 전에 재구성해야 합니다.
+
+작업 공간(workspace) 범위는 실행 백엔드와 분리되어 있습니다. 관리자가 명명된 [`statefulCodeSessions.environments`](/docs/configuration/librechat_yaml/object_structure/agents#statefulcodesessions)를 구성하면, Agent Builder에 **실행 환경(Execution environment)** 선택기가 추가됩니다:
+
+- **Managed:** 배포에 의해 운영되는 상태 저장(stateful) Code API
+- **첨부됨:** 운영자가 관리하는 VM과 같이 아웃바운드 `@librechat/code` 워커에 작업을 위임하는 호환 가능한 Code API 원격 브리지
+- **개인용:** LibreChat 설정에서 인증된 사용자가 연결한 소유자 전용 `@librechat/code` 워커
+- **배포 기본값:** 기본값으로 표시된 구성된 환경 하나
 
 <Callout type="warning" title="매우 실험적인 기능">
   Stateful Code Sessions는 초기 실험 단계에 있습니다. 해당 기능의 동작, 구성, 지속성 특성 및 기반 통합 방식은 크게 변경될 수 있습니다. 현재 구현을 안정적인 프로덕션 계약으로 간주하지 마십시오.
 </Callout>
 
-이 기능은 선택 사항입니다. [Agents endpoint capabilities](/docs/configuration/librechat_yaml/object_structure/agents#capabilities)에서 `execute_code` 및 `stateful_code_sessions`를 활성화하고, 에이전트에서 Code Interpreter를 활성화한 다음, 고급 설정에서 **Stateful code sessions**를 켜십시오. 작업 공간은 언제든지 초기화될 수 있습니다. 중요한 출력물은 `/mnt/data` 아래에 저장하고, 그 외의 경우에는 세션 상태를 영구 저장소로 의존하지 마십시오.
+이 기능은 선택 사항입니다. [Agents endpoint capabilities](/docs/configuration/librechat_yaml/object_structure/agents#capabilities)에서 `execute_code` 및 `stateful_code_sessions`를 활성화하고, [`LIBRECHAT_CODE_BASEURL_STATEFUL`](/docs/configuration/dotenv#stateful-code-interpreter-endpoint) 또는 명명된 환경으로 전용 상태 저장 경로를 구성한 다음, 에이전트에서 Code Interpreter를 활성화하십시오. 그 후 고급 설정에서 **Stateful code sessions**를 켜고 실행 백엔드와 작업 공간 범위를 선택하십시오.
+
+Stateful 요청은 선택된 환경이 누락되었거나, 액세스할 수 없거나, 호환되지 않을 경우 실패하며(fail closed); LibreChat은 이를 `LIBRECHAT_CODE_BASEURL`로 전송하거나 다른 명명된 백엔드를 자동으로 선택하지 않습니다. 명명된 환경이 구성되어 있지 않은 경우, `LIBRECHAT_CODE_BASEURL_STATEFUL`이 계속해서 stateful 경로로 유지됩니다. Stateless 에이전트는 일반 endpoint를 계속 사용합니다. 또한 LibreChat은 `X-CodeAPI-Expected-Profile: stateful` 헤더를 전송하므로, 전용 서비스는 반드시 `stateful` 프로필을 광고해야 합니다.
+
+Stateful 및 stateless 세션은 라이브 작업 공간을 공유하지 않습니다. Stateful 작업 공간은 선택된 범위와 관계없이 언제든지 초기화될 수 있습니다. 중요한 출력물은 `/mnt/data` 아래에 저장하고, 그 외의 경우에는 세션 상태를 영구 저장소로 의존하지 마십시오.
+
+상태 유지형 `create_file` 및 `edit_file` 호출로 작성된 파일은 어시스턴트 메시지 아래의 확장 가능한 **Workspace changes** 행에 나타납니다. 이 행은 해당 응답에 대해 변경된 각 고유 경로를 나열하고 인증된 다운로드 작업을 제공합니다. 다운로드는 사용 가능한 경우 LibreChat의 지속적 파일 흐름을 사용하며, 그렇지 않은 경우 보안 Code Interpreter 대체 기능을 사용합니다. 이 행은 작성된 출력의 기록이며 영구적인 작업 공간 스냅샷이 아닙니다. 상태 비저장 출력은 계속해서 일반 인라인 첨부 파일로 표시됩니다.
+
+#### 연결된 환경 및 페어링 [#attached-environments-and-pairing]
+
+연결된 환경에는 일치하는 실험적 Code Interpreter remote-bridge 빌드가 필요합니다. 브리지는 LibreChat의 인증된 정책, 대기열 및 결과 경계로 유지되며, `@librechat/code` 워커는 연결된 머신에서 아웃바운드로 연결됩니다. 머신에 인바운드 공용 워커 포트가 필요하지는 않습니다. LibreChat은 연결된 환경을 미리 예열(prewarm)하지 않습니다.
+
+운영자는 배포 소유의 연결된 환경을 `workerId`를 사용하여 특정 워커에 고정할 수 있으며, LibreChat이 해당 경로에 대해 관리자 페어링 코드를 발급해야 할 때 `pairing.workerId`를 추가할 수 있습니다. `pairing.tokenEnv`는 브리지 관리자 토큰이 포함된 환경 변수의 이름을 지정하며, 비밀 값 자체는 절대 YAML에 포함되어서는 안 됩니다. 페어링된 컨트롤 플레인은 루프백 개발 환경 외부에서 HTTPS를 요구합니다.
+
+셀프 서비스 워커의 경우, `pairing.allowPrincipalWorkers: true` 및 `pairing.tokenEnv`를 사용하여 배포 소유의 연결된 제어 평면(control plane)을 구성하십시오. 이는 워커 ID를 모두 생략하고 등록 전용 제어 평면으로만 존재할 수 있습니다. 이러한 항목은 실행 대상으로 선택할 수 없으며 배포 기본값으로 설정할 수 없습니다.
+
+Code Environment 관리 권한이 있는 사용자는 **Settings > Code environments**를 열어 환경 이름을 지정하고, 승인된 컨트롤 플레인을 선택한 다음 **Connect VM**을 선택할 수 있습니다. LibreChat은 짧은 시간 동안만 유효한 일회성 `librechat-code pair ...` 명령어를 표시합니다. 이 명령어를 사용자의 VM에서 실행한 다음, `LIBRECHAT_CODE_SANDBOX_ENDPOINT`가 해당 머신의 샌드박스 서비스를 가리키도록 설정하여 `@librechat/code`를 시작하세요. UI에는 사용자의 환경 목록이 표시되며, 나중에 이를 취소하거나 제거할 수 있습니다. 샌드박스 파일은 VM에 그대로 유지됩니다.
+
+개인 환경은 인증된 사용자 및 테넌트에 귀속되며, Code Environment ACL에 의해 보호되고, 서버에서 검증된 ID와 승인된 기본 URL만 할당받습니다. LibreChat은 브리지 관리자 토큰이나 임의의 운영자 URL을 클라이언트에 노출하지 않습니다. 환경을 제거하면 레지스트리 항목을 삭제하기 전에 작업자 자격 증명이 취소되며, 사용자 삭제 시에도 동일한 취소 및 정리 작업이 예약되고 중단된 시도에 대해서는 백그라운드 조정이 수행됩니다. 선택된 작업자 경로는 Code Interpreter, 셸, 생성된 파일 액세스 및 프로그래밍 방식 도구 호출(Programmatic Tool Calling)에 일관되게 적용됩니다.
+
+#### Attached-environment 도구 권한 [#attached-environment-tool-permissions]
+
+Attached 및 personal 환경은 파일 쓰기 및 명령 또는 코드 실행에 대해 기본적으로 승인을 요청하는 정책을 사용합니다. 읽기 전용 및 검색 작업은 배포의 일반적인 도구 정책에 따라 계속됩니다. 관리자가 [`configSchema.permissions`](/docs/configuration/librechat_yaml/object_structure/agents#statefulcodesessions)를 통해 두 범주 중 하나를 노출하는 경우, Code Environment 관리 권한이 있는 사용자는 **Settings > Code environments**에서 허용된 **Allow**, **Ask** 또는 **Deny** 값 중 하나를 선택할 수 있습니다. 설정이 누락되었거나, 오래되었거나, 허용되지 않은 경우 안전하게 **Ask**로 대체됩니다.
+
+이러한 제어 기능은 파일 작성 도구, 셸 및 코드 실행, 컴파일 검사, 그리고 프로그래밍 방식의 도구 호출(Programmatic Tool Calling)을 다룹니다. 일반적인 파일 쓰기가 허용되는 경우에도, Skill 작성이 가능할 때는 영구 Skill 파일에 대한 쓰기 작업에 여전히 확인이 필요합니다. 이 설정들은 VM 격리, 네트워킹, 마운트, 권한 있는 실행, 인그레스(ingress), 이그레스(egress) 또는 비밀 접근 권한을 변경하지 않습니다.
+
+배포의 명시적인 [`toolApproval.enabled: false`](/docs/configuration/librechat_yaml/object_structure/agents#toolapproval) 설정은 이 기준을 비활성화하는 긴급 재정의입니다. 해당 재정의가 없으면, 승인 요청을 제시하고 재개할 수 없는 호출자는 연결된 환경의 도구를 조용히 실행하는 대신 실패(fail closed)하게 됩니다.
+
+페어링은 원격 워커 전송을 인증할 뿐, 샌드박스 경계 역할을 하지는 않습니다. 워커의 로컬 실행 endpoint는 루프백이나 사설 네트워크로 유지하고, 신뢰할 수 없는 코드에 대해서는 적절한 격리 모드를 사용하십시오.
+
+실행이 활성화되어 있는 동안, 확장된 코드 및 셸 세부 정보 창은 스트리밍되는 인수를 따라 하단으로 이동합니다. 위로 스크롤하면 이 따라가기 동작이 일시 중지되므로, 창이 뷰포트를 강제로 이동시키지 않고도 이전 출력을 검토할 수 있습니다.
 
 ## API 사용하기 [#using-the-api]
 
@@ -86,25 +141,66 @@ LibreChat은 다음의 주요 방법을 통해 API를 일급 지원합니다:
 
 4. **[Background Tool Calls](/docs/features/agents#background-tool-calls)**: 에이전트가 적격한 코드를 백그라운드에서 실행하도록 지시하고, 코드가 실행되는 동안 계속 작업을 진행할 수 있게 합니다.
 
-5. **[Stateful Code Sessions](/docs/features/agents#stateful-code-sessions)**: 실험적으로 에이전트의 코드 실행 전반에 걸쳐 대화별 작업 공간을 재사용합니다.
+5. **[Stateful Code Sessions](/docs/features/agents#stateful-code-sessions)**: 사용자, 에이전트 및 사용자, 또는 대화 범위의 작업 공간을 에이전트의 코드 실행 전반에 걸쳐 실험적으로 재사용합니다.
 
 ![LibreChat의 코드 인터프리터](/images/agents/run_code.png)
 
 ### API 키 설정 [#set-up-api-key]
 
-- **사용자별 설정:** 메시지가 표시되면 LibreChat에 API 키를 입력하세요(위의 방법 사용).
-- **전역 설정:** 프로젝트의 .env 파일에서 `LIBRECHAT_CODE_API_KEY` 환경 변수를 사용하세요 (모든 사용자에게 액세스 권한을 제공합니다)
+- **사용자별 설정:** 메시지가 표시되면 LibreChat에 API 키를 입력하세요.
+- **전역 설정:** LibreChat의 `.env` 파일에 `LIBRECHAT_CODE_API_KEY`를 설정하여 모든 사용자가 하나의 키를 공유하도록 합니다.
+
+현재 [ClickHouse/code-interpreter](https://github.com/ClickHouse/code-interpreter) 서비스는 로컬 모드 외부에서 LibreChat JWT 인증을 사용합니다. API 키는 호환되는 Code Interpreter 배포를 위해 계속 사용할 수 있습니다.
+
+### 자체 호스팅 JWT 인증 [#self-hosted-jwt-authentication]
+
+JWT 인증을 사용하면, LibreChat은 각 Code Interpreter 요청 시 인증된 사용자를 위해 단기 베어러 토큰에 서명합니다. Code Interpreter 서비스는 일치하는 공개 키를 검증하고 서명된 사용자 및 테넌트 컨텍스트를 사용하여 파일과 세션을 격리합니다. 개인 서명 키는 LibreChat 내에 유지되며, Code Interpreter는 공개 검증 키만 수신합니다.
+
+다음과 같이 LibreChat을 구성하세요:
+
+```env
+CODEAPI_AUTH_PROVIDER=librechat-jwt
+CODEAPI_JWT_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"
+CODEAPI_JWT_ALGORITHM=EdDSA
+CODEAPI_JWT_KID=lc-codeapi-2026-05
+CODEAPI_JWT_ISSUER=librechat
+CODEAPI_JWT_AUDIENCE=codeapi
+CODEAPI_JWT_TTL_SECONDS=300
+CODEAPI_JWT_MINT_CACHE_SECONDS=30
+CODEAPI_JWT_SINGLE_TENANT_ID=legacy
+```
+
+`CODEAPI_JWT_PRIVATE_KEY_BASE64`는 대신 base64로 인코딩된 PEM을 담을 수 있으며, `CODEAPI_JWT_PRIVATE_JWK_JSON`은 비공개 JWK를 허용합니다. LibreChat은 Ed25519(`EdDSA`, 기본값) 및 RSA(`RS256`) 서명을 지원합니다. 모든 LibreChat 측 설정에 대해서는 [환경 변수 참조](/docs/configuration/dotenv#code-interpreter-jwt-authentication)를 확인하세요.
+
+해당 검증기(verifier)를 사용하여 Code Interpreter를 구성하세요:
+
+```env
+LOCAL_MODE=false
+CODEAPI_AUTH_PROVIDER=librechat-jwt
+CODEAPI_JWT_ISSUER=librechat
+CODEAPI_JWT_AUDIENCE=codeapi
+CODEAPI_JWT_ALLOWED_ALGS=EdDSA
+CODEAPI_JWT_JWKS_JSON={"keys":[{"kty":"OKP","crv":"Ed25519","x":"...","kid":"lc-codeapi-2026-05","alg":"EdDSA"}]}
+CODEAPI_JWT_SINGLE_TENANT_ID=legacy
+```
+
+발급자(issuer), 대상(audience), 키 ID(key ID), 알고리즘(algorithm) 및 공개 키(public key)는 LibreChat의 서명자와 일치해야 합니다. Code Interpreter는 `CODEAPI_JWT_PUBLIC_KEY`와 `CODEAPI_JWT_KID`를 사용하거나 `CODEAPI_JWT_PUBLIC_KEYS_DIR`에서 검증자 키를 로드할 수도 있습니다. 인라인 JWKS는 키 교체(rotation)에 편리합니다. 토큰 TTL은 Code Interpreter 서비스의 `CODEAPI_JWT_MAX_TTL_SECONDS` 이하로 유지하십시오. 이 값은 기본적으로 300초로 설정되어 있으며 최대 300초로 제한됩니다.
+
+로컬 체크아웃의 경우, Code Interpreter 저장소에는 일치하는 Ed25519 서명 및 실행 매니페스트 키를 생성하고 두 `.env` 파일을 모두 업데이트하는 도우미가 포함되어 있습니다:
+
+```bash
+node scripts/setup-local-auth-env.js --librechat /path/to/LibreChat
+```
+
+단일 테넌트 배포의 경우 `CODEAPI_JWT_SINGLE_TENANT_ID=legacy`를 그대로 둘 수 있지만, 두 서비스 모두에서 값이 일치해야 합니다. 다중 테넌트 배포의 경우 인증된 테넌트 컨텍스트를 제공하고 LibreChat에서 `TENANT_ISOLATION_STRICT=true`를, Code Interpreter에서 `CODEAPI_TENANT_ISOLATION_STRICT=true`를 활성화해야 합니다. 엄격 모드(Strict mode)는 단일 테넌트 폴백을 사용하는 대신 테넌트 컨텍스트가 없는 요청을 거부합니다.
 
 ### 직접 API 통합 [#direct-api-integration]
 
-Code Interpreter API는 간단한 API 키 인증을 사용하여 모든 애플리케이션에 통합할 수 있습니다:
-
-1. 자체 [code-interpreter](https://github.com/ClickHouse/code-interpreter) 인스턴스를 배포하고 API 키를 생성하세요
-2. `x-api-key` 헤더를 사용하여 요청에 API 키를 포함하세요.
+현재 자체 호스팅되는 서비스는 LibreChat JWT 클레임 계약을 충족하는 bearer 토큰을 요구합니다. 직접 통합하려면 호환되는 단기 토큰을 생성하여 `Authorization: Bearer <token>` 헤더로 전송해야 합니다. API 키 호환 배포는 대신 `x-api-key` 헤더에 구성된 키를 허용합니다. 공개 또는 프로덕션 endpoint에서 Code Interpreter의 인증이 없는 로컬 모드를 절대 사용하지 마십시오.
 
 ### 자체 호스팅 기본 URL [#self-hosted-base-url]
 
-`LIBRECHAT_CODE_BASEURL` 환경 변수를 설정하여 LibreChat이 사용자가 직접 호스팅하는 [code-interpreter](https://github.com/ClickHouse/code-interpreter) 인스턴스를 가리키도록 하고, 해당 배포에서 생성된 API 키를 위와 동일한 방식으로 사용하세요.
+`LIBRECHAT_CODE_BASEURL`을 설정하여 LibreChat이 자체 호스팅된 [code-interpreter](https://github.com/ClickHouse/code-interpreter) 인스턴스를 가리키도록 한 다음, [JWT 인증](#self-hosted-jwt-authentication)을 구성하세요. API 키 호환 서비스의 경우, 대신 `LIBRECHAT_CODE_API_KEY`를 설정하세요. 매우 실험적인 상태 유지(stateful) Agent 세션은 [`LIBRECHAT_CODE_BASEURL_STATEFUL`](/docs/configuration/dotenv#stateful-code-interpreter-endpoint)을 통해 구성되거나 [`statefulCodeSessions.environments`](/docs/configuration/librechat_yaml/object_structure/agents#statefulcodesessions)로 명명된 별도의 `stateful` 프로필 경로가 필요합니다.
 
 ## 핵심 기능 [#core-functionality]
 

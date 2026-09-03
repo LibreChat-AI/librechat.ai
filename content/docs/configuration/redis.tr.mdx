@@ -14,10 +14,11 @@ Bu kılavuz, LibreChat içinde önbelleğe alma ve oturum depolama için Redis'i
 - [Bağlantı Türleri](#connection-types)
 - [Güvenlik Yapılandırması](#security-configuration)
 - [Gelişmiş Seçenekler](#advanced-options)
+- [Replica Failover Recovery](#replica-failover-recovery)
 - [Performans Ayarı](#performance-tuning)
 - [Yapılandırma Örnekleri](#configuration-examples)
 - [Devam Ettirilebilir Akışlar](#resumable-streams)
-- [Generation Protocol Rollout](#generation-protocol-rollout)
+- [Nesil Protokolü Uyumluluğu](#generation-protocol-compatibility)
 - [Stream Delta Coalescing](#stream-delta-coalescing)
 - [MCP Katalog Koordinasyonu](#mcp-catalog-coordination)
 
@@ -212,6 +213,18 @@ REDIS_PING_INTERVAL=300
 - Aralık saniye cinsinden belirtilir ve hem IoRedis hem de Keyv Redis istemcileri için geçerlidir
 - Örnek değerler: `300` (5 dakika), `600` (10 dakika), `60` (1 dakika)
 
+### Replica Failover Kurtarma [#replica-failover-recovery]
+
+Bir Sentinel yük devretme (failover) sırasında, indirgenmiş bir Redis replikası, `READONLY` ile yazma işlemlerini reddederken mevcut bir soketi açık tutabilir. LibreChat, küme dışı (non-cluster) Keyv istemcisinde bu yanıtı algılar, eski bağlantıyı sonlandırır ve uygulamayı yeniden başlatmaya gerek kalmadan mevcut birincil (primary) sunucunun çözümlenebilmesi için yeniden bağlanır.
+
+```bash
+# Minimum interval between forced recovery attempts, in milliseconds
+# Default: 5000
+REDIS_READONLY_RECOVERY_INTERVAL=5000
+```
+
+Aralık, başarısız yazma işlemlerinin yoğun olduğu durumlarda yeniden bağlanma denemelerini geciktirir (debounce). Redis Cluster istemcileri, yerel küme topolojisini ve yönlendirme yönetimini kullandıkları için bu kapsamın dışındadır.
+
 ### Seçici Bellek İçi Önbelleğe Alma [#selective-in-memory-caching]
 
 Redis etkinleştirildiğinde bile belirli önbellek ad alanlarını bellek içi (in-memory) depolamayı kullanmaya zorlayın:
@@ -327,27 +340,22 @@ REDIS_URI=redis://127.0.0.1:6379
 # USE_REDIS_STREAMS=true  # Enabled by default when USE_REDIS=true
 ```
 
-### Generation Protocol Kullanıma Sunumu [#generation-protocol-rollout]
+### Generation Protocol Uyumluluğu [#generation-protocol-compatibility]
 
-v2 nesil protokolü, mevcut Agent çalıştırmaları tarafından kullanılan dayanıklı kuyruk, kesinti, duraklatma/devam ettirme ve kurtarma garantilerini ekler. `GENERATION_PROTOCOL_VERSION` ayarlanmadığında Redis destekli dağıtımlar kasıtlı olarak v1 protokolünde kalır; böylece farklı LibreChat sürümlerini çalıştıran replikalar, kademeli bir yükseltme sırasında bir arada bulunabilir.
+Mevcut LibreChat istemcileri, her yerleşik üretim deposuyla otomatik olarak v2 üretim protokolünü müzakere eder. Herhangi bir dağıtım ayarı gerekmez. Açık veya kayıtlı bir v1 protokol işaretine sahip mevcut üretimler, tamamlanana kadar yönlendirme, duraklatma/devam ettirme, yeniden deneme ve kurtarma işlemleri boyunca değişmez v1 davranışlarını korurlar.
 
-İki aşamalı bir dağıtım kullanın:
+Kademeli bir yükseltme için, çalışan her API ve worker imajı v2 uyumluluk köprüsünü içermelidir:
 
-1. v2 uyumlu LibreChat imajını, `GENERATION_PROTOCOL_VERSION` değeri ayarlanmamış veya `1` olarak ayarlanmış **her** replikaya dağıtın.
-2. Önceki görsele ait aktif nesillerin tamamlanmasını veya boşaltılmasını bekleyin.
-3. `GENERATION_PROTOCOL_VERSION=2` değerini ayarlayın ve aynı imajı tekrar dağıtın.
+- Her API ve worker imajı, LibreChat `v0.8.8-rc1` veya daha yeni bir sürümünü çalıştırır.
+- Helm chart `2.0.8` veya daha yeni sürümleri uyumlu bir varsayılan image seçer; özel bir image geçersiz kılma işlemi yine de yukarıdaki image gereksinimini karşılamalıdır.
 
-```bash filename=".env"
-USE_REDIS=true
-USE_REDIS_STREAMS=true
-GENERATION_PROTOCOL_VERSION=2
-```
+Daha eski bir sürümden yükseltme yaparken soğuk bir devir teslim gerçekleştirin: yeni imajı başlatmadan önce her bir eski API ve worker kopyasını durdurun. Bu, v2 öncesi ve otomatik-v2 ikili dosyalarının Redis'teki nesil durumunu paylaşmasını önler.
 
 <Callout type="warning" title="Kademeli dağıtım güvenliği">
-  Her replika destekleyene kadar protokol v2'yi etkinleştirmeyin. v2 nesilleri başladıktan sonra, bu nesiller tükenene kadar v2 öncesi bir LibreChat imajına geri dönmeyin; eski replikalar Redis durumları üzerinde güvenli bir şekilde çalışamaz.
+  `v0.8.8-rc1` sürümünden daha eski bir sürümü, mevcut replikalarla aynı Redis nesil durumu üzerinde çalıştırmayın. Bu uyumluluk sınırının altına geri dönmeden önce, mevcut replikaların ve protocol-v2 nesillerinin boşaltıldığından (drained) emin olun.
 </Callout>
 
-Bellek içi (in-memory) üretim akışları, kopyalar (replicas) arasında durum paylaşmaz ve varsayılan olarak v2 protokolünü kullanır, bu nedenle bu geçişi gerektirmezler.
+Bellek içi (in-memory) üretim akışları da protokol v2'yi otomatik olarak müzakere eder ve üretim durumunu süreçler arasında paylaşmaz.
 
 ### Akış Delta Birleştirme (Stream Delta Coalescing) [#stream-delta-coalescing]
 

@@ -21,8 +21,10 @@ LibreChat 的 Code Interpreter API 提供了一种安全且便捷的方式，通
 ## 入门指南 [#getting-started]
 
 1. 部署 [code-interpreter](https://github.com/ClickHouse/code-interpreter) 服务（使用 Docker Compose 或 Helm，请参阅该仓库的 README）
-2. 通过 `LIBRECHAT_CODE_BASEURL` 和 `LIBRECHAT_CODE_API_KEY` 环境变量将 LibreChat 指向它。
-3. 通过 LibreChat 的 Agents 或“运行代码”按钮安全地执行代码并生成文件
+2. 通过 `LIBRECHAT_CODE_BASEURL` 将 LibreChat 指向它
+3. 为当前的开源服务配置 [LibreChat JWT authentication](#self-hosted-jwt-authentication)，或为兼容 API-key 的部署设置 `LIBRECHAT_CODE_API_KEY`
+4. 若要体验有状态的 Agent 会话，请部署一个独立的 `stateful` 配置文件代码解释器路由，并配置 `LIBRECHAT_CODE_BASEURL_STATEFUL` 或指定的 [`statefulCodeSessions.environments`](/docs/configuration/librechat_yaml/object_structure/agents#statefulcodesessions)。
+5. 通过 LibreChat 的 Agents 或“运行代码”按钮安全地执行代码并生成文件
 
 ## 核心功能 [#key-features]
 
@@ -41,6 +43,12 @@ LibreChat 的 Code Interpreter API 提供了一种安全且便捷的方式，通
 
 LibreChat 会在 Agent 运行前将引用的对话文件恢复到当前的 Code Interpreter 环境中。如果所有必需的 Code Interpreter 文件均恢复失败，运行将在模型调用前停止，并提示用户重新附加文件，而不是继续使用过期的引用。
 
+当对话输入挂载到相同的沙盒目标路径时，LibreChat 会在执行前解决冲突。共享对话文件会被优先分配，先于 Agent 私有文件；在每个作用域内，最新的内容写入将保留原始目标路径。冲突的路径会在必要时被扁平化或添加基于标识的后缀，解析后的 `/mnt/data/...` 路径会被包含在 Agent 的文件上下文中。这也涵盖了上传文件与生成的输出文件共享同一文件名的情况，因此单次冲突不会导致对话中后续所有的代码解释器（Code Interpreter）运行被拒绝。重复的种子引用如果仍解析为已被占用的目标路径，则会被跳过，而不会导致整个请求失败。
+
+沙盒图像在有界窗口中传输。请设置 [`LIBRECHAT_CODE_SANDBOX_OUTPUT_MAX_SIZE`](/docs/configuration/dotenv#code-interpreter) 以匹配 worker 的 `SANDBOX_OUTPUT_MAX_SIZE`；LibreChat 会根据该预算推导出最大的安全图像窗口，并在一次读取失败后学习到更小的单服务限制。仅在需要精确覆盖窗口时使用 `LIBRECHAT_CODE_IMAGE_CHUNK_BYTES`。先前下载的生成工件会在请求中尽可能重用，从而避免再次进行沙盒读取。
+
+在多 Agent 图中，请为不同 Agent 的私有文件赋予不同的文件名。每个 Agent 会在图合并其输入之前解析各自的私有文件路径，因此，如果多个独立的私有文件在合并时声明了相同的目标路径，目前还无法进行一致的重命名；系统将采用第一个被植入的目标路径。
+
 ### 安全与便捷 [#security--convenience]
 
 - 安全的沙盒执行环境
@@ -52,25 +60,72 @@ LibreChat 会在 Agent 运行前将引用的对话文件恢复到当前的 Code 
 
 程序化工具调用 (Programmatic Tool Calling) 让 LibreChat Agent 能够通过 Code Interpreter 沙盒路由选定的 MCP 工具。LibreChat 不再要求模型直接调用每个工具，而是提供了一个由 Code Interpreter 支持的编排工具；生成的沙盒代码可以调用已注册的工具存根 (tool stubs)、使用循环和条件判断、处理中间结果并返回最终答案。
 
-沙盒仍然无法获得常规的网络访问权限。工具调用通过 Code Interpreter Tool Call Server 和 LibreChat 的已注册工具映射进行中转，因此只有代理（agent）可用的工具才能被调用。
+沙盒仍然无法获得通用的网络访问权限。工具调用通过代码解释器工具调用服务器（Code Interpreter Tool Call Server）进行中转。LibreChat 将实时调用者能力投影与其受信任的注册表进行交叉比对，因此只能调用已为 Agent 注册的活跃编程工具，且请求无法自行扩展其访问权限。
+
+编程工具需要 Agent 开启 Code Interpreter。在选择 Code Interpreter 之前，它们的开关将保持禁用状态，移除 Code Interpreter 会清除现有的编程工具选择。当 `execute_code` 或 Code Interpreter 工具不可用时，LibreChat 也会在 Agent 的创建、更新、复制和版本恢复操作中剔除过时的编程调用程序选项。
+
+在程序执行期间，展开 Code Interpreter 卡片即可查看带有边界参数预览、状态、持续时间和失败信息的实时终端式工具调用追踪。此追踪有助于在程序运行时对其进行检查，但在页面重新加载后不会被保留。
 
 ### 后台代码执行 [#background-code-execution]
 
-后台执行允许 Agent 分派长时间运行的代码或 shell 任务，继续对话，并稍后通过 `check_background_task` 获取结果。在 LibreChat 聊天中，当任务完成时，标准输出（stdout）和生成的文件会出现在原始代码调用处。即使 Agent 尚未轮询该任务，生成的文件也会被持久化以供后续轮次使用。
+后台执行允许 Agent 分派长时间运行的代码或 Shell 任务，并继续进行对话。对于已保存的 Agent，默认情况下，支持的内容补全将通过后续的自动延续（continuation）进行交付。`check_background_task` 仍然可用于显式状态查询、控制、实时工件（artifacts）和恢复。在 LibreChat 聊天中，当任务完成后，stdout 和生成的文件将出现在原始代码调用处，并为后续的对话轮次进行持久化存储。
 
 此功能需要在部署级别选择开启。请在 [Agents endpoint capabilities](/docs/configuration/librechat_yaml/object_structure/agents#capabilities) 中将 `run_in_background` 与 `execute_code` 一起添加，然后在 Agent 上启用 Code Interpreter。代码执行和 shell 调用将自动具备后台运行资格；当 Agent 需要退出此功能时，请在 Code Interpreter 工具设置中关闭 **Background execution**。模型仍会针对每次调用决定是否将符合条件的工作分派到后台执行。
 
-后台任务状态是进程局部的，不会在应用重启或副本迁移后保留。后台调度也不会延长 Code Interpreter 服务的执行限制；部署的常规服务器端超时设置仍然适用。
+普通的后台执行仍然是进程局部的，且无法在应用工作进程（app worker）丢失后存活。一旦仅包含内容（content-only）的终端结果被持久化，其自动交付就是持久的，并可能在另一个副本上继续；带有实时工件（live artifact）的任务仍然需要在所属的运行（run）上进行轮询。设置 [`endpoints.agents.backgroundTasks.completionWakeups: false`](/docs/configuration/librechat_yaml/object_structure/agents#backgroundtasks) 以要求对每个结果进行轮询。后台调度不会延长 Code Interpreter 服务的执行限制；部署的常规服务器端超时设置仍然适用。
 
 ### 有状态代码会话 [#stateful-code-sessions]
 
-有状态代码会话允许 LibreChat Agent 在每个对话中复用一个 Code Interpreter 沙盒工作区。文件、已安装的包以及工作状态通常会在执行之间保留，从而使迭代分析和多步文件生成更加高效。
+Stateful code sessions 让 LibreChat Agent 能够在多次执行中复用同一个 Code Interpreter 沙盒工作区。文件、已安装的包以及工作状态通常会保留下来，从而使迭代分析和多步骤文件生成更加高效。每个 Agent 都会选择一个工作区范围：
+
+- **用户工作区（推荐）：** 为已登录用户在启用状态的智能体之间提供一个统一的工作区
+- **Agent + user workspace:** 每个用户与 Agent 组合对应一个工作区
+- **对话工作区：** 每个用户和对话对应一个工作区
+
+对于新创建的 Agents，其初始范围来自 **Settings > Data Controls > Code execution > Default stateful workspace**。个人设置默认为 **User workspace**；更改此设置不会修改现有的 Agents 或启用有状态会话。部署管理员可以使用 [`statefulCodeSessions.allowedEnvironments`](/docs/configuration/librechat_yaml/object_structure/agents#statefulcodesessions) 来限制可选择的范围。如果已保存的个人默认设置变得不可用，新的 Agents 将使用第一个允许的范围；对于已启用但其范围现已被禁用的现有 Agent，必须重新配置后才能运行。
+
+工作区范围与其执行后端是分开的。当管理员配置命名的 [`statefulCodeSessions.environments`](/docs/configuration/librechat_yaml/object_structure/agents#statefulcodesessions) 时，Agent Builder 会添加一个**执行环境**选择器：
+
+- **Managed:** 由部署运行的有状态 Code API
+- **附带：** 一个兼容的 Code API 远程桥接器，它将工作任务分配给外向的 `@librechat/code` 工作节点，例如由运维人员管理的虚拟机。
+- **个人：** 一个由授权用户通过 LibreChat 设置进行配对的、绑定所有者的 `@librechat/code` worker。
+- **部署默认值：** 被标记为默认值的已配置环境
 
 <Callout type="warning" title="高度实验性">
   Stateful Code Sessions 目前处于早期实验阶段。其行为、配置、持久化特性以及底层集成可能会发生重大变化。请勿将当前的实现视为稳定的生产环境契约。
 </Callout>
 
-此功能为选择性加入。请在 [Agents endpoint capabilities](/docs/configuration/librechat_yaml/object_structure/agents#capabilities) 中启用 `execute_code` 和 `stateful_code_sessions`，在 Agent 上启用 Code Interpreter，然后在该 Agent 的高级设置中开启 **Stateful code sessions**。工作区可能会随时重置。请将重要输出保存至 `/mnt/data`，不要将其他会话状态视为持久存储。
+此功能为可选功能。请在 [Agents endpoint capabilities](/docs/configuration/librechat_yaml/object_structure/agents#capabilities) 中启用 `execute_code` 和 `stateful_code_sessions`，使用 [`LIBRECHAT_CODE_BASEURL_STATEFUL`](/docs/configuration/dotenv#stateful-code-interpreter-endpoint) 或命名环境配置专用的有状态路由，在 Agent 上启用 Code Interpreter，然后在“高级设置”（Advanced settings）下开启 **Stateful code sessions** 并选择其执行后端和工作区范围。
+
+当所选环境缺失、无法访问或不兼容时，有状态请求（Stateful requests）将以关闭状态失败；LibreChat 不会将它们发送到 `LIBRECHAT_CODE_BASEURL`，也不会静默选择另一个已命名的后端。当未配置任何命名环境时，`LIBRECHAT_CODE_BASEURL_STATEFUL` 仍作为有状态路由。无状态代理（Stateless agents）继续使用常规 endpoint。LibreChat 还会发送 `X-CodeAPI-Expected-Profile: stateful`，因此专用服务必须声明 `stateful` 配置文件。
+
+有状态和无状态会话不共享实时工作区。无论选择何种范围，有状态工作区都可能随时重置。请将重要输出保存至 `/mnt/data`，不要将其他会话状态视为持久存储。
+
+由有状态的 `create_file` 和 `edit_file` 调用所创建的文件会显示在助手消息下方的可展开的 **Workspace changes** 行中。该行会列出针对该响应所更改的每个唯一路径，并提供经过身份验证的下载操作。下载过程在可用时会使用 LibreChat 的持久化文件流，否则将使用安全的 Code Interpreter 后备方案。该行是已创建输出的记录，而非持久的工作区快照；无状态输出将继续作为常规内联附件显示。
+
+#### 附加环境与配对 [#attached-environments-and-pairing]
+
+附加环境需要匹配的实验性 Code Interpreter remote-bridge 构建。该 bridge 仍然是 LibreChat 的身份验证策略、队列和结果边界，而 `@librechat/code` worker 从附加机器向外连接；该机器不需要入站公共 worker 端口。LibreChat 不会预热附加环境。
+
+操作员可以使用 `workerId` 将部署拥有的附加环境固定到一个 worker，并可以在 LibreChat 需要为同一路由颁发管理员配对代码时添加 `pairing.workerId`。`pairing.tokenEnv` 用于指定包含网桥管理员令牌的环境变量名称；密钥本身绝不应出现在 YAML 中。已配对的控制平面在回环开发环境之外需要 HTTPS。
+
+对于自助服务 worker，请配置一个由部署拥有的附加控制平面，并设置 `pairing.allowPrincipalWorkers: true` 和 `pairing.tokenEnv`。它可以省略 worker ID，仅作为注册控制平面存在；此类条目不可选作执行对象，也不能作为部署的默认设置。
+
+拥有代码环境管理权限的用户可以打开 **Settings > Code environments**，为环境命名，选择已批准的控制平面，然后选择 **Connect VM**。LibreChat 会显示一个短暂的、一次性的 `librechat-code pair ...` 命令。在用户的虚拟机上运行该命令，然后通过将 `LIBRECHAT_CODE_SANDBOX_ENDPOINT` 指向该机器的沙盒服务来启动 `@librechat/code`。UI 会列出用户的环境，并允许后续撤销和移除它们；沙盒文件将保留在虚拟机上。
+
+个人环境绑定到经过身份验证的用户和租户，受 Code Environment ACL 保护，并仅分配服务器验证的 ID 和已批准的基准 URL。LibreChat 不会向客户端公开网桥管理员令牌或任意操作员 URL。移除环境会在删除注册表项之前撤销其工作节点凭据，而用户删除操作会通过后台协调机制为中断的尝试安排相同的撤销和清理工作。所选的工作节点路由一致地应用于 Code Interpreter、shell、生成文件访问以及程序化工具调用。
+
+#### 附加环境工具权限 [#attached-environment-tool-permissions]
+
+附加环境和个人环境对文件写入以及命令或代码执行采用默认询问的批准策略。只读和搜索操作继续遵循部署的常规工具策略。如果管理员通过 [`configSchema.permissions`](/docs/configuration/librechat_yaml/object_structure/agents#statefulcodesessions) 公开了任一类别，拥有代码环境管理权限的用户可以在 **设置 > 代码环境** 下选择允许的 **允许 (Allow)**、**询问 (Ask)** 或 **拒绝 (Deny)** 值。缺失、过期或被禁止的设置将安全地回退到 **询问 (Ask)**。
+
+这些控件涵盖了文件创作工具、Shell 和代码执行、编译检查以及程序化工具调用（Programmatic Tool Calling）。即使在允许普通文件写入的情况下，当技能创作（Skill authoring）功能可用时，对持久化技能文件的写入仍需要确认。这些设置不会更改 VM 隔离、网络、挂载、特权执行、入站、出站或密钥访问。
+
+部署中明确设置的 [`toolApproval.enabled: false`](/docs/configuration/librechat_yaml/object_structure/agents#toolapproval) 是一种紧急覆盖设置，用于禁用此基准配置。如果没有该覆盖设置，无法呈现并恢复审批请求的调用方将采取“故障保护（fail closed）”策略，而不是静默执行附加环境中的工具。
+
+配对用于验证远程 worker 传输的身份；它不是沙盒边界。请将 worker 的本地执行 endpoint 保持在回环地址或私有网络上，并为不受信任的代码使用适当的隔离模式。
+
+当执行处于活动状态时，展开的代码和 shell 详细信息面板会跟随流式传输的参数滚动到底部。向上滚动将暂停此跟随行为，以便您可以检查之前的输出，而不会被面板拉走视口。
 
 ## 使用 API [#using-the-api]
 
@@ -86,25 +141,66 @@ LibreChat 通过以下主要方法为 API 提供了一流的支持：
 
 4. **[后台工具调用](/docs/features/agents#background-tool-calls)**：允许 Agent 在后台分派符合条件的任务并继续执行，无需等待其运行结束。
 
-5. **[Stateful Code Sessions](/docs/features/agents#stateful-code-sessions)**：实验性地在代理的代码执行过程中复用每个对话的工作区。
+5. **[有状态代码会话](/docs/features/agents#stateful-code-sessions)**：实验性地在代理的代码执行过程中复用用户级、代理与用户级或对话级的工作区。
 
 ![LibreChat 中的代码解释器](/images/agents/run_code.png)
 
 ### 设置 API key [#set-up-api-key]
 
-- **用户个人设置：** 在 LibreChat 提示时输入您的 API 密钥（使用上述方法）
-- **全局设置：** 在项目的 .env 文件中使用 `LIBRECHAT_CODE_API_KEY` 环境变量（为所有用户提供访问权限）
+- **用户级设置：** 在 LibreChat 提示时输入您的 API 密钥。
+- **全局设置：** 在 LibreChat 的 `.env` 中设置 `LIBRECHAT_CODE_API_KEY`，以便为所有用户提供一个统一的密钥。
+
+当前的 [ClickHouse/code-interpreter](https://github.com/ClickHouse/code-interpreter) 服务在本地模式之外使用 LibreChat JWT 身份验证。API 密钥仍然可用于兼容的 Code Interpreter 部署。
+
+### 自托管 JWT 身份验证 [#self-hosted-jwt-authentication]
+
+通过 JWT 身份验证，LibreChat 会在每次 Code Interpreter 请求时为经过身份验证的用户签署一个短期的 bearer token。Code Interpreter 服务会验证匹配的公钥，并使用已签署的用户和租户上下文来隔离文件和会话。私有签名密钥保留在 LibreChat 中；Code Interpreter 仅接收其公钥验证器。
+
+使用以下配置 LibreChat：
+
+```env
+CODEAPI_AUTH_PROVIDER=librechat-jwt
+CODEAPI_JWT_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"
+CODEAPI_JWT_ALGORITHM=EdDSA
+CODEAPI_JWT_KID=lc-codeapi-2026-05
+CODEAPI_JWT_ISSUER=librechat
+CODEAPI_JWT_AUDIENCE=codeapi
+CODEAPI_JWT_TTL_SECONDS=300
+CODEAPI_JWT_MINT_CACHE_SECONDS=30
+CODEAPI_JWT_SINGLE_TENANT_ID=legacy
+```
+
+`CODEAPI_JWT_PRIVATE_KEY_BASE64` 也可以存储 base64 编码的 PEM，而 `CODEAPI_JWT_PRIVATE_JWK_JSON` 则接受私有 JWK。LibreChat 支持 Ed25519（`EdDSA`，默认值）和 RSA（`RS256`）签名。请参阅[环境变量参考](/docs/configuration/dotenv#code-interpreter-jwt-authentication)以获取所有 LibreChat 端的设置。
+
+配置带有相应验证器的 Code Interpreter：
+
+```env
+LOCAL_MODE=false
+CODEAPI_AUTH_PROVIDER=librechat-jwt
+CODEAPI_JWT_ISSUER=librechat
+CODEAPI_JWT_AUDIENCE=codeapi
+CODEAPI_JWT_ALLOWED_ALGS=EdDSA
+CODEAPI_JWT_JWKS_JSON={"keys":[{"kty":"OKP","crv":"Ed25519","x":"...","kid":"lc-codeapi-2026-05","alg":"EdDSA"}]}
+CODEAPI_JWT_SINGLE_TENANT_ID=legacy
+```
+
+颁发者、受众、密钥 ID、算法和公钥必须与 LibreChat 的签名者匹配。Code Interpreter 还可以从 `CODEAPI_JWT_PUBLIC_KEY` 加上 `CODEAPI_JWT_KID`，或者从 `CODEAPI_JWT_PUBLIC_KEYS_DIR` 加载验证器密钥；内联 JWKS 对于轮换非常方便。请将令牌 TTL 保持在 Code Interpreter 服务的 `CODEAPI_JWT_MAX_TTL_SECONDS` 或以下，该值默认为 300 秒且上限也为 300 秒。
+
+对于本地检出，Code Interpreter 仓库包含一个辅助工具，用于生成匹配的 Ed25519 签名密钥和执行清单（execution-manifest）密钥，并更新两个 `.env` 文件：
+
+```bash
+node scripts/setup-local-auth-env.js --librechat /path/to/LibreChat
+```
+
+单租户部署可以保留 `CODEAPI_JWT_SINGLE_TENANT_ID=legacy`，但该值必须在两个服务上保持一致。多租户部署应提供经过身份验证的租户上下文，并在 LibreChat 中启用 `TENANT_ISOLATION_STRICT=true`，同时在 Code Interpreter 中启用 `CODEAPI_TENANT_ISOLATION_STRICT=true`。严格模式会拒绝没有租户上下文的请求，而不是使用单租户回退机制。
 
 ### 直接 API 集成 [#direct-api-integration]
 
-Code Interpreter API 可以通过简单的 API 密钥认证集成到任何应用程序中：
-
-1. 部署您自己的 [code-interpreter](https://github.com/ClickHouse/code-interpreter) 实例并创建一个 API key
-2. 在请求中使用 `x-api-key` 请求头包含 API 密钥
+当前的自托管服务需要一个满足其 LibreChat JWT 声明契约的 bearer token。直接集成必须生成兼容的短效 token，并将其发送在 `Authorization: Bearer <token>` 请求头中。兼容 API-key 的部署则接受在 `x-api-key` 请求头中配置的密钥。切勿在公共或生产环境的 endpoint 上使用 Code Interpreter 的免认证本地模式。
 
 ### 自托管基础 URL [#self-hosted-base-url]
 
-设置 `LIBRECHAT_CODE_BASEURL` 环境变量，将 LibreChat 指向您自托管的 [code-interpreter](https://github.com/ClickHouse/code-interpreter) 实例，并使用在该部署上生成的 API 密钥，其使用方式与上述相同。
+设置 `LIBRECHAT_CODE_BASEURL` 以将 LibreChat 指向您自托管的 [code-interpreter](https://github.com/ClickHouse/code-interpreter) 实例，然后配置 [JWT authentication](#self-hosted-jwt-authentication)。对于兼容 API-key 的服务，请改为设置 `LIBRECHAT_CODE_API_KEY`。高度实验性的有状态 Agent 会话需要通过 [`LIBRECHAT_CODE_BASEURL_STATEFUL`](/docs/configuration/dotenv#stateful-code-interpreter-endpoint) 或命名的 [`statefulCodeSessions.environments`](/docs/configuration/librechat_yaml/object_structure/agents#statefulcodesessions) 配置单独的 `stateful`-profile 路由。
 
 ## 核心功能 [#core-functionality]
 

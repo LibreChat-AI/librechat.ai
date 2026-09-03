@@ -88,6 +88,28 @@ LANGFUSE_BASE_URL=https://cloud.langfuse.com
 
 当两个环境变量键同时存在时，LibreChat 会将它们用于中央项目，并隐藏 **Settings → Langfuse**。`LANGFUSE_TRACING_ENABLED=false` 或 `LANGFUSE_SAMPLE_RATE=0` 将同时禁用追踪和反馈评分。分段采样会对每个追踪做出一次确定性决策；被采样排除的追踪将不会接收后续的反馈评分。
 
+`LANGFUSE_BASE_URL` 是规范的基础 URL 设置。旧的 `LANGFUSE_HOST` 和 `LANGFUSE_BASEURL` 名称仍作为兼容性别名保留，当设置了多个变量时，`LANGFUSE_BASE_URL` 具有优先权。
+
+### 经过身份验证的代理和网关 [#authenticated-proxies-and-gateways]
+
+对于部署在 Cloudflare Access、oauth2-proxy 或其他身份验证网关之后的自托管 Langfuse 实例，请在 `librechat.yaml` 中定义部署级别的自定义请求头：
+
+```yaml filename="librechat.yaml"
+langfuse:
+  headers:
+    CF-Access-Client-Id: '${CF_ACCESS_CLIENT_ID}'
+    CF-Access-Client-Secret: '${CF_ACCESS_CLIENT_SECRET}'
+```
+
+LibreChat 会将解析后的标头应用于每一个直接的 Langfuse 接口：追踪（trace）和媒体导出、反馈评分的创建与删除、项目身份查找以及管理员凭据验证。Langfuse 自身的 `Authorization` 凭据在 REST 请求中保持权威性。这些值支持 `${ENV_VAR}` 插值；未解析的变量、受保护的基础设施密钥引用、空值以及无效的标头名称将被丢弃并发出警告。标头值在启动日志和管理员配置读取中会被掩码处理，但仍建议使用环境变量引用而非直接填写凭据。
+
+这些标头由运营商所有，且仅限在 YAML 中配置。它们无法通过管理面板或配置 API 写入，无法存储在 MongoDB 中，也无法使用基于用户的 `{{...}}` 占位符进行填充。LibreChat 仅在配置解析出唯一一个 Langfuse 源时才会发送这些标头。如果存在多个中心、租户或收集器源，系统会记录一条警告，且不会发送任何自定义标头，因为映射无法安全地选择接收方。
+
+<Callout type="warning" title="扇出限制">
+  fanout 收集器目前仅将 `Authorization` 转发至租户 Langfuse 目的地。
+自定义 `langfuse.headers` 可以验证 LibreChat 对单个收集器或 Langfuse 源的直接请求，但它们无法验证收集器向位于另一个代理之后的租户目的地发出的上游请求。
+</Callout>
+
 ## 租户扇出 (可选) [#tenant-fanout-optional]
 
 Langfuse fanout 允许一个多租户的 LibreChat 部署将每个符合条件的追踪（trace）及其媒体导出到中央 Langfuse 项目以及租户特定的项目中。该功能为可选配置，并增加了一个网关和一个内部 OpenTelemetry 收集器；当未部署 fanout 时，上述常规的单项目追踪功能保持不变。
@@ -205,9 +227,23 @@ Redis 存储短期的、一次性的媒体上传计划，以便创建和上传�
 
 设置 `LANGFUSE_FANOUT_CENTRAL_MEDIA_UPLOAD_DISABLED=true` 以防止 LibreChat SDK 为中央或回退收集器追踪创建媒体上传；租户路由的媒体上传不受影响。此应用端的开关与网关端的 `LANGFUSE_FANOUT_CENTRAL_MEDIA_EXPORT_DISABLED` 不同，后者用于在上传到达网关后阻止中央媒体转发。
 
+对于媒体转发，fanout 网关仅接受由配置的 Langfuse 授权机构返回的绝对 HTTPS 上传目标，并且不会在上传 `PUT` 请求时跟随重定向。当自托管对象存储（包括私有 MinIO 主机）返回的上传 URL 使用 HTTPS 时，它仍然受支持。纯 HTTP 或依赖重定向的媒体上传目标现在会默认失败（fail closed），而追踪导出（trace export）则会继续独立运行。
+
 追踪和媒体流量通过扇出网关（fanout gateway）。反馈评分直接从 LibreChat 发送：中心评分使用 `LANGFUSE_PUBLIC_KEY`、`LANGFUSE_SECRET_KEY` 和 `LANGFUSE_BASE_URL`，而租户评分则使用租户应用配置。
 
 请参阅 [Langfuse fanout deployment reference](https://github.com/danny-avila/LibreChat/blob/dev/otel/langfuse-fanout/README.md) 以获取有关所有网关变量、自定义目标设置、指标、扩展和 Redis 行为的信息。
+
+### 导出诊断信息 [#export-diagnostics]
+
+每个被追踪的请求都会记录低基数的 OpenTelemetry 属性，这些属性解释了其租户导出决策：
+
+- `librechat.tenant.id` 用于标识租户上下文
+- `librechat.langfuse.export_plan` 的取值为 `central_only`、`tenant_fanout` 或 `disabled`
+- `librechat.langfuse.export_reason` 的取值为 `configured`、`collector_unconfigured`、`destination_unconfigured`、`emergency_disabled`、`fanout_disabled`、`missing_credentials` 或 `tenant_disabled`
+
+网关还公开了 `langfuse_fanout_trace_exports_total{destination,result,tenant_id}`。没有租户的批次使用 `<unknown>`，混合租户的批次使用 `<multiple>`，格式错误的租户 ID 使用 `<invalid>`。网关每个进程最多保留 1,000 个不同的有效租户标签，并将后续的 ID 合并到 `<overflow>` 下，以限制指标的基数；无法识别的目标会被记录为 `central`，而不是创建另一个标签。
+
+成功的应用内连接更改也会写入结构化事件 `librechat.langfuse.connection.changed`。它包含租户、配置和启用状态、目标、验证结果、主要更改以及完整的更改字段列表，且不会记录任何密钥。使用这些字段可以区分是有意为之的仅限中央管理或已禁用计划，还是缺少收集器、目标或凭据配置。
 
 ## 重启 LibreChat [#restart-librechat]
 
@@ -222,11 +258,15 @@ docker compose up -d
 
 一旦配置好 Langfuse 并重启 LibreChat，您将在 Langfuse UI 中看到每一条聊天消息响应的新追踪记录：
 
+LibreChat v0.8.8-rc2 更新了 Agent 追踪塑形，现在使用 `StandardGraph`、`MultiAgentGraph` 和 `AgentModelCall` 运行时观测名称，并将活动和推理标签调用嵌套在其描述的工作之下。追踪级别的输入和输出也已在根观测中呈现。请检查依赖于早期观测名称或追踪级别输入/输出字段的已保存 Langfuse 过滤器、仪表板和评估。
+
 ![LibreChat 示例追踪](https://langfuse.com/images/cookbook/integration_librechat/librechat-example-trace.png)
 
 [在 Langfuse UI 中查看追踪的链接](https://cloud.langfuse.com/project/cloramnkj0002jz088vzn1ja4/traces/57b4aa20a258a2e9e2d1ce2e4eacb21c?observation=06f5341a68d723b1&timestamp=2026-02-04T13%3A02%3A54.248Z&traceId=57b4aa20a258a2e9e2d1ce2e4eacb21c)
 
-拥有 `access:admin` 和 `manage:configs:langfuse` 权限的管理员还可以打开对话的 **Context Usage**（上下文使用情况）细分页面，并选择 **View session in Langfuse**（在 Langfuse 中查看会话）。该链接仅在生成完成后，且对话包含至少一个发送至当前启用的应用内 Langfuse 连接的采样追踪（sampled trace）时才会显示。它指向该连接已验证的目标地址和项目；对于环境管理的凭据、已禁用的连接、被采样排除的对话，或没有 Langfuse 配置访问权限的用户，该链接不会显示。
+拥有 `access:admin` 和 `manage:configs:langfuse` 权限的管理员可以打开对话的 **Context Usage**（上下文使用情况）细分页面，并选择 **View session in Langfuse**（在 Langfuse 中查看会话）。对于拥有 Langfuse 配置访问权限且经过身份验证的同一租户管理员，共享对话中也会出现相同的操作。公开查看者和普通共享链接查看者则无法看到此选项。
+
+该链接仅在生成完成后且对话中包含至少一个发送至当前启用的应用内 Langfuse 连接的采样追踪时才会显示。它指向该连接已验证的目标地址和项目；对于环境管理的凭据、已禁用的连接、被采样排除的对话、跨租户查看者或缺乏必要访问权限的用户，该链接不会显示。
 
 ## 消息反馈评分 [#message-feedback-scores]
 

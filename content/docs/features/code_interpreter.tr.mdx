@@ -23,8 +23,10 @@ LibreChat'in Code Interpreter API'si, basit bir API arayüzü aracılığıyla k
 ## Başlarken [#getting-started]
 
 1. [code-interpreter](https://github.com/ClickHouse/code-interpreter) servisini dağıtın (Docker Compose veya Helm, deponun README dosyasına bakın)
-2. `LIBRECHAT_CODE_BASEURL` ve `LIBRECHAT_CODE_API_KEY` ortam değişkenlerini kullanarak LibreChat'i buna yönlendirin.
-3. LibreChat'in Ajanları veya "Run Code" butonu aracılığıyla güvenli bir şekilde kod yürütmeye ve dosya oluşturmaya başlayın
+2. `LIBRECHAT_CODE_BASEURL` ile LibreChat'i ona yönlendirin
+3. Mevcut açık kaynak hizmeti için [LibreChat JWT authentication](#self-hosted-jwt-authentication) yapılandırın veya API anahtarı uyumlu bir dağıtım için `LIBRECHAT_CODE_API_KEY` değerini ayarlayın
+4. Durumlu (stateful) Ajan oturumlarını denemek için ayrı bir `stateful` profilli Code Interpreter rotası dağıtın ve `LIBRECHAT_CODE_BASEURL_STATEFUL` değişkenini veya adlandırılmış [`statefulCodeSessions.environments`](/docs/configuration/librechat_yaml/object_structure/agents#statefulcodesessions) ayarını yapılandırın.
+5. LibreChat'in Ajanları veya "Run Code" butonu aracılığıyla güvenli bir şekilde kod yürütmeye ve dosya oluşturmaya başlayın
 
 ## Temel Özellikler [#key-features]
 
@@ -43,6 +45,12 @@ Birden fazla programlama dilinde kod çalıştırın:
 
 LibreChat, bir Agent çalıştırılmadan önce referans verilen konuşma dosyalarını mevcut Code Interpreter ortamına geri yükler. Eğer gerekli tüm Code Interpreter dosyalarının kurtarılması başarısız olursa, çalışma model çağrısından önce durdurulur ve kullanıcıdan eski referanslarla devam etmek yerine dosyaları yeniden eklemesi istenir.
 
+Sohbet girdileri aynı sandbox hedefine yüklendiğinde, LibreChat yürütme öncesinde çakışmayı çözer. Paylaşılan sohbet dosyaları, Ajan'a özel dosyalardan önce atanır; her kapsam içinde, en yeni içerik yazımı orijinal hedefi korur. Çakışan yollar gerektiğinde düzleştirilir veya kimlik türevli bir sonek alır ve çözümlenen `/mnt/data/...` yolları Ajan'ın dosya bağlamına dahil edilir. Bu durum aynı dosya adını paylaşan bir yükleme ve oluşturulan bir çıktı için de geçerlidir, böylece bir çakışma, sohbet içindeki sonraki tüm Code Interpreter çalıştırmalarını reddetmez. Hâlâ halihazırda talep edilmiş bir hedefe yönlenen yinelenen kaynak referansları, tüm isteği başarısız kılmak yerine atlanır.
+
+Sandbox görüntüleri sınırlı pencereler içinde aktarılır. [`LIBRECHAT_CODE_SANDBOX_OUTPUT_MAX_SIZE`](/docs/configuration/dotenv#code-interpreter) değerini, worker'ın `SANDBOX_OUTPUT_MAX_SIZE` değeriyle eşleşecek şekilde ayarlayın; LibreChat, en güvenli görüntü penceresini bu bütçeden türetir ve başarısız bir okuma işleminden sonra daha küçük bir hizmet başına sınır öğrenebilir. `LIBRECHAT_CODE_IMAGE_CHUNK_BYTES` değerini yalnızca kesin bir pencere geçersiz kılma işlemi gerektiğinde kullanın. Daha önce indirilen oluşturulmuş yapılar, mümkün olduğunda istek içinde yeniden kullanılır ve böylece başka bir sandbox okuma işleminden kaçınılır.
+
+Çoklu Agent grafiğinde, farklı Agent'lara özel dosyalar için birbirinden farklı dosya adları kullanın. Her Agent, grafik girdilerini birleştirmeden önce kendi özel dosya yollarını çözümler; bu nedenle, bağımsız olarak aynı hedefi talep eden ve aslında birbirinden farklı olan özel dosyalar, birleştirme anında henüz tutarlı bir şekilde yeniden adlandırılamaz; ilk oluşturulan (seeded) hedef geçerli olur.
+
 ### Güvenlik ve Kolaylık [#security--convenience]
 
 - Güvenli korumalı alan (sandboxed) yürütme ortamı
@@ -54,25 +62,72 @@ LibreChat, bir Agent çalıştırılmadan önce referans verilen konuşma dosyal
 
 Programmatic Tool Calling, LibreChat Ajanlarının seçili MCP araçlarını Code Interpreter sanal alanı üzerinden yönlendirmesine olanak tanır. LibreChat, modelden her aracı doğrudan çağırmasını istemek yerine, Code Interpreter destekli bir düzenleme aracı sağlar; oluşturulan sanal alan kodu, kayıtlı araç taslaklarını (stubs) çağırabilir, döngüler ve koşullu ifadeler kullanabilir, ara sonuçları işleyebilir ve nihai bir yanıt döndürebilir.
 
-Sandbox hala genel ağ erişimi almamaktadır. Araç çağrıları, Code Interpreter Tool Call Server ve LibreChat'in kayıtlı araç haritası aracılığıyla yönetilir, bu nedenle yalnızca araca sunulan araçlar çağrılabilir.
+Sandbox hala genel ağ erişimi almamaktadır. Araç çağrıları, Code Interpreter Tool Call Server aracılığıyla yönetilir. LibreChat, canlı çağırıcı-yetenek projeksiyonunu güvenilir kayıt defteriyle kesiştirir; bu sayede yalnızca Ajan için halihazırda kayıtlı olan aktif programatik araçlar çağrılabilir ve bir istek kendi erişimini genişletemez.
+
+Programatik araçlar, Ajan üzerinde Code Interpreter gerektirir. Bunların geçiş düğmeleri, Code Interpreter seçilene kadar devre dışı kalır ve Code Interpreter'ın kaldırılması mevcut Programatik seçimleri temizler. LibreChat ayrıca, `execute_code` veya Code Interpreter aracı kullanılamadığında Ajan oluşturma, güncelleme, çoğaltma ve sürüm geri yükleme işlemlerinden eski programatik çağırıcı seçeneklerini kaldırır.
+
+Programatik bir yürütme sırasında, sınırlı argüman önizlemeleri, durumlar, süreler ve hatalar içeren iç araç çağrılarının canlı terminal tarzı izini görmek için Code Interpreter kartını genişletin. Bu iz, program çalışırken onu incelemeye yardımcı olur, ancak sayfa yenilendiğinde kalıcı olmaz.
 
 ### Background Code Execution [#background-code-execution]
 
-Arka plan yürütme, bir Agent'ın uzun süren kod veya kabuk (shell) işlemlerini göndermesine, konuşmaya devam etmesine ve sonucu daha sonra `check_background_task` aracılığıyla almasına olanak tanır. LibreChat sohbetinde, işlem tamamlandığında stdout ve oluşturulan dosyalar orijinal kod çağrısında görünür. Oluşturulan dosyalar, Agent henüz görevi sorgulamamış olsa bile sonraki turlar için kalıcı hale getirilir.
+Arka plan yürütme, bir Agent'ın uzun süren kod veya kabuk işlemlerini başlatmasına ve sohbete devam etmesine olanak tanır. Kaydedilmiş Agent'lar için, desteklenen içerik odaklı tamamlamalar varsayılan olarak bir devam niteliğindeki takip mesajıyla otomatik olarak iletilir. `check_background_task` işlevi; durum kontrolü, denetim, canlı artifact'ler ve kurtarma işlemleri için kullanılabilir durumdadır. LibreChat sohbetinde, işlem tamamlandığında stdout ve oluşturulan dosyalar orijinal kod çağrısında görünür ve sonraki aşamalar için kalıcı hale getirilir.
 
 Bu özellik, dağıtım düzeyinde isteğe bağlıdır (opt-in). [Agents endpoint capabilities](/docs/configuration/librechat_yaml/object_structure/agents#capabilities) içindeki `execute_code` yanına `run_in_background` ekleyin ve ardından ajan üzerinde Code Interpreter'ı etkinleştirin. Kod yürütme ve kabuk çağrıları otomatik olarak arka planda çalışmaya uygun hale gelir; bir ajanın bu özelliği devre dışı bırakması gerektiğinde Code Interpreter araç ayarlarından **Background execution** seçeneğini kapatın. Model, uygun işlerin arka planda gönderilip gönderilmeyeceğine her çağrıda yine kendisi karar verir.
 
-Arka plan görevi durumu süreç-yereldir ve uygulama yeniden başlatıldığında veya kopyalar (replicas) arasında taşındığında korunmaz. Arka plan gönderimi (dispatch), Code Interpreter hizmetinin yürütme sınırını da genişletmez; dağıtımın normal sunucu tarafı zaman aşımı süresi geçerli olmaya devam eder.
+Sıradan arka plan yürütme işlemi, süreç yerelinde kalır ve uygulama çalışanının (app worker) kaybından sağ çıkamaz. Yalnızca içerik içeren bir terminal sonucu kalıcı hale getirildiğinde, otomatik teslimatı dayanıklıdır ve başka bir replikada devam edebilir; canlı bir yapıya (artifact) sahip görevler, sahibi olan çalıştırmada hala yoklama (polling) gerektirir. Her sonuç için yoklamayı zorunlu kılmak üzere [`endpoints.agents.backgroundTasks.completionWakeups: false`](/docs/configuration/librechat_yaml/object_structure/agents#backgroundtasks) ayarını yapın. Arka plan gönderimi, Code Interpreter hizmetinin yürütme sınırını genişletmez; dağıtımın normal sunucu tarafı zaman aşımı hala geçerlidir.
 
 ### Durum Bilgili (Stateful) Kod Oturumları [#stateful-code-sessions]
 
-Stateful kod oturumları, bir LibreChat Agent'ın her konuşma için bir Code Interpreter sanal alan çalışma alanını yeniden kullanmasına olanak tanır. Dosyalar, yüklü paketler ve çalışma durumu genellikle yürütmeler arasında taşınır; bu da yinelemeli analizi ve çok adımlı dosya oluşturmayı daha verimli hale getirir.
+Stateful kod oturumları, bir LibreChat Agent'ın tek bir Code Interpreter sanal alan çalışma alanını yürütmeler arasında yeniden kullanmasına olanak tanır. Dosyalar, yüklü paketler ve çalışma durumu genellikle korunur; bu da yinelemeli analizi ve çok adımlı dosya oluşturmayı daha verimli hale getirir. Her bir agent, bir çalışma alanı kapsamı seçer:
+
+- **Kullanıcı çalışma alanı (önerilen):** durum bilgisi etkinleştirilmiş aracılar genelinde oturum açmış kullanıcı için tek bir çalışma alanı
+- **Ajan + kullanıcı çalışma alanı:** her kullanıcı ve ajan kombinasyonu için bir çalışma alanı
+- **Sohbet çalışma alanı:** her kullanıcı ve sohbet için bir çalışma alanı
+
+Yeni oluşturulan Ajanlar için ilk kapsam, **Ayarlar > Veri Kontrolleri > Kod yürütme > Varsayılan durum bilgili çalışma alanı** kısmından gelir. Kişisel ayar varsayılan olarak **Kullanıcı çalışma alanı** şeklindedir; bunu değiştirmek mevcut Ajanları değiştirmez veya durum bilgili oturumları etkinleştirmez. Dağıtım yöneticileri, seçilebilir kapsamları [`statefulCodeSessions.allowedEnvironments`](/docs/configuration/librechat_yaml/object_structure/agents#statefulcodesessions) ile kısıtlayabilir. Kaydedilmiş bir kişisel varsayılan kullanılamaz hale gelirse, yeni Ajanlar ilk izin verilen kapsamı kullanır; artık izin verilmeyen bir kapsama sahip mevcut ve etkin bir Ajanın çalışabilmesi için yeniden yapılandırılması gerekir.
+
+Çalışma alanı kapsamı, yürütme arka ucundan ayrıdır. Yöneticiler adlandırılmış [`statefulCodeSessions.environments`](/docs/configuration/librechat_yaml/object_structure/agents#statefulcodesessions) yapılandırdığında, Agent Builder bir **Yürütme ortamı** seçicisi ekler:
+
+- **Managed:** dağıtım tarafından işletilen durum bilgisi olan (stateful) bir Code API
+- **Ekli:** operatör tarafından yönetilen bir VM gibi, işi giden bir `@librechat/code` çalışanına kiralayan uyumlu bir Code API uzak köprüsü
+- **Kişisel:** LibreChat ayarları aracılığıyla yetkili bir kullanıcı tarafından eşleştirilen, sahibi tarafından kısıtlanmış bir `@librechat/code` çalıştırıcısı
+- **Dağıtım varsayılanı:** varsayılan olarak işaretlenmiş yapılandırılmış ortam
 
 <Callout type="warning" title="Son derece deneysel">
   Stateful Code Sessions erken bir deneme aşamasındadır. Davranışları, yapılandırmaları, kalıcılık özellikleri ve temel entegrasyonları önemli ölçüde değişebilir. Mevcut uygulamayı kararlı bir üretim sözleşmesi olarak değerlendirmeyin.
 </Callout>
 
-Bu özellik isteğe bağlıdır (opt-in). [Agents endpoint capabilities](/docs/configuration/librechat_yaml/object_structure/agents#capabilities) kısmında `execute_code` ve `stateful_code_sessions` ayarlarını etkinleştirin, ajan üzerinde Code Interpreter'ı açın ve ardından Gelişmiş ayarlarından **Stateful code sessions** seçeneğini aktif hale getirin. Çalışma alanı herhangi bir zamanda sıfırlanabilir. Önemli çıktıları `/mnt/data` altında kaydedin ve bunun dışında oturum durumuna kalıcı depolama olarak güvenmeyin.
+Bu özellik isteğe bağlıdır (opt-in). [Agents endpoint capabilities](/docs/configuration/librechat_yaml/object_structure/agents#capabilities) kısmında `execute_code` ve `stateful_code_sessions` özelliklerini etkinleştirin, [`LIBRECHAT_CODE_BASEURL_STATEFUL`](/docs/configuration/dotenv#stateful-code-interpreter-endpoint) veya adlandırılmış ortamlar ile özel bir stateful (durumlu) rota yapılandırın, ajan üzerinde Code Interpreter'ı etkinleştirin, ardından Gelişmiş ayarlardan **Stateful code sessions** seçeneğini açın ve yürütme arka ucunu (execution backend) ve çalışma alanı kapsamını (workspace scope) belirleyin.
+
+Seçili ortam eksik, erişilemez veya uyumsuz olduğunda durum bilgili (stateful) istekler başarısız olur; LibreChat bunları `LIBRECHAT_CODE_BASEURL` adresine göndermez veya sessizce başka bir adlandırılmış arka uç seçmez. Hiçbir adlandırılmış ortam yapılandırılmadığında, `LIBRECHAT_CODE_BASEURL_STATEFUL` durum bilgili rota olarak kalmaya devam eder. Durum bilgisiz (stateless) aracılar normal endpoint kullanmaya devam eder. LibreChat ayrıca `X-CodeAPI-Expected-Profile: stateful` başlığını gönderir, bu nedenle özel hizmetin `stateful` profilini duyurması gerekir.
+
+Stateful ve stateless oturumlar canlı bir çalışma alanını paylaşmazlar. Stateful çalışma alanı, seçilen kapsamdan bağımsız olarak herhangi bir zamanda sıfırlanabilir. Önemli çıktıları `/mnt/data` altında kaydedin ve bunun dışında oturum durumuna kalıcı depolama olarak güvenmeyin.
+
+Stateful `create_file` ve `edit_file` çağrıları tarafından oluşturulan dosyalar, asistan mesajının altında genişletilebilir bir **Workspace changes** satırında görünür. Bu satır, ilgili yanıt için değiştirilen her benzersiz yolu listeler ve kimliği doğrulanmış bir indirme işlemi sunar. İndirmeler, mevcut olduğunda LibreChat'in kalıcı dosya akışını, aksi takdirde güvenli bir Code Interpreter yedeğini kullanır. Bu satır, kalıcı bir çalışma alanı anlık görüntüsü değil, oluşturulan çıktıların bir kaydıdır; durumsuz (stateless) çıktılar normal satır içi ekler olarak görünmeye devam eder.
+
+#### Ekli ortamlar ve eşleştirme [#attached-environments-and-pairing]
+
+Ekli ortamlar, eşleşen bir deneysel Code Interpreter remote-bridge derlemesi gerektirir. Köprü, LibreChat'in kimlik doğrulamalı ilkesi, kuyruğu ve sonuç sınırı olmaya devam ederken, `@librechat/code` işçisi (worker) ekli makineden dışa doğru bağlantı kurar; makinenin gelen bir genel işçi portuna ihtiyacı yoktur. LibreChat, ekli ortamları önceden ısıtmaz (prewarm).
+
+Bir operatör, dağıtıma ait bir ekli ortamı `workerId` ile tek bir çalışana sabitleyebilir ve LibreChat'in aynı rota için bir yönetici eşleştirme kodu oluşturması gerektiğinde `pairing.workerId` ekleyebilir. `pairing.tokenEnv`, köprü yönetici belirtecini içeren ortam değişkenini adlandırır; gizli anahtarın kendisi asla YAML içinde yer almamalıdır. Eşleştirilmiş kontrol düzlemleri, loopback geliştirme ortamı dışında HTTPS gerektirir.
+
+Self-service çalışanlar için, `pairing.allowPrincipalWorkers: true` ve `pairing.tokenEnv` ile dağıtımın kendisine ait bir bağlı kontrol düzlemi yapılandırın. Bu, her iki worker ID'sini de atlayabilir ve yalnızca bir kayıt kontrol düzlemi olarak var olabilir; böyle bir girdi yürütme için seçilemez ve dağıtım varsayılanı olamaz.
+
+Kod Ortamı yönetimi iznine sahip kullanıcılar daha sonra **Ayarlar > Kod ortamları** kısmını açabilir, bir ortama isim verebilir, onaylanmış bir kontrol düzlemi seçebilir ve **VM'ye Bağlan** seçeneğine tıklayabilir. LibreChat, kısa ömürlü ve tek kullanımlık bir `librechat-code pair ...` komutu gösterir. Bu komutu kullanıcının VM'sinde çalıştırın, ardından `LIBRECHAT_CODE_SANDBOX_ENDPOINT` değerini o makinenin sandbox servisine yönlendirerek `@librechat/code` başlatın. Arayüz, kullanıcının ortamlarını listeler ve bunları daha sonra iptal edip kaldırabilir; sandbox dosyaları VM üzerinde kalmaya devam eder.
+
+Kişisel ortamlar, kimliği doğrulanmış kullanıcıya ve kiracıya bağlıdır, Code Environment ACL'leri ile korunur ve yalnızca sunucu tarafından doğrulanmış kimlikler ve onaylanmış temel URL'ler atanır. LibreChat, köprü yöneticisi belirtecini veya rastgele operatör URL'lerini istemciye ifşa etmez. Bir ortamın kaldırılması, kayıt defteri girdisini silmeden önce çalışan kimlik bilgilerini iptal eder ve kullanıcı silme işlemi, kesintiye uğrayan denemeler için arka plan mutabakatı ile aynı iptal ve temizleme işlemini zamanlar. Seçilen çalışan rotası; Code Interpreter, kabuk, oluşturulan dosya erişimi ve Programmatic Tool Calling için tutarlı bir şekilde uygulanır.
+
+#### Attached-environment araç izinleri [#attached-environment-tool-permissions]
+
+Ekli ve kişisel ortamlar, dosya yazma ve komut veya kod yürütme işlemleri için varsayılan olarak "sor" (ask-by-default) onay politikasını kullanır. Salt okunur ve arama işlemleri, dağıtımın normal araç politikası kapsamında devam eder. Yönetici, her iki kategoriyi de [`configSchema.permissions`](/docs/configuration/librechat_yaml/object_structure/agents#statefulcodesessions) aracılığıyla kullanıma sunarsa, Kod Ortamı yönetimi iznine sahip kullanıcılar **Ayarlar > Kod ortamları** altında izin verilen **İzin Ver (Allow)**, **Sor (Ask)** veya **Reddet (Deny)** değerleri arasından seçim yapabilirler. Eksik, güncel olmayan veya izin verilmeyen ayarlar güvenli bir şekilde **Sor (Ask)** seçeneğine geri döner.
+
+Bu kontroller; dosya oluşturma araçlarını, kabuk ve kod yürütmeyi, derleme denetimlerini ve Programatik Araç Çağırmayı (Programmatic Tool Calling) kapsar. Beceri (Skill) yazma özelliği etkin olduğunda, sıradan dosya yazma işlemlerine izin verilse bile kalıcı Beceri dosyalarına yapılan yazma işlemleri yine de onay gerektirir. Ayarlar; VM izolasyonunu, ağ oluşturmayı, bağlamaları (mounts), ayrıcalıklı yürütmeyi, girişi (ingress), çıkışı (egress) veya gizli anahtar erişimini değiştirmez.
+
+Dağıtımın açık [`toolApproval.enabled: false`](/docs/configuration/librechat_yaml/object_structure/agents#toolapproval) ayarı, bu temel kuralı devre dışı bırakan bir acil durum geçersiz kılma işlemidir. Bu geçersiz kılma olmadan, onay isteklerini sunamayan ve devam ettiremeyen bir çağırıcı, ekli ortam aracını sessizce yürütmek yerine başarısız olur ve kapanır.
+
+Eşleştirme, uzak çalışan taşıyıcısının kimliğini doğrular; bu bir korumalı alan (sandbox) sınırı değildir. Çalışanın yerel yürütme endpoint'ini loopback veya özel bir ağ üzerinde tutun ve güvenilmeyen kodlar için uygun bir izolasyon modu kullanın.
+
+Bir yürütme işlemi aktifken, genişletilmiş kod ve kabuk detay bölmeleri, akış halindeki argümanları en alta kadar takip eder. Yukarı kaydırma işlemi, takip davranışını duraklatır; böylece bölme görünüm alanını başka yöne çekmeden önceki çıktıları inceleyebilirsiniz.
 
 ## API Kullanımı [#using-the-api]
 
@@ -88,25 +143,66 @@ LibreChat'te API, şu ana yöntemler aracılığıyla birinci sınıf desteğe s
 
 4. **[Background Tool Calls](/docs/features/agents#background-tool-calls)**: Bir ajanın uygun kodları arka planda göndermesine ve kod çalışırken devam etmesine izin verin.
 
-5. **[Stateful Code Sessions](/docs/features/agents#stateful-code-sessions)**: Bir ajanın kod yürütmeleri genelinde konuşma başına bir çalışma alanını deneysel olarak yeniden kullanın.
+5. **[Stateful Code Sessions](/docs/features/agents#stateful-code-sessions)**: Bir ajanın kod yürütmeleri genelinde kullanıcı, ajan-ve-kullanıcı veya konuşma kapsamlı bir çalışma alanını deneysel olarak yeniden kullanın.
 
 ![LibreChat içinde Kod Yorumlayıcı](/images/agents/run_code.png)
 
 ### API anahtarını ayarlama [#set-up-api-key]
 
-- **Kullanıcı bazlı kurulum:** İstendiğinde (yukarıdaki yöntemleri kullanarak) LibreChat içinde API anahtarınızı girin
-- **Global kurulum:** projenizin .env dosyasındaki `LIBRECHAT_CODE_API_KEY` ortam değişkenini kullanın (tüm kullanıcılara erişim sağlar)
+- **Kullanıcı bazlı kurulum:** İstendiğinde API anahtarınızı LibreChat'e girin.
+- **Global setup:** LibreChat'in `.env` dosyasında `LIBRECHAT_CODE_API_KEY` değerini ayarlayarak tüm kullanıcılar için tek bir anahtar sağlayın.
+
+Mevcut [ClickHouse/code-interpreter](https://github.com/ClickHouse/code-interpreter) hizmeti, yerel mod dışında LibreChat JWT kimlik doğrulamasını kullanır. API anahtarları, uyumlu Code Interpreter dağıtımları için kullanılabilir durumda kalmaya devam eder.
+
+### Kendi kendine barındırılan JWT kimlik doğrulaması [#self-hosted-jwt-authentication]
+
+JWT kimlik doğrulaması ile LibreChat, her Code Interpreter isteğinde kimliği doğrulanmış kullanıcı için kısa ömürlü bir bearer token imzalar. Code Interpreter hizmeti, eşleşen genel anahtarı doğrular ve dosyaları ve oturumları izole etmek için imzalanmış kullanıcı ve kiracı bağlamını kullanır. Özel imzalama anahtarı LibreChat'te kalır; Code Interpreter yalnızca genel doğrulayıcısını alır.
+
+LibreChat'i şununla yapılandırın:
+
+```env
+CODEAPI_AUTH_PROVIDER=librechat-jwt
+CODEAPI_JWT_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"
+CODEAPI_JWT_ALGORITHM=EdDSA
+CODEAPI_JWT_KID=lc-codeapi-2026-05
+CODEAPI_JWT_ISSUER=librechat
+CODEAPI_JWT_AUDIENCE=codeapi
+CODEAPI_JWT_TTL_SECONDS=300
+CODEAPI_JWT_MINT_CACHE_SECONDS=30
+CODEAPI_JWT_SINGLE_TENANT_ID=legacy
+```
+
+`CODEAPI_JWT_PRIVATE_KEY_BASE64` bunun yerine base64 kodlu bir PEM tutabilir ve `CODEAPI_JWT_PRIVATE_JWK_JSON` özel bir JWK kabul eder. LibreChat, Ed25519 (`EdDSA`, varsayılan) ve RSA (`RS256`) imzalamayı destekler. LibreChat tarafındaki tüm ayarlar için [environment-variable reference](/docs/configuration/dotenv#code-interpreter-jwt-authentication) bölümüne bakın.
+
+Code Interpreter'ı ilgili doğrulayıcı (verifier) ile yapılandırın:
+
+```env
+LOCAL_MODE=false
+CODEAPI_AUTH_PROVIDER=librechat-jwt
+CODEAPI_JWT_ISSUER=librechat
+CODEAPI_JWT_AUDIENCE=codeapi
+CODEAPI_JWT_ALLOWED_ALGS=EdDSA
+CODEAPI_JWT_JWKS_JSON={"keys":[{"kty":"OKP","crv":"Ed25519","x":"...","kid":"lc-codeapi-2026-05","alg":"EdDSA"}]}
+CODEAPI_JWT_SINGLE_TENANT_ID=legacy
+```
+
+Veren (issuer), hedef kitle (audience), anahtar kimliği (key ID), algoritma ve ortak anahtar, LibreChat'in imzalayıcısı ile eşleşmelidir. Code Interpreter ayrıca doğrulayıcı anahtarlarını `CODEAPI_JWT_PUBLIC_KEY` ve `CODEAPI_JWT_KID` üzerinden veya `CODEAPI_JWT_PUBLIC_KEYS_DIR` dizininden yükleyebilir; satır içi (inline) bir JWKS, anahtar rotasyonu için kullanışlıdır. Belirteç (token) TTL değerini, varsayılan olarak 300 saniye ile sınırlandırılmış olan Code Interpreter hizmetinin `CODEAPI_JWT_MAX_TTL_SECONDS` değerinde veya altında tutun.
+
+Yerel bir kurulum için, Code Interpreter deposu, eşleşen Ed25519 imzalama ve yürütme manifestosu anahtarlarını oluşturan ve her iki `.env` dosyasını da güncelleyen bir yardımcı araç içerir:
+
+```bash
+node scripts/setup-local-auth-env.js --librechat /path/to/LibreChat
+```
+
+Tek kiracılı (single-tenant) dağıtımlarda `CODEAPI_JWT_SINGLE_TENANT_ID=legacy` değeri bırakılabilir, ancak bu değer her iki serviste de aynı olmalıdır. Çok kiracılı (multi-tenant) dağıtımlar, kimliği doğrulanmış bir kiracı bağlamı sağlamalı ve LibreChat içinde `TENANT_ISOLATION_STRICT=true` ile Code Interpreter içinde `CODEAPI_TENANT_ISOLATION_STRICT=true` ayarlarını etkinleştirmelidir. Katı mod (strict mode), tek kiracılı yedekleme (fallback) kullanmak yerine kiracı bağlamı olmayan istekleri reddeder.
 
 ### Doğrudan API Entegrasyonu [#direct-api-integration]
 
-Code Interpreter API, basit bir API anahtarı kimlik doğrulaması kullanılarak herhangi bir uygulamaya entegre edilebilir:
-
-1. Kendi [code-interpreter](https://github.com/ClickHouse/code-interpreter) örneğinizi dağıtın ve bir API anahtarı oluşturun
-2. İsteklerinize `x-api-key` başlığını kullanarak API anahtarını dahil edin
+Mevcut kendi kendine barındırılan hizmet, LibreChat JWT talep sözleşmesini karşılayan bir bearer token bekler. Doğrudan bir entegrasyon, uyumlu kısa ömürlü tokenlar oluşturmalı ve bunları `Authorization: Bearer <token>` başlığında göndermelidir. API anahtarı ile uyumlu dağıtımlar ise bunun yerine yapılandırılmış anahtarlarını `x-api-key` başlığında kabul eder. Code Interpreter'ın kimlik doğrulaması gerektirmeyen yerel modunu asla herkese açık veya üretim (production) bir endpoint üzerinde kullanmayın.
 
 ### Self-hosted temel URL [#self-hosted-base-url]
 
-`LIBRECHAT_CODE_BASEURL` ortam değişkenini, LibreChat'i kendi barındırdığınız [code-interpreter](https://github.com/ClickHouse/code-interpreter) örneğinize yönlendirecek şekilde ayarlayın ve bu dağıtımda oluşturulan bir API anahtarını yukarıdakiyle aynı şekilde kullanın.
+LibreChat'i kendi barındırdığınız [code-interpreter](https://github.com/ClickHouse/code-interpreter) örneğinize yönlendirmek için `LIBRECHAT_CODE_BASEURL` değerini ayarlayın, ardından [JWT authentication](#self-hosted-jwt-authentication) yapılandırmasını gerçekleştirin. API anahtarıyla uyumlu bir hizmet için bunun yerine `LIBRECHAT_CODE_API_KEY` değerini ayarlayın. Oldukça deneysel olan durum bilgili (stateful) Agent oturumları, [`LIBRECHAT_CODE_BASEURL_STATEFUL`](/docs/configuration/dotenv#stateful-code-interpreter-endpoint) aracılığıyla yapılandırılmış ayrı bir `stateful`-profile rotası veya adlandırılmış [`statefulCodeSessions.environments`](/docs/configuration/librechat_yaml/object_structure/agents#statefulcodesessions) gerektirir.
 
 ## Temel İşlevsellik [#core-functionality]
 

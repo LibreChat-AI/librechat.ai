@@ -2,24 +2,25 @@
 title: API Agents (Bêta)
 icon: Plug
 description: >-
-  Accédez aux agents LibreChat par programmation via les endpoints d'API
-  compatibles OpenAI et Open Responses
+  Exécutez des agents LibreChat et transmettez des événements authentifiés via
+  des API programmatiques
 ---
 
 <Callout type="warning" title="Fonctionnalité bêta">
 L'API Agents est actuellement en version bêta. Les endpoints, les formats de requête/réponse et le comportement peuvent changer à mesure que nous progressons vers une version stable.
 </Callout>
 
-LibreChat expose vos agents via deux interfaces compatibles avec l'API, permettant aux applications, scripts et services externes d'interagir avec vos agents de manière programmatique.
+LibreChat expose les agents à des applications, scripts et services externes via des API d'inférence et de diffusion d'événements.
 
 ## Vue d'ensemble [#overview]
 
-L'API Agents fournit deux interfaces :
+L'API Agents fournit deux interfaces d'inférence et une livraison d'événements authentifiée :
 
 - **Chat Completions compatibles avec OpenAI** — `POST /api/agents/v1/chat/completions`
 - **API de réponses ouvertes** — `POST /api/agents/v1/responses`
+- **Événements d'agent** — `POST /api/agents/v1/events`
 
-Les deux sont authentifiés via des clés API et prennent en charge les réponses en streaming, ce qui facilite l'intégration des agents LibreChat dans les flux de travail existants qui utilisent déjà des SDK OpenAI ou des outils similaires.
+Les interfaces d'inférence prennent en charge l'authentification par clé API, l'authentification OIDC optionnelle et les réponses en streaming. Les événements d'agent utilisent l'authentification par clé API des Remote Agents afin que LibreChat puisse lier chaque livraison à une identité source stable.
 
 LibreChat adopte [Open Responses](https://www.openresponses.org/) comme cadre d'API principal pour servir les agents. Bien que le endpoint Chat Completions assure une rétrocompatibilité avec les outils existants compatibles avec OpenAI, le endpoint Open Responses représente l'orientation future.
 
@@ -88,6 +89,10 @@ curl -X POST https://your-librechat-instance/api/agents/v1/responses \
 </Callout>
 
 Voir [Agents Endpoint - remoteApi](/docs/configuration/librechat_yaml/object_structure/agents#remoteapi) pour toutes les options de configuration.
+
+<Callout type="warning" title="Les événements d'agent nécessitent une clé API">
+  L'authentification OIDC uniquement n'est pas prise en charge pour les endpoints Agent Events. Utilisez une clé API Remote Agents lors de la création de liaisons, de la mise en file d'attente d'événements et de l'interrogation du statut de livraison.
+</Callout>
 
 ## Endpoints [#endpoints]
 
@@ -158,9 +163,144 @@ curl -X POST https://your-librechat-instance/api/agents/v1/responses \
   }'
 ```
 
+## Événements d'agent [#agent-events]
+
+Les Agent Events permettent à un contrôleur authentifié ou à un adaptateur source de transmettre un travail durable à un Agent. La distribution d'événements est une fonctionnalité en version bêta et son comportement en matière de requête, de réponse et d'exécution est susceptible de changer.
+
+Les endpoints utilisent l'utilisateur authentifié, le tenant et la clé API ; l'Agent cible doit être visible pour cet utilisateur selon les permissions existantes des Remote Agents. Les requêtes Agent Event utilisent également le bucket dédié [`rateLimits.agentEvents`](/docs/configuration/librechat_yaml/object_structure/config#ratelimits).
+
+### Délivrer un événement [#deliver-an-event]
+
+```http
+POST /api/agents/v1/events
+Authorization: Bearer <REMOTE_AGENTS_API_KEY>
+Idempotency-Key: webhook-42-resource-7
+Content-Type: application/json
+
+{
+  "mode": "fire",
+  "event": {
+    "id": "resource-7-ready-3",
+    "type": "resource.ready",
+    "occurredAt": 1786967999000,
+    "payload": { "resourceId": "resource-7" }
+  },
+  "target": { "agentId": "agent_abc123" },
+  "input": "Resource resource-7 is ready. Inspect it and report the result.",
+  "orderingKey": "resource-7"
+}
+```
+
+Envoyez exactement un en-tête `Idempotency-Key` et réutilisez-le lors de la nouvelle tentative de livraison du même événement source vers la cible. La clé doit contenir entre 1 et 256 lettres, chiffres ou les caractères `._~:/+=-`. La réutilisation d'une clé avec un contenu de livraison différent renvoie un conflit.
+
+L'appelant fournit l' `id`, le `type`, `occurredAt` et le `payload` nettoyé de l'événement. LibreChat remplace tout `event.source` fourni par l'appelant par l'identité de la clé API authentifiée et déduit l'utilisateur, le locataire (tenant), l'ID de requête et l'heure de réception. Ne placez pas d'identifiants ou de secrets de transport dans les charges utiles (payloads) d'événements, car les livraisons acceptées sont persistées.
+
+`orderingKey` est facultatif. Utilisez une valeur stable lorsque les livraisons provenant de différentes sources doivent rester ordonnées pour la même ressource.
+
+Une requête réussie renvoie `202 Accepted`, un `id` de livraison opaque, son statut actuel et un en-tête `Location`. Interrogez cet emplacement :
+
+```http
+GET /api/agents/v1/events/{delivery_id}
+Authorization: Bearer <SAME_REMOTE_AGENTS_API_KEY>
+```
+
+La livraison peut être `pending`, `leased`, `succeeded` ou `dead`. La réponse de statut inclut les tentatives et les horodatages ainsi qu'un résultat ou une erreur publique une fois réglée ; elle n'expose pas la charge utile stockée, la clé de commande, l'historique des tentatives ou l'identité du travailleur. L'accès au statut est limité au même utilisateur, au même locataire et à la même source de clé API.
+
+Pour un `continue` lié, `succeeded` signifie que le tour de l'Agent a été admis, et non que le travail demandé est terminé. Son statut expose donc également un cycle de vie `handling` durable : `started`, suivi exactement de l'un des états suivants : `applied`, `completed_no_action`, `failed` ou `cancelled`.
+
+Les sources sensibles aux actions peuvent inclure une `expectedAction` avec un nom d'outil et un sous-ensemble d'arguments optionnel. LibreChat rapporte `applied` uniquement lorsque cette génération exacte se termine avec une preuve d'outil observée par l'hôte correspondant au contrat ; la prose rédigée par le modèle n'est jamais acceptée comme preuve. Les envois `fire`, `steer` et `continue` non liés rejettent `expectedAction`.
+
+Les résultats `fire` réussis incluent l'identité de la conversation et de la génération qu'un événement `steer` ultérieur peut cibler.
+
+### Agents enfants pilotés par les événements [#event-driven-child-agents]
+
+Un système externe peut lier un acteur source à un Agent enfant direct, puis poursuivre cette même conversation enfant à travers les événements. Les continuations d'enfants liés sont automatiques une fois que les vérifications de l'identité par clé API, de la propriété de liaison, de la relation parentale et de l'autorisation de l'Agent ont réussi ; il n'y a pas de commutateur de fonctionnalité distinct.
+
+Enregistrez l'acteur avec la même clé API que celle qui fournira ses tours ultérieurs :
+
+```http
+POST /api/agents/v1/events/bindings
+Authorization: Bearer <REMOTE_AGENTS_API_KEY>
+Idempotency-Key: championship-7-player-hanae
+Content-Type: application/json
+
+{
+  "actorId": "hanae-kobayashi",
+  "parentConversationId": "director-conversation-id",
+  "parentMessageId": "director-message-id",
+  "target": { "agentId": "agent_hanae" }
+}
+```
+
+`actorId` peut contenir jusqu'à 128 caractères. Le parent doit être une conversation d'Agent ordinaire, et la cible doit être configurée comme l'un des Sous-agents directs de cet Agent ou comme un auto-spawn autorisé. Une nouvelle liaison renvoie `201` ; une relecture idempotente renvoie `200`. Les deux réponses incluent `id`, `actorId`, `agentId` et `threadId`.
+
+Envoyez les tours ultérieurs avec l'ID de liaison renvoyé :
+
+```http
+POST /api/agents/v1/events
+Authorization: Bearer <SAME_REMOTE_AGENTS_API_KEY>
+Idempotency-Key: game-12-ply-17-hanae
+Content-Type: application/json
+
+{
+  "mode": "continue",
+  "bindingId": "evtbind_...",
+  "event": {
+    "id": "game-12-ply-17",
+    "type": "chess.turn.ready",
+    "occurredAt": 1786968000000,
+    "payload": { "gameId": "game-12", "expectedPly": 17 }
+  },
+  "input": "Your clock is running. Read the position and submit one legal move.",
+  "expectedAction": {
+    "tool": "submit_move",
+    "arguments": { "gameId": "game-12" }
+  }
+}
+```
+
+LibreChat résout l'Agent enfant, le fil de discussion, la dernière feuille de branche et la voie de commande à partir de la liaison immédiatement avant la répartition. Les champs de cible et de commande fournis par l'appelant ne peuvent pas rediriger une continuation liée. La clé `Idempotency-Key` de la requête devient l'identité publique stable pour ce tour enfant à travers les tentatives de livraison, la location de génération, les messages persistés, l'activité en direct et une reprise HITL ultérieure.
+
+Chaque liaison dispose d'une boîte aux lettres durable automatique. Son événement suivant reste en file d'attente jusqu'à ce que le tour actuel atteigne `applied`, `completed_no_action`, `failed` ou `cancelled` ; les différentes liaisons restent indépendantes et peuvent s'exécuter en parallèle. La continuation par point de contrôle n'est tentée que pour un tour initialisé compatible. Si un point de contrôle est manquant ou ne peut pas être restauré, LibreChat revient à l'historique des messages durables sans affaiblir les vérifications de réception, d'autorisation ou d'action attendue.
+
+Un acteur lié peut se mettre en pause pour une demande utilisateur (Ask User) ou une approbation d'outil. LibreChat conserve la suspension signée exacte avant d'exposer l'action en attente, et la boîte aux lettres de la liaison reste bloquée jusqu'à ce que cette même invocation d'acteur reprenne ou se termine. Les Event Actors nécessitent le checkpointer durable MongoDB ; `type: memory` n'est pas compatible. LibreChat négocie le protocole de génération v2 et sélectionne automatiquement le point de contrôle ou la continuation de l'historique. Le travail existant sous le protocole v1 reste sur le chemin de l'historique durable jusqu'à son épuisement. Voir [Generation Protocol Compatibility](/docs/configuration/redis#generation-protocol-compatibility) pour les exigences de déploiement en version mixte.
+
+### Fusion des événements observationnels [#coalescing-observational-events]
+
+Les sources capables de prouver que plusieurs événements `continue` liés sont des observations interchangeables peuvent leur attribuer la même `coalesce.key` définie par la source :
+
+```json
+{
+  "mode": "continue",
+  "bindingId": "evtbind_...",
+  "event": {
+    "id": "championship-7-game-12-move-18",
+    "type": "chess.move.completed",
+    "occurredAt": 1786968000750,
+    "payload": { "gameId": "game-12", "ply": 18 }
+  },
+  "input": "A tournament game advanced.",
+  "coalesce": { "key": "championship-commentary" }
+}
+```
+
+LibreChat collecte les événements compatibles pendant une durée maximale de 750 ms, avec au plus 8 événements et 512 KiB d'enveloppes combinées. L'enfant reçoit un document de lot déterministe, mais chaque événement source conserve sa propre `Idempotency-Key`, son enregistrement de livraison et son accusé de réception.
+
+Utilisez la coalescence uniquement pour les observations sans action requise. Elle est rejetée pour `fire`, `steer`, `continue` non lié, et les livraisons avec `expectedAction` ; ne l'utilisez pas pour les commandes, les approbations, les demandes HITL, les clôtures ou les événements dont le timing individuel est important.
+
+Dans la conversation parente authentifiée, chaque acteur lié apparaît sous son message parent propriétaire. Le panneau Subagent permet de basculer entre les acteurs et les tours, de charger une activité antérieure et de développer un tour pour afficher son activité liée complète. Les détails de l'événement incluent le type, la source, l'heure de survenance et l'action attendue. Les étapes d'exécution, les outils, les messages et les marqueurs de raisonnement visibles sont inclus sans le texte de raisonnement brut. L'index parent renvoie au maximum 64 fils de discussion enfants et 20 tâches récentes par enfant à partir d'une fenêtre source liée, signale une troncature au lieu d'impliquer une exhaustivité, et limite la réponse à 96 Ko. Il est autorisé au niveau du parent, de l'utilisateur et du locataire ; les liaisons, les identifiants de clé source, les jetons de bail et l'état du travailleur ne sont pas inclus dans la projection.
+
+Le thread enfant reste masqué de la navigation de conversation normale et est en lecture seule pour les routes de chat humaines, hérite de la politique temporaire ou d'expiration du parent, et est limité à un niveau d'enfant direct. Un ID de liaison seul ne donne pas accès ; les continuations sont limitées à l'utilisateur, au locataire et à la clé API qui les ont créées.
+
+### Actions de l'acteur d'événement détaché [#detached-event-actor-actions]
+
+Les tours d'acteur d'événement peuvent détacher des Actions éligibles et les exécuter de manière durable. La livraison reste dans son cycle de vie de traitement pendant que l'Action s'exécute ; une preuve terminale durable reprend l'invocation originale de l'acteur signé, et seule la preuve d'outil observée par l'hôte résultante peut satisfaire `expectedAction`. Les relectures et les répliques concurrentes ne peuvent pas lancer deux fois la même Action réservée. Si LibreChat ne peut pas déterminer si un effet secondaire externe a commencé, il met le lancement en quarantaine au lieu de le réessayer aveuglément.
+
+LibreChat active automatiquement ce travail de complétion interne lorsque le magasin de génération intégré sélectionné annonce sa prise en charge. Le magasin en mémoire exécute le lancement, la complétion et la continuation dans un seul processus et ne peut pas récupérer ce travail après la fermeture du processus. Les flux de génération Redis ajoutent une récupération durable après redémarrage et un transfert de réplica. Les enregistrements de livraison et de récupération appartenant à la fonctionnalité restent invisibles pour les anciens demandeurs lors d'un drainage de version mixte ; il n'existe aucun indicateur de producteur géré par l'opérateur.
+
 ## Suivi de l'utilisation des jetons [#token-usage-tracking]
 
-Toutes les requêtes de l'API Agents suivent l'utilisation des jetons par rapport au solde de l'utilisateur (lorsque la dépense de jetons est configurée). Les jetons d'entrée et de sortie sont comptabilisés, y compris les jetons de cache pour les fournisseurs qui les prennent en charge (OpenAI, Anthropic).
+Toutes les requêtes d'inférence de l'API Agents suivent l'utilisation des jetons par rapport au solde de l'utilisateur lorsque la dépense de jetons est configurée. Les réponses en streaming et non-streaming agrègent chaque appel de modèle d'Agent principal et de sous-agent facturé dans les totaux de haut niveau. La réponse inclut également des ventilations de jetons `primary` et `subagent` sans identité. Les détails des jetons de cache et de raisonnement sont inclus lorsque le fournisseur les signale.
 
 ## Feuille de route [#roadmap]
 
@@ -170,6 +310,8 @@ Toutes les requêtes de l'API Agents suivent l'utilisation des jetons par rappor
 ## Documentation associée [#related-documentation]
 
 - [Agents](/docs/features/agents) — Création et configuration d'agents
+- [Subagents](/docs/features/subagents) — Configuration des Agents enfants directs
+- [Configuration du endpoint Agents](/docs/configuration/librechat_yaml/object_structure/agents) — Paramètres d'exécution des événements et d'authentification
 - [Configuration de l'interface — remoteAgents](/docs/configuration/librechat_yaml/object_structure/interface#remoteagents) — Paramètres de contrôle d'accès
 - [Utilisation des jetons](/docs/configuration/token_usage) — Configuration de la consommation et du solde des jetons
 - [Open Responses Specification](https://www.openresponses.org/) — Le standard d'inférence ouvert

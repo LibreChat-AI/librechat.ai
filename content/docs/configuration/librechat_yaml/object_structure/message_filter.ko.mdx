@@ -1,15 +1,120 @@
 ---
-title: 메시지 필터 객체 구조
+title: 콘텐츠 필터 객체 구조
 icon: ShieldAlert
 ---
 
 ## 개요 [#overview]
 
-`messageFilter` 객체는 서버 측 메시지 필터를 구성합니다. 지원되는 필터 유형은 `messageFilter.pii`입니다.
+LibreChat은 두 가지 서버 측 필터 구성을 제공합니다:
 
-`messageFilter.pii`는 제출된 메시지 텍스트가 조정(moderation), 모델 요청 또는 메시지 지속성(persistence)에 도달하기 전에 자격 증명 형태의 시작 패턴이나 운영자가 정의한 정규 표현식과 일치하는 경우 해당 텍스트를 거부합니다.
+- `filters`는 메시지, 프롬프트, 에이전트, 파일, 스킬, 메모리, 도구 및 기타 재사용 가능한 콘텐츠 전반에 걸쳐 선택된 필드에 소스 인식 정책을 적용합니다.
+- `messageFilter`는 레거시 메시지 텍스트 필터입니다. 기존 배포 환경에서는 `filters.messages`로 마이그레이션하는 동안 계속해서 사용할 수 있습니다.
 
-## 예시 [#example]
+둘 다 선택 사항(opt-in)입니다. 둘 다 구성된 경우, 두 정책이 모두 적용됩니다.
+
+<Callout type="warning" title="기본 구성만 포함">
+  `filters`는 기본 `librechat.yaml`에서만 로드됩니다. 데이터베이스, 역할, 그룹 및 사용자 재정의(override)를 통해서는 이를 추가, 변경 또는 제거할 수 없습니다. 다중 복제본 배포 환경에서는 모든 복제본을 함께 배포하거나 재시작하고, 정책을 활성화하기 전에 각 복제본이 동일한 기본 구성을 로드했는지 확인하십시오.
+</Callout>
+
+## 소스 인식 필터 (Source-Aware Filters) [#source-aware-filters]
+
+각 소스에는 선택적으로 `pii` 정책을 설정할 수 있습니다. `filters`, 소스 또는 해당 `pii` 블록을 생략하면 해당 범위는 비활성화됩니다.
+
+```yaml filename="librechat.yaml"
+filters:
+  messages:
+    unattributedAssistantContent: model_output
+    pii:
+      action: audit
+      fields: [text, summary, attachment_reference]
+      starterPatterns: [sk_prefix, bearer_header, api_key_header]
+      customPatterns:
+        - id: organization_identifier
+          label: Organization identifier
+          regex: 'ORG-[A-Z0-9]{12}'
+  files:
+    pii:
+      fields: [name, content, extracted_text, transcript]
+      uninspectable: block
+  skills:
+    pii:
+      fields: [name, description, instructions, imported_text, file_text]
+```
+
+### 패턴 구성 (Pattern Configuration) [#pattern-configuration]
+
+활성화된 각 소스에 대해:
+
+- `action`을 생략하거나 `block`으로 설정하면 일치하는 항목을 거부합니다. 콘텐츠를 거부, 변경 또는 수정하지 않고 결과를 기록하는 섀도우 롤아웃(shadow rollout)을 수행하려면 `action: audit`으로 설정하세요.
+- 소스에 대해 지원되는 모든 필드를 검사하려면 `fields`를 생략하세요. 명시적 목록에는 1개에서 256개 사이의 지원되는 필드 이름이 포함되어야 합니다.
+- `starterPatterns`를 생략하면 전체 스타터 카탈로그가 활성화됩니다. `[]`로 설정하면 `customPatterns`는 유지하면서 스타터 패턴을 비활성화할 수 있습니다.
+- `id`, 사용자에게 표시될 `label`, 그리고 `regex`를 사용하여 `customPatterns`를 구성하세요.
+
+감사 모드(Audit mode)는 모든 구성된 조각(fragment)과 규칙을 평가하여 운영자가 적용 전에 결과를 측정할 수 있도록 합니다. 각 정보 수준의 감사 기록은 작업, 탐지기, 규칙, 레이블, 소스, 필드 및 출처를 식별하지만, 일치하는 텍스트나 소스 콘텐츠는 포함하지 않습니다. 감사 모드는 수정(redaction) 기능을 제공하지 않으며, 구성이 로드될 때 지원되지 않는 작업 값은 거부됩니다.
+
+Actions는 소스별로 독립적으로 구성되므로, 한 소스는 감사를 수행하고 다른 소스는 차단하도록 설정할 수 있습니다. `filters.files.pii.uninspectable: block`은 해당 소스의 패턴 action이 `audit`인 경우에도 불투명하거나 너무 큰 선택된 파일 콘텐츠에 대해 독립적인 fail-closed 규칙으로 유지됩니다.
+
+기본 제공되는 starter pattern ID는 다음과 같습니다:
+
+- `sk_prefix`: `sk-` 스타일의 토큰 접두사.
+- `bearer_header`: 텍스트 내의 bearer 토큰.
+- `api_key_header`: `api-key` 헤더 형태의 텍스트.
+
+사용자 지정 패턴은 RE2JS의 제한적이고 선형 시간(linear-time)인 정규 표현식 구문을 사용합니다. 역참조(backreferences)와 룩어라운드(lookaround)는 지원되지 않으며, 일부 이스케이프는 JavaScript 정규 표현식과 다릅니다. LibreChat은 구성을 로드하는 동안 유효하지 않거나 지원되지 않는 패턴을 거부합니다.
+
+### 지원되는 소스 및 필드 [#supported-sources-and-fields]
+
+| 소스 | 지원되는 필드 |
+| --- | --- |
+| `messages` | `name`, `text`, `summary`, `quote`, `answer`, `decision_response`, `decision_reason`, `content_part`, `attachment_reference`, `assembled_context` |
+| `prompts` | `name`, `description`, `oneliner`, `category`, `command`, `text`, `preset_text`, `system`, `context`, `instructions`, `additional_instructions`, `greeting`, `example_input`, `example_output` |
+| `agentInstructions` | `name`, `category`, `description`, `instructions`, `additional_instructions`, `edge_description`, `edge_prompt`, `edge_prompt_key`, `artifacts`, `support_contact_name`, `support_contact_email` |
+| `conversationStarters` | `text` |
+| `conversationTitles` | `title` |
+| `feedback` | `text` |
+| `skills` | `name`, `display_title`, `description`, `category`, `frontmatter`, `instructions`, `imported_text`, `file_name`, `file_text` |
+| `memories` | `key`, `value`, `summary` |
+| `files` | `name`, `content`, `extracted_text`, `transcript`, `uri` |
+| `toolArguments` | `name`, `arguments`, `output` |
+| `modelParameters` | `stop`, `request_fields`, `response_format`, `metadata` |
+| `actionMetadata` | `raw_spec`, `domain`, `privacy_policy_url`, `authorization_type`, `custom_auth_header`, `authorization_content_type`, `authorization_url`, `client_url`, `scope`, `token_exchange_method`, `api_key`, `oauth_client_id`, `oauth_client_secret` |
+
+### 메시지 출처 (Message Provenance) [#message-provenance]
+
+`filters.messages.unattributedAssistantContent`는 출처가 없는 레거시 어시스턴트 콘텐츠가 어떻게 분류될지 제어합니다:
+
+- `model_output` (기본값): 속성이 지정되지 않은 어시스턴트 콘텐츠를 모델 출력으로 처리하여 기존 동작을 유지합니다.
+- `inspect`: 할당되지 않은 어시스턴트 콘텐츠(선택된 첨부 파일 투영 포함)를 제출된 콘텐츠로 취급합니다. 모델 출력으로 명시적으로 표시된 어시스턴트 콘텐츠는 제외됩니다.
+
+이 분류는 `filters.messages.pii`가 생략된 경우에도 활성화된 레거시 `messageFilter.pii` 정책에 영향을 줄 수 있습니다. 소급 적용 검사에 의존하기 전에 기존 레코드를 인벤토리화하거나 마이그레이션하십시오.
+
+### 검사할 수 없는 파일 [#uninspectable-files]
+
+`filters.files.pii.uninspectable`는 LibreChat이 검사할 수 없는 선택된 파일 콘텐츠(불투명하거나 너무 큰 콘텐츠 포함)를 제어합니다:
+
+- `allow` (기본값): 호환성을 유지하며 콘텐츠를 허용합니다.
+- `block`: 공급자 또는 스토리지 측의 부작용이 발생하기 전에 이를 거부합니다.
+
+`block`을 신중하게 배포하세요. 검사 가능한 텍스트가 존재할 때까지 이전 파일을 재사용할 수 없게 만들 수 있습니다.
+
+### 저장 및 재사용된 콘텐츠 [#stored-and-reused-content]
+
+정책을 활성화하거나 변경해도 저장된 기록이 다시 작성되거나 삭제되지는 않습니다. LibreChat은 보호된 콘텐츠가 제출, 복사, 공유, 재사용되거나 모델에 바인딩될 때 현재 정책을 적용합니다.
+
+안전한 메타데이터 편집은 여전히 성공할 수 있으므로 차단된 레코드는 복구 가능한 상태로 유지됩니다. 관리 뷰에서 차단된 프롬프트 또는 프리셋 필드는 `contentFilterBlocked: true`와 함께 비어 있을 수 있으며, 차단된 프롬프트 그룹은 직접 검색 시 오류를 반환하고 컬렉션 및 재사용 응답에서는 생략됩니다. 거부된 백그라운드 메모리 업데이트는 건너뛸 수 있으며, 이 경우에도 메인 채팅 응답은 계속 진행됩니다.
+
+소스 인식 텍스트 일치를 차단하면 `content_filter_block`과 함께 HTTP `400`을 반환합니다. 검사할 수 없는 파일 거부는 `content_filter_uninspectable`을 사용합니다.
+
+### 제한 사항 [#limits]
+
+- 소스당 최대 256개의 필드, 시작 패턴 또는 사용자 지정 패턴.
+- 전체 구성에 걸쳐 최대 256개의 사용자 지정 패턴을 지원합니다.
+- 패턴 ID는 최대 256자, 레이블은 최대 512자, 정규식은 최대 512자까지 가능합니다.
+- 최대 8,192개의 총 정규식(regex) 문자와 8,192개의 컴파일된 필터 명령어를 지원합니다.
+
+## 레거시 `messageFilter` [#legacy-messagefilter]
+
+`messageFilter.pii`는 중재, 모델 요청 또는 지속성 이전에 호출자가 제공한 메시지 텍스트가 `message_filter_pii_block`과 일치하는 경우 이를 거부합니다. 이 기능은 차단 전용으로 유지되며 `action`을 허용하지 않습니다. 파일 내용이나 `filters`에서 다루는 다른 재사용 가능한 소스는 검사하지 않습니다.
 
 ```yaml filename="librechat.yaml"
 messageFilter:
@@ -24,63 +129,4 @@ messageFilter:
         regex: 'sk-ant-[A-Za-z0-9_-]{20,}'
 ```
 
-## 필드 [#fields]
-
-### messageFilter.pii
-
-<OptionTable
-  options={[
-    [
-      'pii.starterPatterns',
-      'Array of Strings',
-      '활성화할 내장 시작 패턴 ID의 선택적 하위 집합입니다. 모든 시작 패턴을 활성화하려면 생략하세요.',
-      'starterPatterns: [sk_prefix, bearer_header]',
-    ],
-    [
-      'pii.customPatterns',
-      'Array of Objects',
-      '운영자가 정의한 패턴입니다. 각 항목에는 `id`, `label`, `regex`가 필요합니다.',
-      '',
-    ],
-  ]}
-/>
-
-**기본 제공 시작 패턴 ID:**
-
-- `sk_prefix`: `sk-` 스타일의 토큰 접두사와 일치합니다.
-- `bearer_header`: 텍스트 내의 bearer 토큰과 일치합니다.
-- `api_key_header`: `api-key` 헤더 형태의 텍스트와 일치합니다.
-
-### customPatterns
-
-<OptionTable
-  options={[
-    ['id', 'String', '로그 및 디버깅에 사용되는 안정적인 패턴 ID입니다.', 'id: anthropic_api_key'],
-    [
-      'label',
-      'String',
-      '거부 메시지에 표시되는 사람이 읽을 수 있는 레이블입니다.',
-      'label: Anthropic API key',
-    ],
-    [
-      'regex',
-      'String',
-      'RE2 정규 표현식입니다. LibreChat은 설정 로드 시점에 이를 검증하고 전역적으로 적용합니다.',
-      "regex: 'sk-ant-[A-Za-z0-9_-]{20,}'",
-    ],
-  ]}
-/>
-
-사용자 지정 패턴은 선형 시간 RE2 엔진을 사용합니다. 역참조(backreferences)와 룩어라운드(lookaround)는 지원되지 않으며, 일부 이스케이프는 JavaScript 정규 표현식과 다릅니다. LibreChat은 구성을 로드할 때 RE2가 컴파일할 수 없는 패턴을 거부합니다.
-
-## 동작 [#behavior]
-
-제출된 메시지 텍스트가 구성된 PII 패턴과 일치하면, LibreChat은 `message_filter_pii_block`과 함께 HTTP `400` 응답을 반환하며 호출자에게 일치하는 자격 증명 유형을 제거하도록 요청하는 메시지를 보냅니다.
-
-필터는 다음을 확인합니다:
-
-- LibreChat UI를 통해 제출된 채팅 경로 사용자 텍스트입니다.
-- OpenAI 호환 Chat Completions 요청에서 호출자가 제공한 모든 메시지 역할에 걸친 텍스트 콘텐츠입니다.
-- OpenAI 호환 응답 요청의 모든 호출자 제공 메시지 역할에 걸친 텍스트 콘텐츠입니다.
-
-이 필터는 요청 본문(request body)에 제공된 텍스트를 평가합니다. 파일 내용은 스캔하지 않습니다.
+레거시 필터는 OpenAI 호환 Chat Completions 및 Responses 요청의 모든 역할에 걸쳐 chat-route 사용자 텍스트와 호출자가 제공한 텍스트를 확인합니다. 이 필터는 위에서 설명한 동일한 내장 ID와 선형 시간(linear-time) 사용자 지정 정규식 규칙을 사용합니다.

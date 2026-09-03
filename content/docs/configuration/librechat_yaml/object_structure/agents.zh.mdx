@@ -12,6 +12,7 @@ endpoints:
   agents:
     recursionLimit: 50
     maxRecursionLimit: 100
+    maxSubagents: 20
     maxToolCallArgBytes: 65536
     maxDeltaEventsPerTurn: 100000
     maxToolCallArgBytesByTool:
@@ -29,9 +30,34 @@ endpoints:
     activityModel: gpt-4.1-nano
     activityPhaseLabel: true
     activityPhaseMaxPerRun: 5
-    maxSubagents: 10 # Maximum explicit subagents per agent (1-50)
     skills:
       maxCatalogSkills: 20
+    statefulCodeSessions:
+      allowedEnvironments: ['user', 'agent-user', 'conversation']
+      environments:
+        - id: managed-default
+          name: Managed Code API
+          type: managed
+          baseURL: https://code.example.com/v1
+          default: true
+        - id: engineering-vm
+          name: Engineering VM
+          type: attached
+          baseURL: https://code-bridge.example.com/v1
+          pairing:
+            workerId: engineering-vm
+            tokenEnv: CODE_BRIDGE_ADMIN_TOKEN
+        - id: personal-workers
+          name: Personal Code Workers
+          type: attached
+          baseURL: https://code-bridge.example.com/v1
+          pairing:
+            allowPrincipalWorkers: true
+            tokenEnv: CODE_BRIDGE_ADMIN_TOKEN
+    # eventDriven:
+    #   selfUrl: https://librechat.internal
+    backgroundTasks:
+      completionWakeups: true
     toolApproval:
       enabled: true
       mode: default
@@ -56,7 +82,7 @@ endpoints:
       'recursionLimit',
       'Number',
       '设置代理在单次运行中可执行的默认步数。',
-      'Controls recursion depth to prevent infinite loops. When limit is reached, raises GraphRecursionError. This value can be configured from the UI up to the maxRecursionLimit.',
+      'Controls recursion depth to prevent infinite loops. When the limit is reached, LibreChat preserves the partial turn and offers Keep going or Answer now. This value can be configured from the UI up to maxRecursionLimit.',
     ],
   ]}
 />
@@ -242,7 +268,9 @@ allowedProviders:
 
 **默认值：** `["deferred_tools", "execute_code", "file_search", "web_search", "artifacts", "subagents", "actions", "context", "skills", "memory", "ask_user_question", "tools", "chain", "ocr"]`
 
-`programmatic_tools`、`stateful_code_sessions`、`run_in_background` 和 `tool_intents` 为可选功能，必须显式添加。Programmatic tools 和 stateful sessions 还需要 `execute_code` 以及兼容的 Code Interpreter 部署。后台代码执行需要 `run_in_background`、`execute_code` 和 Code Interpreter。
+`programmatic_tools`、`stateful_code_sessions`、`run_in_background` 和 `tool_intents` 为选择性加入功能，必须显式添加。Programmatic tools 和 stateful sessions 还需要 `execute_code` 以及兼容的 Code Interpreter 部署。Agent Builder 会在没有 Code Interpreter 的情况下禁用 Programmatic MCP 选择，且当代码执行不可用时，服务器会移除过期的 programmatic caller 选项。`run_in_background` 使 Code Interpreter 工具默认符合条件，并允许针对符合条件的 MCP、Plugin 和 Action 工具进行逐个工具的选择性加入；后台代码执行同样需要 `execute_code` 和 Code Interpreter。
+
+`stateful_code_sessions` 目前处于高度实验性阶段。它需要一个单独的 `stateful` 配置文件的代码解释器路由，并通过 [`LIBRECHAT_CODE_BASEURL_STATEFUL`](/docs/configuration/dotenv#stateful-code-interpreter-endpoint) 或 [`statefulCodeSessions.environments`](#statefulcodesessions) 进行配置。有状态请求在失败时会直接终止，而不会回退到正常的无状态服务。在 Agent Builder 中，每个启用的 Agent 都可以选择用户（user）、代理与用户（agent-and-user）或对话（conversation）的工作区范围；当配置了命名后端时，还可以选择执行环境。新创建的 Agent 默认使用用户的个人范围以及部署的默认执行环境。
 
 **示例：**
 
@@ -265,9 +293,11 @@ capabilities:
   - 'tools'
   - 'chain'
   - 'ocr'
-  # Optional: reuse one Code Interpreter workspace per conversation.
+  # Optional and highly experimental: reuse a user-, agent-and-user-, or
+  # conversation-scoped workspace. Requires LIBRECHAT_CODE_BASEURL_STATEFUL
+  # or a named statefulCodeSessions environment.
   # - 'stateful_code_sessions'
-  # Optional: allow selected eligible MCP and Code Interpreter tools to run as background tasks.
+  # Optional: allow eligible Code Interpreter, MCP, Plugin, and Action tools to run as background tasks.
   # - 'run_in_background'
   # Optional: show live model-written intent labels for native and selected MCP tools.
   # - 'tool_intents'
@@ -275,13 +305,152 @@ capabilities:
 
 **注意：** 此字段为可选字段。如果省略，默认行为是包含 default 中列出的所有功能。
 
-## toolApproval
+## statefulCodeSessions
 
-控制 Agent 工具调用的人工审核。此功能默认处于禁用状态。启用后，匹配的调用将暂停，直到用户提交允许的决策（例如批准、拒绝或编辑参数）。
+配置高度实验性的有状态 Code Interpreter 工作区的共享范围和可选执行后端。
+
+<Callout type="warning" title="高度实验性">
+  Stateful Code Sessions、命名执行环境、附加工作进程以及配对功能目前处于早期实验阶段。其行为、配置、持久化特性以及集成协议可能会发生重大变化。
+</Callout>
 
 <OptionTable
   options={[
-    ['enabled', 'Boolean', '启用 Agents endpoint 的工具审批功能。', 'false'],
+    [
+      'allowedEnvironments',
+      'Array/List of Strings',
+      '允许的有状态工作区范围：`user`、`agent-user` 和/或 `conversation`。',
+      '["user", "agent-user", "对话"]',
+    ],
+    [
+      'environments',
+      'Array of Objects',
+      '在 Agent Builder 中显示的可选命名托管或挂载的 Code API 环境。',
+      'Unset; LIBRECHAT_CODE_BASEURL_STATEFUL remains the stateful endpoint',
+    ],
+  ]}
+/>
+
+```yaml filename="endpoints / agents / statefulCodeSessions"
+statefulCodeSessions:
+  allowedEnvironments:
+    - 'user'
+    - 'agent-user'
+    - 'conversation'
+  environments:
+    - id: managed-default
+      name: Managed Code API
+      type: managed
+      baseURL: https://code.example.com/v1
+      default: true
+    - id: engineering-vm
+      name: Engineering VM
+      type: attached
+      baseURL: https://code-bridge.example.com/v1
+      owner: deployment
+      pairing:
+        workerId: engineering-vm
+        tokenEnv: CODE_BRIDGE_ADMIN_TOKEN
+    - id: personal-workers
+      name: Personal Code Workers
+      type: attached
+      baseURL: https://code-bridge.example.com/v1
+      owner: deployment
+      configSchema:
+        permissions:
+          fileWrite:
+            allowed: [allow, ask, deny]
+            default: ask
+          commandExecution:
+            allowed: [ask, deny]
+            default: ask
+      pairing:
+        allowPrincipalWorkers: true
+        tokenEnv: CODE_BRIDGE_ADMIN_TOKEN
+```
+
+当该代码块存在时，`allowedEnvironments` 是必需的，且必须至少包含一个工作区范围。省略整个代码块即表示允许所有三个范围，并继续通过 [`LIBRECHAT_CODE_BASEURL_STATEFUL`](/docs/configuration/dotenv#stateful-code-interpreter-endpoint) 路由有状态工作。个人默认设置和 Agent Builder 仅允许使用已授权的值。如果管理员收紧了策略，已保存的个人默认设置将保持可见但处于禁用状态，且新的 Agent 将使用第一个允许的范围。现有的已启用 Agent 将保留其已保存的范围，但如果某个范围现在被禁止，则在运行时会失败并关闭，直到重新配置该 Agent 为止。
+
+当 `environments` 非空时，每个条目都需要一个唯一的 `id`、一个显示名称 `name`、一个 `managed` 或 `attached` 类型的 `type`，以及一个不带查询字符串或片段的 HTTP(S) `baseURL`。如果列表中包含可执行环境，则必须有且仅有一个条目设置 `default: true`。随后 Agent Builder 会添加一个 **Execution environment**（执行环境）选择器；将其保留为 **Deployment default**（部署默认值）将使用该默认条目。仅包含自助服务配对控制平面的列表无需设置默认值。如果 Agent 指定的环境随后被移除或无法访问，该 Agent 将会关闭失败，而不会回退到其他后端。
+
+- `managed` 直接指向一个由 operator 管理的有状态 Code API。
+- `attached` 指向一个兼容的 Code API `remote-bridge` 后端，该后端将任务租借给一个出站的 `@librechat/code` worker。该 worker 不需要入站公共端口，但其本地执行 endpoint 仍需要适当的隔离。
+- `workerId` 可选地将附加的环境路由到一个出站 worker。它是仅限服务器端的，不会通过客户端启动配置暴露。
+- `owner` 默认为 `deployment`。由主体（Principal）拥有的环境是通过 LibreChat 经过身份验证的 Code Environments API 创建的，受 ACL 保护，并且仅针对授权请求进行合并；请勿将客户端提供的 URL 放入 deployment YAML 中。
+- `pairing` 是可选的，且仅对部署拥有的 `attached` 条目有效。`pairing.workerId` 用于标识要注册的由操作员管理的 worker，而 `pairing.allowPrincipalWorkers: true` 则允许授权用户将绑定所有者的 worker 注册到该控制平面。当存在 `pairing` 时，必须至少提供其中一个字段。
+- `pairing.tokenEnv` 指定了包含网桥管理员令牌的环境变量名称；它本身不包含令牌。除本地回环开发外，配对需要 HTTPS。
+- `configSchema.permissions` 允许授权所有者为个人环境选择 `fileWrite` 和 `commandExecution` 策略，具体设置位于 **Settings > Code environments**。每个字段都需要一个非空的 `allowed` 列表，其中包含 `allow`、`ask` 和/或 `deny`；如果省略 `default`，则默认为 `ask`，且该值必须出现在 `allowed` 中。LibreChat 会拒绝管理员列表之外的存储值。
+- 不要在部署的 YAML 中配置 `settings`。LibreChat 会从经过服务器验证的已认证所有者的偏好设置中提供该请求范围内的字段。
+- 只有文件写入和命令执行策略是用户可配置的。隔离、网络、挂载、特权执行、入站、出站和密钥仍由管理员控制。
+- 如果同时存在顶层的 `workerId` 和 `pairing.workerId`，它们必须匹配。如果一个条目设置了 `allowPrincipalWorkers: true` 且两个 worker ID 均非仅配对（pairing-only）模式：它将从执行选择器中被忽略，且不能设置 `default: true`。
+
+附加执行会自动启用安全批准基准：文件写入以及命令或代码执行会请求确认，而只读和搜索操作则继续遵循常规工具策略。该基准的作用域限定为使用附加环境的 Agent。如果没有可用的用户设置，LibreChat 将使用 `ask`；[`toolApproval.enabled: false`](#toolapproval) 是管理员的紧急覆盖设置，用于禁用此附加环境基准。除非设置了该显式覆盖，否则不支持批准和恢复的调用方将默认拒绝执行。
+
+附加执行需要匹配的实验性 Code Interpreter remote-bridge 构建版本。配对用于验证出站 worker 连接；它不能替代沙盒或虚拟机隔离。拥有 Code Environment 管理权限的用户可以在 **Settings > Code environments** 下进行配对、配置允许的工具策略以及撤销个人 worker。请参阅 [Stateful Code Sessions](/docs/features/code_interpreter#stateful-code-sessions)。
+
+## eventDriven
+
+配置用于 Agent 事件传递的受信任内部源。大多数部署应省略此代码块，并使用当前进程绑定的监听器。
+
+<OptionTable
+  options={[
+    [
+      'selfUrl',
+      'URL',
+      '覆盖当前进程绑定的受信任内部触发准入监听器。仅在交付必须经过另一个受信任的 HTTP 源时使用。',
+      '',
+    ],
+  ]}
+/>
+
+```yaml filename="endpoints / agents / eventDriven"
+endpoints:
+  agents:
+    eventDriven:
+      selfUrl: https://librechat.internal
+```
+
+绑定的子延续（child continuations）是自动执行的。`eventDriven` 下较旧的 `childTurns`、`completionWakeups`、`coalescing`、`actorMailbox`、`checkpointForks` 和 `durableReceipts` 字段不再是配置开关，应予以移除。运行时现在直接应用这些交付保证。独立的 [`backgroundTasks.completionWakeups`](#backgroundtasks) 字段控制已完成的后台工具和分离的 Subagents 的对话交付。
+
+对于正常的绑定监听器路径，请将 `selfUrl` 留空。仅当受信任的内部触发准入必须经过另一个 HTTP(S) 源（例如 TLS 前端）时才进行设置。当省略此字段时，`AGENT_TRIGGERS_SELF_URL` 将作为兼容性回退方案。请参阅 [Agents API events](/docs/features/agents_api#agent-events) 和 [Automatic Parent Continuation](/docs/features/subagents#automatic-parent-continuation)。
+
+Event Actor detached Action completion 会自动从内置生成存储中选择。内存中执行是进程局部的；Redis 生成流增加了持久化重启恢复和副本切换功能。无需 `librechat.yaml` 开关或环境变量功能标志。请参阅 [Agent Event Runtime](/docs/configuration/dotenv#agent-event-runtime)。
+
+## backgroundTasks
+
+控制受支持的已完成后台工具和已分离的 Subagents 是否自动恢复其保存的父级 Agent。
+
+<OptionTable
+  options={[
+    [
+      'completionWakeups',
+      'Boolean',
+      '自动将受支持的后台任务补全作为延续交付。设置为 false 以仅使用轮询行为。',
+      'true',
+    ],
+  ]}
+/>
+
+```yaml filename="endpoints / agents / backgroundTasks"
+backgroundTasks:
+  completionWakeups: true
+```
+
+即使省略此代码块，自动补全交付功能也会启用。设置 `completionWakeups: false` 以要求 Agent 通过 `check_background_task` 收集每一个结果。
+
+普通的后台工具执行仍保持在进程本地，且无法在工作进程丢失后存活。一旦仅包含内容的终端结果被持久化，其交付就是持久的，并可能在另一个副本上继续。带有实时工件的任务仍需要在所属运行中进行轮询。分离的子代理（Subagents）保留其独立的持久化记录和终端结果路径。在两种模式下，手动轮询仍可用于状态、控制和恢复。请参阅 [Background Tool Calls](/docs/features/agents#background-tool-calls) 和 [Automatic Parent Continuation](/docs/features/subagents#automatic-parent-continuation)。
+
+## toolApproval
+
+控制 Agent 工具调用的人工审核。如果省略此代码块，则全局部署策略将被禁用。使用附加 Code 环境的 Agent 是个例外：除非管理员明确设置 `enabled: false`，否则 LibreChat 会默认启用其作用域内的询问安全策略。当审核生效时，匹配的调用会暂停，直到用户提交允许的决定，例如批准、拒绝或编辑参数。
+
+<OptionTable
+  options={[
+    [
+      'enabled',
+      'Boolean',
+      '启用整个部署范围内的工具批准。显式设置为 false 也会禁用关联的 Code 环境安全基准。',
+      'Omitted',
+    ],
     [
       'mode',
       'String',
@@ -306,7 +475,7 @@ capabilities:
   ]}
 />
 
-模式使用 glob 匹配。MCP 工具可以通过 `mcp:<server>:<tool>` 进行范围限定；例如，`mcp:github:*` 匹配来自 `github` 服务器的所有工具。评估时 `deny` 具有最高优先级，即使在 `bypass` 模式下也是如此。
+模式使用 glob 匹配。MCP 工具可以通过 `mcp:<server>:<tool>` 进行范围限定；例如，`mcp:github:*` 会匹配来自 `github` 服务器的所有工具。LibreChat 将静态规则和钩子匹配器应用于 MCP 运行时名称和面向模型的别名，包括通过嵌套子代理（Subagents）可访问的工具。静态规则在选定模式提供回退之前，按照 `deny`、`ask`，然后是 `allow` 的顺序进行评估。因此，拒绝规则（deny rule）总是优先，即使在 `bypass` 模式下也是如此。
 
 ```yaml filename="endpoints / agents / toolApproval"
 toolApproval:
@@ -554,7 +723,7 @@ endpoints:
 - **deferred_tools**: 允许智能体在运行时发现延迟加载的 MCP 工具，而不是预先将所有工具加载到上下文中。
 - **programmatic_tools**: 启用在 Agent Builder 中标记为 Programmatic 的 MCP 工具的程序化工具调用（Programmatic Tool Calling）。需要 `execute_code` 以及带有 Tool Call Server 组件的 Code Interpreter 部署。此功能为选择性加入，默认情况下不启用。
 - **execute_code**: 允许智能体执行代码。
-- **stateful_code_sessions**: 允许已选择加入的智能体在每个对话中复用一个 Code Interpreter 工作区。需要 `execute_code`、兼容的 Code Interpreter 部署以及每个智能体的“高级”设置。此功能处于高度实验性阶段，默认不启用，且在实验过程中可能会发生重大变化；请勿将其当前行为或配置视为稳定的生产环境契约。
+- **stateful_code_sessions**：允许已启用的 Agent 在用户、Agent 与用户，或对话范围内重用同一个 Code Interpreter 工作区。需要 `execute_code`、兼容的 Code Interpreter 部署以及每个 Agent 的高级设置。新 Agent 将使用已登录用户的首选范围。此功能处于高度实验阶段，默认不启用，且在实验过程中可能会发生重大变化；请勿将当前的行为或配置视为稳定的生产环境契约。
 - **file_search**: 启用该功能后，Agent 可以搜索并与文件进行交互。启用后，引用行为将由 `maxCitations`、`maxCitationsPerFile` 和 `minRelevanceScore` 设置控制。
 - **web_search**: 为智能体启用网络搜索功能，允许其搜索并从互联网检索信息。
 - **artifacts**: 启用代理以生成交互式工件（React 组件、HTML、Mermaid 图表）。
@@ -567,7 +736,7 @@ endpoints:
 - **tools**: 授予智能体访问各种工具的权限。
 - **chain**: 启用代理链（Agent Chaining）的 Beta 功能，也称为智能体混合（Mixture-of-Agents，简称 MoA）工作流。
 - **ocr**: 可选功能，用于增强聊天中的“上传为文本”以及智能体的“文件上下文”功能，允许上传文件并使用 OCR 进行处理。**需要配置 OCR 服务。**
-- **run_in_background**：默认使 Code Interpreter 执行和 shell 工具具备后台运行资格，并为 MCP 工具启用按工具的后台运行选择。Agent 可以显式地将 Code Interpreter 排除在后台运行之外。此设置允许后台执行；模型会针对每次调用决定是否使用它。需要 `execute_code` 以及已配置的 Code Interpreter 部署来执行代码。此功能默认不启用。
+- **run_in_background**：默认使 Code Interpreter 执行和 shell 工具具备后台运行资格，并为符合条件的 MCP、Plugin 和 Action 工具启用按工具的后台运行选择。Action 级别的开关可为所有符合条件的操作启用此功能；OAuth Action 以及已定义 `run_in_background` 参数的操作将被排除在外。Agent 可以显式选择让 Code Interpreter 不在后台运行。此设置允许后台执行；模型会针对每次调用决定是否使用该功能。需要 `execute_code` 以及已配置的 Code Interpreter 部署来执行代码。此功能默认不启用。
 - **tool_intents**：为符合条件的工具调用添加实时模型编写的意图标签。原生工具（包括 Code Interpreter 工具）会自动加入；MCP 工具可以在 Agent Builder 中单独或批量启用。Model Specs 使用 `describeIntent`。此功能默认不启用。
 
 通过指定功能，您可以控制用户在与智能体交互时可使用的特性。
@@ -589,7 +758,7 @@ endpoints:
       # Optional: enables Programmatic Tool Calling for MCP tools marked Programmatic in the Agent Builder.
       # - 'programmatic_tools'
       - 'execute_code'
-      # Optional: makes Code Interpreter background-eligible and enables selected MCP tools.
+      # Optional: makes Code Interpreter background-eligible and enables selected MCP, Plugin, and Action tools.
       # - 'run_in_background'
       # Optional: enables live intent labels for native and selected MCP tools.
       # - 'tool_intents'
@@ -610,7 +779,7 @@ endpoints:
 - 仅包含相关度在 60% 以上的来源
 - LibreChat Agents 可以访问代码执行、文件搜索（带引用）、Skills、Subagents、actions、artifacts、文件上下文、OCR 服务（如果已配置）以及网络搜索功能。
 - 除非你同时添加 `programmatic_tools` 和 `execute_code` 功能，否则 Programmatic Tool Calling 将保持禁用状态。
-- 除非您添加 `run_in_background`，否则后台工具调用将保持禁用状态；此时 Code Interpreter 工具将默认变为可用，而 MCP 工具仍需逐个选择。
+- 除非您添加 `run_in_background`，否则后台工具调用将保持禁用状态；此时 Code Interpreter 工具将默认变为可用，而符合条件的 MCP、Plugin 和 Action 工具仍需手动选择。
 - 除非您添加 `tool_intents`，否则工具意图标签将保持禁用状态；原生工具会自动选择加入，而 MCP 工具仍需要逐个选择。
 
 ## remoteApi
@@ -748,6 +917,12 @@ endpoints:
       '此智能体可能生成的特定智能体。受 `maxSubagents` 限制，默认值为 10。',
       'agent_ids: ["agent_researcher"]',
     ],
+    [
+      'graphs',
+      'Array of Objects',
+      '已保存的 Agent 团队，可以作为独立的子图运行。列表上限由 `maxSubagents` 决定（默认：10）；每个团队最多可包含 32 名成员。',
+      '',
+    ],
   ]}
 />
 
@@ -759,6 +934,8 @@ subagents:
     - 'agent_researcher'
     - 'agent_reviewer'
 ```
+
+每个 `graphs` 条目都需要一个唯一的 `type`、`name`、`description`、`agent_ids`、直接 `edges`、`entry_agent_id` 和 `result_agent_id`。团队定义必须构成一个连通的有向无环图，每个成员都必须对用户可见，且总配置限制为 50 个唯一 Agent 目标和 100 个展开的运行配置。请参阅 [saved-team 示例和运行时行为](/docs/features/subagents#configure-an-agent)。
 
 有关面向用户的行为和限制，请参阅 [Subagents](/docs/features/subagents)。
 

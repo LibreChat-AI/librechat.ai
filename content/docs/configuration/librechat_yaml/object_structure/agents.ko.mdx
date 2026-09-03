@@ -12,6 +12,7 @@ endpoints:
   agents:
     recursionLimit: 50
     maxRecursionLimit: 100
+    maxSubagents: 20
     maxToolCallArgBytes: 65536
     maxDeltaEventsPerTurn: 100000
     maxToolCallArgBytesByTool:
@@ -29,9 +30,34 @@ endpoints:
     activityModel: gpt-4.1-nano
     activityPhaseLabel: true
     activityPhaseMaxPerRun: 5
-    maxSubagents: 10 # Maximum explicit subagents per agent (1-50)
     skills:
       maxCatalogSkills: 20
+    statefulCodeSessions:
+      allowedEnvironments: ['user', 'agent-user', 'conversation']
+      environments:
+        - id: managed-default
+          name: Managed Code API
+          type: managed
+          baseURL: https://code.example.com/v1
+          default: true
+        - id: engineering-vm
+          name: Engineering VM
+          type: attached
+          baseURL: https://code-bridge.example.com/v1
+          pairing:
+            workerId: engineering-vm
+            tokenEnv: CODE_BRIDGE_ADMIN_TOKEN
+        - id: personal-workers
+          name: Personal Code Workers
+          type: attached
+          baseURL: https://code-bridge.example.com/v1
+          pairing:
+            allowPrincipalWorkers: true
+            tokenEnv: CODE_BRIDGE_ADMIN_TOKEN
+    # eventDriven:
+    #   selfUrl: https://librechat.internal
+    backgroundTasks:
+      completionWakeups: true
     toolApproval:
       enabled: true
       mode: default
@@ -56,7 +82,7 @@ endpoints:
       'recursionLimit',
       'Number',
       '에이전트가 실행 중에 취할 수 있는 기본 단계 수를 설정합니다.',
-      'Controls recursion depth to prevent infinite loops. When limit is reached, raises GraphRecursionError. This value can be configured from the UI up to the maxRecursionLimit.',
+      'Controls recursion depth to prevent infinite loops. When the limit is reached, LibreChat preserves the partial turn and offers Keep going or Answer now. This value can be configured from the UI up to maxRecursionLimit.',
     ],
   ]}
 />
@@ -242,7 +268,9 @@ allowedProviders:
 
 **기본값:** `["deferred_tools", "execute_code", "file_search", "web_search", "artifacts", "subagents", "actions", "context", "skills", "memory", "ask_user_question", "tools", "chain", "ocr"]`
 
-`programmatic_tools`, `stateful_code_sessions`, `run_in_background` 및 `tool_intents`는 옵트인(opt-in) 방식이며 명시적으로 추가해야 합니다. Programmatic tools 및 Stateful sessions를 사용하려면 `execute_code`와 호환되는 Code Interpreter 배포가 필요합니다. 백그라운드 코드 실행을 위해서는 `run_in_background`, `execute_code` 및 Code Interpreter가 필요합니다.
+`programmatic_tools`, `stateful_code_sessions`, `run_in_background` 및 `tool_intents`는 옵트인(opt-in) 방식이며 명시적으로 추가해야 합니다. Programmatic 도구와 stateful 세션은 `execute_code` 및 호환되는 Code Interpreter 배포도 필요합니다. Agent Builder는 Code Interpreter 없이는 Programmatic MCP 선택을 비활성화하며, 서버는 코드 실행을 사용할 수 없을 때 오래된 programmatic 호출자 옵션을 제거합니다. `run_in_background`는 Code Interpreter 도구를 기본적으로 적격하게 만들며, 적격한 MCP, Plugin 및 Action 도구에 대해 도구별 옵트인을 허용합니다. 백그라운드 코드 실행 또한 `execute_code` 및 Code Interpreter가 필요합니다.
+
+`stateful_code_sessions`는 매우 실험적인 기능입니다. 이 기능은 [`LIBRECHAT_CODE_BASEURL_STATEFUL`](/docs/configuration/dotenv#stateful-code-interpreter-endpoint) 또는 [`statefulCodeSessions.environments`](#statefulcodesessions)로 구성된 별도의 `stateful` 프로필 Code Interpreter 경로를 필요로 합니다. Stateful 요청은 일반적인 stateless 서비스로 대체되지 않고 실패 시 차단(fail closed)됩니다. Agent Builder에서 활성화된 각 에이전트는 사용자(user), 에이전트 및 사용자(agent-and-user), 또는 대화(conversation) 작업 공간 범위를 선택하며, 명명된 백엔드가 구성된 경우 실행 환경을 선택합니다. 새로운 에이전트는 사용자의 개인 범위 기본값과 배포의 기본 실행 환경으로 시작합니다.
 
 **예시:**
 
@@ -265,9 +293,11 @@ capabilities:
   - 'tools'
   - 'chain'
   - 'ocr'
-  # Optional: reuse one Code Interpreter workspace per conversation.
+  # Optional and highly experimental: reuse a user-, agent-and-user-, or
+  # conversation-scoped workspace. Requires LIBRECHAT_CODE_BASEURL_STATEFUL
+  # or a named statefulCodeSessions environment.
   # - 'stateful_code_sessions'
-  # Optional: allow selected eligible MCP and Code Interpreter tools to run as background tasks.
+  # Optional: allow eligible Code Interpreter, MCP, Plugin, and Action tools to run as background tasks.
   # - 'run_in_background'
   # Optional: show live model-written intent labels for native and selected MCP tools.
   # - 'tool_intents'
@@ -275,13 +305,152 @@ capabilities:
 
 **참고:** 이 필드는 선택 사항입니다. 생략할 경우, 기본 동작은 기본값에 나열된 모든 기능을 포함하는 것입니다.
 
-## toolApproval
+## statefulCodeSessions
 
-에이전트 도구 호출에 대한 사람의 검토를 제어합니다. 이 기능은 기본적으로 비활성화되어 있습니다. 활성화되면, 일치하는 호출은 사용자가 승인, 거부 또는 인수 편집과 같은 허용 결정을 제출할 때까지 일시 중지됩니다.
+매우 실험적인 상태 유지(stateful) Code Interpreter 작업 공간을 위한 공유 범위 및 선택적 실행 백엔드를 구성합니다.
+
+<Callout type="warning" title="매우 실험적인 기능">
+  Stateful Code Sessions, named execution environments, attached workers, 그리고 pairing은 초기 실험 단계에 있습니다. 이들의 동작, 구성, 지속성 특성 및 통합 프로토콜은 크게 변경될 수 있습니다.
+</Callout>
 
 <OptionTable
   options={[
-    ['enabled', 'Boolean', 'Agents endpoint에 대한 도구 승인을 활성화합니다.', 'false'],
+    [
+      'allowedEnvironments',
+      'Array/List of Strings',
+      '허용된 stateful workspace 범위: `user`, `agent-user` 및/또는 `conversation`.',
+      '["user", "agent-user", "대화"]',
+    ],
+    [
+      'environments',
+      'Array of Objects',
+      'Agent Builder에 표시되는 선택적 명명된 관리형 또는 연결된 Code API 환경입니다.',
+      'Unset; LIBRECHAT_CODE_BASEURL_STATEFUL remains the stateful endpoint',
+    ],
+  ]}
+/>
+
+```yaml filename="endpoints / agents / statefulCodeSessions"
+statefulCodeSessions:
+  allowedEnvironments:
+    - 'user'
+    - 'agent-user'
+    - 'conversation'
+  environments:
+    - id: managed-default
+      name: Managed Code API
+      type: managed
+      baseURL: https://code.example.com/v1
+      default: true
+    - id: engineering-vm
+      name: Engineering VM
+      type: attached
+      baseURL: https://code-bridge.example.com/v1
+      owner: deployment
+      pairing:
+        workerId: engineering-vm
+        tokenEnv: CODE_BRIDGE_ADMIN_TOKEN
+    - id: personal-workers
+      name: Personal Code Workers
+      type: attached
+      baseURL: https://code-bridge.example.com/v1
+      owner: deployment
+      configSchema:
+        permissions:
+          fileWrite:
+            allowed: [allow, ask, deny]
+            default: ask
+          commandExecution:
+            allowed: [ask, deny]
+            default: ask
+      pairing:
+        allowPrincipalWorkers: true
+        tokenEnv: CODE_BRIDGE_ADMIN_TOKEN
+```
+
+`allowedEnvironments`는 해당 블록이 존재할 때 필수이며, 최소 하나의 작업 공간(workspace) 범위를 포함해야 합니다. 전체 블록을 생략하면 세 가지 범위가 모두 허용되며, 상태 유지 작업은 계속해서 [`LIBRECHAT_CODE_BASEURL_STATEFUL`](/docs/configuration/dotenv#stateful-code-interpreter-endpoint)을 통해 라우팅됩니다. 개인 기본값 및 Agent Builder는 허용된 값만 사용할 수 있습니다. 관리자가 정책을 강화하면 저장된 개인 기본값은 계속 표시되지만 비활성화되며, 새로운 Agent는 첫 번째로 허용된 범위를 사용합니다. 기존에 활성화된 Agent는 저장된 범위를 유지하지만, 이제 허용되지 않는 범위는 Agent가 재구성될 때까지 런타임에 실패(fail closed) 처리됩니다.
+
+`environments`가 비어 있지 않은 경우, 모든 항목에는 고유한 `id`, 표시용 `name`, `managed` 또는 `attached` 유형의 `type`, 그리고 쿼리 문자열이나 프래그먼트가 없는 HTTP(S) `baseURL`이 필요합니다. 목록에 실행 가능한 환경이 포함된 경우, 해당 항목 중 정확히 하나는 `default: true`로 설정되어야 합니다. 그러면 Agent Builder가 **Execution environment** 선택기를 추가하며, 이를 **Deployment default**로 두면 해당 기본 항목이 사용됩니다. 셀프 서비스 페어링 제어 평면만 포함된 목록에는 기본값이 필요하지 않습니다. 나중에 제거되거나 더 이상 액세스할 수 없는 환경을 지정한 에이전트는 다른 백엔드로 대체되지 않고 실패 상태로 종료됩니다.
+
+- `managed`는 운영자가 관리하는 상태 저장 Code API를 직접 가리킵니다.
+- `attached`는 작업물을 아웃바운드 `@librechat/code` 워커에 임대하는 호환 가능한 Code API `remote-bridge` 백엔드를 가리킵니다. 워커는 인바운드 공용 포트를 필요로 하지 않지만, 로컬 실행 endpoint는 여전히 적절한 격리가 필요합니다.
+- `workerId`는 선택적으로 연결된 환경을 하나의 아웃바운드 워커로 라우팅합니다. 이는 서버 전용이며 클라이언트 시작 구성(startup configuration)을 통해 노출되지 않습니다.
+- `owner`의 기본값은 `deployment`입니다. 주체(Principal)가 소유한 환경은 LibreChat의 인증된 Code Environments API를 통해 생성되며, ACL로 보호되고, 승인된 요청에 대해서만 병합됩니다. 클라이언트가 제공한 URL을 deployment YAML에 넣지 마십시오.
+- `pairing`은 선택 사항이며 배포 소유의 `attached` 항목에 대해서만 유효합니다. `pairing.workerId`는 등록할 운영자 관리 워커를 식별하며, `pairing.allowPrincipalWorkers: true`는 승인된 사용자가 소유자 귀속 워커를 해당 제어 평면에 등록할 수 있도록 합니다. `pairing`이 존재할 경우, 이 필드 중 최소 하나는 필수입니다.
+- `pairing.tokenEnv`는 브리지 관리자 토큰을 포함하는 환경 변수의 이름을 지정하며, 토큰 자체를 포함하지는 않습니다. 페어링에는 루프백 개발을 제외하고 HTTPS가 필요합니다.
+- `configSchema.permissions`는 선택적으로 권한이 있는 소유자가 **Settings > Code environments**에서 개인 환경에 대한 `fileWrite` 및 `commandExecution` 정책을 선택할 수 있도록 합니다. 각 필드는 `allow`, `ask` 및/또는 `deny`를 포함하는 비어 있지 않은 `allowed` 목록을 요구합니다. `default`는 생략 시 `ask`이며 반드시 `allowed`에 포함되어야 합니다. LibreChat은 관리자가 설정한 목록 외의 저장된 값은 거부합니다.
+- 배포 YAML에서 `settings`를 구성하지 마십시오. LibreChat은 인증된 소유자의 서버 검증된 기본 설정에서 해당 요청 범위(request-scoped) 필드를 제공합니다.
+- 파일 쓰기 및 명령 실행 정책만 사용자가 구성할 수 있습니다. 격리, 네트워킹, 마운트, 권한 있는 실행, 인그레스, 이그레스 및 보안 비밀은 관리자가 제어합니다.
+- 최상위 `workerId`와 `pairing.workerId`가 모두 존재할 경우, 두 값은 일치해야 합니다. `allowPrincipalWorkers: true`로 설정된 항목에 워커 ID가 모두 없는 경우, 해당 항목은 페어링 전용(pairing-only)으로 간주됩니다. 이 경우 실행 선택기(execution selectors)에서 제외되며 `default: true`를 설정할 수 없습니다.
+
+Attached execution은 안전한 승인 기준을 자동으로 활성화합니다. 파일 쓰기 및 명령 또는 코드 실행은 확인을 요청하며, 읽기 전용 및 검색 작업은 일반 도구 정책에 따라 계속됩니다. 이 기준은 연결된 환경을 사용하는 Agent로 범위가 지정됩니다. 사용자 설정이 없는 경우, LibreChat은 `ask`를 사용합니다. [`toolApproval.enabled: false`](#toolapproval)는 이 연결된 환경 기준을 비활성화하는 관리자 긴급 재정의(override)입니다. 승인 및 재개 지원이 없는 호출자는 해당 명시적 재정의가 설정되지 않은 경우 실패(fail closed) 처리됩니다.
+
+연결된 실행을 위해서는 일치하는 실험적 Code Interpreter remote-bridge 빌드가 필요합니다. 페어링은 아웃바운드 워커 연결을 인증하며, 샌드박스나 VM 격리를 대체하지 않습니다. Code Environment 관리 권한이 있는 사용자는 **설정 > 코드 환경(Settings > Code environments)**에서 페어링하고, 허용된 도구 정책을 구성하며, 개인 워커를 취소할 수 있습니다. [상태 저장 코드 세션(/docs/features/code_interpreter#stateful-code-sessions)](/docs/features/code_interpreter#stateful-code-sessions)을 참조하세요.
+
+## eventDriven
+
+에이전트 이벤트 전달에 사용되는 신뢰할 수 있는 내부 오리진을 구성합니다. 대부분의 배포 환경에서는 이 블록을 생략하고 현재 프로세스에 바인딩된 리스너를 사용하는 것이 좋습니다.
+
+<OptionTable
+  options={[
+    [
+      'selfUrl',
+      'URL',
+      '신뢰할 수 있는 내부 트리거 승인을 위해 현재 프로세스에 바인딩된 리스너를 재정의합니다. 전달이 다른 신뢰할 수 있는 HTTP 오리진을 거쳐야 하는 경우에만 사용하십시오.',
+      '',
+    ],
+  ]}
+/>
+
+```yaml filename="endpoints / agents / eventDriven"
+endpoints:
+  agents:
+    eventDriven:
+      selfUrl: https://librechat.internal
+```
+
+바인딩된 하위 연속(Bound child continuations)은 자동으로 처리됩니다. `eventDriven` 하위의 이전 `childTurns`, `completionWakeups`, `coalescing`, `actorMailbox`, `checkpointForks`, `durableReceipts` 필드는 더 이상 구성 스위치가 아니므로 제거해야 합니다. 런타임은 이제 해당 전달 보장을 직접 적용합니다. 별도의 [`backgroundTasks.completionWakeups`](#backgroundtasks) 필드는 완료된 백그라운드 도구 및 분리된 Subagent에 대한 대화형 전달을 제어합니다.
+
+일반적인 바운드 리스너(bound-listener) 경로의 경우 `selfUrl`을 설정하지 않은 상태로 두십시오. 신뢰할 수 있는 내부 트리거 허용이 TLS 프런트 도어와 같은 다른 HTTP(S) 오리진을 통과해야 하는 경우에만 설정하십시오. 이 필드가 생략된 경우 `AGENT_TRIGGERS_SELF_URL`이 호환성을 위한 대체 수단으로 유지됩니다. [Agents API events](/docs/features/agents_api#agent-events) 및 [Automatic Parent Continuation](/docs/features/subagents#automatic-parent-continuation)을 참조하십시오.
+
+Event Actor detached Action completion은 내장된 생성 저장소(generation store)에서 자동으로 선택됩니다. 인메모리 실행은 프로세스 로컬 방식이며, Redis 생성 스트림은 내구성이 있는 재시작 복구 및 복제본 핸드오프 기능을 추가합니다. 별도의 `librechat.yaml` 스위치나 환경 기능 플래그는 필요하지 않습니다. [Agent Event Runtime](/docs/configuration/dotenv#agent-event-runtime)을 참조하세요.
+
+## backgroundTasks
+
+지원되는 완료된 백그라운드 도구 및 분리된 Subagent가 저장된 상위 Agent를 자동으로 재개할지 여부를 제어합니다.
+
+<OptionTable
+  options={[
+    [
+      'completionWakeups',
+      'Boolean',
+      '지원되는 백그라운드 작업 완료를 연속 작업으로 자동 전달합니다. 폴링 전용 동작을 원하면 false로 설정하세요.',
+      'true',
+    ],
+  ]}
+/>
+
+```yaml filename="endpoints / agents / backgroundTasks"
+backgroundTasks:
+  completionWakeups: true
+```
+
+이 블록이 생략된 경우에도 자동 완성 전달이 활성화됩니다. 에이전트가 `check_background_task`를 통해 모든 결과를 수집하도록 하려면 `completionWakeups: false`로 설정하세요.
+
+일반적인 백그라운드 도구 실행은 프로세스 로컬 상태로 유지되며, 작업자 프로세스가 종료되면 함께 소멸합니다. 콘텐츠 전용 터미널 결과가 영구 저장되면 해당 결과는 내구성을 갖게 되며 다른 복제본에서 전달이 계속될 수 있습니다. 라이브 아티팩트가 포함된 작업은 여전히 소유 실행(owning run)에서 폴링이 필요합니다. 분리된 서브에이전트(Detached Subagents)는 별도의 영구 기록 및 터미널 결과 경로를 유지합니다. 두 모드 모두에서 상태 확인, 제어 및 복구를 위한 수동 폴링을 사용할 수 있습니다. [Background Tool Calls](/docs/features/agents#background-tool-calls) 및 [Automatic Parent Continuation](/docs/features/subagents#automatic-parent-continuation)을 참조하세요.
+
+## toolApproval
+
+에이전트 도구 호출에 대한 인간의 검토를 제어합니다. 이 블록이 생략되면 배포 전체 정책은 비활성화됩니다. 연결된 코드 환경을 사용하는 에이전트는 예외입니다. 관리자가 명시적으로 `enabled: false`로 설정하지 않는 한, LibreChat은 범위가 지정된 기본 확인(ask-by-default) 안전 정책을 활성화합니다. 검토가 적용되면, 사용자가 승인, 거부 또는 인수 편집과 같은 허용된 결정을 제출할 때까지 일치하는 호출이 일시 중지됩니다.
+
+<OptionTable
+  options={[
+    [
+      'enabled',
+      'Boolean',
+      '배포 전체에 걸친 도구 승인을 활성화합니다. 명시적인 false 설정은 연결된 Code 환경 안전 기준도 비활성화합니다.',
+      'Omitted',
+    ],
     [
       'mode',
       'String',
@@ -306,7 +475,7 @@ capabilities:
   ]}
 />
 
-패턴은 glob 매칭을 사용합니다. MCP 도구는 `mcp:<server>:<tool>`로 범위를 지정할 수 있습니다. 예를 들어, `mcp:github:*`는 `github` 서버의 모든 도구와 일치합니다. 평가는 `bypass` 모드를 포함하여 `deny`에 가장 높은 우선순위를 부여합니다.
+패턴은 glob 매칭을 사용합니다. MCP 도구는 `mcp:<server>:<tool>`로 범위를 지정할 수 있습니다. 예를 들어, `mcp:github:*`는 `github` 서버의 모든 도구와 일치합니다. LibreChat은 정적 규칙과 훅 매처를 MCP 런타임 이름 및 모델 대면 별칭(model-facing aliases)에 적용하며, 여기에는 중첩된 Subagent를 통해 도달할 수 있는 도구도 포함됩니다. 정적 규칙은 선택된 모드가 폴백(fallback)을 제공하기 전에 `deny`, `ask`, `allow` 순서로 평가됩니다. 따라서 `bypass` 모드를 포함하여 거부(deny) 규칙이 항상 우선합니다.
 
 ```yaml filename="endpoints / agents / toolApproval"
 toolApproval:
@@ -554,7 +723,7 @@ endpoints:
 - **deferred_tools**: 에이전트가 모든 도구를 사전에 컨텍스트로 로드하는 대신 런타임에 지연된 MCP 도구를 검색할 수 있도록 합니다.
 - **programmatic_tools**: 에이전트 빌더(Agent Builder)에서 Programmatic으로 표시된 MCP 도구에 대해 프로그래밍 방식의 도구 호출(Programmatic Tool Calling)을 활성화합니다. `execute_code` 및 Tool Call Server 구성 요소가 포함된 코드 인터프리터(Code Interpreter) 배포가 필요합니다. 이 기능은 선택 사항이며 기본적으로 활성화되어 있지 않습니다.
 - **execute_code**: 에이전트가 코드를 실행할 수 있도록 허용합니다.
-- **stateful_code_sessions**: 옵트인(opted-in)된 에이전트가 대화당 하나의 Code Interpreter 작업 공간을 재사용할 수 있도록 합니다. `execute_code`, 호환되는 Code Interpreter 배포, 그리고 에이전트별 고급(Advanced) 설정이 필요합니다. 이 기능은 매우 실험적인 단계이며 기본적으로 활성화되어 있지 않고, 실험 과정에서 크게 변경될 수 있습니다. 현재의 동작이나 구성을 안정적인 프로덕션 계약으로 간주하지 마십시오.
+- **stateful_code_sessions**: 옵트인(opted-in)된 에이전트가 사용자, 에이전트 및 사용자, 또는 대화 범위에서 하나의 Code Interpreter 워크스페이스를 재사용할 수 있도록 합니다. `execute_code`, 호환되는 Code Interpreter 배포, 그리고 에이전트별 고급(Advanced) 설정이 필요합니다. 새로운 에이전트는 로그인한 사용자가 선호하는 범위를 사용합니다. 이 기능은 매우 실험적인 단계이며 기본적으로 활성화되어 있지 않고, 실험 과정에서 크게 변경될 수 있습니다. 현재의 동작이나 구성을 안정적인 프로덕션 계약으로 간주하지 마십시오.
 - **file_search**: 에이전트가 파일을 검색하고 상호작용할 수 있도록 합니다. 활성화되면 인용 동작은 `maxCitations`, `maxCitationsPerFile` 및 `minRelevanceScore` 설정에 의해 제어됩니다.
 - **web_search**: 에이전트가 인터넷을 검색하고 정보를 가져올 수 있도록 웹 검색 기능을 활성화합니다.
 - **artifacts**: 에이전트가 대화형 아티팩트(React 컴포넌트, HTML, Mermaid 다이어그램)를 생성할 수 있도록 합니다.
@@ -567,7 +736,7 @@ endpoints:
 - **tools**: 에이전트에게 다양한 도구에 대한 액세스 권한을 부여합니다.
 - **chain**: 에이전트 체이닝(Mixture-of-Agents (MoA) 워크플로우라고도 함)을 위한 베타 기능을 활성화합니다.
 - **ocr**: 채팅에서 "텍스트로 업로드(Upload as Text)" 기능과 에이전트를 위한 "파일 컨텍스트(File Context)"를 선택적으로 향상시켜, 파일을 업로드하고 OCR로 처리할 수 있게 합니다. **OCR 서비스를 구성해야 합니다.**
-- **run_in_background**: Code Interpreter 실행 및 셸 도구를 기본적으로 백그라운드 실행이 가능하도록 설정하며, MCP 도구에 대한 도구별 백그라운드 옵트인(opt-in)을 활성화합니다. 에이전트는 Code Interpreter를 명시적으로 제외할 수 있습니다. 이 설정은 백그라운드 실행을 허용하며, 모델이 호출할 때마다 이를 사용할지 여부를 결정합니다. 코드를 실행하려면 `execute_code`와 구성된 Code Interpreter 배포가 필요합니다. 이 기능은 기본적으로 활성화되어 있지 않습니다.
+- **run_in_background**: Code Interpreter 실행 및 셸 도구를 기본적으로 백그라운드 실행이 가능하도록 설정하며, 적격한 MCP, Plugin 및 Action 도구에 대해 도구별 백그라운드 옵트인(opt-in)을 활성화합니다. Action 수준의 스위치는 모든 적격한 작업에 대해 옵트인을 적용합니다. 단, OAuth Action 및 이미 `run_in_background` 매개변수를 정의한 작업은 제외됩니다. 에이전트는 Code Interpreter를 명시적으로 옵트아웃(opt-out)할 수 있습니다. 이 설정은 백그라운드 실행을 허용하며, 모델이 호출 시마다 사용 여부를 결정합니다. 코드를 실행하려면 `execute_code`와 구성된 Code Interpreter 배포가 필요합니다. 이 기능은 기본적으로 활성화되어 있지 않습니다.
 - **tool_intents**: 적격한 도구 호출에 모델이 직접 작성한 인텐트(intent) 레이블을 추가합니다. 코드 인터프리터 도구를 포함한 기본 도구는 자동으로 옵트인(opt-in)되며, MCP 도구는 Agent Builder에서 개별적으로 또는 일괄적으로 활성화할 수 있습니다. Model Specs는 `describeIntent`를 사용합니다. 이 기능은 기본적으로 활성화되어 있지 않습니다.
 
 기능(capabilities)을 지정하여 사용자가 에이전트와 상호작용할 때 사용할 수 있는 기능을 제어할 수 있습니다.
@@ -589,7 +758,7 @@ endpoints:
       # Optional: enables Programmatic Tool Calling for MCP tools marked Programmatic in the Agent Builder.
       # - 'programmatic_tools'
       - 'execute_code'
-      # Optional: makes Code Interpreter background-eligible and enables selected MCP tools.
+      # Optional: makes Code Interpreter background-eligible and enables selected MCP, Plugin, and Action tools.
       # - 'run_in_background'
       # Optional: enables live intent labels for native and selected MCP tools.
       # - 'tool_intents'
@@ -610,7 +779,7 @@ endpoints:
 - 60% 이상의 관련성을 가진 소스만 포함됩니다
 - LibreChat 에이전트는 코드 실행, 파일 검색(출처 포함), Skills, Subagents, actions, artifacts, 파일 컨텍스트, 구성된 경우 OCR 서비스, 그리고 웹 검색 기능에 액세스할 수 있습니다.
 - `execute_code`와 함께 `programmatic_tools` 기능을 추가하지 않으면 Programmatic Tool Calling은 비활성화된 상태로 유지됩니다.
-- `run_in_background`를 추가하지 않으면 백그라운드 도구 호출은 비활성화된 상태로 유지됩니다. 이 경우 Code Interpreter 도구는 기본적으로 사용 가능해지지만, MCP 도구는 여전히 도구별로 선택해야 합니다.
+- 백그라운드 도구 호출은 `run_in_background`를 추가하지 않는 한 비활성화된 상태로 유지됩니다. Code Interpreter 도구는 기본적으로 사용 가능하게 되지만, 사용 가능한 MCP, Plugin 및 Action 도구는 여전히 선택이 필요합니다.
 - `tool_intents`를 추가하지 않으면 도구 의도(tool intent) 레이블은 비활성화된 상태로 유지됩니다. 기본 도구(native tools)는 자동으로 옵트인(opt in)되지만, MCP 도구는 여전히 도구별로 선택해야 합니다.
 
 ## remoteApi
@@ -748,6 +917,12 @@ endpoints:
       '이 에이전트가 생성할 수 있는 특정 에이전트입니다. 기본값이 10인 `maxSubagents`에 의해 제한됩니다.',
       'agent_ids: ["agent_researcher"]',
     ],
+    [
+      'graphs',
+      'Array of Objects',
+      '하나의 격리된 하위 그래프로 실행할 수 있는 저장된 Agent 팀입니다. 목록은 `maxSubagents`(기본값: 10)로 제한되며, 각 팀은 최대 32명의 멤버를 포함할 수 있습니다.',
+      '',
+    ],
   ]}
 />
 
@@ -759,6 +934,8 @@ subagents:
     - 'agent_researcher'
     - 'agent_reviewer'
 ```
+
+각 `graphs` 항목은 고유한 `type`, `name`, `description`, `agent_ids`, 직접적인 `edges`, `entry_agent_id` 및 `result_agent_id`를 필요로 합니다. 팀 정의는 연결된 비순환 방향 그래프(DAG)를 형성해야 하며, 모든 구성원은 사용자에게 보여야 합니다. 또한 전체 구성은 50개의 고유한 Agent 대상과 100개의 확장된 실행 구성으로 제한됩니다. [saved-team 예시 및 런타임 동작](/docs/features/subagents#configure-an-agent)을 참조하세요.
 
 사용자 대상 동작 및 제한 사항은 [Subagents](/docs/features/subagents)를 참조하세요.
 

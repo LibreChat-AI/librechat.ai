@@ -14,10 +14,11 @@ Questa guida illustra come configurare Redis per la memorizzazione nella cache e
 - [Tipi di connessione](#connection-types)
 - [Configurazione di sicurezza](#security-configuration)
 - [Opzioni avanzate](#advanced-options)
+- [Ripristino dopo failover della replica](#replica-failover-recovery)
 - [Ottimizzazione delle prestazioni](#performance-tuning)
 - [Esempi di configurazione](#configuration-examples)
 - [Flussi riprendibili](#resumable-streams)
-- [Protocollo di generazione rollout](#generation-protocol-rollout)
+- [Compatibilità del protocollo di generazione](#generation-protocol-compatibility)
 - [Stream Delta Coalescing](#stream-delta-coalescing)
 - [Coordinamento del catalogo MCP](#mcp-catalog-coordination)
 
@@ -212,6 +213,18 @@ REDIS_PING_INTERVAL=300
 - L'intervallo è specificato in secondi e si applica sia ai client IoRedis che a quelli Keyv Redis
 - Valori di esempio: `300` (5 minuti), `600` (10 minuti), `60` (1 minuto)
 
+### Ripristino da Failover della Replica [#replica-failover-recovery]
+
+Durante un failover di Sentinel, una replica Redis declassata può mantenere aperto un socket esistente rifiutando al contempo le scritture con `READONLY`. LibreChat rileva questa risposta sul client Keyv non-cluster, interrompe la connessione obsoleta e si riconnette in modo che il primary corrente possa essere risolto senza riavviare l'applicazione.
+
+```bash
+# Minimum interval between forced recovery attempts, in milliseconds
+# Default: 5000
+REDIS_READONLY_RECOVERY_INTERVAL=5000
+```
+
+L'intervallo esegue il debounce dei tentativi di riconnessione durante un picco di scritture fallite. I client Redis Cluster sono esclusi perché utilizzano la topologia cluster nativa e la gestione dei reindirizzamenti.
+
 ### Caching selettivo in memoria [#selective-in-memory-caching]
 
 Forza specifici namespace di cache a utilizzare l'archiviazione in-memory anche quando Redis è abilitato:
@@ -327,27 +340,22 @@ REDIS_URI=redis://127.0.0.1:6379
 # USE_REDIS_STREAMS=true  # Enabled by default when USE_REDIS=true
 ```
 
-### Rollout del Protocollo di Generazione [#generation-protocol-rollout]
+### Compatibilità del Protocollo di Generazione [#generation-protocol-compatibility]
 
-Il protocollo di generazione v2 aggiunge la coda persistente, l'interruzione, la pausa/ripristino e le garanzie di recupero utilizzate dalle attuali esecuzioni degli Agent. Le distribuzioni basate su Redis rimangono intenzionalmente sul protocollo v1 quando `GENERATION_PROTOCOL_VERSION` non è impostato, in modo che le repliche che eseguono versioni diverse di LibreChat possano coesistere durante un aggiornamento graduale.
+I client LibreChat attuali negoziano automaticamente il protocollo di generazione v2 con ogni archivio di generazione integrato. Non è richiesta alcuna impostazione di distribuzione. Le generazioni esistenti con un marcatore di protocollo v1 esplicito o memorizzato mantengono il loro comportamento v1 immutabile attraverso steering, pausa/ripresa, riprova e ripristino fino al completamento.
 
-Utilizza un rollout a due fasi:
+Per un aggiornamento progressivo (rolling upgrade), ogni immagine API e worker in esecuzione deve includere il bridge di compatibilità v2:
 
-1. Distribuisci l'immagine di LibreChat compatibile con v2 su **ogni** replica con `GENERATION_PROTOCOL_VERSION` non impostato o impostato su `1`.
-2. Attendere che le generazioni attive appartenenti all'immagine precedente terminino o vengano svuotate.
-3. Imposta `GENERATION_PROTOCOL_VERSION=2` e distribuisci nuovamente la stessa immagine.
+- Ogni immagine API e worker esegue LibreChat `v0.8.8-rc1` o versioni successive.
+- Il Helm chart `2.0.8` o versioni successive seleziona un'immagine predefinita compatibile; un override dell'immagine personalizzata deve comunque soddisfare il requisito dell'immagine sopra indicato.
 
-```bash filename=".env"
-USE_REDIS=true
-USE_REDIS_STREAMS=true
-GENERATION_PROTOCOL_VERSION=2
-```
+Quando si esegue l'aggiornamento da una versione precedente, eseguire un cold handoff: arrestare ogni vecchia replica dell'API e del worker prima di avviare la nuova immagine. Questo impedisce ai binari pre-v2 e automatic-v2 di condividere lo stato di generazione in Redis.
 
 <Callout type="warning" title="Sicurezza del deployment progressivo">
-  Non abilitare il protocollo v2 finché ogni replica non lo supporta. Dopo l'inizio delle generazioni v2, non eseguire il rollback a un'immagine LibreChat pre-v2 finché tali generazioni non sono state completate; le repliche più vecchie non possono operare in sicurezza sullo stato Redis.
+  Non eseguire una release precedente alla `v0.8.8-rc1` con lo stesso stato di generazione Redis delle repliche attuali. Prima di eseguire il rollback a una versione inferiore a questo limite di compatibilità, assicurarsi innanzitutto che le repliche attuali e le generazioni protocol-v2 siano state svuotate.
 </Callout>
 
-I flussi di generazione in-memory non condividono lo stato tra le repliche e utilizzano il protocollo v2 per impostazione predefinita, quindi non richiedono questo passaggio.
+I flussi di generazione in-memory negoziano automaticamente anche il protocollo v2 e non condividono lo stato di generazione tra i processi.
 
 ### Stream Delta Coalescing [#stream-delta-coalescing]
 

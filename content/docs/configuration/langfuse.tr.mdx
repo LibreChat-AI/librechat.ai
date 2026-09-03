@@ -90,6 +90,28 @@ LANGFUSE_BASE_URL=https://cloud.langfuse.com
 
 Her iki ortam anahtarı da mevcut olduğunda, LibreChat bunları merkezi proje için kullanır ve **Settings → Langfuse** kısmını gizler. `LANGFUSE_TRACING_ENABLED=false` veya `LANGFUSE_SAMPLE_RATE=0` ayarları hem izlemeleri (traces) hem de geri bildirim puanlarını devre dışı bırakır. Kesirli örnekleme, izleme başına deterministik bir karar verir; örnekleme dışı bırakılan izlemeler daha sonra geri bildirim puanı almaz.
 
+`LANGFUSE_BASE_URL` kanonik temel URL ayarıdır. Daha eski olan `LANGFUSE_HOST` ve `LANGFUSE_BASEURL` isimleri uyumluluk takma adları olarak kalmaya devam eder; birden fazlasının ayarlanmış olması durumunda `LANGFUSE_BASE_URL` önceliklidir.
+
+### Kimlik Doğrulamalı Proxy'ler ve Ağ Geçitleri [#authenticated-proxies-and-gateways]
+
+Cloudflare Access, oauth2-proxy veya başka bir kimlik doğrulama ağ geçidinin arkasındaki kendi kendine barındırılan (self-hosted) bir Langfuse örneği için, dağıtım düzeyindeki özel istek başlıklarını `librechat.yaml` içinde tanımlayın:
+
+```yaml filename="librechat.yaml"
+langfuse:
+  headers:
+    CF-Access-Client-Id: '${CF_ACCESS_CLIENT_ID}'
+    CF-Access-Client-Secret: '${CF_ACCESS_CLIENT_SECRET}'
+```
+
+LibreChat, çözümlenmiş başlıkları her doğrudan Langfuse yüzeyine uygular: izleme (trace) ve medya dışa aktarımı, geri bildirim puanı oluşturma ve silme, proje kimliği arama ve yönetici kimlik bilgisi doğrulama. Langfuse'un kendi `Authorization` kimlik bilgisi, REST isteklerinde yetkili olmaya devam eder. Değerler `${ENV_VAR}` enterpolasyonunu destekler; çözümlenmemiş değişkenler, korumalı altyapı gizli referansları, boş değerler ve geçersiz başlık adları bir uyarı ile atılır. Başlık değerleri başlangıç günlüklerinde ve yönetici yapılandırma okumalarında maskelenir, ancak yine de değişmez kimlik bilgileri yerine ortam referanslarının kullanılması önerilir.
+
+Bu başlıklar operatör sahiplidir ve yalnızca YAML ile kullanılabilir. Yönetim Paneli veya yapılandırma API'si aracılığıyla yazılamazlar, MongoDB'de saklanamazlar veya kullanıcı bazlı `{{...}}` yer tutucuları ile doldurulamazlar. LibreChat bunları yalnızca yapılandırma tam olarak bir Langfuse kaynağı ile eşleştiğinde gönderir. Birden fazla merkezi, kiracı veya toplayıcı kaynağı olduğunda, bir uyarı günlüğe kaydeder ve eşleme güvenli bir şekilde alıcıyı seçemediği için hiçbir özel başlık göndermez.
+
+<Callout type="warning" title="Fanout sınırlaması">
+  Fanout toplayıcı şu anda yalnızca `Authorization` bilgisini kiracı Langfuse hedeflerine iletmektedir.
+  Özel `langfuse.headers`, LibreChat'in tek bir toplayıcıya veya Langfuse kaynağına yaptığı doğrudan isteğin kimliğini doğrulayabilir, ancak toplayıcının başka bir proxy arkasındaki bir kiracı hedefine yaptığı yukarı yönlü (upstream) isteğin kimliğini doğrulamaz.
+</Callout>
+
 ## Tenant Fanout (İsteğe bağlı) [#tenant-fanout-optional]
 
 Langfuse fanout, çok kiracılı bir LibreChat dağıtımının her uygun izlemeyi (trace) ve medyasını hem merkezi bir Langfuse projesine hem de kiracıya özel bir projeye aktarmasına olanak tanır. Bu özellik isteğe bağlıdır ve bir ağ geçidi ile dahili bir OpenTelemetry toplayıcısı ekler; fanout dağıtılmadığında yukarıdaki normal tek projeli izleme değişmeden kalır.
@@ -207,9 +229,23 @@ Kiracı dışa aktarımı (tenant export) yalnızca fanout ve toplayıcı URL'si
 
 LibreChat SDK'sının merkezi veya yedek toplayıcı izlemeleri için medya yüklemeleri oluşturmasını engellemek üzere `LANGFUSE_FANOUT_CENTRAL_MEDIA_UPLOAD_DISABLED=true` ayarını yapın; kiracı yönlendirmeli medya yüklemeleri bundan etkilenmez. Bu uygulama tarafı anahtarı, bir yükleme ağ geçidine ulaştıktan sonra merkezi medya iletimini engelleyen ağ geçidi tarafındaki `LANGFUSE_FANOUT_CENTRAL_MEDIA_EXPORT_DISABLED` ayarından farklıdır.
 
+Medya yönlendirme için fanout ağ geçidi, yalnızca yapılandırılmış Langfuse yetkilisi tarafından döndürülen mutlak HTTPS yükleme hedeflerini kabul eder ve yükleme `PUT` isteklerinde yönlendirmeleri takip etmez. Özel MinIO ana bilgisayarları dahil olmak üzere kendi kendine barındırılan nesne depolama, döndürülen yükleme URL'si HTTPS kullandığında desteklenmeye devam eder. Düz HTTP veya yönlendirmeye bağımlı medya yükleme hedefleri artık başarısız olurken, izleme dışa aktarımı bağımsız olarak devam eder.
+
 İzleme ve medya trafiği fanout ağ geçidi üzerinden geçer. Geri bildirim puanları doğrudan LibreChat'ten gönderilir: merkezi puanlar `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` ve `LANGFUSE_BASE_URL` kullanırken, kiracı puanları kiracı uygulama yapılandırmasını kullanır.
 
 Tüm ağ geçidi değişkenleri, özel hedef kurulumu, metrikler, ölçeklendirme ve Redis davranışı için [Langfuse fanout deployment reference](https://github.com/danny-avila/LibreChat/blob/dev/otel/langfuse-fanout/README.md) bölümüne bakın.
+
+### Tanılama Verilerini Dışa Aktar [#export-diagnostics]
+
+İzlenen her istek, kiracı dışa aktarma kararını açıklayan düşük kardinaliteli OpenTelemetry özniteliklerini kaydeder:
+
+- `librechat.tenant.id`, kiracı bağlamını tanımlar
+- `librechat.langfuse.export_plan` değeri `central_only`, `tenant_fanout` veya `disabled` olabilir.
+- `librechat.langfuse.export_reason` değeri `configured`, `collector_unconfigured`, `destination_unconfigured`, `emergency_disabled`, `fanout_disabled`, `missing_credentials` veya `tenant_disabled` olabilir.
+
+Ağ geçidi ayrıca `langfuse_fanout_trace_exports_total{destination,result,tenant_id}` metriğini de dışa aktarır. Kiracı içermeyen bir toplu işlem `<unknown>`, karma kiracılı bir toplu işlem `<multiple>` ve hatalı biçimlendirilmiş bir kiracı kimliği `<invalid>` olarak kullanılır. Ağ geçidi, işlem başına en fazla 1.000 farklı geçerli kiracı etiketi tutar ve metrik kardinalitesini sınırlamak için sonraki kimlikleri `<overflow>` altında birleştirir; tanınmayan hedefler başka bir etiket oluşturmak yerine `central` olarak kaydedilir.
+
+Başarılı uygulama içi bağlantı değişiklikleri, `librechat.langfuse.connection.changed` yapılandırılmış olayını da yazar. Bu olay; kiracı (tenant), yapılandırılmış ve etkinleştirilmiş durum, hedef, doğrulama sonucu, birincil değişiklik ve herhangi bir anahtarı günlüğe kaydetmeden tam değiştirilen alan listesini içerir. Bu alanları, kasıtlı bir merkezi-sadece veya devre dışı bırakılmış planı, eksik toplayıcı, hedef veya kimlik bilgisi yapılandırmasından ayırt etmek için kullanın.
 
 ## LibreChat'i Yeniden Başlatın [#restart-librechat]
 
@@ -224,11 +260,15 @@ docker compose up -d
 
 LibreChat, Langfuse yapılandırılmış şekilde yeniden başlatıldığında, Langfuse arayüzünde her sohbet mesajı yanıtı için yeni bir izleme (trace) göreceksiniz:
 
+LibreChat v0.8.8-rc2, Agent izleme şekillendirmesini `StandardGraph`, `MultiAgentGraph` ve `AgentModelCall` çalışma zamanı gözlem adlarını kullanacak şekilde günceller; etkinlik ve akıl yürütme etiketi çağrıları, tanımladıkları işin altına iç içe yerleştirilir. İzleme düzeyi girdi ve çıktıları da kök gözlemlerde temsil edilir. Daha önceki gözlem adlarına veya izleme düzeyi girdi/çıktı alanlarına bağlı olan kayıtlı Langfuse filtrelerini, panolarını ve değerlendirmelerini gözden geçirin.
+
 ![LibreChat örnek izlemesi](https://langfuse.com/images/cookbook/integration_librechat/librechat-example-trace.png)
 
 [Langfuse arayüzündeki izleme bağlantısı](https://cloud.langfuse.com/project/cloramnkj0002jz088vzn1ja4/traces/57b4aa20a258a2e9e2d1ce2e4eacb21c?observation=06f5341a68d723b1&timestamp=2026-02-04T13%3A02%3A54.248Z&traceId=57b4aa20a258a2e9e2d1ce2e4eacb21c)
 
-`access:admin` ve `manage:configs:langfuse` yetkilerine sahip yöneticiler, konuşmanın **Context Usage** (Bağlam Kullanımı) dökümünü açabilir ve **View session in Langfuse** (Oturumu Langfuse'da görüntüle) seçeneğini belirleyebilirler. Bağlantı, yalnızca üretim tamamlandıktan sonra ve konuşma, etkin uygulama içi Langfuse bağlantısına gönderilmiş en az bir örneklenmiş iz (sampled trace) içerdiğinde görünür. Bu bağlantı, ilgili bağlantının doğrulanmış hedefine ve projesine yönlendirir; ortam tarafından yönetilen kimlik bilgileri, devre dışı bırakılmış bağlantılar, örnekleme dışı bırakılmış konuşmalar veya Langfuse yapılandırma erişimi olmayan kullanıcılar için gösterilmez.
+`access:admin` ve `manage:configs:langfuse` yetkilerine sahip yöneticiler, konuşmanın **Context Usage** dökümünü açabilir ve **View session in Langfuse** seçeneğini belirleyebilirler. Aynı işlem, Langfuse yapılandırma erişimine sahip, kimliği doğrulanmış ve aynı kiracıdaki (tenant) bir yönetici için paylaşılan bir konuşmada da görünebilir. Herkese açık ve sıradan paylaşım bağlantısı görüntüleyicileri bunu asla göremez.
+
+Bağlantı yalnızca oluşturma işlemi bittikten sonra ve konuşma, aktif uygulama içi Langfuse bağlantısına gönderilen en az bir örneklenmiş iz içerdiğinde görünür. Bu bağlantı, ilgili bağlantının doğrulanmış hedefine ve projesine yönlendirir; ortam tarafından yönetilen kimlik bilgileri, devre dışı bırakılmış bağlantılar, örnekleme dışı bırakılmış konuşmalar, kiracılar arası görüntüleyiciler veya gerekli erişime sahip olmayan kullanıcılar için gösterilmez.
 
 ## Mesaj Geri Bildirim Puanları [#message-feedback-scores]
 

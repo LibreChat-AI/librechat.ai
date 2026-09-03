@@ -49,15 +49,17 @@ LibreChat zeigt konfigurierte MCP-Server direkt im Chat-Bereich an, wenn traditi
 - Wenn ausgewählt, werden alle Tools von diesem Server für Ihr aktuelles Modell verfügbar.
 - Schneller Zugriff auf MCP-Tools, ohne einen Agenten erstellen zu müssen, wodurch mehrere Server gleichzeitig verwendet werden können
 
-Um zu verhindern, dass MCP-Server im Chat-Dropdown erscheinen (und sie ausschließlich für Agents verfügbar zu halten), setzen Sie [`chatMenu: false`](/docs/configuration/librechat_yaml/object_structure/mcp_servers#chatmenu) in Ihrer Konfiguration:
+Um einen MCP Server aus der regulären Chat-Auswahl herauszuhalten, setzen Sie [`chatMenu: false`](/docs/configuration/librechat_yaml/object_structure/mcp_servers#chatmenu) in Ihrer Konfiguration:
 
 ```yaml
 mcpServers:
   internal-tools:
     command: npx
     args: ['-y', 'internal-mcp-server']
-    chatMenu: false # Only available in agent builder
+    chatMenu: false # Not selectable in regular chat
 ```
+
+Diese Einstellung wird sowohl bei Chat-Anfragen als auch in der Auswahl erzwungen, sodass eine veraltete gespeicherte Auswahl nicht weiterhin einen ausgeblendeten Server verwenden kann. Sie entfernt den Server nicht aus gespeicherten Agents oder aus einer Model Specs, die ihn explizit zuweist. LibreChat lässt zudem Server, die ein Benutzer nur über einen autorisierten Agent erreichen kann, aus der regulären Chat-Auswahl und dem Anfragepfad weg.
 
 ### Mit Agents [#with-agents]
 
@@ -264,7 +266,7 @@ Initialisierungsfehler unterscheiden nun zwischen einem nicht erreichbaren Serve
 
 Wenn ein Agent explizit MCP Tools erwartet, aber beim Start der Ausführung keine aufgelöst werden können, bricht LibreChat die Ausführung mit Hinweisen zur Verbindung und zum Zugriff ab, anstatt sie stillschweigend ohne diese Tools auszuführen.
 
-MCP-Server, die `notifications/tools/list_changed` aussenden, können ihren Tool-Katalog aktualisieren, ohne dass ein Neustart von LibreChat erforderlich ist. LibreChat ruft die aktuelle Liste von der aktiven Verbindung ab, veröffentlicht hinzugefügte Tools und beendet die Bereitstellung von Tools, die der Server entfernt hat. Wiederverbindungen synchronisieren ebenfalls den Katalog, bevor die Verbindung als bereit eingestuft wird.
+MCP-Server, die `notifications/tools/list_changed` aussenden, können ihren Tool-Katalog aktualisieren, ohne dass ein Neustart von LibreChat erforderlich ist. LibreChat ruft die aktuelle Liste von der Live-Verbindung ab, veröffentlicht hinzugefügte Tools und beendet die Bereitstellung von Tools, die der Server entfernt hat. Auch bei Wiederverbindungen wird der Katalog synchronisiert, bevor die Verbindung als bereit eingestuft wird. Verwaltete Snapshot-Aktualisierungen und die Erkennung kalter Server teilen sich ein prozessweites Drei-Operationen-Gate. Sobald eine Operation zugelassen ist, bleibt sie durch ihre Tool-Listen- oder Server-spezifische Erkennungsfrist begrenzt, einschließlich eines eventuell kürzeren `initTimeout`, sodass langsame Katalogvorgänge einen Slot nicht unbegrenzt belegen können.
 
 Bei streamfähigen HTTP-Servern kann ein Wiederverbindungsversuch kurzzeitig einen HTTP-`409`-Fehler zurückgeben, wenn der Server noch einen veralteten, eigenständigen SSE-Stream für die alte Sitzung hält. LibreChat behandelt dies als vorübergehend, beendet die veraltete Sitzung und baut die Verbindung automatisch neu auf; bei erfolgreicher Wiederherstellung ist kein Eingreifen des Bedieners erforderlich. Sollte die neu aufgebaute Verbindung ebenfalls fehlschlagen, zeigt LibreChat weiterhin den zugrunde liegenden Verbindungsfehler an.
 
@@ -320,6 +322,10 @@ Zu den verfügbaren Platzhaltern gehören:
 
 YAML-definierte MCP-Server können auch `{{LIBRECHAT_OPENID_*}}`-, `{{LIBRECHAT_GRAPH_*}}`- und `{{LIBRECHAT_BODY_*}}`-Platzhalter verwenden. `{{LIBRECHAT_BODY_*}}`-Werte sind auf den Request beschränkt, sodass LibreChat Verbindungen für den aktiven Lauf erstellt, sie über Tool-Aufrufe in diesem Lauf hinweg wiederverwendet und sie bereinigt, wenn der Request endet. Request-bezogene Server sind vom persistenten Tool-Cache ausgeschlossen, damit Request-spezifische Header und URLs nicht außerhalb des aktiven Laufs wiederverwendet werden. Da ihre Tool-Liste nicht aufgelöst werden kann, bevor eine Chat-Anfrage existiert, stellt der Agent Builder eine Laufzeit-Tool-Auswahl für den gesamten Server bereit und löst dessen Tools zur Laufzeit auf. Der Abschluss von OAuth speichert die Autorisierung, stellt die Verbindung jedoch erst her, wenn der erste Lauf den Request-Kontext bereitstellt. User-, OpenID- und Graph-Platzhalter sind auf den Benutzer beschränkt; HTTP-Transporte aktualisieren ihre aufgelösten Header vor jedem Tool-Aufruf, ohne dass eine erneute Verbindung erforderlich ist.
 
+`{{LIBRECHAT_GRAPH_ACCESS_TOKEN}}` tauscht das wiederverwendbare OpenID-Zugriffstoken des Benutzers über den Microsoft On-Behalf-Of-Flow aus. [`GRAPH_API_SCOPES`](/docs/configuration/dotenv#microsoft-graph-api--entra-id-integration) legt die angeforderten, durch Leerzeichen getrennten Scopes fest und verwendet standardmäßig `https://graph.microsoft.com/.default`. Dies ist unabhängig von `OPENID_GRAPH_SCOPES`, welches die Personen- und Gruppensuche konfiguriert.
+
+Der `{{LIBRECHAT_BODY_PARENTMESSAGEID}}` Platzhalter wird für native Agent-Chats, OpenAI-kompatible Agents API-Aufrufe und Legacy-Assistants-Ausführungen ausgefüllt. Open Responses hat keine äquivalente übergeordnete Nachrichtenidentität und schlägt fehl, wenn ein MCP-Server diesen Wert erfordert. Siehe die [Referenz für MCP-Server-Platzhalter](/docs/configuration/librechat_yaml/object_structure/mcp_servers#headers).
+
 ### Server-Anweisungen [#server-instructions]
 
 `serverInstructions` ist eine LibreChat-Funktion, die dynamisch konfigurierte Anweisungen hinzufügt, sobald ein Tool von diesem MCP-Server ausgewählt wird:
@@ -358,6 +364,8 @@ mcpServers:
 ```
 
 **Hinweis**: Falls Vorgänge weiterhin vorzeitig abgebrochen werden, überprüfen Sie Ihre Proxy-Konfiguration (z. B. nginx, traefik usw.), da diese aufgrund von Standard-Timeouts möglicherweise Verbindungen vorzeitig trennt.
+
+Wenn ein Benutzer während eines Agent-Tool-Aufrufs im Vordergrund auf **Stop** drückt, leitet LibreChat das Signal zum Abbruch der Ausführung an MCP weiter. Bei streamfähigen HTTP-Servern sendet das MCP SDK `notifications/cancelled`; der Server muss diese Benachrichtigung berücksichtigen, um seine eigene Arbeit zu beenden. Losgelöste Hintergrundaufrufe behalten absichtlich einen separaten Lebenszyklus bei und werden nicht mit dem Vordergrund-Turn abgebrochen.
 
 ### Vom Benutzer bereitgestellte Anmeldedaten [#user-provided-credentials]
 
@@ -497,6 +505,8 @@ LibreChat verarbeitet OAuth-Token intelligent:
 - **Automatische Aktualisierung**: Wenn Refresh-Tokens verfügbar sind, erneuert LibreChat automatisch abgelaufene Access-Tokens.
 - **Stumme 401-Wiederherstellung**: Wenn eine OAuth MCP-Verbindung während einer Sitzung eine Authentifizierungsablehnung erhält, koordiniert LibreChat einen begrenzten Aktualisierungs- und Wiederverbindungsversuch pro Benutzer und Server. Gleichzeitige Aufrufer teilen sich dieses Wiederherstellungsergebnis, bevor LibreChat eine neue Authentifizierungsaufforderung anzeigt.
 - **Sitzungsverwaltung**: Jeder Benutzer unterhält seine eigenen OAuth-Sitzungen für Multi-User-Umgebungen
+
+Wenn ein gespeicherter Agent-Stream neu geladen oder fortgesetzt wird, während eine MCP-Autorisierungsaufforderung noch aussteht, rekonstruiert LibreChat diese Aufforderung aus dem persistenten Generierungsstatus. Abgeschlossene, abgebrochene, fehlgeschlagene oder abgelaufene Aufforderungen werden nicht wiederhergestellt.
 
 Gespeicherte OAuth-Clients und -Token sind an die MCP-Server-URL sowie die OAuth-Client-/endpoint-Einstellungen gebunden. Das Ändern dieser Einstellungen erfordert eine erneute Authentifizierung der Benutzer. Wenn Sie einen über die Benutzeroberfläche erstellten Server bearbeiten, der ein gespeichertes `client_secret` beibehält, geben Sie das Secret erneut ein, wenn Sie ein Bindungsfeld wie die Server-URL, die Client-ID, die Autorisierungs-URL, die Token-URL oder die Token-Authentifizierungsmethode ändern.
 

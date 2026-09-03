@@ -1,15 +1,120 @@
 ---
-title: Struktur des Nachrichtenfilter-Objekts
+title: Struktur des Inhaltsfilter-Objekts
 icon: ShieldAlert
 ---
 
 ## Übersicht [#overview]
 
-Das `messageFilter`-Objekt konfiguriert serverseitige Nachrichtenfilter. Der unterstützte Filtertyp ist `messageFilter.pii`.
+LibreChat bietet zwei serverseitige Filterkonfigurationen:
 
-`messageFilter.pii` lehnt übermittelten Nachrichtentext ab, der mit anmeldedatenähnlichen Startmustern oder vom Betreiber definierten regulären Ausdrücken übereinstimmt, bevor der Text die Moderation, eine Modellanfrage oder die Nachrichtenspeicherung erreicht.
+- `filters` wendet quellenspezifische Richtlinien auf ausgewählte Felder in Nachrichten, Prompts, Agents, Dateien, Skills, Memories, Tools und anderen wiederverwendbaren Inhalten an.
+- `messageFilter` ist der veraltete Nachrichten-Textfilter. Bestehende Bereitstellungen können ihn weiterhin verwenden, während sie zu `filters.messages` migrieren.
 
-## Beispiel [#example]
+Beide sind optional. Wenn beide konfiguriert sind, gelten beide Richtlinien.
+
+<Callout type="warning" title="Nur Basiskonfiguration">
+  `filters` wird nur aus der Basis `librechat.yaml` geladen. Datenbank-, Rollen-, Gruppen- und Benutzer-Overrides können diese weder hinzufügen, ändern noch entfernen. Rollen Sie bei einer Bereitstellung mit mehreren Replikaten alle Replikate gemeinsam aus oder starten Sie diese neu und stellen Sie sicher, dass jedes die gleiche Basiskonfiguration geladen hat, bevor Sie die Richtlinie als aktiv betrachten.
+</Callout>
+
+## Quellenspezifische Filter [#source-aware-filters]
+
+Jede Quelle verfügt über eine optionale `pii`-Richtlinie. Lassen Sie `filters`, eine Quelle oder deren `pii`-Block weg, um diesen Bereich deaktiviert zu lassen.
+
+```yaml filename="librechat.yaml"
+filters:
+  messages:
+    unattributedAssistantContent: model_output
+    pii:
+      action: audit
+      fields: [text, summary, attachment_reference]
+      starterPatterns: [sk_prefix, bearer_header, api_key_header]
+      customPatterns:
+        - id: organization_identifier
+          label: Organization identifier
+          regex: 'ORG-[A-Z0-9]{12}'
+  files:
+    pii:
+      fields: [name, content, extracted_text, transcript]
+      uninspectable: block
+  skills:
+    pii:
+      fields: [name, description, instructions, imported_text, file_text]
+```
+
+### Musterkonfiguration [#pattern-configuration]
+
+Für jede aktivierte Quelle:
+
+- Lassen Sie `action` weg oder setzen Sie es auf `block`, um Übereinstimmungen abzulehnen. Setzen Sie `action: audit` für ein Shadow-Rollout, das Ergebnisse aufzeichnet, ohne Inhalte abzulehnen, zu ändern oder zu schwärzen.
+- Lassen Sie `fields` weg, um jedes unterstützte Feld für diese Quelle zu überprüfen. Eine explizite Liste muss zwischen 1 und 256 unterstützte Feldnamen enthalten.
+- Lassen Sie `starterPatterns` weg, um den vollständigen Starter-Katalog zu aktivieren. Setzen Sie es auf `[]`, um Starter-Muster zu deaktivieren, während alle `customPatterns` beibehalten werden.
+- Konfigurieren Sie `customPatterns` mit einer `id`, einem benutzerseitigen `label` und einem `regex`.
+
+Der Audit-Modus evaluiert alle konfigurierten Fragmente und Regeln, sodass Operatoren die Ergebnisse vor der Durchsetzung messen können. Jeder Audit-Datensatz auf Info-Ebene identifiziert die Aktion, den Detektor, die Regel, das Label, die Quelle, das Feld und die Herkunft, enthält jedoch niemals den übereinstimmenden Text oder den Quellinhalt. Der Audit-Modus bietet keine Schwärzung; nicht unterstützte Aktionswerte werden beim Laden der Konfiguration abgelehnt.
+
+Aktionen werden unabhängig pro Quelle konfiguriert, sodass eine Quelle protokollieren kann, während eine andere blockiert. `filters.files.pii.uninspectable: block` bleibt eine unabhängige „Fail-Closed“-Regel für undurchsichtige oder zu große ausgewählte Dateiinhalte, selbst wenn die Musteraktion dieser Quelle auf `audit` gesetzt ist.
+
+Die integrierten Starter-Muster-IDs sind:
+
+- `sk_prefix`: `sk-`-artige Token-Präfixe.
+- `bearer_header`: Bearer-Token im Text.
+- `api_key_header`: Text in Form eines `api-key`-Headers.
+
+Benutzerdefinierte Muster verwenden die begrenzte, lineare RE2JS-Syntax für reguläre Ausdrücke. Rückwärtsreferenzen (Backreferences) und Lookaround werden nicht unterstützt, und einige Escape-Sequenzen unterscheiden sich von regulären JavaScript-Ausdrücken. LibreChat weist ungültige oder nicht unterstützte Muster beim Laden der Konfiguration zurück.
+
+### Unterstützte Quellen und Felder [#supported-sources-and-fields]
+
+| Quelle | Unterstützte Felder |
+| --- | --- |
+| `messages` | `name`, `text`, `summary`, `quote`, `answer`, `decision_response`, `decision_reason`, `content_part`, `attachment_reference`, `assembled_context` |
+| `prompts` | `name`, `description`, `oneliner`, `category`, `command`, `text`, `preset_text`, `system`, `context`, `instructions`, `additional_instructions`, `greeting`, `example_input`, `example_output` |
+| `agentInstructions` | `name`, `category`, `description`, `instructions`, `additional_instructions`, `edge_description`, `edge_prompt`, `edge_prompt_key`, `artifacts`, `support_contact_name`, `support_contact_email` |
+| `conversationStarters` | `text` |
+| `conversationTitles` | `title` |
+| `feedback` | `text` |
+| `skills` | `name`, `display_title`, `description`, `category`, `frontmatter`, `instructions`, `imported_text`, `file_name`, `file_text` |
+| `memories` | `key`, `value`, `summary` |
+| `files` | `name`, `content`, `extracted_text`, `transcript`, `uri` |
+| `toolArguments` | `name`, `arguments`, `output` |
+| `modelParameters` | `stop`, `request_fields`, `response_format`, `metadata` |
+| `actionMetadata` | `raw_spec`, `domain`, `privacy_policy_url`, `authorization_type`, `custom_auth_header`, `authorization_content_type`, `authorization_url`, `client_url`, `scope`, `token_exchange_method`, `api_key`, `oauth_client_id`, `oauth_client_secret` |
+
+### Nachrichtenherkunft [#message-provenance]
+
+`filters.messages.unattributedAssistantContent` steuert, wie ältere Assistant-Inhalte ohne Herkunftsnachweis klassifiziert werden:
+
+- `model_output` (Standard): bewahrt das Legacy-Verhalten, indem nicht zugeordnete Assistant-Inhalte als Modellausgabe behandelt werden.
+- `inspect`: behandelt ansonsten nicht zugeordnete Assistant-Inhalte, einschließlich ausgewählter Anhang-Projektionen, als übermittelte Inhalte. Assistant-Inhalte, die explizit als Modellausgabe gekennzeichnet sind, bleiben davon ausgenommen.
+
+Diese Klassifizierung kann sich auf eine aktivierte Legacy-Richtlinie `messageFilter.pii` auswirken, selbst wenn `filters.messages.pii` weggelassen wird. Inventarisieren oder migrieren Sie alte Datensätze, bevor Sie sich auf eine rückwirkende Überprüfung verlassen.
+
+### Nicht überprüfbare Dateien [#uninspectable-files]
+
+`filters.files.pii.uninspectable` steuert ausgewählte Dateiinhalte, die LibreChat nicht untersuchen kann, einschließlich undurchsichtiger oder zu großer Inhalte:
+
+- `allow` (Standard): bewahrt die Kompatibilität und lässt den Inhalt zu.
+- `block`: lehnt es vor den Nebenwirkungen des Providers oder Speichers ab.
+
+Führen Sie `block` bewusst ein. Dies kann dazu führen, dass ältere Dateien für die Wiederverwendung nicht mehr verfügbar sind, bis überprüfbarer Text vorhanden ist.
+
+### Gespeicherte und wiederverwendete Inhalte [#stored-and-reused-content]
+
+Das Aktivieren oder Ändern einer Richtlinie schreibt oder löscht keine gespeicherten Datensätze. LibreChat wendet die aktuelle Richtlinie an, wenn geschützte Inhalte übermittelt, kopiert, geteilt, wiederverwendet oder an ein Modell gebunden werden.
+
+Sichere Metadaten-Bearbeitungen können weiterhin erfolgreich sein, sodass blockierte Datensätze reparabel bleiben. In Verwaltungsansichten können blockierte Prompt- oder Preset-Felder mit `contentFilterBlocked: true` leer sein; blockierte Prompt-Gruppen geben bei direktem Abruf einen Fehler zurück und werden bei Sammlungs- und Wiederverwendungsantworten ausgelassen. Eine abgelehnte Hintergrund-Speicheraktualisierung kann übersprungen werden, während die Haupt-Chat-Antwort fortgesetzt wird.
+
+Das Blockieren von quellbezogenen Textübereinstimmungen gibt einen HTTP `400` mit `content_filter_block` zurück. Ablehnungen von nicht überprüfbaren Dateien verwenden `content_filter_uninspectable`.
+
+### Limits [#limits]
+
+- Bis zu 256 Felder, Starter-Muster oder benutzerdefinierte Muster pro Quelle.
+- Bis zu 256 benutzerdefinierte Muster über die gesamte Konfiguration hinweg.
+- Muster-IDs bis zu 256 Zeichen, Bezeichnungen bis zu 512 Zeichen und Regex-Ausdrücke bis zu 512 Zeichen.
+- Bis zu 8.192 Regex-Gesamtzeichen und 8.192 kompilierte Filteranweisungen.
+
+## Legacy `messageFilter` [#legacy-messagefilter]
+
+`messageFilter.pii` lehnt übereinstimmende, vom Aufrufer bereitgestellte Nachrichtentexte vor der Moderation, den Modellanfragen oder der Persistenz mit `message_filter_pii_block` ab. Es bleibt auf das Blockieren beschränkt und akzeptiert kein `action`. Es überprüft weder Dateiinhalte noch die anderen wiederverwendbaren Quellen, die von `filters` abgedeckt werden.
 
 ```yaml filename="librechat.yaml"
 messageFilter:
@@ -24,63 +129,4 @@ messageFilter:
         regex: 'sk-ant-[A-Za-z0-9_-]{20,}'
 ```
 
-## Felder [#fields]
-
-### messageFilter.pii
-
-<OptionTable
-  options={[
-    [
-      'pii.starterPatterns',
-      'Array of Strings',
-      'Optionale Teilmenge der zu aktivierenden integrierten Starter-Pattern-IDs. Weglassen, um alle Starter-Pattern zu aktivieren.',
-      'starterPatterns: [sk_prefix, bearer_header]',
-    ],
-    [
-      'pii.customPatterns',
-      'Array of Objects',
-      'Vom Operator definierte Muster. Jeder Eintrag erfordert `id`, `label` und `regex`.',
-      '',
-    ],
-  ]}
-/>
-
-**Integrierte Starter-Muster-IDs:**
-
-- `sk_prefix`: entspricht Token-Präfixen im `sk-`-Stil.
-- `bearer_header`: gleicht Bearer-Token im Text ab.
-- `api_key_header`: entspricht Text im Format des `api-key`-Headers.
-
-### customPatterns
-
-<OptionTable
-  options={[
-    ['id', 'String', 'Stabile Muster-ID, die für Protokolle und das Debugging verwendet wird.', 'id: anthropic_api_key'],
-    [
-      'label',
-      'String',
-      'Für Menschen lesbare Bezeichnung, die in der Ablehnungsnachricht angezeigt wird.',
-      'label: Anthropic API key',
-    ],
-    [
-      'regex',
-      'String',
-      'RE2-regulärer Ausdruck. LibreChat validiert diesen beim Laden der Konfiguration und wendet ihn global an.',
-      "regex: 'sk-ant-[A-Za-z0-9_-]{20,}'",
-    ],
-  ]}
-/>
-
-Benutzerdefinierte Muster verwenden die RE2-Engine mit linearer Laufzeit. Rückwärtsreferenzen (Backreferences) und Lookaround werden nicht unterstützt, und einige Escape-Sequenzen unterscheiden sich von regulären JavaScript-Ausdrücken. LibreChat lehnt Muster, die RE2 nicht kompilieren kann, beim Laden der Konfiguration ab.
-
-## Verhalten [#behavior]
-
-Wenn der übermittelte Nachrichtentext mit einem konfigurierten PII-Muster übereinstimmt, gibt LibreChat den HTTP-Status `400` mit `message_filter_pii_block` sowie eine Nachricht zurück, die den Aufrufer auffordert, den übereinstimmenden Anmeldedatentyp zu entfernen.
-
-Der Filter prüft:
-
-- Die Chat-Route verarbeitet Benutzereingaben, die über die LibreChat UI übermittelt werden.
-- Textinhalt über alle vom Aufrufer bereitgestellten Nachrichtenrollen in OpenAI-kompatiblen Chat Completions-Anfragen.
-- Textinhalt über alle vom Aufrufer bereitgestellten Nachrichtenrollen in OpenAI-kompatiblen Responses-Anfragen.
-
-Der Filter wertet den im Request-Body bereitgestellten Text aus. Er scannt keine Dateiinhalte.
+Der Legacy-Filter überprüft den Benutzertext der Chat-Route sowie den vom Aufrufer bereitgestellten Text über alle Rollen hinweg in OpenAI-kompatiblen Chat Completions- und Responses-Anfragen. Er verwendet dieselben integrierten IDs und benutzerdefinierten Regex-Regeln in linearer Zeit, die oben beschrieben wurden.

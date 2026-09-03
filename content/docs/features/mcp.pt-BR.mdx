@@ -49,15 +49,17 @@ O LibreChat exibe servidores MCP configurados diretamente na área de chat ao us
 - Quando selecionado, todas as ferramentas daquele servidor tornam-se disponíveis para o seu modelo atual
 - Acesso rápido a ferramentas MCP sem a necessidade de criar um agente, permitindo o uso de múltiplos servidores simultaneamente
 
-Para desativar a exibição de servidores MCP no menu suspenso de chat (mantendo-os apenas para agentes), defina [`chatMenu: false`](/docs/configuration/librechat_yaml/object_structure/mcp_servers#chatmenu) em sua configuração:
+Para manter um servidor MCP fora da seleção regular de chat, defina [`chatMenu: false`](/docs/configuration/librechat_yaml/object_structure/mcp_servers#chatmenu) em sua configuração:
 
 ```yaml
 mcpServers:
   internal-tools:
     command: npx
     args: ['-y', 'internal-mcp-server']
-    chatMenu: false # Only available in agent builder
+    chatMenu: false # Not selectable in regular chat
 ```
+
+Esta configuração é aplicada em solicitações de chat, bem como no seletor, para que uma seleção salva obsoleta não possa continuar usando um servidor oculto. Ela não remove o servidor de Agents salvos ou de um model spec que o atribua explicitamente. O LibreChat também omite servidores que um usuário só pode alcançar por meio de um Agent autorizado do seletor de chat regular e do caminho de solicitação.
 
 ### Com Agents [#with-agents]
 
@@ -264,7 +266,7 @@ As falhas de inicialização agora distinguem um servidor inacessível, `customU
 
 Se um Agent espera explicitamente ferramentas MCP, mas nenhuma pode ser resolvida no início da execução, o LibreChat falha a execução com orientações de conexão e acesso em vez de executar silenciosamente sem essas ferramentas.
 
-Servidores MCP que emitem `notifications/tools/list_changed` podem atualizar seu catálogo de ferramentas sem a necessidade de reiniciar o LibreChat. O LibreChat busca a lista atual da conexão ativa, publica as ferramentas adicionadas e para de anunciar as ferramentas que o servidor removeu. Reconexões também sincronizam o catálogo antes que a conexão seja considerada pronta.
+Servidores MCP que emitem `notifications/tools/list_changed` podem atualizar seu catálogo de ferramentas sem a necessidade de reiniciar o LibreChat. O LibreChat busca a lista atual da conexão ativa, publica as ferramentas adicionadas e para de anunciar as ferramentas que o servidor removeu. Reconexões também sincronizam o catálogo antes que a conexão seja considerada pronta. Atualizações de snapshot gerenciadas e a descoberta de servidores inativos compartilham um gate de três operações em todo o processo. Uma vez admitida, cada operação permanece limitada pelo seu prazo de lista de ferramentas ou de descoberta por servidor, incluindo qualquer `initTimeout` mais curto, para que o trabalho lento no catálogo não possa ocupar um slot indefinidamente.
 
 Para servidores HTTP com suporte a streaming, uma reconexão pode retornar brevemente um HTTP `409` quando o servidor ainda mantém um fluxo SSE autônomo obsoleto para a sessão antiga. O LibreChat trata isso como transitório, encerra a sessão obsoleta e restabelece a conexão automaticamente; nenhuma ação do operador é necessária quando a recuperação é bem-sucedida. Se a conexão restabelecida também falhar, o LibreChat continuará a exibir o erro de conexão subjacente.
 
@@ -320,6 +322,10 @@ Os placeholders disponíveis incluem:
 
 Servidores MCP definidos em YAML também podem usar os placeholders `{{LIBRECHAT_OPENID_*}}`, `{{LIBRECHAT_GRAPH_*}}` e `{{LIBRECHAT_BODY_*}}`. Os valores de `{{LIBRECHAT_BODY_*}}` são delimitados pelo escopo da requisição, portanto, o LibreChat cria conexões para a execução ativa, reutiliza-as em chamadas de ferramentas durante essa execução e as encerra quando a requisição termina. Servidores com escopo de requisição são excluídos do cache persistente de ferramentas para que cabeçalhos e URLs específicos da requisição não sejam reutilizados fora da execução ativa. Como sua lista de ferramentas não pode ser resolvida antes que uma requisição de chat exista, o Agent Builder expõe uma seleção de ferramentas de tempo de execução para o servidor completo e resolve suas ferramentas no momento da execução. A conclusão do OAuth armazena a autorização, mas adia a conexão até que a primeira execução forneça o contexto da requisição. Os placeholders de usuário, OpenID e Graph são delimitados pelo escopo do usuário; transportes HTTP atualizam seus cabeçalhos resolvidos antes de cada chamada de ferramenta sem exigir uma reconexão por conta própria.
 
+`{{LIBRECHAT_GRAPH_ACCESS_TOKEN}}` troca o token de acesso OpenID reutilizável do usuário através do fluxo on-behalf-of da Microsoft. [`GRAPH_API_SCOPES`](/docs/configuration/dotenv#microsoft-graph-api--entra-id-integration) define os escopos solicitados separados por espaço e tem como padrão `https://graph.microsoft.com/.default`. Isso é independente de `OPENID_GRAPH_SCOPES`, que configura a pesquisa de pessoas e grupos.
+
+O placeholder `{{LIBRECHAT_BODY_PARENTMESSAGEID}}` é preenchido para chats de Agentes nativos, chamadas da API de Agentes compatíveis com OpenAI e execuções de Assistants legados. O Open Responses não possui uma identidade de mensagem pai equivalente e falha de forma segura (fails closed) quando um servidor MCP requer esse valor. Veja a [referência de placeholders do servidor MCP](/docs/configuration/librechat_yaml/object_structure/mcp_servers#headers).
+
 ### Instruções do Servidor [#server-instructions]
 
 `serverInstructions` é um recurso do LibreChat que adiciona dinamicamente instruções configuradas quando qualquer ferramenta daquele servidor MCP é selecionada:
@@ -358,6 +364,8 @@ mcpServers:
 ```
 
 **Nota**: Se as operações ainda estiverem sendo interrompidas, verifique a configuração do seu proxy (por exemplo, nginx, traefik, etc.), que pode estar encerrando conexões prematuramente devido a timeouts padrão.
+
+Quando um usuário pressiona **Stop** durante uma chamada de ferramenta de Agent em primeiro plano, o LibreChat encaminha o sinal de cancelamento da execução para o MCP. Para servidores HTTP transmissíveis (Streamable), o SDK do MCP envia `notifications/cancelled`; o servidor deve honrar essa notificação para interromper seu próprio trabalho. Chamadas em segundo plano (detached) mantêm intencionalmente um ciclo de vida separado e não são canceladas com o turno em primeiro plano.
 
 ### Credenciais Fornecidas pelo Usuário [#user-provided-credentials]
 
@@ -497,6 +505,8 @@ O LibreChat gerencia tokens OAuth de forma inteligente:
 - **Atualização Automática**: Quando tokens de atualização estão disponíveis, o LibreChat renova automaticamente tokens de acesso expirados
 - **Recuperação Silenciosa de 401**: Se uma conexão MCP OAuth receber uma rejeição de autenticação no meio da sessão, o LibreChat coordena uma tentativa limitada de atualização e reconexão por usuário e servidor. Chamadores simultâneos compartilham esse resultado de recuperação antes que o LibreChat exiba um novo prompt de autenticação.
 - **Gerenciamento de Sessão**: Cada usuário mantém suas próprias sessões OAuth para ambientes multiusuário
+
+Se um fluxo de Agent salvo for recarregado ou retomado enquanto uma solicitação de autorização MCP ainda estiver pendente, o LibreChat reconstrói essa solicitação a partir do estado de geração durável. Solicitações concluídas, canceladas, falhas ou expiradas não são restauradas.
 
 Clientes OAuth e tokens armazenados estão vinculados à URL do servidor MCP e às configurações de cliente/endpoint OAuth. Alterar essas configurações exige que os usuários se autentiquem novamente. Ao editar um servidor criado pela interface que retém um `client_secret` armazenado, insira novamente o segredo ao alterar um campo de vinculação, como a URL do servidor, ID do cliente, URL de autorização, URL do token ou método de autenticação de token.
 

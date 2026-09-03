@@ -91,6 +91,28 @@ LANGFUSE_BASE_URL=https://cloud.langfuse.com
 
 Khi cả hai khóa môi trường đều hiện diện, LibreChat sẽ sử dụng chúng cho dự án trung tâm và ẩn **Settings → Langfuse**. `LANGFUSE_TRACING_ENABLED=false` hoặc `LANGFUSE_SAMPLE_RATE=0` sẽ vô hiệu hóa cả dấu vết (traces) và điểm phản hồi. Việc lấy mẫu phân đoạn (fractional sampling) đưa ra một quyết định tất định cho mỗi dấu vết; các dấu vết bị loại khỏi mẫu sẽ không nhận được điểm phản hồi sau đó.
 
+`LANGFUSE_BASE_URL` là thiết lập URL cơ sở chính thức. Các tên cũ hơn là `LANGFUSE_HOST` và `LANGFUSE_BASEURL` vẫn được giữ lại làm bí danh tương thích, trong đó `LANGFUSE_BASE_URL` sẽ được ưu tiên nếu có nhiều hơn một thiết lập được đặt.
+
+### Các Proxy và Gateway được xác thực [#authenticated-proxies-and-gateways]
+
+Đối với một instance Langfuse tự lưu trữ nằm sau Cloudflare Access, oauth2-proxy hoặc một cổng xác thực khác, hãy xác định các tiêu đề yêu cầu tùy chỉnh ở cấp độ triển khai trong `librechat.yaml`:
+
+```yaml filename="librechat.yaml"
+langfuse:
+  headers:
+    CF-Access-Client-Id: '${CF_ACCESS_CLIENT_ID}'
+    CF-Access-Client-Secret: '${CF_ACCESS_CLIENT_SECRET}'
+```
+
+LibreChat áp dụng các tiêu đề (headers) đã được phân giải cho mọi bề mặt Langfuse trực tiếp: xuất trace và phương tiện, tạo và xóa điểm phản hồi (feedback-score), tra cứu định danh dự án và xác minh thông tin xác thực quản trị viên. Thông tin xác thực `Authorization` của riêng Langfuse vẫn có thẩm quyền đối với các yêu cầu REST. Các giá trị hỗ trợ nội suy `${ENV_VAR}`; các biến chưa được phân giải, tham chiếu bí mật cơ sở hạ tầng được bảo vệ, giá trị trống và tên tiêu đề không hợp lệ sẽ bị loại bỏ kèm theo cảnh báo. Các giá trị tiêu đề được ẩn trong nhật ký khởi động và khi đọc cấu hình quản trị, nhưng các tham chiếu môi trường vẫn được khuyến nghị sử dụng thay vì thông tin xác thực dạng văn bản thuần túy.
+
+Các tiêu đề này thuộc quyền sở hữu của người vận hành và chỉ dành cho YAML. Chúng không thể được ghi thông qua Bảng điều khiển quản trị (Admin Panel) hoặc API cấu hình, không được lưu trữ trong MongoDB, hoặc điền bằng các trình giữ chỗ `{{...}}` theo từng người dùng. LibreChat chỉ gửi chúng khi cấu hình phân giải chính xác một nguồn gốc Langfuse. Với nhiều nguồn gốc trung tâm, đối tượng thuê (tenant) hoặc bộ thu thập (collector), hệ thống sẽ ghi lại cảnh báo và không gửi bất kỳ tiêu đề tùy chỉnh nào vì bản đồ không thể chọn người nhận một cách an toàn.
+
+<Callout type="warning" title="Giới hạn Fanout">
+  Bộ thu fanout hiện tại chỉ chuyển tiếp `Authorization` đến các đích Langfuse của người thuê (tenant).
+  `langfuse.headers` tùy chỉnh có thể xác thực yêu cầu trực tiếp của LibreChat tới một bộ thu đơn lẻ hoặc nguồn Langfuse, nhưng chúng không xác thực yêu cầu ngược dòng (upstream) của bộ thu tới đích của người thuê nằm sau một proxy khác.
+</Callout>
+
 ## Tenant Fanout (Tùy chọn) [#tenant-fanout-optional]
 
 Tính năng fanout của Langfuse cho phép một triển khai LibreChat đa người thuê (multi-tenant) xuất từng trace đủ điều kiện cùng với phương tiện của nó đến cả dự án Langfuse trung tâm và dự án dành riêng cho từng người thuê. Tính năng này là tùy chọn và bổ sung thêm một gateway cùng với một bộ thu OpenTelemetry nội bộ; tính năng tracing đơn dự án thông thường ở trên vẫn không thay đổi khi fanout không được triển khai.
@@ -208,9 +230,23 @@ Việc xuất dữ liệu Tenant chỉ diễn ra khi fanout và URL của collec
 
 Đặt `LANGFUSE_FANOUT_CENTRAL_MEDIA_UPLOAD_DISABLED=true` để ngăn LibreChat SDK tạo các bản tải lên phương tiện cho các dấu vết (trace) của bộ thu trung tâm hoặc bộ thu dự phòng; các bản tải lên phương tiện được định tuyến theo đối tượng thuê (tenant-routed) sẽ không bị thay đổi. Công tắc phía ứng dụng này khác biệt với `LANGFUSE_FANOUT_CENTRAL_MEDIA_EXPORT_DISABLED` ở phía gateway, vốn có chức năng chặn việc chuyển tiếp phương tiện trung tâm sau khi quá trình tải lên đến được gateway.
 
+Đối với việc chuyển tiếp phương tiện, fanout gateway chỉ chấp nhận các đích tải lên HTTPS tuyệt đối do cơ quan Langfuse đã cấu hình trả về và không tuân theo các lệnh chuyển hướng (redirect) trên các yêu cầu `PUT` tải lên. Lưu trữ đối tượng tự lưu trữ (self-hosted), bao gồm các máy chủ MinIO riêng, vẫn được hỗ trợ khi URL tải lên được trả về sử dụng HTTPS. Các đích tải lên phương tiện sử dụng HTTP thuần hoặc phụ thuộc vào chuyển hướng hiện sẽ bị chặn (fail closed) trong khi việc xuất dấu vết (trace export) vẫn tiếp tục độc lập.
+
 Lưu lượng truy cập trace và media đi qua fanout gateway. Điểm phản hồi được gửi trực tiếp từ LibreChat: điểm số trung tâm sử dụng `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` và `LANGFUSE_BASE_URL`, trong khi điểm số của tenant sử dụng cấu hình ứng dụng của tenant.
 
 Xem [tài liệu tham khảo về triển khai fanout Langfuse](https://github.com/danny-avila/LibreChat/blob/dev/otel/langfuse-fanout/README.md) để biết mọi biến gateway, thiết lập đích tùy chỉnh, số liệu, khả năng mở rộng và hành vi của Redis.
+
+### Xuất chẩn đoán [#export-diagnostics]
+
+Mỗi yêu cầu được truy vết sẽ ghi lại các thuộc tính OpenTelemetry có độ phân tán thấp, giải thích quyết định xuất dữ liệu của đối tượng thuê (tenant) đó:
+
+- `librechat.tenant.id` xác định ngữ cảnh của tenant
+- `librechat.langfuse.export_plan` có thể là `central_only`, `tenant_fanout`, hoặc `disabled`
+- `librechat.langfuse.export_reason` là `configured`, `collector_unconfigured`, `destination_unconfigured`, `emergency_disabled`, `fanout_disabled`, `missing_credentials`, hoặc `tenant_disabled`
+
+Gateway cũng hiển thị `langfuse_fanout_trace_exports_total{destination,result,tenant_id}`. Một lô không có tenant sẽ sử dụng `<unknown>`, một lô hỗn hợp nhiều tenant sử dụng `<multiple>`, và ID tenant không đúng định dạng sử dụng `<invalid>`. Gateway lưu giữ tối đa 1.000 nhãn tenant hợp lệ khác nhau trên mỗi tiến trình và kết hợp các ID sau đó dưới nhãn `<overflow>`, nhằm giới hạn số lượng metric; các destination không được nhận diện sẽ được ghi lại là `central` thay vì tạo thêm nhãn mới.
+
+Các thay đổi kết nối trong ứng dụng thành công cũng ghi lại sự kiện có cấu trúc `librechat.langfuse.connection.changed`. Sự kiện này bao gồm tenant, trạng thái đã cấu hình và đã bật, đích đến, kết quả xác minh, thay đổi chính và danh sách đầy đủ các trường đã thay đổi mà không ghi lại bất kỳ khóa nào. Sử dụng các trường này để phân biệt kế hoạch chỉ dành cho trung tâm hoặc bị vô hiệu hóa có chủ đích với việc thiếu cấu hình bộ thu thập, đích đến hoặc thông tin xác thực.
 
 ## Khởi động lại LibreChat [#restart-librechat]
 
@@ -225,11 +261,15 @@ docker compose up -d
 
 Sau khi LibreChat được khởi động lại với Langfuse đã được cấu hình, bạn sẽ thấy một trace mới cho mỗi phản hồi tin nhắn trò chuyện trong giao diện người dùng Langfuse:
 
+LibreChat v0.8.8-rc2 cập nhật tính năng định hình dấu vết (trace shaping) của Agent để sử dụng các tên quan sát thời gian chạy `StandardGraph`, `MultiAgentGraph` và `AgentModelCall`, với các lệnh gọi hoạt động và nhãn suy luận được lồng trong công việc mà chúng mô tả. Đầu vào và đầu ra ở cấp độ dấu vết cũng được thể hiện trên các quan sát gốc. Hãy xem xét các bộ lọc, bảng điều khiển và đánh giá Langfuse đã lưu phụ thuộc vào các tên quan sát hoặc trường đầu vào/đầu ra cấp độ dấu vết trước đó.
+
 ![Ví dụ về trace của LibreChat](https://langfuse.com/images/cookbook/integration_librechat/librechat-example-trace.png)
 
 [Liên kết đến dấu vết trong giao diện người dùng Langfuse](https://cloud.langfuse.com/project/cloramnkj0002jz088vzn1ja4/traces/57b4aa20a258a2e9e2d1ce2e4eacb21c?observation=06f5341a68d723b1&timestamp=2026-02-04T13%3A02%3A54.248Z&traceId=57b4aa20a258a2e9e2d1ce2e4eacb21c)
 
-Các quản trị viên có quyền `access:admin` và `manage:configs:langfuse` cũng có thể mở bảng phân tích **Context Usage** của cuộc trò chuyện và chọn **View session in Langfuse**. Liên kết này chỉ xuất hiện sau khi quá trình tạo hoàn tất và khi cuộc trò chuyện chứa ít nhất một dấu vết (trace) được lấy mẫu đã gửi đến kết nối Langfuse trong ứng dụng đang hoạt động. Liên kết này trỏ đến đích và dự án đã được xác minh của kết nối đó; nó sẽ không hiển thị đối với các thông tin xác thực do môi trường quản lý, các kết nối bị vô hiệu hóa, các cuộc trò chuyện không được lấy mẫu hoặc người dùng không có quyền truy cập cấu hình Langfuse.
+Các quản trị viên có quyền `access:admin` và `manage:configs:langfuse` có thể mở bảng phân tích **Context Usage** của cuộc trò chuyện và chọn **View session in Langfuse**. Hành động tương tự có thể xuất hiện trong một cuộc trò chuyện được chia sẻ đối với quản trị viên đã xác thực, cùng tenant và có quyền truy cập cấu hình Langfuse. Người xem công khai và người xem qua liên kết chia sẻ thông thường sẽ không bao giờ nhìn thấy tùy chọn này.
+
+Liên kết chỉ xuất hiện sau khi quá trình tạo hoàn tất và khi cuộc trò chuyện chứa ít nhất một dấu vết (trace) được lấy mẫu gửi đến kết nối Langfuse trong ứng dụng đang hoạt động. Nó trỏ đến đích và dự án đã được xác minh của kết nối đó; liên kết này sẽ không hiển thị đối với các thông tin xác thực do môi trường quản lý, các kết nối bị vô hiệu hóa, các cuộc trò chuyện bị loại khỏi quá trình lấy mẫu, người xem liên kết thuê (cross-tenant viewers) hoặc người dùng không có quyền truy cập cần thiết.
 
 ## Điểm phản hồi tin nhắn [#message-feedback-scores]
 

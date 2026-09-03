@@ -1,15 +1,120 @@
 ---
-title: Struktur Objek Filter Pesan
+title: Struktur Objek Filter Konten
 icon: ShieldAlert
 ---
 
 ## Ikhtisar [#overview]
 
-Objek `messageFilter` mengonfigurasi filter pesan sisi server. Tipe filter yang didukung adalah `messageFilter.pii`.
+LibreChat menyediakan dua konfigurasi filter sisi server:
 
-`messageFilter.pii` menolak teks pesan yang dikirimkan yang cocok dengan pola awal berbentuk kredensial atau ekspresi reguler yang ditentukan operator sebelum teks tersebut mencapai moderasi, permintaan model, atau persistensi pesan.
+- `filters` menerapkan kebijakan yang sadar sumber (source-aware) pada kolom-kolom yang dipilih di seluruh pesan, prompt, agen, file, skill, memori, alat, dan konten lain yang dapat digunakan kembali.
+- `messageFilter` adalah filter teks pesan versi lama. Deployment yang sudah ada dapat terus menggunakannya sembari melakukan migrasi ke `filters.messages`.
 
-## Contoh [#example]
+Keduanya bersifat opt-in. Jika keduanya dikonfigurasi, kedua kebijakan tersebut akan berlaku.
+
+<Callout type="warning" title="Hanya konfigurasi dasar">
+  `filters` hanya dimuat dari `librechat.yaml` dasar. Penggantian (override) basis data, peran, grup, dan pengguna tidak dapat menambah, mengubah, atau menghapusnya. Dalam penyebaran multi-replika, lakukan peluncuran atau mulai ulang setiap replika secara bersamaan dan verifikasi bahwa masing-masing memuat konfigurasi dasar yang sama sebelum menganggap kebijakan tersebut aktif.
+</Callout>
+
+## Filter yang Sadar Sumber (Source-Aware Filters) [#source-aware-filters]
+
+Setiap sumber memiliki kebijakan `pii` opsional. Hilangkan `filters`, sebuah sumber, atau blok `pii`-nya untuk membiarkan cakupan tersebut dinonaktifkan.
+
+```yaml filename="librechat.yaml"
+filters:
+  messages:
+    unattributedAssistantContent: model_output
+    pii:
+      action: audit
+      fields: [text, summary, attachment_reference]
+      starterPatterns: [sk_prefix, bearer_header, api_key_header]
+      customPatterns:
+        - id: organization_identifier
+          label: Organization identifier
+          regex: 'ORG-[A-Z0-9]{12}'
+  files:
+    pii:
+      fields: [name, content, extracted_text, transcript]
+      uninspectable: block
+  skills:
+    pii:
+      fields: [name, description, instructions, imported_text, file_text]
+```
+
+### Konfigurasi Pola [#pattern-configuration]
+
+Untuk setiap sumber yang diaktifkan:
+
+- Hilangkan `action` atau atur ke `block` untuk menolak kecocokan. Atur `action: audit` untuk peluncuran bayangan (shadow rollout) yang mencatat temuan tanpa menolak, mengubah, atau menyunting konten.
+- Hilangkan `fields` untuk memeriksa setiap field yang didukung untuk sumber tersebut. Daftar eksplisit harus berisi antara 1 hingga 256 nama field yang didukung.
+- Hilangkan `starterPatterns` untuk mengaktifkan katalog starter penuh. Atur ke `[]` untuk menonaktifkan pola starter sambil tetap mempertahankan `customPatterns` apa pun.
+- Konfigurasikan `customPatterns` dengan `id`, `label` yang ditampilkan kepada pengguna, dan `regex`.
+
+Mode audit mengevaluasi semua fragmen dan aturan yang dikonfigurasi agar operator dapat mengukur temuan sebelum penegakan. Setiap catatan audit tingkat info mengidentifikasi tindakan, detektor, aturan, label, sumber, bidang, dan asal, tetapi tidak pernah menyertakan teks yang cocok atau konten sumber. Mode audit tidak menyediakan penyuntingan (redaction); nilai tindakan yang tidak didukung akan ditolak saat konfigurasi dimuat.
+
+Tindakan dikonfigurasi secara independen per sumber, sehingga satu sumber dapat melakukan audit sementara sumber lainnya melakukan pemblokiran. `filters.files.pii.uninspectable: block` tetap menjadi aturan fail-closed independen untuk konten file yang dipilih yang bersifat buram atau terlalu besar, bahkan ketika tindakan pola sumber tersebut adalah `audit`.
+
+ID pola starter bawaan adalah:
+
+- `sk_prefix`: prefiks token bergaya `sk-`.
+- `bearer_header`: bearer token dalam teks.
+- `api_key_header`: teks berbentuk header `api-key`.
+
+Pola kustom menggunakan sintaks ekspresi reguler waktu-linear yang dibatasi oleh RE2JS. Backreference dan lookaround tidak didukung, dan beberapa escape berbeda dari ekspresi reguler JavaScript. LibreChat akan menolak pola yang tidak valid atau tidak didukung saat memuat konfigurasi.
+
+### Sumber dan Bidang yang Didukung [#supported-sources-and-fields]
+
+| Sumber | Bidang yang didukung |
+| --- | --- |
+| `messages` | `name`, `text`, `summary`, `quote`, `answer`, `decision_response`, `decision_reason`, `content_part`, `attachment_reference`, `assembled_context` |
+| `prompts` | `name`, `description`, `oneliner`, `category`, `command`, `text`, `preset_text`, `system`, `context`, `instructions`, `additional_instructions`, `greeting`, `example_input`, `example_output` |
+| `agentInstructions` | `name`, `category`, `description`, `instructions`, `additional_instructions`, `edge_description`, `edge_prompt`, `edge_prompt_key`, `artifacts`, `support_contact_name`, `support_contact_email` |
+| `conversationStarters` | `text` |
+| `conversationTitles` | `title` |
+| `feedback` | `text` |
+| `skills` | `name`, `display_title`, `description`, `category`, `frontmatter`, `instructions`, `imported_text`, `file_name`, `file_text` |
+| `memories` | `key`, `value`, `summary` |
+| `files` | `name`, `content`, `extracted_text`, `transcript`, `uri` |
+| `toolArguments` | `name`, `arguments`, `output` |
+| `modelParameters` | `stop`, `request_fields`, `response_format`, `metadata` |
+| `actionMetadata` | `raw_spec`, `domain`, `privacy_policy_url`, `authorization_type`, `custom_auth_header`, `authorization_content_type`, `authorization_url`, `client_url`, `scope`, `token_exchange_method`, `api_key`, `oauth_client_id`, `oauth_client_secret` |
+
+### Asal-usul Pesan [#message-provenance]
+
+`filters.messages.unattributedAssistantContent` mengontrol bagaimana konten asisten lama tanpa asal-usul diklasifikasikan:
+
+- `model_output` (default): mempertahankan perilaku lama dengan memperlakukan konten asisten yang tidak diatribusikan sebagai output model.
+- `inspect`: memperlakukan konten asisten yang tidak diatribusikan, termasuk proyeksi lampiran yang dipilih, sebagai konten yang dikirimkan. Konten asisten yang ditandai secara eksplisit sebagai output model tetap dikecualikan.
+
+Klasifikasi ini dapat memengaruhi kebijakan `messageFilter.pii` warisan yang diaktifkan meskipun `filters.messages.pii` dihilangkan. Inventarisasi atau migrasikan catatan lama sebelum mengandalkan inspeksi retrospektif.
+
+### File yang Tidak Dapat Diperiksa [#uninspectable-files]
+
+`filters.files.pii.uninspectable` mengontrol konten file terpilih yang tidak dapat diperiksa oleh LibreChat, termasuk konten yang buram atau berukuran terlalu besar:
+
+- `allow` (default): mempertahankan kompatibilitas dan mengizinkan konten tersebut.
+- `block`: menolaknya sebelum efek samping penyedia atau penyimpanan terjadi.
+
+Terapkan `block` secara sengaja. Hal ini dapat menyebabkan file lama tidak tersedia untuk digunakan kembali sampai teks yang dapat diperiksa tersedia.
+
+### Konten yang Disimpan dan Digunakan Kembali [#stored-and-reused-content]
+
+Mengaktifkan atau mengubah kebijakan tidak akan menulis ulang atau menghapus catatan yang tersimpan. LibreChat menerapkan kebijakan saat ini ketika konten yang dilindungi dikirimkan, disalin, dibagikan, digunakan kembali, atau menjadi terikat dengan model (model-bound).
+
+Pengeditan metadata yang aman masih dapat berhasil sehingga catatan yang diblokir tetap dapat diperbaiki. Dalam tampilan manajemen, kolom prompt atau preset yang diblokir bisa kosong dengan `contentFilterBlocked: true`; grup prompt yang diblokir akan mengembalikan kesalahan pada pengambilan langsung dan dihilangkan dari respons koleksi dan penggunaan ulang. Pembaruan memori latar belakang yang ditolak dapat dilewati sementara respons obrolan utama tetap berlanjut.
+
+Pencocokan teks yang sadar sumber (source-aware) yang diblokir akan mengembalikan HTTP `400` dengan `content_filter_block`. Penolakan file yang tidak dapat diperiksa menggunakan `content_filter_uninspectable`.
+
+### Batasan [#limits]
+
+- Hingga 256 field, pola awal, atau pola kustom per sumber.
+- Hingga 256 pola kustom di seluruh konfigurasi lengkap.
+- ID Pola hingga 256 karakter, label hingga 512 karakter, dan regex hingga 512 karakter.
+- Hingga 8.192 total karakter regex dan 8.192 instruksi filter yang dikompilasi.
+
+## `messageFilter` Warisan [#legacy-messagefilter]
+
+`messageFilter.pii` menolak teks pesan yang diberikan oleh pemanggil yang cocok sebelum moderasi, permintaan model, atau persistensi dengan `message_filter_pii_block`. Fitur ini tetap bersifat blok-saja dan tidak menerima `action`. Fitur ini tidak memeriksa konten file atau sumber lain yang dapat digunakan kembali yang dicakup oleh `filters`.
 
 ```yaml filename="librechat.yaml"
 messageFilter:
@@ -24,63 +129,4 @@ messageFilter:
         regex: 'sk-ant-[A-Za-z0-9_-]{20,}'
 ```
 
-## Fields [#fields]
-
-### messageFilter.pii
-
-<OptionTable
-  options={[
-    [
-      'pii.starterPatterns',
-      'Array of Strings',
-      'Subset opsional dari id pola awal bawaan yang akan diaktifkan. Abaikan untuk mengaktifkan semua pola awal.',
-      'starterPatterns: [sk_prefix, bearer_header]',
-    ],
-    [
-      'pii.customPatterns',
-      'Array of Objects',
-      'Pola yang ditentukan operator. Setiap entri memerlukan `id`, `label`, dan `regex`.',
-      '',
-    ],
-  ]}
-/>
-
-**Id pola awal bawaan:**
-
-- `sk_prefix`: mencocokkan prefiks token bergaya `sk-`.
-- `bearer_header`: mencocokkan token bearer dalam teks.
-- `api_key_header`: mencocokkan teks berbentuk header `api-key`.
-
-### customPatterns
-
-<OptionTable
-  options={[
-    ['id', 'String', 'ID pola stabil yang digunakan untuk log dan debugging.', 'id: anthropic_api_key'],
-    [
-      'label',
-      'String',
-      'Label yang dapat dibaca manusia yang ditampilkan dalam pesan penolakan.',
-      'label: Anthropic API key',
-    ],
-    [
-      'regex',
-      'String',
-      'Ekspresi reguler RE2. LibreChat memvalidasinya saat waktu pemuatan config dan menerapkannya secara global.',
-      "regex: 'sk-ant-[A-Za-z0-9_-]{20,}'",
-    ],
-  ]}
-/>
-
-Pola kustom menggunakan mesin RE2 waktu linear. Backreference dan lookaround tidak didukung, dan beberapa escape berbeda dari ekspresi reguler JavaScript. LibreChat menolak pola yang tidak dapat dikompilasi oleh RE2 saat memuat konfigurasi.
-
-## Perilaku [#behavior]
-
-Ketika teks pesan yang dikirimkan cocok dengan pola PII yang dikonfigurasi, LibreChat mengembalikan HTTP `400` dengan `message_filter_pii_block` dan pesan yang meminta pemanggil untuk menghapus tipe kredensial yang cocok tersebut.
-
-Filter memeriksa:
-
-- Teks pengguna rute chat yang dikirimkan melalui UI LibreChat.
-- Konten teks di seluruh peran pesan yang disediakan pemanggil dalam permintaan Chat Completions yang kompatibel dengan OpenAI.
-- Konten teks di seluruh peran pesan yang disediakan pemanggil dalam permintaan Respons yang kompatibel dengan OpenAI.
-
-Filter ini mengevaluasi teks yang diberikan dalam badan permintaan. Filter ini tidak memindai konten file.
+Filter legacy memeriksa teks pengguna chat-route dan teks yang disediakan pemanggil di semua peran dalam permintaan OpenAI-compatible Chat Completions dan Responses. Filter ini menggunakan ID bawaan dan aturan custom-regex waktu linear yang sama seperti yang dijelaskan di atas.

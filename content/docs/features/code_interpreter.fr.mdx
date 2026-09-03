@@ -23,8 +23,10 @@ L'API Code Interpreter de LibreChat offre un moyen sécurisé et sans tracas d'e
 ## Démarrage [#getting-started]
 
 1. Déployez le service [code-interpreter](https://github.com/ClickHouse/code-interpreter) (Docker Compose ou Helm, consultez le README du dépôt)
-2. Pointez LibreChat vers celui-ci avec les variables d'environnement `LIBRECHAT_CODE_BASEURL` et `LIBRECHAT_CODE_API_KEY`
-3. Commencez à exécuter du code et à générer des fichiers de manière sécurisée via les Agents de LibreChat ou le bouton "Run Code"
+2. Pointez LibreChat vers celui-ci avec `LIBRECHAT_CODE_BASEURL`
+3. Configurez [l'authentification JWT de LibreChat](#self-hosted-jwt-authentication) pour le service open-source actuel, ou définissez `LIBRECHAT_CODE_API_KEY` pour un déploiement compatible avec les clés API.
+4. Pour expérimenter avec les sessions d'Agent avec état, déployez une route Code Interpreter avec un profil `stateful` distinct et configurez `LIBRECHAT_CODE_BASEURL_STATEFUL` ou les [`statefulCodeSessions.environments`](/docs/configuration/librechat_yaml/object_structure/agents#statefulcodesessions) nommés.
+5. Commencez à exécuter du code et à générer des fichiers de manière sécurisée via les Agents de LibreChat ou le bouton "Run Code"
 
 ## Fonctionnalités clés [#key-features]
 
@@ -43,6 +45,12 @@ Exécutez du code dans plusieurs langages de programmation :
 
 LibreChat restaure les fichiers de conversation référencés dans l'environnement Code Interpreter actuel avant l'exécution d'un Agent. Si la récupération de tous les fichiers Code Interpreter requis échoue, l'exécution s'arrête avant l'invocation du modèle et demande à l'utilisateur de joindre à nouveau les fichiers plutôt que de continuer avec des références obsolètes.
 
+Lorsque les entrées de conversation sont montées vers la même destination de sandbox, LibreChat résout la collision avant l'exécution. Les fichiers de conversation partagés sont assignés avant les fichiers privés de l'Agent ; au sein de chaque portée, l'écriture de contenu la plus récente conserve la destination d'origine. Les chemins conflictuels sont aplatis si nécessaire ou reçoivent un suffixe dérivé de l'identité, et les chemins `/mnt/data/...` résolus sont inclus dans le contexte de fichier de l'Agent. Cela couvre également un téléchargement et une sortie générée qui partagent le même nom de fichier, afin qu'une collision ne rejette pas toutes les exécutions ultérieures de l'interpréteur de code dans la conversation. Les références de seed en double qui pointent toujours vers une destination déjà réclamée sont ignorées au lieu de faire échouer la requête complète.
+
+Les images du Sandbox sont transférées dans des fenêtres délimitées. Définissez [`LIBRECHAT_CODE_SANDBOX_OUTPUT_MAX_SIZE`](/docs/configuration/dotenv#code-interpreter) pour qu'il corresponde à la valeur `SANDBOX_OUTPUT_MAX_SIZE` du worker ; LibreChat déduit la plus grande fenêtre d'image sécurisée à partir de ce budget et peut apprendre une limite plus petite par service après une lecture échouée. Utilisez `LIBRECHAT_CODE_IMAGE_CHUNK_BYTES` uniquement lorsqu'une substitution exacte de la fenêtre est requise. Les artefacts générés précédemment téléchargés sont réutilisés au sein de la requête lorsque cela est possible, évitant ainsi une nouvelle lecture du sandbox.
+
+Dans un graphe multi-Agent, donnez des noms de fichiers distincts aux fichiers privés des différents Agents. Chaque Agent résout ses chemins de fichiers privés avant que le graphe ne combine leurs entrées ; par conséquent, des fichiers privés réellement différents qui revendiquent indépendamment la même destination ne peuvent pas encore être renommés de manière cohérente au moment de la fusion ; la première destination amorcée l'emporte.
+
 ### Sécurité et commodité [#security--convenience]
 
 - Environnement d'exécution sécurisé et isolé (sandboxed)
@@ -54,25 +62,72 @@ LibreChat restaure les fichiers de conversation référencés dans l'environneme
 
 L'appel d'outils programmatique (Programmatic Tool Calling) permet aux agents LibreChat d'acheminer les outils MCP sélectionnés via le bac à sable (sandbox) de l'interpréteur de code (Code Interpreter). Au lieu de demander au modèle d'appeler chaque outil directement, LibreChat fournit un outil d'orchestration basé sur l'interpréteur de code ; le code généré dans le bac à sable peut appeler des stubs d'outils enregistrés, utiliser des boucles et des conditions, traiter des résultats intermédiaires et renvoyer une réponse finale.
 
-Le sandbox ne reçoit toujours pas d'accès réseau général. Les appels d'outils sont négociés via le Code Interpreter Tool Call Server et la carte d'outils enregistrée de LibreChat, de sorte que seuls les outils disponibles pour l'agent peuvent être appelés.
+Le sandbox ne reçoit toujours pas d'accès réseau général. Les appels d'outils sont relayés par le Code Interpreter Tool Call Server. LibreChat croise la projection des capacités de l'appelant en direct avec son registre de confiance, de sorte que seuls les outils programmatiques actifs déjà enregistrés pour l'Agent peuvent être appelés et qu'une requête ne peut pas étendre son propre accès.
+
+Les outils programmatiques nécessitent Code Interpreter sur l'Agent. Leurs commutateurs restent désactivés tant que Code Interpreter n'est pas sélectionné, et la suppression de Code Interpreter efface les sélections programmatiques existantes. LibreChat supprime également les options d'appelant programmatique obsolètes lors des opérations de création, de mise à jour, de duplication et de restauration de version d'un Agent lorsque `execute_code` ou l'outil Code Interpreter est indisponible.
+
+Lors d'une exécution programmatique, développez la carte Code Interpreter pour voir une trace en direct, de type terminal, des appels d'outils internes avec des aperçus d'arguments limités, des statuts, des durées et des échecs. Cette trace aide à inspecter le programme pendant son exécution, mais elle n'est pas conservée après un rechargement de la page.
 
 ### Exécution de code en arrière-plan [#background-code-execution]
 
-L'exécution en arrière-plan permet à un Agent de lancer du code ou des tâches shell de longue durée, de poursuivre la conversation et de récupérer le résultat ultérieurement via `check_background_task`. Dans le chat LibreChat, lorsque le travail est terminé, la sortie standard (stdout) et les fichiers générés apparaissent sur l'appel de code original. Les fichiers générés sont conservés pour les tours suivants, même si l'Agent n'a pas encore interrogé la tâche.
+L'exécution en arrière-plan permet à un Agent de lancer du code ou des tâches shell de longue durée et de poursuivre la conversation. Pour les Agents enregistrés, les complétions de contenu prises en charge sont livrées automatiquement dans une suite de suivi par défaut. `check_background_task` reste disponible pour obtenir le statut explicite, le contrôle, les artefacts en direct et la récupération. Dans le chat LibreChat, lorsque le travail est terminé, stdout et les fichiers générés apparaissent sur l'appel de code original et sont conservés pour les tours suivants.
 
 Cette fonctionnalité est optionnelle au niveau du déploiement. Ajoutez `run_in_background` aux côtés de `execute_code` dans les [capacités du endpoint Agents](/docs/configuration/librechat_yaml/object_structure/agents#capabilities), puis activez l'interpréteur de code (Code Interpreter) sur l'agent. L'exécution de code et les appels shell deviennent automatiquement éligibles à l'arrière-plan ; désactivez **Background execution** dans les paramètres de l'outil Code Interpreter lorsqu'un agent doit s'en exclure. Le modèle décide toujours, pour chaque appel, s'il doit envoyer le travail éligible en arrière-plan.
 
-L'état des tâches en arrière-plan est local au processus et ne survit pas à un redémarrage de l'application ou à un déplacement entre les réplicas. La répartition en arrière-plan ne prolonge pas non plus la limite d'exécution du service Code Interpreter ; le délai d'attente côté serveur normal du déploiement s'applique toujours.
+L'exécution en arrière-plan ordinaire reste locale au processus et ne survit pas à la perte de son worker d'application. Une fois qu'un résultat de terminal contenant uniquement du contenu est persisté, sa livraison automatique est durable et peut se poursuivre sur une autre réplique ; les tâches avec un artefact actif nécessitent toujours une interrogation (polling) sur l'exécution propriétaire. Définissez [`endpoints.agents.backgroundTasks.completionWakeups: false`](/docs/configuration/librechat_yaml/object_structure/agents#backgroundtasks) pour exiger une interrogation pour chaque résultat. La répartition en arrière-plan ne prolonge pas la limite d'exécution du service Code Interpreter ; le délai d'attente côté serveur normal du déploiement s'applique toujours.
 
 ### Sessions de code avec état [#stateful-code-sessions]
 
-Les sessions de code avec état permettent à un Agent LibreChat de réutiliser un espace de travail sandbox Code Interpreter par conversation. Les fichiers, les paquets installés et l'état de fonctionnement sont généralement conservés entre les exécutions, ce qui rend l'analyse itérative et la génération de fichiers en plusieurs étapes plus efficaces.
+Les sessions de code avec état permettent à un Agent LibreChat de réutiliser un espace de travail sandbox Code Interpreter entre les exécutions. Les fichiers, les paquets installés et l'état de fonctionnement sont généralement conservés, ce qui rend l'analyse itérative et la génération de fichiers en plusieurs étapes plus efficaces. Chaque agent sélectionne une portée d'espace de travail :
+
+- **Espace de travail utilisateur (recommandé) :** un espace de travail pour l'utilisateur connecté à travers les agents avec état activé
+- **Espace de travail agent + utilisateur :** un espace de travail pour chaque combinaison d'utilisateur et d'agent
+- **Espace de travail de conversation :** un espace de travail pour chaque utilisateur et chaque conversation
+
+Pour les Agents nouvellement créés, la portée initiale provient de **Paramètres > Contrôles des données > Exécution de code > Espace de travail avec état par défaut**. Le paramètre personnel est défini par défaut sur **Espace de travail utilisateur** ; le modifier ne modifie pas les Agents existants et n'active pas les sessions avec état. Les administrateurs de déploiement peuvent restreindre les portées sélectionnables avec [`statefulCodeSessions.allowedEnvironments`](/docs/configuration/librechat_yaml/object_structure/agents#statefulcodesessions). Si une valeur par défaut personnelle enregistrée devient indisponible, les nouveaux Agents utilisent la première portée autorisée ; un Agent activé existant avec une portée désormais non autorisée doit être reconfiguré avant de pouvoir s'exécuter.
+
+La portée de l'espace de travail est distincte de son backend d'exécution. Lorsque les administrateurs configurent des [`statefulCodeSessions.environments`](/docs/configuration/librechat_yaml/object_structure/agents#statefulcodesessions) nommés, le Constructeur d'agents ajoute un sélecteur d'**Environnement d'exécution** :
+
+- **Managed :** une API de code avec état exploitée par le déploiement
+- **Ci-joint :** un pont distant compatible avec l'API Code qui délègue le travail à un worker `@librechat/code` sortant, tel qu'une machine virtuelle gérée par un opérateur
+- **Personnel :** un worker `@librechat/code` lié au propriétaire et associé par un utilisateur autorisé via les paramètres de LibreChat
+- **Déploiement par défaut :** l'environnement configuré marqué comme étant celui par défaut
 
 <Callout type="warning" title="Hautement expérimental">
   Les Stateful Code Sessions sont dans une phase d'expérimentation précoce. Leur comportement, leur configuration, leurs caractéristiques de persistance et leur intégration sous-jacente peuvent changer de manière substantielle. Ne considérez pas l'implémentation actuelle comme un contrat de production stable.
 </Callout>
 
-Cette fonctionnalité est optionnelle. Activez `execute_code` et `stateful_code_sessions` dans les [capacités de l'endpoint Agents](/docs/configuration/librechat_yaml/object_structure/agents#capabilities), activez l'Interpréteur de code sur l'agent, puis activez **Stateful code sessions** dans ses paramètres avancés. L'espace de travail peut être réinitialisé à tout moment. Enregistrez les sorties importantes sous `/mnt/data` et ne comptez pas sur l'état de la session comme stockage durable.
+Cette fonctionnalité est optionnelle. Activez `execute_code` et `stateful_code_sessions` dans les [capacités de l'endpoint Agents](/docs/configuration/librechat_yaml/object_structure/agents#capabilities), configurez une route avec état dédiée avec [`LIBRECHAT_CODE_BASEURL_STATEFUL`](/docs/configuration/dotenv#stateful-code-interpreter-endpoint) ou des environnements nommés, activez l'interpréteur de code sur l'agent, puis activez **Stateful code sessions** et choisissez son backend d'exécution ainsi que la portée de l'espace de travail dans les paramètres avancés.
+
+Les requêtes avec état (stateful) échouent par défaut lorsque l'environnement sélectionné est manquant, inaccessible ou incompatible ; LibreChat ne les envoie pas à `LIBRECHAT_CODE_BASEURL` et ne choisit pas silencieusement un autre backend nommé. Lorsqu'aucun environnement nommé n'est configuré, `LIBRECHAT_CODE_BASEURL_STATEFUL` demeure la route avec état. Les agents sans état (stateless) continuent d'utiliser l'endpoint normal. LibreChat envoie également `X-CodeAPI-Expected-Profile: stateful`, le service dédié doit donc annoncer le profil `stateful`.
+
+Les sessions avec état (stateful) et sans état (stateless) ne partagent pas d'espace de travail actif. L'espace de travail avec état peut être réinitialisé à tout moment, indépendamment de sa portée sélectionnée. Enregistrez les sorties importantes sous `/mnt/data` et ne comptez pas sur l'état de la session comme stockage durable.
+
+Les fichiers créés par les appels `create_file` et `edit_file` avec état apparaissent dans le message de l'assistant sous une ligne **Workspace changes** extensible. Elle liste chaque chemin modifié de manière unique pour cette réponse et fournit une action de téléchargement authentifiée. Les téléchargements utilisent le flux de fichiers persistants de LibreChat lorsqu'il est disponible, et une solution de secours sécurisée Code Interpreter dans le cas contraire. La ligne constitue un enregistrement des sorties créées, et non un instantané durable de l'espace de travail ; les sorties sans état continuent d'apparaître sous forme de pièces jointes intégrées classiques.
+
+#### Environnements attachés et appairage [#attached-environments-and-pairing]
+
+Attached environments require a matching experimental Code Interpreter remote-bridge build. The bridge remains LibreChat's authenticated policy, queue, and result boundary, while the `@librechat/code` worker connects outbound from the attached machine; the machine does not need an inbound public worker port. LibreChat does not prewarm attached environments.
+
+Un opérateur peut épingler un environnement attaché appartenant à un déploiement sur un worker spécifique avec `workerId`, et peut ajouter `pairing.workerId` lorsque LibreChat doit générer un code de jumelage administrateur pour cette même route. `pairing.tokenEnv` nomme la variable d'environnement contenant le jeton d'administrateur du pont ; le secret lui-même ne doit jamais figurer dans le YAML. Les plans de contrôle jumelés nécessitent HTTPS en dehors du développement en loopback.
+
+Pour les workers en libre-service, configurez un plan de contrôle attaché appartenant au déploiement avec `pairing.allowPrincipalWorkers: true` et `pairing.tokenEnv`. Il peut omettre les deux ID de worker et exister uniquement en tant que plan de contrôle d'inscription ; une telle entrée n'est pas sélectionnable pour l'exécution et ne peut pas être la valeur par défaut du déploiement.
+
+Les utilisateurs disposant de l'autorisation de gestion des Code Environments peuvent ensuite ouvrir **Settings > Code environments**, nommer un environnement, choisir un plan de contrôle approuvé et sélectionner **Connect VM**. LibreChat affiche une commande éphémère à usage unique `librechat-code pair ...`. Exécutez-la sur la VM de l'utilisateur, puis démarrez `@librechat/code` avec `LIBRECHAT_CODE_SANDBOX_ENDPOINT` pointant vers le service sandbox de cette machine. L'interface utilisateur liste les environnements de l'utilisateur et permet de les révoquer et de les supprimer ultérieurement ; les fichiers sandbox restent sur la VM.
+
+Les environnements personnels sont liés à l'utilisateur authentifié et au locataire, protégés par des ACL d'environnement de code, et se voient attribuer uniquement des identifiants validés par le serveur et des URL de base approuvées. LibreChat n'expose pas le jeton d'administrateur de pont ou des URL d'opérateur arbitraires au client. La suppression d'un environnement révoque ses identifiants de travailleur avant de supprimer l'entrée du registre, et la suppression d'un utilisateur planifie la même révocation et le même nettoyage avec une réconciliation en arrière-plan pour les tentatives interrompues. La route de travailleur sélectionnée s'applique de manière cohérente à l'interpréteur de code, au shell, à l'accès aux fichiers générés et à l'appel d'outils programmatiques.
+
+#### Autorisations des outils pour l'environnement attaché [#attached-environment-tool-permissions]
+
+Les environnements attachés et personnels utilisent une politique d'approbation « demander par défaut » pour l'écriture de fichiers et l'exécution de commandes ou de code. Les opérations de lecture seule et de recherche continuent de suivre la politique d'outils habituelle du déploiement. Si l'administrateur expose l'une ou l'autre catégorie via [`configSchema.permissions`](/docs/configuration/librechat_yaml/object_structure/agents#statefulcodesessions), les utilisateurs disposant de l'autorisation de gestion des environnements de code peuvent choisir parmi les valeurs autorisées **Autoriser**, **Demander** ou **Refuser** sous **Paramètres > Environnements de code**. Les paramètres manquants, obsolètes ou non autorisés reviennent par sécurité à **Demander**.
+
+Ces contrôles couvrent les outils de création de fichiers, l'exécution de shell et de code, les vérifications de compilation et l'appel de fonctions programmatiques (Programmatic Tool Calling). Les écritures dans les fichiers de compétences (Skill) persistants nécessitent toujours une confirmation lorsque la création de compétences est activée, même lorsque les écritures de fichiers ordinaires sont autorisées. Les paramètres ne modifient pas l'isolation de la VM, la mise en réseau, les montages, l'exécution privilégiée, l'entrée, la sortie ou l'accès aux secrets.
+
+Le paramètre explicite [`toolApproval.enabled: false`](/docs/configuration/librechat_yaml/object_structure/agents#toolapproval) du déploiement est une commande de secours qui désactive cette base de référence. Sans cette commande, un appelant incapable de présenter et de reprendre les demandes d'approbation échoue par défaut au lieu d'exécuter silencieusement un outil d'environnement attaché.
+
+Le jumelage authentifie le transport du worker distant ; ce n'est pas une limite de sandbox. Maintenez l'endpoint d'exécution local du worker sur loopback ou sur un réseau privé et utilisez un mode d'isolation approprié pour le code non fiable.
+
+Pendant qu'une exécution est active, les volets de détails du code et du shell développés suivent les arguments diffusés en continu jusqu'en bas. Faire défiler vers le haut suspend le comportement de suivi afin que vous puissiez inspecter les sorties précédentes sans que le volet ne déplace la fenêtre d'affichage.
 
 ## Utilisation de l'API [#using-the-api]
 
@@ -88,25 +143,66 @@ L'API bénéficie d'une prise en charge de premier ordre dans LibreChat via ces 
 
 4. **[Appels d'outils en arrière-plan](/docs/features/agents#background-tool-calls)** : Permettez à un agent de distribuer du code éligible en arrière-plan et de continuer pendant son exécution.
 
-5. **[Sessions de code avec état](/docs/features/agents#stateful-code-sessions)** : Réutilisez de manière expérimentale un espace de travail par conversation lors des exécutions de code d'un agent.
+5. **[Stateful Code Sessions](/docs/features/agents#stateful-code-sessions)** : Réutilisation expérimentale d'un espace de travail à portée utilisateur, agent-utilisateur ou conversation pour les exécutions de code d'un agent.
 
 ![Code Interpreter dans LibreChat](/images/agents/run_code.png)
 
 ### Configurer la clé API [#set-up-api-key]
 
-- **Configuration par utilisateur :** saisissez votre clé API dans LibreChat lorsque vous y êtes invité (en utilisant les méthodes ci-dessus)
-- **Configuration globale :** utilisez la variable d'environnement `LIBRECHAT_CODE_API_KEY` dans le fichier .env de votre projet (donne accès à tous les utilisateurs)
+- **Configuration par utilisateur :** Saisissez votre clé API dans LibreChat lorsque vous y êtes invité.
+- **Configuration globale :** Définissez `LIBRECHAT_CODE_API_KEY` dans le fichier `.env` de LibreChat pour fournir une clé unique à tous les utilisateurs.
+
+Le service actuel [ClickHouse/code-interpreter](https://github.com/ClickHouse/code-interpreter) utilise l'authentification JWT de LibreChat en dehors du mode local. Les clés API restent disponibles pour les déploiements de Code Interpreter compatibles.
+
+### Authentification JWT auto-hébergée [#self-hosted-jwt-authentication]
+
+Avec l'authentification JWT, LibreChat signe un jeton bearer à courte durée de vie pour l'utilisateur authentifié à chaque requête Code Interpreter. Le service Code Interpreter vérifie la clé publique correspondante et utilise le contexte de l'utilisateur et du locataire signé pour isoler les fichiers et les sessions. La clé de signature privée reste dans LibreChat ; Code Interpreter ne reçoit que son vérificateur public.
+
+Configurez LibreChat avec :
+
+```env
+CODEAPI_AUTH_PROVIDER=librechat-jwt
+CODEAPI_JWT_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"
+CODEAPI_JWT_ALGORITHM=EdDSA
+CODEAPI_JWT_KID=lc-codeapi-2026-05
+CODEAPI_JWT_ISSUER=librechat
+CODEAPI_JWT_AUDIENCE=codeapi
+CODEAPI_JWT_TTL_SECONDS=300
+CODEAPI_JWT_MINT_CACHE_SECONDS=30
+CODEAPI_JWT_SINGLE_TENANT_ID=legacy
+```
+
+`CODEAPI_JWT_PRIVATE_KEY_BASE64` peut contenir une clé PEM encodée en base64 à la place, et `CODEAPI_JWT_PRIVATE_JWK_JSON` accepte une clé privée JWK. LibreChat prend en charge la signature Ed25519 (`EdDSA`, la valeur par défaut) et RSA (`RS256`). Consultez la [référence des variables d'environnement](/docs/configuration/dotenv#code-interpreter-jwt-authentication) pour tous les paramètres côté LibreChat.
+
+Configurez le Code Interpreter avec le vérificateur correspondant :
+
+```env
+LOCAL_MODE=false
+CODEAPI_AUTH_PROVIDER=librechat-jwt
+CODEAPI_JWT_ISSUER=librechat
+CODEAPI_JWT_AUDIENCE=codeapi
+CODEAPI_JWT_ALLOWED_ALGS=EdDSA
+CODEAPI_JWT_JWKS_JSON={"keys":[{"kty":"OKP","crv":"Ed25519","x":"...","kid":"lc-codeapi-2026-05","alg":"EdDSA"}]}
+CODEAPI_JWT_SINGLE_TENANT_ID=legacy
+```
+
+L'émetteur, l'audience, l'ID de clé, l'algorithme et la clé publique doivent correspondre au signataire de LibreChat. Code Interpreter peut également charger des clés de vérification à partir de `CODEAPI_JWT_PUBLIC_KEY` et `CODEAPI_JWT_KID`, ou à partir de `CODEAPI_JWT_PUBLIC_KEYS_DIR` ; un JWKS en ligne est pratique pour la rotation. Maintenez le TTL du jeton à une valeur inférieure ou égale à `CODEAPI_JWT_MAX_TTL_SECONDS` du service Code Interpreter, qui est limité par défaut à 300 secondes.
+
+Pour une installation locale, le dépôt Code Interpreter inclut un utilitaire qui génère les clés de signature Ed25519 et de manifeste d'exécution correspondantes, et met à jour les deux fichiers `.env` :
+
+```bash
+node scripts/setup-local-auth-env.js --librechat /path/to/LibreChat
+```
+
+Les déploiements à locataire unique peuvent laisser `CODEAPI_JWT_SINGLE_TENANT_ID=legacy`, mais la valeur doit correspondre sur les deux services. Les déploiements multi-locataires doivent fournir un contexte de locataire authentifié et activer `TENANT_ISOLATION_STRICT=true` dans LibreChat ainsi que `CODEAPI_TENANT_ISOLATION_STRICT=true` dans Code Interpreter. Le mode strict rejette les requêtes sans contexte de locataire au lieu d'utiliser le repli vers le locataire unique.
 
 ### Intégration directe de l'API [#direct-api-integration]
 
-L'API Code Interpreter peut être intégrée dans n'importe quelle application en utilisant une authentification par clé API simple :
-
-1. Déployez votre propre instance [code-interpreter](https://github.com/ClickHouse/code-interpreter) et créez une clé API
-2. Incluez la clé API dans vos requêtes en utilisant l'en-tête `x-api-key`
+Le service auto-hébergé actuel attend un jeton bearer qui satisfait son contrat de revendication JWT LibreChat. Une intégration directe doit générer des jetons à courte durée de vie compatibles et les envoyer dans l'en-tête `Authorization: Bearer <token>`. Les déploiements compatibles avec les clés API acceptent plutôt leur clé configurée dans l'en-tête `x-api-key`. N'utilisez jamais le mode local sans authentification de Code Interpreter sur un endpoint public ou de production.
 
 ### URL de base auto-hébergée [#self-hosted-base-url]
 
-Définissez la variable d'environnement `LIBRECHAT_CODE_BASEURL` pour pointer LibreChat vers votre instance auto-hébergée de [code-interpreter](https://github.com/ClickHouse/code-interpreter), accompagnée d'une clé API générée sur ce déploiement, utilisée de la même manière que ci-dessus.
+Définissez `LIBRECHAT_CODE_BASEURL` pour pointer LibreChat vers votre instance [code-interpreter](https://github.com/ClickHouse/code-interpreter) auto-hébergée, puis configurez [l'authentification JWT](#self-hosted-jwt-authentication). Pour un service compatible avec les clés API, définissez plutôt `LIBRECHAT_CODE_API_KEY`. Les sessions d'agent avec état, hautement expérimentales, nécessitent une route de profil `stateful` distincte configurée via [`LIBRECHAT_CODE_BASEURL_STATEFUL`](/docs/configuration/dotenv#stateful-code-interpreter-endpoint) ou nommée [`statefulCodeSessions.environments`](/docs/configuration/librechat_yaml/object_structure/agents#statefulcodesessions).
 
 ## Fonctionnalités principales [#core-functionality]
 

@@ -13,6 +13,7 @@ Verwenden Sie Subagents für:
 - Recherchieren Sie Teilaufgaben, die möglicherweise lange Zwischenergebnisse generieren
 - Überprüfungen mit einem spezialisierten Agenten bestehen
 - Tool-lastige Arbeit, die außerhalb des übergeordneten Kontexts bleiben sollte
+- Multi-Agent-Team-Workflows, die hinter einer delegierten Aufgabe ausgeführt werden sollten
 - Dekomposition im Parallel-Stil, bei der das übergeordnete Element koordiniert und zusammenfasst
 
 ## Wie sich Subagents von Agent Chain unterscheiden [#how-subagents-differ-from-agent-chain]
@@ -56,6 +57,27 @@ Verfügbare Einstellungen:
 - **Allow self-spawn**: ermöglicht es dem Agenten, eine frische Kopie seiner selbst in einem isolierten Kontext zu erstellen. Dies ist standardmäßig aktiviert, wenn Subagents aktiviert sind.
 - **Zusätzliche Subagents**: wählt spezifische Agents aus, die der übergeordnete Agent erstellen darf.
 
+Gespeicherte Agent-Teams sind als `subagents.graphs` in den Payloads zum Erstellen oder Aktualisieren von Agenten eingebettet. Der aktuelle Agent Builder behält diese Definitionen bei, während Sie die Einstellungen für Self-Spawn und individuelle Agenten bearbeiten, erstellt jedoch keine Graph-Definitionen. Jedes Team benennt einen begrenzten gerichteten azyklischen Graphen, seinen Einstiegs-Agenten und den Agenten, dessen Ergebnis an den übergeordneten Agenten zurückgegeben wird:
+
+```yaml filename="agent saved-team subagent"
+subagents:
+  enabled: true
+  allowSelf: false
+  graphs:
+    - type: 'research_team'
+      name: 'Research team'
+      description: 'Researches a topic and reviews the findings'
+      agent_ids:
+        - 'agent_researcher'
+        - 'agent_reviewer'
+      entry_agent_id: 'agent_researcher'
+      result_agent_id: 'agent_reviewer'
+      edges:
+        - from: 'agent_researcher'
+          to: 'agent_reviewer'
+          edgeType: 'direct'
+```
+
 Äquivalente Agentenform:
 
 ```yaml filename="agent subagents"
@@ -85,7 +107,7 @@ modelSpecs:
         model: 'gpt-4o'
 ```
 
-Nur `enabled` und `allowSelf` werden in der Startup-Konfiguration an Clients gesendet. Die `agent_ids`-Allowlist verbleibt serverseitig und wird gegen das effektive Subagent-Limit validiert, das standardmäßig 10 beträgt und über [`endpoints.agents.maxSubagents`](/docs/configuration/librechat_yaml/object_structure/agents#maxsubagents) konfigurierbar ist. Client-Request-Payloads können die Model-Spec-Subagent-Konfiguration weder bereitstellen noch überschreiben.
+Nur `enabled` und `allowSelf` werden in der Startup-Konfiguration an Clients gesendet. Die `agent_ids`-Allowlist verbleibt serverseitig und wird gegen das effektive Subagent-Limit validiert, das standardmäßig 10 beträgt und über [`endpoints.agents.maxSubagents`](/docs/configuration/librechat_yaml/object_structure/agents#maxsubagents) konfiguriert wird. Client-Request-Payloads können die Model-Spec Subagent-Konfiguration weder bereitstellen noch überschreiben.
 
 ## Laufzeitverhalten [#runtime-behavior]
 
@@ -93,10 +115,54 @@ Wenn Subagents aktiviert sind, erhält der übergeordnete Agent ein `subagent`-T
 
 - `self`, wenn `allowSelf` nicht false ist
 - Jeder konfigurierte untergeordnete Agent in `agent_ids`
+- Jedes vollständige gespeicherte Agenten-Team in `graphs`
 
-Untergeordnete Agents (Child Agents) werden mit isoliertem Kontext ausgeführt. Der Tool-Suchstatus und der angesammelte Kontext des übergeordneten Agents (Parent) werden nicht in den untergeordneten Lauf kopiert. Die Modellnutzung des untergeordneten Laufs wird der übergeordneten Transaktion in Rechnung gestellt und in die Nutzungssummen des übergeordneten Agents einbezogen. Die Benutzeroberfläche zeigt den untergeordneten Lauf als erweiterbaren Agent-Aktivitätsteil mit Status, Ticker-Updates und dem vollständigen Endergebnis an, einschließlich des Ergebnistextes, der inkrementell während des Streamings des untergeordneten Agents geliefert wurde.
+Child-Agents werden mit isoliertem Kontext ausgeführt. Der Tool-Suchstatus und der angesammelte Kontext des Parents werden nicht in den Child-Lauf kopiert. Die Nutzung des Child-Modells im Vordergrund wird in die Transaktions- und Nutzungssummen des Parents einbezogen; losgelöste (detached) Child-Aufrufe, die nach Abschluss der Parent-Anfrage enden, erfassen die Nutzung unabhängig. Die kompakte Child-Karte öffnet ein einheitliches Aktivitäts-Seitenpanel für Vordergrund-, Graph-, Legacy- und losgelöste Läufe, das Details zu Lebenszyklus, Reasoning, Tools, Genehmigungen und Ergebnissen anzeigt, die für den jeweiligen Transport geeignet sind.
 
 Explizite untergeordnete Agenten (Child Agents) werden dem übergeordneten Agenten als leichtgewichtige Deskriptoren angekündigt und erst bei Auswahl vollständig initialisiert. Nicht verwendete untergeordnete Agenten laden weder ihr Modell, ihre Tools, MCP-Server, Dateien noch ihre Skills. Beim Aufruf überprüft LibreChat erneut die Ansichtsberechtigung sowie die versionierte Konfigurationsidentität des untergeordneten Agenten; falls der Zugriff widerrufen wurde oder sich die gespeicherte Konfiguration während der Laufzeit geändert hat, schlägt der untergeordnete Agent fehl (fail closed), anstatt veraltete Einstellungen auszuführen.
+
+Wenn parallele Zweige auf denselben untergeordneten Agent verweisen, wertet LibreChat die Zyklus- und Tiefenbegrenzungen für jeden Traversierungspfad unabhängig aus. Ein Zyklus in einem Zweig führt daher nicht dazu, dass gültige verschachtelte Agent-Links in einem anderen Zweig verworfen werden.
+
+Gespeicherte Teams folgen derselben Lazy-Resolution und denselben Zugriffsprüfungen wie einzelne untergeordnete Elemente. Wenn ein Team ausgewählt wird, behält jedes Mitglied sein eigenes Modell, seine Anweisungen, Tools, MCP-Anmeldeinformationen, Skills, Dateien, seinen Speicher, sein Code Interpreter-Profil und seine Abrechnungsidentität bei. LibreChat führt das Team als einen isolierten untergeordneten Graphen aus, streamt den Fortschritt unter Berücksichtigung der Mitglieder und gibt die Ausgabe des konfigurierten Ergebnis-Agents zurück. Wenn ein persistiertes Mitglied fehlt, nicht zugänglich oder ungültig ist, überspringt LibreChat das gesamte Team, anstatt einen Teilgraphen auszuführen.
+
+In späteren Turns behält LibreChat frühere Aufrufe von erreichbaren Child- und Team-Tools in einer strukturierten Tool-Call-Form bei, einschließlich der aufgelösten MCP-Server-Identität, wo dies erforderlich ist. Tools, die nicht mehr erreichbar sind, werden nicht allein deshalb zum aktiven Run hinzugefügt, weil sie im Verlauf erscheinen.
+
+## Abgelöste Subagent-Threads [#detached-subagent-threads]
+
+Wenn `run_in_background` für den Agents endpoint aktiviert ist, kann ein übergeordneter Agent (Parent Agent) die Arbeit eines Unter-Agenten (Subagent) auslagern und fortfahren, ohne auf dessen Abschluss zu warten. LibreChat speichert jedes ausgelagerte untergeordnete Element mit einer privaten Ausführungslinie und einem kanonischen Transkript. Untergeordnete Threads bleiben von der normalen Konversationsnavigation und -suche ausgeschlossen und können nicht direkt gelesen werden; die autorisierte Ansicht des übergeordneten Elements zeigt nur begrenzte Aktivitäten der untergeordneten Elemente an.
+
+Untergeordnete Threads (Child threads) sind schreibgeschützte Ausführungsprotokolle. Ein Benutzer kann das kanonische untergeordnete Element nicht direkt bearbeiten oder löschen. Für ein abgeschlossenes, dauerhaftes direktes Agent-untergeordnetes Element erstellt **Continue in a new chat** einen Fork des exakt abgeschlossenen Zweigs in eine separate, normale, beschreibbare Agent-Konversation, während das ursprüngliche untergeordnete Element ausgeblendet und schreibgeschützt bleibt. Das Aktivitäts-Panel hält während der gesamten Laufzeit und über eingehende Aufgabenlieferungen hinweg einen Composer bereit, wodurch der Fokus und halb getippte Anweisungen erhalten bleiben, während eine neue Aufgabenansicht geladen wird. Die Übermittlung bleibt deaktiviert, bis die Aufgabe Steuerbefehle akzeptieren kann. Text, der nach der Abwicklung eingegeben wurde, wird in den Fork übernommen, und ein fehlgeschlagener Fork stellt den Entwurf im Panel wieder her. Diese Aktion ist für laufende, Graph-, anonyme Agent- und geteilte Ansichten nicht verfügbar. Das Löschen des übergeordneten Elements wirkt sich kaskadierend auf dessen untergeordnete Abstammung aus. Der übergeordnete Agent kann das kanonische untergeordnete Element über seine Aufgaben-Tools abfragen, steuern, in die Warteschlange stellen, unterbrechen, abbrechen, sammeln und später fortsetzen; Mongo-basierte Leases serialisieren diese Fortsetzungen über API-Replikate hinweg.
+
+Das Aktivitäts-Panel stellt die Turns des ausgewählten Kind-Elements als einen verzweigungsbewussten Verlauf dar. Verwenden Sie **Load earlier activity**, um rückwärts zu blättern, und **Show full activity** bei einem Turn, um dessen vollständige, begrenzte Ausführungsdetails anzuzeigen. Tool-Aufrufe, Genehmigungen, Ergebnisse, Steuerelemente und für den Benutzer sichtbare Überlegungen (Reasoning) können erscheinen. Überlegungstexte sind wie der Rest der Projektion begrenzt und werden markiert, wenn sie gekürzt wurden; Aktivitäten, die von älteren Servern gespeichert wurden, zeigen möglicherweise nur eine Markierung für Überlegungen an. Gewöhnliche gespeicherte Aktivitäten verwenden dieselben Limits pro Element wie private Kind-Aktivitäten und passen einen zusammenhängenden neuesten Suffix in ein serialisiertes Aktivitätsbudget von 64 KB, sodass der Hinweis auf die Kürzung nur erscheint, wenn aussagekräftige Inhalte weggelassen wurden. Wenn der Verlauf gekürzt oder nicht verfügbar ist, weist das Panel darauf hin, anstatt eine Teilansicht als vollständig darzustellen. Neue Ereignis-Turns setzen sich am unteren Rand des Verlaufs ab, laufende Turns zeigen die verstrichene Zeit an, und Akteur-Zeilen verwenden Statuspunkte mit fester Position, damit Statusänderungen das Layout nicht verschieben. Ein kompakter, schwebender Header lässt den Verlauf darunter scrollen, während der Composer den Dimensionen des Haupt-Chats folgt. Laufende Arbeit wird durch ihre Streaming-Aktivität vermittelt und nicht durch einen separaten Status-Chip; anormale Endzustände bleiben gekennzeichnet.
+
+Wenn Redis aktiviert ist, protokolliert LibreChat den aktiven Ausführungseigentümer und leitet Anfragen für Poll, List, Steer, Queue, Interrupt, Cancel und Collect von jeder API-Replika an diesen Prozess über begrenzte, ablaufende Request/Reply-Nachrichten weiter. Das offene Aktivitäts-Panel empfängt ebenfalls aufgabenbezogene Live-Updates; eine dauerhafte Zwei-Sekunden-Abfrage dient als Fallback für verpasste Ereignisse, Wiederverbindungen oder Redis-Ausfälle. Einzelprozess- und Nicht-Redis-Bereitstellungen nutzen den In-Memory-Schnellpfad. Ein Live-Executor wird nicht migriert, nachdem sein Eigentümerprozess neu gestartet wurde oder verschwunden ist, aber das auf MongoDB basierende untergeordnete Transkript, der Terminalstatus, die Nutzung, der Verlauf und die spätere Agent-gesteuerte Fortsetzung bleiben unabhängig davon erhalten. Dies macht losgelöste Aufgaben nicht zu einer öffentlichen Hintergrund-Job-API.
+
+### Einen laufenden Prozess steuern [#control-a-running-child]
+
+Öffnen Sie in einer authentifizierten übergeordneten Konversation das Aktivitäts-Panel des Subagenten und wählen Sie eine dauerhafte untergeordnete Aufgabe aus. Während diese Aufgabe ausgeführt wird, geben Sie Anweisungen ein und senden Sie diese ab, um standardmäßig zu steuern. Auf einem Desktop-Gerät mit Mauszeigerunterstützung bietet das Aktionsmenü des Sende-Steuerelements **Steer**, **Queue** und **Interrupt** und zeigt nur die Tastenkombinationen an, die unter den aktuellen Tastatureinstellungen des Benutzers aktiv sind. Auf Touch-Geräten und im modalen Panel bleiben „Queue“ und „Interrupt“ als Symbol-Steuerelemente verfügbar. Wenn keine Anweisungen eingegeben wurden, wird das Sende-Steuerelement zu **Cancel task**.
+
+- **Steer** fügt an der nächsten sicheren Grenze des Kindes eine Anleitung hinzu.
+- **Queue** enthält Anweisungen für einen späteren Durchlauf in der untergeordneten Aufgabe.
+- **Interrupt** stoppt die aktuelle Arbeit des Kindes an einer sicheren Grenze und wendet neue Anweisungen an.
+- **Cancel task** fordert den Abbruch an, ohne eine Anleitung zu senden.
+
+Akzeptierte Steuerelemente erscheinen in einem aufgabenspezifischen Verlauf als sendend, wartend, angewendet, nicht angewendet oder fehlgeschlagen, gegebenenfalls mit einem Grund, falls verfügbar. Wählen Sie **Withdraw**, um eine in der Warteschlange befindliche Anleitung zu entfernen, bevor das untergeordnete Element sie anwendet. Die Anleitung ist auf 4 KB begrenzt. Jede Aufgabe speichert bis zu 64 autoritative Belege, während das Aktivitätsfenster bis zu 32 anzeigt; älterer abgeschlossener Verlauf wird vor aktiven akzeptierten Steuerelementen weggelassen, und die Benutzeroberfläche kennzeichnet weggelassenen Verlauf oder Anleitungen, die zur Anzeige gekürzt wurden.
+
+Laufende Steuerelemente werden geschlossen, wenn sich das untergeordnete Element stabilisiert, und derselbe Composer wechselt dazu, ein berechtigtes untergeordnetes Element in einem neuen Chat fortzusetzen. LibreChat überprüft bei jeder Anfrage den Zugriff des angemeldeten Benutzers auf das übergeordnete und das untergeordnete Element, deren Eltern-Kind-Beziehung sowie den Mandantenbesitz und wendet die konfigurierten Inhaltsfilter und Moderationsprüfungen auf die Anleitung an. Die wiederholte Übermittlung desselben akzeptierten Steuerelements gibt dessen autoritativen Beleg zurück, anstatt die Anweisung zweimal anzuwenden. Geteilte Konversationen bleiben schreibgeschützt und legen diese Steuerelemente nicht offen.
+
+Geteilte Konversationen können nur die begrenzten Aktivitäten anzeigen, die bereits im geteilten Payload enthalten sind. Ihre Ansicht ist schreibgeschützt, lässt Genehmigungssteuerungen und dauerhafte untergeordnete Selektoren aus und öffnet niemals den authentifizierten Abfragepfad für untergeordnete Threads.
+
+### Ereignisgesteuerte untergeordnete Aktivität [#event-driven-child-activity]
+
+Child Agents, die über eine [Agents API event binding](/docs/features/agents_api#event-driven-child-agents) fortgesetzt werden, stammen nicht von einer `subagent` Tool-Karte. Stattdessen fügt LibreChat in der authentifizierten übergeordneten Konversation eine kompakte Akteurszeile unter der Nachricht hinzu, die die Bindung besitzt. Durch das Öffnen wird das Subagent-Aktivitätsfenster wiederverwendet, mit Auswahlmöglichkeiten für den Akteur und seine Turns sowie Live-Aktivitäten für Run-Steps, Tools, Nachrichten und Reasoning-Marker. Externe Event-Trigger werden als normale User-Trigger-Zeilen mit erweiterbaren Details zu Event-Typ, Quelle, Zeitpunkt des Auftretens und erwarteter Aktion dargestellt. Wenn eine neue Zustellung eine weitere Aufgabe im selben Child-Thread auswählt, bleiben die bestehenden Turns sichtbar, während die neue Aufgabe geladen wird und nur deren Streaming-Platzhalter angehängt wird; aufgabenspezifischer Status und Steuerelemente werden niemals aus der beibehaltenen Ansicht übernommen. Frühere Seiten und die vollständige Aktivität pro Turn verwenden denselben begrenzten, schreibgeschützten Child-Verlauf.
+
+Die übergeordnete Projektion ist bewusst begrenzt: Sie gibt maximal 64 untergeordnete Threads zurück, behält bis zu 20 aktuelle Aufgaben pro untergeordnetem Thread aus einem gemeinsam genutzten, begrenzten Quellfenster bei und begrenzt die Antwort auf 96 KB. Die Benutzeroberfläche meldet einen abgeschnittenen Verlauf, anstatt zu suggerieren, dass eine Ansicht, die das Limit überschreitet, vollständig ist. Das Starten einer weiteren Runde befördert einen älteren Akteur in das Fenster der aktuellen untergeordneten Threads. Diese untergeordneten Threads bleiben für die normale Navigation verborgen und können nicht von einem anderen übergeordneten Element oder Mandanten entdeckt werden.
+
+### Automatische übergeordnete Fortsetzung [#automatic-parent-continuation]
+
+Nachdem ein losgelöstes Kind-Element (detached child) abgeschlossen ist, speichert LibreChat dessen Terminal-Ergebnis oder Fehler und sendet standardmäßig eine idempotente Fortsetzung an den gespeicherten übergeordneten Agenten auf genau dem Zweig, der es gestartet hat. Die Zustellung wartet, während dieser übergeordnete Zweig läuft, pausiert ist oder abgeschlossen wird. Der fortgesetzte übergeordnete Prozess erhält ein begrenztes Manifest relevanter Geschwister-Aufgaben, anstatt diese durch aktives Polling abzufragen, und der Chat präsentiert das „Aufwachen“ in einer einklappbaren Aufgabenkarte.
+
+Die automatische Zustellung von Vervollständigungen ist aktiviert, wenn [`endpoints.agents.backgroundTasks.completionWakeups`](/docs/configuration/librechat_yaml/object_structure/agents#backgroundtasks) weggelassen wird oder auf `true` gesetzt ist. Setzen Sie es auf `false`, um losgelöste (detached) untergeordnete Prozesse nur im Abrufmodus (poll-only) zu halten. Abgebrochene untergeordnete Prozesse werden ignoriert, und ephemere übergeordnete Agents werden nicht unterstützt, da keine gespeicherte Konfiguration zur Wiederherstellung vorhanden ist. Die Ausführung eines losgelösten untergeordneten Prozesses besitzt einen eigenen Ausführungskontext, sodass das Abschließen oder Abbrechen der ursprünglichen übergeordneten Anfrage die unabhängig ausgeführte Arbeit nicht abbricht. Der übergeordnete Prozess kann dauerhafte Ergebnisse der untergeordneten Prozesse weiterhin über seine Task-Tools abrufen.
 
 ## Limits [#limits]
 
@@ -105,10 +171,16 @@ LibreChat erzwingt diese Limits, um Subagent-Graphen begrenzt zu halten:
 <OptionTable
   options={[
     [
-      'MAX_SUBAGENTS',
+      'endpoints.agents.maxSubagents',
       'Number',
-      'Maximale explizite Sub-Agents pro übergeordnetem Agent. Konfigurierbar über `endpoints.agents.maxSubagents`, bis zu 50.',
+      'Maximale Einträge in jeder übergeordneten Agent `agent_ids` oder `graphs` Liste. Konfigurierbar von 1 bis 50.',
       '10',
+    ],
+    [
+      'MAX_GRAPH_SUBAGENT_MEMBERS',
+      'Number',
+      'Maximale Anzahl an Mitgliedern in einem gespeicherten Agent-Team.',
+      '32',
     ],
     ['MAX_SUBAGENT_DEPTH', 'Number', 'Maximale explizite Subagent-Hops von einem Root-Agenten.', '5'],
     [
@@ -134,15 +206,16 @@ endpoints:
     maxSubagents: 20
 ```
 
-Der konfigurierte Wert gilt für Anfragen zum Erstellen, Aktualisieren und Duplizieren von Agents, für die `subagents.agent_ids`-Allowlists in den Model Specs sowie für die Subagent-Auswahl im Agent Builder. Siehe [maxSubagents](/docs/configuration/librechat_yaml/object_structure/agents#maxsubagents) für die vollständige Referenz. Die oben genannten Grenzwerte für Tiefe, Graph-Knoten und Laufzeitkonfiguration sind fest vorgegeben.
+Der konfigurierte Wert gilt für Anfragen zum Erstellen, Aktualisieren und Duplizieren von Agents sowohl für `subagents.agent_ids` als auch für `subagents.graphs`, für die Zulassungslisten von Model Specs unter `subagents.agent_ids` sowie für die Subagent-Auswahl im Agent Builder. Siehe [maxSubagents](/docs/configuration/librechat_yaml/object_structure/agents#maxsubagents) für die vollständige Referenz. Die oben genannten Limits pro Teammitglied, Tiefe, Graph-Knoten und Laufzeitkonfiguration sind fest vorgegeben.
 
 ## Zugriffskontrolle [#access-control]
 
-Konfigurierte untergeordnete Agenten (Child Agents) müssen für den Benutzer sichtbar sein. Wenn der Benutzer keinen Lesezugriff auf einen referenzierten Agenten hat, überspringt LibreChat diesen Subagenten. Bei Erstellungs- und Aktualisierungsanfragen werden ungültige oder nicht autorisierte `subagents.agent_ids`-Einträge abgelehnt.
+Konfigurierte untergeordnete Agents und jedes gespeicherte Teammitglied müssen für den Benutzer sichtbar sein. Wenn der Benutzer keinen Lesezugriff auf einen einzeln referenzierten Agent hat, überspringt LibreChat diesen Subagent. Ein gespeichertes Team ist eine Alles-oder-Nichts-Einheit und wird übersprungen, wenn ein Mitglied nicht verfügbar ist. Erstellungs- und Aktualisierungsanfragen lehnen fehlende oder nicht autorisierte Referenzen, doppelte Spawn-Typen, zyklische oder nicht verbundene Team-Graphen, ungültige Einstiegs- oder Ergebnismitglieder sowie Konfigurationen, die die oben genannten Grenzwerte überschreiten, ab.
 
 ## Design-Tipps [#design-tips]
 
 - Aktiviere Self-Spawn, wenn der übergeordnete Agent bereits gut eingegrenzt ist und lediglich einen neuen Kontext für eine Teilaufgabe benötigt.
 - Fügen Sie spezifische untergeordnete Agenten (Child Agents) hinzu, wenn die Aufgabe ein anderes Modell, ein anderes Anweisungsset, ein anderes Tool-Set oder eine andere Skill-Allowlist erfordert.
+- Verwenden Sie ein gespeichertes Team, wenn mehrere Agents als ein delegierter Workflow ausgeführt werden sollen, wobei ein einzelnes Ergebnis an das übergeordnete Element zurückgegeben wird.
 - Halten Sie untergeordnete Beschreibungen klar. Das übergeordnete Element verwendet jeden Namen und jede Beschreibung eines untergeordneten Elements, um das richtige Delegationsziel auszuwählen.
 - Verwenden Sie Subagents für Zwischenarbeiten, die ein kompaktes Ergebnis liefern sollen, nicht für dauerhafte Übergaben an einen anderen Konversationspfad.

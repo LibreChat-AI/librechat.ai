@@ -1,15 +1,120 @@
 ---
-title: 消息过滤器对象结构
+title: 内容过滤器对象结构
 icon: ShieldAlert
 ---
 
 ## 概述 [#overview]
 
-`messageFilter` 对象用于配置服务器端消息过滤器。支持的过滤器类型为 `messageFilter.pii`。
+LibreChat 提供两种服务端过滤器配置：
 
-`messageFilter.pii` 会在文本到达审核、模型请求或消息持久化之前，拒绝匹配凭据类起始模式或操作员定义的正则表达式的已提交消息文本。
+- `filters` 将基于来源的策略应用于消息、提示词、智能体、文件、技能、记忆、工具以及其他可重用内容中的选定字段。
+- `messageFilter` 是旧版消息文本过滤器。现有部署可以在迁移到 `filters.messages` 的同时继续使用它。
 
-## 示例 [#example]
+两者均为选择性加入。当两者均已配置时，两条策略同时适用。
+
+<Callout type="warning" title="仅基础配置">
+  `filters` 仅从基础 `librechat.yaml` 加载。数据库、角色、组和用户覆盖项无法添加、更改或删除它。在多副本部署中，请统一发布或重启所有副本，并在将策略视为生效之前，验证每个副本是否加载了相同的基础配置。
+</Callout>
+
+## 源感知过滤器 [#source-aware-filters]
+
+每个源都有一个可选的 `pii` 策略。省略 `filters`、某个源或其 `pii` 块即可禁用该范围。
+
+```yaml filename="librechat.yaml"
+filters:
+  messages:
+    unattributedAssistantContent: model_output
+    pii:
+      action: audit
+      fields: [text, summary, attachment_reference]
+      starterPatterns: [sk_prefix, bearer_header, api_key_header]
+      customPatterns:
+        - id: organization_identifier
+          label: Organization identifier
+          regex: 'ORG-[A-Z0-9]{12}'
+  files:
+    pii:
+      fields: [name, content, extracted_text, transcript]
+      uninspectable: block
+  skills:
+    pii:
+      fields: [name, description, instructions, imported_text, file_text]
+```
+
+### 模式配置 [#pattern-configuration]
+
+对于每个已启用的源：
+
+- Omit `action` or set it to `block` to reject matches. Set `action: audit` for a shadow rollout that records findings without rejecting, changing, or redacting content.
+- 省略 `fields` 以检查该源支持的所有字段。显式列表必须包含 1 到 256 个受支持的字段名称。
+- 省略 `starterPatterns` 以启用完整的入门目录。将其设置为 `[]` 可禁用入门模式，同时保留任何 `customPatterns`。
+- 使用 `id`、面向用户的 `label` 和 `regex` 来配置 `customPatterns`。
+
+审计模式会评估所有已配置的片段和规则，以便操作员在强制执行前衡量检测结果。每条信息级别的审计记录都会标识操作、检测器、规则、标签、来源、字段和来源证明，但绝不会包含匹配的文本或源内容。审计模式不提供脱敏功能；当配置加载时，不支持的操作值将被拒绝。
+
+Actions 是针对每个源独立配置的，因此一个源可以执行审计（audit），而另一个源可以执行拦截（block）。即使某个源的模式动作为 `audit`，`filters.files.pii.uninspectable: block` 仍然作为针对不透明或超大所选文件内容的独立“故障关闭”（fail-closed）规则存在。
+
+内置的 starter pattern ID 为：
+
+- `sk_prefix`: `sk-` 风格的令牌前缀。
+- `bearer_header`: 文本中的 bearer token。
+- `api_key_header`: `api-key` 标头格式文本。
+
+自定义模式使用 RE2JS 的有界线性时间正则表达式语法。不支持反向引用和环视（lookaround），且某些转义符与 JavaScript 正则表达式不同。LibreChat 在加载配置时会拒绝无效或不支持的模式。
+
+### 支持的来源和字段 [#supported-sources-and-fields]
+
+| 来源 | 支持的字段 |
+| --- | --- |
+| `messages` | `name`, `text`, `summary`, `quote`, `answer`, `decision_response`, `decision_reason`, `content_part`, `attachment_reference`, `assembled_context` |
+| `prompts` | `name`, `description`, `oneliner`, `category`, `command`, `text`, `preset_text`, `system`, `context`, `instructions`, `additional_instructions`, `greeting`, `example_input`, `example_output` |
+| `agentInstructions` | `name`, `category`, `description`, `instructions`, `additional_instructions`, `edge_description`, `edge_prompt`, `edge_prompt_key`, `artifacts`, `support_contact_name`, `support_contact_email` |
+| `conversationStarters` | `text` |
+| `conversationTitles` | `title` |
+| `feedback` | `text` |
+| `skills` | `name`, `display_title`, `description`, `category`, `frontmatter`, `instructions`, `imported_text`, `file_name`, `file_text` |
+| `memories` | `key`, `value`, `summary` |
+| `files` | `name`, `content`, `extracted_text`, `transcript`, `uri` |
+| `toolArguments` | `name`, `arguments`, `output` |
+| `modelParameters` | `stop`, `request_fields`, `response_format`, `metadata` |
+| `actionMetadata` | `raw_spec`, `domain`, `privacy_policy_url`, `authorization_type`, `custom_auth_header`, `authorization_content_type`, `authorization_url`, `client_url`, `scope`, `token_exchange_method`, `api_key`, `oauth_client_id`, `oauth_client_secret` |
+
+### 消息来源 (Message Provenance) [#message-provenance]
+
+`filters.messages.unattributedAssistantContent` 控制如何分类没有来源的旧版 assistant 内容：
+
+- `model_output`（默认）：保留旧有行为，将未归属的助手内容视为模型输出。
+- `inspect`：将原本未归属的助手内容（包括选定的附件投影）视为已提交内容。明确标记为模型输出的助手内容则保持豁免。
+
+即使省略了 `filters.messages.pii`，此分类仍可能影响已启用的旧版 `messageFilter.pii` 策略。在依赖追溯性检查之前，请先盘点或迁移旧记录。
+
+### 无法检查的文件 [#uninspectable-files]
+
+`filters.files.pii.uninspectable` 控制 LibreChat 无法检查的所选文件内容，包括不透明或过大的内容：
+
+- `allow`（默认）：保持兼容性并允许该内容。
+- `block`：在提供商或存储端产生副作用之前拒绝它。
+
+谨慎地推出 `block`。在存在可检查文本之前，它可能会导致旧文件无法重复使用。
+
+### 存储与复用的内容 [#stored-and-reused-content]
+
+启用或更改策略不会重写或删除已存储的记录。当受保护的内容被提交、复制、共享、重用或与模型绑定时，LibreChat 会应用当前策略。
+
+安全的元数据编辑仍然可以成功，因此被拦截的记录仍然可以修复。在管理视图中，被拦截的 prompt 或预设字段可能为空，并显示 `contentFilterBlocked: true`；被拦截的 prompt 组在直接检索时会返回错误，并从集合和重用响应中被忽略。被拒绝的后台记忆更新可以被跳过，而主要的聊天响应则会继续进行。
+
+阻止源感知文本匹配将返回 HTTP `400` 并附带 `content_filter_block`。无法检查的文件拒绝将使用 `content_filter_uninspectable`。
+
+### 限制 [#limits]
+
+- 每个源最多支持 256 个字段、起始模式或自定义模式。
+- 在整个配置中最多支持 256 个自定义模式。
+- Pattern ID 最长 256 个字符，标签最长 512 个字符，正则表达式最长 512 个字符。
+- 最多 8,192 个正则表达式字符和 8,192 条已编译的过滤指令。
+
+## 旧版 `messageFilter` [#legacy-messagefilter]
+
+`messageFilter.pii` 会在进行内容审核、模型请求或持久化之前，根据 `message_filter_pii_block` 拒绝匹配的调用方提供的消息文本。它仅支持拦截功能，不接受 `action` 参数。它不会检查文件内容或 `filters` 所涵盖的其他可重用来源。
 
 ```yaml filename="librechat.yaml"
 messageFilter:
@@ -24,63 +129,4 @@ messageFilter:
         regex: 'sk-ant-[A-Za-z0-9_-]{20,}'
 ```
 
-## 字段 [#fields]
-
-### messageFilter.pii
-
-<OptionTable
-  options={[
-    [
-      'pii.starterPatterns',
-      'Array of Strings',
-      '可选的内置启动器模式 ID 子集，用于启用特定模式。省略此项则启用所有启动器模式。',
-      'starterPatterns: [sk_prefix, bearer_header]',
-    ],
-    [
-      'pii.customPatterns',
-      'Array of Objects',
-      '由操作员定义的模式。每个条目都需要 `id`、`label` 和 `regex`。',
-      '',
-    ],
-  ]}
-/>
-
-**内置的 starter pattern id：**
-
-- `sk_prefix`：匹配 `sk-` 样式的令牌前缀。
-- `bearer_header`：匹配文本中的 bearer tokens。
-- `api_key_header`：匹配 `api-key` 标头格式的文本。
-
-### customPatterns
-
-<OptionTable
-  options={[
-    ['id', 'String', '用于日志记录和调试的稳定模式 ID。', 'id: anthropic_api_key'],
-    [
-      'label',
-      'String',
-      '拒绝消息中显示的人类可读标签。',
-      'label: Anthropic API key',
-    ],
-    [
-      'regex',
-      'String',
-      'RE2 正则表达式。LibreChat 会在配置加载时对其进行验证，并将其全局应用。',
-      "regex: 'sk-ant-[A-Za-z0-9_-]{20,}'",
-    ],
-  ]}
-/>
-
-自定义模式使用线性时间的 RE2 引擎。不支持反向引用和环视，且某些转义符与 JavaScript 正则表达式不同。LibreChat 在加载配置时会拒绝 RE2 无法编译的模式。
-
-## 行为 [#behavior]
-
-当提交的消息文本匹配到已配置的 PII 模式时，LibreChat 将返回 HTTP `400` 状态码以及 `message_filter_pii_block`，并提示调用者移除匹配到的凭据类型。
-
-过滤器检查：
-
-- 通过 LibreChat UI 提交的聊天路由用户文本。
-- OpenAI 兼容的 Chat Completions 请求中所有调用者提供的消息角色对应的文本内容。
-- 在 OpenAI 兼容的 Responses 请求中，跨所有调用者提供的消息角色的文本内容。
-
-该过滤器会对请求体中提供的文本进行评估。它不会扫描文件内容。
+旧版过滤器会检查 OpenAI 兼容的 Chat Completions 和 Responses 请求中所有角色的聊天路由用户文本及调用方提供的文本。它使用上述相同的内置 ID 和线性时间自定义正则表达式规则。

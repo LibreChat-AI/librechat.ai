@@ -49,15 +49,17 @@ LibreChat muestra los servidores MCP configurados directamente en el área de ch
 - Cuando se selecciona, todas las herramientas de ese servidor pasan a estar disponibles para su modelo actual
 - Acceso rápido a herramientas MCP sin necesidad de crear un agente, permitiendo el uso de múltiples servidores a la vez
 
-Para evitar que los servidores MCP aparezcan en el menú desplegable del chat (manteniéndolos solo para agentes), establezca [`chatMenu: false`](/docs/configuration/librechat_yaml/object_structure/mcp_servers#chatmenu) en su configuración:
+Para mantener un servidor MCP fuera de la selección regular de chat, establezca [`chatMenu: false`](/docs/configuration/librechat_yaml/object_structure/mcp_servers#chatmenu) en su configuración:
 
 ```yaml
 mcpServers:
   internal-tools:
     command: npx
     args: ['-y', 'internal-mcp-server']
-    chatMenu: false # Only available in agent builder
+    chatMenu: false # Not selectable in regular chat
 ```
+
+Esta configuración se aplica tanto en las solicitudes de chat como en el selector, por lo que una selección guardada obsoleta no puede seguir utilizando un servidor oculto. Esto no elimina el servidor de los Agents guardados ni de un Model Specs que lo asigne explícitamente. LibreChat también omite de la ruta de solicitud y del selector de chat regular aquellos servidores a los que un usuario solo puede acceder a través de un Agent autorizado.
 
 ### Con Agentes [#with-agents]
 
@@ -264,7 +266,7 @@ Los fallos de inicialización ahora distinguen entre un servidor inalcanzable, l
 
 Si un Agent espera explícitamente herramientas MCP pero ninguna puede resolverse al inicio de la ejecución, LibreChat falla la ejecución con una guía de conexión y acceso en lugar de ejecutarse silenciosamente sin esas herramientas.
 
-Los servidores MCP que emiten `notifications/tools/list_changed` pueden actualizar su catálogo de herramientas sin necesidad de reiniciar LibreChat. LibreChat obtiene la lista actual desde la conexión activa, publica las herramientas añadidas y deja de anunciar las herramientas que el servidor eliminó. Las reconexiones también sincronizan el catálogo antes de que la conexión sea considerada como lista.
+Los servidores MCP que emiten `notifications/tools/list_changed` pueden actualizar su catálogo de herramientas sin necesidad de reiniciar LibreChat. LibreChat obtiene la lista actual desde la conexión activa, publica las herramientas añadidas y deja de anunciar las herramientas que el servidor eliminó. Las reconexiones también sincronizan el catálogo antes de que la conexión sea considerada como lista. Las actualizaciones de instantáneas gestionadas y la detección de servidores en frío comparten una puerta de tres operaciones a nivel de proceso. Una vez admitida, cada operación permanece limitada por su lista de herramientas o por el plazo de detección por servidor, incluyendo cualquier `initTimeout` más corto, por lo que el trabajo lento del catálogo no puede ocupar un espacio indefinidamente.
 
 Para servidores HTTP transmitibles (Streamable), una reconexión puede devolver brevemente un `409` HTTP cuando el servidor aún mantiene una transmisión SSE independiente obsoleta para la sesión anterior. LibreChat trata esto como algo transitorio, cierra la sesión obsoleta y reconstruye la conexión automáticamente; no se requiere ninguna acción por parte del operador cuando la recuperación tiene éxito. Si la conexión reconstruida también falla, LibreChat continúa mostrando el error de conexión subyacente.
 
@@ -320,6 +322,10 @@ Los marcadores de posición disponibles incluyen:
 
 Los servidores MCP definidos en YAML también pueden usar marcadores de posición `{{LIBRECHAT_OPENID_*}}`, `{{LIBRECHAT_GRAPH_*}}` y `{{LIBRECHAT_BODY_*}}`. Los valores de `{{LIBRECHAT_BODY_*}}` tienen un alcance de solicitud (request-scoped), por lo que LibreChat crea conexiones para la ejecución activa, las reutiliza en las llamadas a herramientas durante esa ejecución y las limpia cuando finaliza la solicitud. Los servidores con alcance de solicitud se excluyen de la caché persistente de herramientas para que los encabezados y URLs específicos de la solicitud no se reutilicen fuera de la ejecución activa. Debido a que su lista de herramientas no puede resolverse antes de que exista una solicitud de chat, el Agent Builder expone una selección de herramientas en tiempo de ejecución para el servidor completo y resuelve sus herramientas en tiempo de ejecución. Completar OAuth almacena la autorización pero pospone la conexión hasta que la primera ejecución proporcione el contexto de la solicitud. Los marcadores de posición de usuario, OpenID y Graph tienen un alcance de usuario (user-scoped); los transportes HTTP actualizan sus encabezados resueltos antes de cada llamada a herramienta sin requerir una reconexión por sí mismos.
 
+`{{LIBRECHAT_GRAPH_ACCESS_TOKEN}}` intercambia el token de acceso OpenID reutilizable del usuario a través del flujo on-behalf-of de Microsoft. [`GRAPH_API_SCOPES`](/docs/configuration/dotenv#microsoft-graph-api--entra-id-integration) establece los ámbitos solicitados separados por espacios y tiene como valor predeterminado `https://graph.microsoft.com/.default`. Esto es independiente de `OPENID_GRAPH_SCOPES`, que configura la búsqueda de personas y grupos.
+
+El marcador de posición `{{LIBRECHAT_BODY_PARENTMESSAGEID}}` se completa para chats de agentes nativos, llamadas a la API de agentes compatibles con OpenAI y ejecuciones de Assistants heredadas. Open Responses no tiene una identidad de mensaje principal equivalente y falla de forma cerrada cuando un servidor MCP requiere ese valor. Consulta la [referencia de marcadores de posición del servidor MCP](/docs/configuration/librechat_yaml/object_structure/mcp_servers#headers).
+
 ### Instrucciones del servidor [#server-instructions]
 
 `serverInstructions` es una funcionalidad de LibreChat que añade dinámicamente instrucciones configuradas cuando se selecciona cualquier herramienta de ese servidor MCP:
@@ -358,6 +364,8 @@ mcpServers:
 ```
 
 **Nota**: Si las operaciones siguen interrumpiéndose, verifica la configuración de tu proxy (por ejemplo, nginx, traefik, etc.), ya que podría estar cerrando las conexiones prematuramente debido a los tiempos de espera predeterminados.
+
+Cuando un usuario presiona **Stop** durante una llamada a una herramienta de agente en primer plano, LibreChat reenvía la señal de cancelación de ejecución a MCP. Para servidores HTTP transmitibles (Streamable), el SDK de MCP envía `notifications/cancelled`; el servidor debe respetar esa notificación para detener su propio trabajo. Las llamadas en segundo plano desconectadas mantienen intencionalmente un ciclo de vida separado y no se cancelan con el turno en primer plano.
 
 ### Credenciales proporcionadas por el usuario [#user-provided-credentials]
 
@@ -497,6 +505,8 @@ LibreChat gestiona los tokens OAuth de forma inteligente:
 - **Actualización automática**: Cuando los tokens de actualización están disponibles, LibreChat renueva automáticamente los tokens de acceso caducados
 - **Recuperación silenciosa 401**: Si una conexión MCP OAuth recibe un rechazo de autenticación a mitad de la sesión, LibreChat coordina un intento limitado de actualización y reconexión por usuario y servidor. Los llamadores concurrentes comparten ese resultado de recuperación antes de que LibreChat muestre un nuevo aviso de autenticación.
 - **Gestión de sesiones**: Cada usuario mantiene sus propias sesiones OAuth para entornos multiusuario
+
+Si un flujo de Agent guardado se recarga o reanuda mientras una solicitud de autorización de MCP sigue pendiente, LibreChat reconstruye dicha solicitud a partir del estado de generación persistente. Las solicitudes completadas, canceladas, fallidas o caducadas no se restauran.
 
 Los clientes y tokens de OAuth almacenados están vinculados a la URL del servidor MCP y a la configuración del cliente/endpoint de OAuth. Cambiar esa configuración requiere que los usuarios se autentiquen de nuevo. Al editar un servidor creado desde la interfaz de usuario que conserva un `client_secret` almacenado, vuelva a ingresar el secreto al cambiar un campo de vinculación como la URL del servidor, el ID de cliente, la URL de autorización, la URL de token o el método de autenticación de token.
 

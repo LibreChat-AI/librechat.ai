@@ -11,7 +11,7 @@ icon: Settings
 
 <OptionTable
   options={[
-    ['version', 'String', '指定配置文件的版本。', 'version: 1.3.14'],
+    ['version', 'String', '指定配置文件的版本。', 'version: 1.3.15'],
   ]}
 />
 
@@ -35,7 +35,7 @@ icon: Settings
     [
       'langfuse',
       'Object',
-      '存储通过 LibreChat 配置 API 管理的加密 Langfuse 连接。',
+      '配置加密的 Langfuse 连接和部署拥有的请求标头。',
       '',
     ],
   ]}
@@ -56,14 +56,31 @@ icon: Settings
       '选择一个已部署批准的 Langfuse 目标密钥。',
       '',
     ],
+    [
+      'headers',
+      'Object/Map of Strings',
+      '部署拥有的标头，发送至一个已配置的 Langfuse 源，用于代理或网关身份验证。支持 `${ENV_VAR}` 引用。',
+      '',
+    ],
   ]}
 />
 
-通过 **Settings → Langfuse** 或授权的管理员配置客户端管理此对象。设置流程会验证连接并派生 `projectId`；授权的管理员写入加密的 `secretKey`，生成 `secretKeyPreview`，并从读取中屏蔽该密钥。运行时连接路径不接受直接放置在 `librechat.yaml` 中的明文 `secretKey` 值。旧版的 `displaySecretKey` 和 `fanout.enabled` 字段已不再属于该架构。
+通过 **Settings → Langfuse** 或授权的管理员配置客户端管理连接字段。设置流程会验证连接并派生 `projectId`；授权的管理员写入加密的 `secretKey`，生成 `secretKeyPreview`，并在读取时屏蔽密钥。运行时连接路径不接受直接放置在 `librechat.yaml` 中的明文 `secretKey` 值。旧版的 `displaySecretKey` 和 `fanout.enabled` 字段已不再属于该架构。
+
+`headers` 的处理方式有所不同：它是部署基础设施的一部分，只能在 `librechat.yaml` 中设置。管理员配置写入操作会拒绝整个映射表以及单独的 header 路径，因此网关凭据不会存储在基于 Mongo 的配置中，也不会通过该配置返回。其值支持 `${ENV_VAR}` 插值；请使用环境变量引用而非字面量。LibreChat 会丢弃无法解析的变量、受保护的基础设施密钥引用、空值以及无效的 HTTP header 名称，并发出警告。
+
+仅当部署解析出唯一的 Langfuse 源时，自定义标头才会随跟踪（trace）和媒体导出、反馈评分请求、项目查找以及管理员凭据验证一同发送。如果中央、租户或收集器配置产生了多个源，LibreChat 将不会发送任何自定义标头并记录一条警告，因为该映射无法安全地识别接收方。它们不能使用基于用户的 `{{...}}` 占位符，且扇出（fanout）收集器仅会将 `Authorization` 转发至上游。
+
+```yaml filename="langfuse / headers"
+langfuse:
+  headers:
+    CF-Access-Client-Id: '${CF_ACCESS_CLIENT_ID}'
+    CF-Access-Client-Secret: '${CF_ACCESS_CLIENT_SECRET}'
+```
 
 `langfuse` 是一个仅限基础配置的部分。角色、组和用户配置覆盖无法替换或禁用它。
 
-请参阅 [Langfuse Configuration](/docs/configuration/langfuse) 以了解可用性规则、环境管理的凭据以及可选的扇出部署。
+请参阅 [Langfuse Configuration](/docs/configuration/langfuse) 以了解可用性规则、身份验证代理设置、环境托管凭据以及可选的扇出部署。
 
 ## skillSync
 
@@ -80,6 +97,23 @@ icon: Settings
 
 请参阅：[Skill Sync 对象结构](/docs/configuration/librechat_yaml/object_structure/skill_sync)
 
+## filters
+
+<OptionTable
+  options={[
+    [
+      'filters',
+      'Object',
+      '配置针对消息、提示词、Agent 指令、对话启动语和标题、反馈、技能、记忆、文件、工具参数、模型参数以及 Action 元数据的源感知内容保护。',
+      '',
+    ],
+  ]}
+/>
+
+`filters` 仅为基础配置策略。角色、组、用户和数据库的覆盖设置无法对其进行添加、替换或删除。在多副本部署中，请协调配置的发布或重启，以确保每个副本加载相同的策略。
+
+请参阅：[内容过滤器对象结构](/docs/configuration/librechat_yaml/object_structure/message_filter#source-aware-filters)
+
 ## messageFilter
 
 <OptionTable
@@ -87,13 +121,13 @@ icon: Settings
     [
       'messageFilter',
       'Object',
-      '配置服务器端消息过滤器。在 v1.3.13 版本中，`messageFilter.pii` 可以在模型调用和持久化之前拒绝提交的凭据格式文本。',
+      '配置旧版仅消息 PII 策略。现有部署在迁移至 `filters.messages` 时可保留此代码块；当两者均已配置时，两条策略将同时生效。',
       '',
     ],
   ]}
 />
 
-请参阅：[Message Filter Object Structure](/docs/configuration/librechat_yaml/object_structure/message_filter)
+请参阅：[Legacy messageFilter](/docs/configuration/librechat_yaml/object_structure/message_filter#legacy-messagefilter)
 
 ## fileStrategy
 
@@ -317,11 +351,15 @@ fileStrategies:
     [
       'secureImageLinks',
       'Boolean',
-      '是否对应用本地托管的图片链接访问进行安全保护。默认值：false。',
+      '需要对应用本地托管的图片链接进行授权。默认值：true。',
       'secureImageLinks: true',
     ],
   ]}
 />
+
+当省略此字段时，本地图像将受到保护。私有对话图像需要有效的会话和所有者访问权限。存储的用户头像需要同一租户中经过身份验证的查看者。代理头像遵循代理的查看 ACL（包括公开可见性），而助手头像则需要同一租户以及有效的 endpoint 共享或助手管理策略。授权和配置查找失败时将默认拒绝访问。
+
+仅在为了兼容性而需要允许部署故意暴露未经身份验证的本地图片 URL 时，才设置 `secureImageLinks: false`。角色和用户配置的覆盖项将根据图片所有者的有效配置进行解析。
 
 ## imageOutputType
 
@@ -571,67 +609,63 @@ fileStrategies:
     [
       'enabled',
       'Boolean',
-      '启用或禁用客户端图像调整大小功能。默认值：false。',
+      '当明确设置时，将强制开启或关闭所有用户的客户端调整大小功能，并锁定设置中的开关。省略此项则允许每个用户在“设置 > 聊天”中进行选择；用户偏好默认为关闭。',
       'enabled: true',
     ],
     [
       'maxWidth',
       'Number',
-      '调整后图像的最大宽度（以像素为单位）。超过此宽度的图像将被调整大小。默认值：1920。',
-      'maxWidth: 1024',
+      '调整大小后图像的最大宽度（以像素为单位）。必须至少为 1。默认值为 1900。',
+      'maxWidth: 1900',
     ],
     [
       'maxHeight',
       'Number',
-      '调整大小后的图像最大高度（像素）。超过此高度的图像将被调整大小。默认值：1080。',
-      'maxHeight: 768',
+      '调整大小后图像的最大高度（以像素为单位）。必须至少为 1。默认值为 1900。',
+      'maxHeight: 1900',
     ],
     [
       'quality',
       'Number',
-      'JPEG 压缩质量（0.1 到 1.0）。数值越高，质量越好，但文件体积越大。默认值：0.8。',
-      'quality: 0.9',
-    ],
-    [
-      'compressFormat',
-      'String',
-      '压缩图像的输出格式。选项："jpeg", "webp"。默认："jpeg"。',
-      'compressFormat: "webp"',
+      '浏览器编码器质量，范围从 0 到 1。数值越高通常保留的细节越多，生成的文件也越大。默认值：0.92。',
+      'quality: 0.92',
     ],
   ]}
 />
 
 **描述：**
 
-`clientImageResize` 配置支持在上传前自动进行客户端图像缩放。此功能有助于：
+`clientImageResize` 配置用于控制上传前的客户端图像缩放。此功能有助于：
 
 - **防止上传失败**，避免因图片文件过大而超出服务器限制
 - **减少带宽使用**，通过在传输前压缩图像
 - **提升上传性能**，减小文件大小
 - **保持图像质量**的同时优化文件大小
 
-启用后，超过指定 `maxWidth` 或 `maxHeight` 尺寸的图像会在上传到服务器之前在客户端自动调整大小。调整大小时会保持原始宽高比，同时确保图像符合指定的边界。
+当启用调整大小功能时，超过 `maxWidth` 或 `maxHeight` 的受支持图像会在上传前在浏览器中进行缩小处理。LibreChat 会保持宽高比，绝不会放大较小的图像，并且在编码后的结果并不比原文件小时，会保留原始文件。
+
+如果省略 `enabled`，用户可以在 **Settings > Chat** 下开启或关闭 **Resize images before upload**。该偏好设置存储在浏览器中，默认处于关闭状态。在 `librechat.yaml` 中设置 `enabled: true` 或 `enabled: false` 将覆盖所有用户的偏好设置并禁用该开关。
 
 **示例：**
 
 ```yaml filename="clientImageResize"
 fileConfig:
   clientImageResize:
-    enabled: true
-    maxWidth: 1920
-    maxHeight: 1080
-    quality: 0.8
-    compressFormat: 'jpeg'
+    # Omit enabled so each user can choose under Settings > Chat.
+    maxWidth: 1900
+    maxHeight: 1900
+    quality: 0.92
 ```
+
+若要强制执行部署的某种行为，请在同一代码块中添加 `enabled: true` 或 `enabled: false`。
 
 **注意：**
 
-- 仅适用于图像文件（JPEG、PNG、WebP 等）
-- 当图片超过指定尺寸时，会自动进行调整大小。
-- 调整大小时保留原始宽高比
-- 此功能适用于所有受支持的图像上传 endpoint。
-- 质量设置仅适用于 JPEG 和 WebP 格式
-- 将质量设置得过低（< 0.5）可能会导致明显的图像质量下降
+- 在具备所需 Canvas API 的浏览器中，调整大小流水线支持 JPEG、PNG 和 WebP 格式。
+- Animated PNG 和 WebP 文件将保持原样发送，因此调整大小不会导致动画丢失。
+- 输出保持源格式。没有 `compressFormat` 设置。
+- 浏览器编码器可能会忽略 PNG 等无损格式的 `quality` 参数。
+- 如果调整大小失败，将回退到原始文件；正常的服务器上传限制仍然适用。
 
 请参阅：[文件配置对象结构](/docs/configuration/librechat_yaml/object_structure/file_config)
 
@@ -664,6 +698,12 @@ fileConfig:
       'conversationsImport',
       'Object',
       '专门为对话导入操作配置速率限制。',
+      '',
+    ],
+    [
+      'agentEvents',
+      'Object',
+      '配置已认证 Agent 事件请求的 API-key-principal 准入限制。',
       '',
     ],
     ['stt', 'Object', '专门为语音转文字 (stt) 请求配置速率限制', ''],
@@ -703,6 +743,27 @@ fileConfig:
   ]}
 />
 
+**agentEvents 子键：**
+
+<OptionTable
+  options={[
+    [
+      'userMax',
+      'Number',
+      '每个 Remote Agents API 密钥主体在单个窗口内允许的最大已认证 Agent 事件准入数。',
+      '40',
+    ],
+    [
+      'userWindowInMinutes',
+      'Number',
+      '经过身份验证的 Agent 事件准入窗口时长（以分钟为单位）。',
+      '1',
+    ],
+  ]}
+/>
+
+此准入存储桶与常规消息执行限制是分开的。持久化工作进程在执行投递时会消耗常规的消息-用户存储桶，从而避免在准入时产生双重计费。当省略 YAML 字段时，旧版的 `AGENT_EVENT_USER_MAX` 和 `AGENT_EVENT_USER_WINDOW` 值仍将作为回退方案；显式的 YAML 值具有优先权。
+
 **tts 子键：**
 
 <OptionTable
@@ -738,6 +799,9 @@ fileConfig:
     - **示例**:
     ```yaml filename="rateLimits"
     rateLimits:
+      agentEvents:
+        userMax: 40
+        userWindowInMinutes: 1
       fileUploads:
         ipMax: 100
         ipWindowInMinutes: 60

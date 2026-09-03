@@ -13,6 +13,7 @@ Use subagentes para:
 - Subtarefas de pesquisa que podem gerar saídas intermediárias longas
 - Revisar passagens com um agente especializado
 - Trabalho intensivo de ferramentas que deve permanecer fora do contexto pai
+- Fluxos de trabalho de equipe multi-agente que devem ser executados por trás de uma tarefa delegada
 - Decomposição em estilo paralelo onde o pai coordena e resume
 
 ## Como os Subagents diferem do Agent Chain [#how-subagents-differ-from-agent-chain]
@@ -56,6 +57,27 @@ Configurações disponíveis:
 - **Allow self-spawn**: permite que o agente crie uma nova cópia de si mesmo em um contexto isolado. Isso é habilitado por padrão quando subagentes estão ativados.
 - **Subagentes adicionais**: seleciona agentes específicos que o pai pode gerar.
 
+Equipes de Agentes salvas são incorporadas como `subagents.graphs` nos payloads de criação ou atualização de Agentes. O Construtor de Agentes atual preserva essas definições enquanto você edita as configurações de auto-geração e de Agentes individuais, mas ele não cria definições de grafo. Cada equipe nomeia um grafo acíclico direcionado limitado, seu Agente de entrada e o Agente cujo resultado é retornado ao pai:
+
+```yaml filename="agent saved-team subagent"
+subagents:
+  enabled: true
+  allowSelf: false
+  graphs:
+    - type: 'research_team'
+      name: 'Research team'
+      description: 'Researches a topic and reviews the findings'
+      agent_ids:
+        - 'agent_researcher'
+        - 'agent_reviewer'
+      entry_agent_id: 'agent_researcher'
+      result_agent_id: 'agent_reviewer'
+      edges:
+        - from: 'agent_researcher'
+          to: 'agent_reviewer'
+          edgeType: 'direct'
+```
+
 Formato de agente equivalente:
 
 ```yaml filename="agent subagents"
@@ -85,7 +107,7 @@ modelSpecs:
         model: 'gpt-4o'
 ```
 
-Apenas `enabled` e `allowSelf` são enviados aos clientes na configuração de inicialização. A lista de permissões `agent_ids` permanece no lado do servidor e é validada em relação ao limite efetivo de subagentes, que é definido como 10 por padrão e é configurável com [`endpoints.agents.maxSubagents`](/docs/configuration/librechat_yaml/object_structure/agents#maxsubagents). Os payloads de solicitação do cliente não podem fornecer ou substituir a configuração de Subagent do Model Specs.
+Apenas `enabled` e `allowSelf` são enviados aos clientes na configuração de inicialização. A lista de permissões `agent_ids` permanece no lado do servidor e é validada em relação ao limite efetivo de Subagentes, que é definido como 10 por padrão e configurado com [`endpoints.agents.maxSubagents`](/docs/configuration/librechat_yaml/object_structure/agents#maxsubagents). Os payloads de solicitação do cliente não podem fornecer ou substituir a configuração de Subagente do Model Specs.
 
 ## Comportamento em Tempo de Execução [#runtime-behavior]
 
@@ -93,10 +115,54 @@ Quando subagents estão habilitados, o agente pai recebe uma ferramenta `subagen
 
 - `self`, quando `allowSelf` não for false
 - Qualquer agente filho configurado em `agent_ids`
+- Qualquer equipe de Agentes salva e completa em `graphs`
 
-Agentes filhos são executados com contexto isolado. O estado de busca de ferramentas do pai e o contexto acumulado não são copiados para a execução do filho. O uso do modelo na execução do filho é cobrado na transação do pai e incluído nos totais de uso do pai. A interface do usuário exibe a execução do filho como uma parte expansível da atividade do agente com status, atualizações em tempo real e o resultado final completo, incluindo o texto do resultado entregue incrementalmente enquanto o filho realizava o streaming.
+Agentes filhos são executados com contexto isolado. O estado de busca de ferramentas do pai e o contexto acumulado não são copiados para a execução do filho. O uso do modelo do filho em primeiro plano é incluído na transação do pai e nos totais de uso; chamadas de filhos desvinculados que terminam após o fechamento da solicitação do pai registram o uso de forma independente. O cartão compacto do filho abre um painel lateral de atividade unificado para execuções em primeiro plano, em grafo, legadas e desvinculadas, exibindo detalhes de ciclo de vida limitado, raciocínio, ferramenta, aprovação e resultados apropriados para aquele transporte.
 
 Agentes filhos explícitos são anunciados ao pai como descritores leves e inicializam totalmente apenas quando selecionados. Filhos não utilizados não carregam seu modelo, ferramentas, servidores MCP, arquivos ou Skills. Na invocação, o LibreChat verifica novamente a permissão de visualização e a identidade de configuração versionada do filho; se o acesso foi revogado ou a configuração salva foi alterada durante a execução, o filho falha de forma segura (fails closed) em vez de executar configurações obsoletas.
+
+Quando ramificações paralelas referenciam o mesmo Agent filho, o LibreChat avalia os limites de ciclo e profundidade independentemente para cada caminho de travessia. Portanto, um ciclo em uma ramificação não descarta links de Agent aninhados válidos em outra ramificação.
+
+Equipes salvas seguem a mesma resolução preguiçosa e verificações de acesso que os filhos individuais. Quando selecionado, cada membro retém seu próprio modelo, instruções, ferramentas, credenciais MCP, Skills, arquivos, memória, perfil do Code Interpreter e identidade de faturamento. O LibreChat executa a equipe como um grafo filho isolado, transmite o progresso com reconhecimento dos membros e retorna a saída do Agent configurado como resultado. Se qualquer membro persistido estiver ausente, inacessível ou inválido, o LibreChat ignora a equipe inteira em vez de executar um grafo parcial.
+
+Em turnos posteriores, o LibreChat mantém chamadas anteriores de ferramentas de equipe e ferramentas filhas acessíveis em formato de chamada de ferramenta estruturada, incluindo a identidade do servidor MCP resolvida quando necessário. Ferramentas que não estão mais acessíveis não são adicionadas à execução ativa apenas por aparecerem no histórico.
+
+## Threads de Subagentes Desacopladas [#detached-subagent-threads]
+
+Quando `run_in_background` está habilitado para o endpoint Agents, um Agent pai pode separar o trabalho de um subagente e continuar sem esperar por ele. O LibreChat persiste cada filho separado com linhagem de execução privada e uma transcrição canônica. Threads filhas permanecem fora da navegação e pesquisa de conversas normais e não podem ser lidas diretamente; a visualização autorizada do pai expõe apenas a atividade limitada do filho.
+
+Threads filhas são registros de execução somente leitura. Um usuário não pode editar ou excluir a filha canônica diretamente. Para uma filha de Agente direto durável concluída, **Continue in a new chat** bifurca o ramo concluído exato em uma conversa de Agente normal e editável separada, enquanto mantém a filha original oculta e somente leitura. O painel de atividades mantém um compositor montado durante toda a execução e através de entregas de tarefas recebidas, preservando o foco e orientações parcialmente digitadas enquanto uma nova visualização de tarefa é carregada. O envio permanece indisponível até que a tarefa possa aceitar controles. O texto inserido após a conclusão é levado para a bifurcação, e uma bifurcação com falha restaura o rascunho no painel. Esta ação não está disponível para visualizações em execução, de grafo, de Agente anônimo e compartilhadas. Excluir o pai causa uma exclusão em cascata na linhagem de seus filhos. O Agente pai pode pesquisar, direcionar, enfileirar, interromper, cancelar, coletar e, posteriormente, continuar a filha canônica por meio de suas ferramentas de tarefa; leases baseados em Mongo serializam essas continuações entre réplicas da API.
+
+O painel de atividade apresenta os turnos do filho selecionado como um histórico ciente de ramificações. Use **Load earlier activity** para navegar para trás e **Show full activity** em um turno para revelar seus detalhes completos de execução delimitada. Chamadas de ferramentas, aprovações, resultados, controles e raciocínio visível ao usuário podem aparecer. O texto de raciocínio é delimitado como o restante da projeção e marcado quando truncado; atividades persistidas por servidores mais antigos podem mostrar apenas um marcador de raciocínio. A atividade persistida comum usa os mesmos limites por item que a atividade do filho privado e ajusta um sufixo contíguo mais recente em um orçamento de atividade serializada de 64 KB, portanto, o aviso de encurtamento aparece apenas quando conteúdo significativo foi omitido. Quando o histórico é truncado ou indisponível, o painel informa isso em vez de apresentar uma visualização parcial como completa. Novos turnos de eventos se acomodam na parte inferior do histórico, turnos em execução mostram o tempo decorrido e as linhas de ator usam pontos de status de posição fixa para que as alterações de status não desloquem o layout. Um cabeçalho flutuante compacto permite que o histórico role abaixo dele, enquanto o compositor segue as dimensões do chat principal. O trabalho em execução é transmitido por sua atividade de streaming em vez de um chip de status de execução separado; estados terminais anormais permanecem rotulados.
+
+Com o Redis habilitado, o LibreChat registra o proprietário da execução ativa e roteia solicitações de sondagem (poll), listagem (list), direcionamento (steer), enfileiramento (queue), interrupção (interrupt), cancelamento (cancel) e coleta (collect) de qualquer réplica da API para esse processo por meio de mensagens de solicitação/resposta limitadas e com tempo de expiração. O painel de atividades abertas também recebe atualizações em tempo real com escopo de tarefa; uma consulta durável de dois segundos permanece como o fallback para eventos perdidos, reconexões ou interrupções do Redis. Implantações de processo único e sem Redis utilizam o caminho rápido em memória. Um executor ativo não é migrado após o reinício ou desaparecimento do seu processo proprietário, mas a transcrição filha baseada em MongoDB, o estado do terminal, o uso, o histórico e a continuação posterior orientada por Agente sobrevivem de forma independente. Isso não transforma tarefas desanexadas em uma API pública de tarefas em segundo plano.
+
+### Controlar um Child em Execução [#control-a-running-child]
+
+Em uma conversa pai autenticada, abra o painel de atividade do Subagent e selecione uma tarefa filha durável. Enquanto essa tarefa estiver em execução, digite uma orientação e envie-a para direcionar por padrão. Em um desktop com suporte a passar o mouse, o menu de ação do controle de envio oferece **Steer** (Direcionar), **Queue** (Enfileirar) e **Interrupt** (Interromper) e mostra apenas os atalhos ativos nas configurações de teclado atuais do usuário. Em dispositivos touch e no painel modal, as opções de enfileirar e interromper permanecem disponíveis como controles de ícone. Sem nenhuma orientação inserida, o controle de envio torna-se **Cancel task** (Cancelar tarefa).
+
+- **Steer** adiciona orientação no próximo limite seguro do filho.
+- **Queue** contém orientações para um turno posterior na tarefa filha.
+- **Interrupt** interrompe o trabalho atual do filho em um limite seguro e aplica novas orientações.
+- **Cancel task** solicita o cancelamento sem enviar orientações.
+
+Os controles aceitos aparecem em um histórico específico da tarefa como enviando, aguardando, aplicado, não aplicado ou falhou, com um motivo quando disponível. Escolha **Withdraw** para remover a orientação na fila antes que o filho a aplique. A orientação é limitada a 4 KB. Cada tarefa armazena até 64 recibos autoritativos, enquanto o painel de atividades exibe até 32; o histórico concluído mais antigo é omitido antes dos controles aceitos ativos, e a interface rotula o histórico omitido ou a orientação encurtada para exibição.
+
+Os controles de execução são fechados quando o filho é definido, e o mesmo compositor alterna para continuar um filho elegível em um novo chat. O LibreChat verifica o acesso do usuário conectado ao pai e ao filho, seu relacionamento pai-filho e a propriedade do locatário em cada solicitação, e aplica os filtros de conteúdo e verificações de moderação configurados à orientação. A entrega repetida do mesmo controle aceito retorna seu recibo autoritativo em vez de aplicar a instrução duas vezes. Conversas compartilhadas permanecem somente leitura e não expõem esses controles.
+
+Conversas compartilhadas podem exibir apenas a atividade limitada já incluída no payload de compartilhamento. Sua visualização é somente leitura, omite controles de aprovação e seletores de filhos duráveis, e nunca abre o caminho de consulta de thread filha autenticada.
+
+### Atividade Filha Orientada a Eventos [#event-driven-child-activity]
+
+Child Agents continuados por meio de uma [vinculação de evento da Agents API](/docs/features/agents_api#event-driven-child-agents) não se originam de um cartão de ferramenta `subagent`. Na conversa pai autenticada, o LibreChat adiciona, em vez disso, uma linha de ator compacta abaixo da mensagem que possui a vinculação. Ao abri-la, o painel de atividade do Subagent é reutilizado, com seletores para o ator e seus turnos, além da atividade em tempo real de run-step, ferramenta, mensagem e marcadores de raciocínio. Gatilhos de eventos externos são renderizados como linhas normais de gatilho de usuário com detalhes expansíveis de tipo de evento, origem, hora da ocorrência e ação esperada. Quando uma nova entrega seleciona outra tarefa no mesmo thread filho, os turnos existentes permanecem visíveis enquanto a nova tarefa é carregada e apenas seu placeholder de streaming é anexado; o status e os controles específicos da tarefa nunca são tomados emprestados da visualização retida. Páginas anteriores e a atividade completa por turno usam o mesmo histórico filho limitado e somente leitura.
+
+A projeção pai é deliberadamente limitada: ela retorna no máximo 64 threads filhas, mantém até 20 tarefas recentes por filha a partir de uma janela de origem compartilhada limitada e restringe a resposta a 96 KB. A UI relata o histórico truncado em vez de sugerir que uma visualização acima do limite está completa. Iniciar outro turno promove um ator mais antigo para a janela de filhos recentes. Essas threads filhas permanecem ocultas da navegação comum e não podem ser descobertas a partir de outro pai ou tenant.
+
+### Continuação Automática de Pai [#automatic-parent-continuation]
+
+Após a conclusão de um processo filho desanexado (detached), o LibreChat persiste seu resultado de terminal ou erro e, por padrão, envia uma continuação idempotente para o Agent pai salvo no branch exato que o iniciou. A entrega aguarda enquanto esse branch pai estiver em execução, pausado ou finalizando. O pai retomado recebe um manifesto limitado de tarefas irmãs relevantes em vez de consultá-las repetidamente (busy-polling), e o chat apresenta o despertar em um cartão de tarefa recolhível.
+
+A entrega de conclusão automática é habilitada quando [`endpoints.agents.backgroundTasks.completionWakeups`](/docs/configuration/librechat_yaml/object_structure/agents#backgroundtasks) é omitido ou definido como `true`. Defina-o como `false` para manter os filhos desanexados (detached) apenas em modo de consulta (poll-only). Filhos cancelados são ignorados, e Agents pais efêmeros não são suportados, pois não há configuração salva para restaurar. A execução de um filho desanexado possui seu próprio contexto de execução, portanto, finalizar ou abortar a solicitação do pai original não cancela o trabalho de propriedade independente. O pai ainda pode coletar resultados duráveis dos filhos por meio de suas ferramentas de tarefa (task tools).
 
 ## Limites [#limits]
 
@@ -105,10 +171,16 @@ O LibreChat impõe estes limites para manter os grafos de subagentes delimitados
 <OptionTable
   options={[
     [
-      'MAX_SUBAGENTS',
+      'endpoints.agents.maxSubagents',
       'Number',
-      'Máximo de subagentes explícitos por agente pai. Configurável via `endpoints.agents.maxSubagents`, até 50.',
+      'Número máximo de entradas em cada lista `agent_ids` ou `graphs` do Agente pai. Configurável de 1 a 50.',
       '10',
+    ],
+    [
+      'MAX_GRAPH_SUBAGENT_MEMBERS',
+      'Number',
+      'Número máximo de membros em uma equipe de Agent salva.',
+      '32',
     ],
     ['MAX_SUBAGENT_DEPTH', 'Number', 'Máximo de saltos explícitos de subagente a partir de um agente raiz.', '5'],
     [
@@ -134,15 +206,16 @@ endpoints:
     maxSubagents: 20
 ```
 
-O valor configurado aplica-se a solicitações de criação, atualização e duplicação de agentes, a listas de permissão `subagents.agent_ids` do Model Specs e ao seletor de subagentes no Agent Builder. Consulte [maxSubagents](/docs/configuration/librechat_yaml/object_structure/agents#maxsubagents) para a referência completa. Os limites de profundidade, nó de grafo e configuração de execução acima são fixos.
+O valor configurado aplica-se a solicitações de criação, atualização e duplicação de agentes tanto para `subagents.agent_ids` quanto para `subagents.graphs`, às listas de permissão de `subagents.agent_ids` do Model Specs e ao seletor de subagentes no Construtor de Agentes (Agent Builder). Consulte [maxSubagents](/docs/configuration/librechat_yaml/object_structure/agents#maxsubagents) para a referência completa. Os limites por membro da equipe, profundidade, nó de grafo e configuração de execução acima são fixos.
 
 ## Controle de Acesso [#access-control]
 
-Agentes filhos configurados devem estar visíveis para o usuário. Se o usuário não tiver acesso de visualização a um agente referenciado, o LibreChat ignora esse subagente. Para solicitações de criação e atualização, entradas `subagents.agent_ids` inválidas ou não autorizadas são rejeitadas.
+Agentes filhos configurados e cada membro de equipe salvo devem estar visíveis para o usuário. Se o usuário não tiver acesso de visualização a um Agente referenciado individual, o LibreChat ignora esse subagente. Uma equipe salva é tudo ou nada e é ignorada se qualquer membro estiver indisponível. Solicitações de criação e atualização rejeitam referências ausentes ou não autorizadas, tipos de spawn duplicados, grafos de equipe cíclicos ou desconectados, membros de entrada ou resultado inválidos e configurações que excedam os limites acima.
 
 ## Dicas de Design [#design-tips]
 
 - Habilite o self-spawn quando o agente pai já estiver bem delimitado e precisar apenas de um contexto novo para uma subtarefa.
 - Adicione agentes filhos específicos quando a tarefa precisar de um modelo, conjunto de instruções, conjunto de ferramentas ou lista de permissões de habilidades diferente.
+- Use uma equipe salva quando vários Agents precisarem ser executados como um fluxo de trabalho delegado, com um único resultado retornado ao pai.
 - Mantenha as descrições dos filhos claras. O pai usa o nome e a descrição de cada filho para escolher o destino de delegação correto.
 - Use subagentes para trabalhos intermediários que devam retornar um resultado compacto, não para transferências permanentes para outro caminho de conversa.

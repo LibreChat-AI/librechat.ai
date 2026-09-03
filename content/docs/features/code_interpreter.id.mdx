@@ -23,8 +23,10 @@ API Code Interpreter LibreChat menyediakan cara yang aman dan bebas hambatan unt
 ## Memulai [#getting-started]
 
 1. Deploy layanan [code-interpreter](https://github.com/ClickHouse/code-interpreter) (Docker Compose atau Helm, lihat README repositori tersebut)
-2. Arahkan LibreChat ke sana dengan variabel lingkungan `LIBRECHAT_CODE_BASEURL` dan `LIBRECHAT_CODE_API_KEY`
-3. Mulai jalankan kode dan buat file secara aman melalui Agen LibreChat atau tombol "Run Code"
+2. Arahkan LibreChat ke sana dengan `LIBRECHAT_CODE_BASEURL`
+3. Konfigurasikan [LibreChat JWT authentication](#self-hosted-jwt-authentication) untuk layanan open-source saat ini, atau atur `LIBRECHAT_CODE_API_KEY` untuk deployment yang kompatibel dengan API-key.
+4. Untuk bereksperimen dengan sesi Agent yang *stateful*, gunakan rute Code Interpreter dengan profil `stateful` yang terpisah dan konfigurasikan `LIBRECHAT_CODE_BASEURL_STATEFUL` atau [`statefulCodeSessions.environments`](/docs/configuration/librechat_yaml/object_structure/agents#statefulcodesessions) yang telah ditentukan.
+5. Mulai jalankan kode dan buat file secara aman melalui Agen LibreChat atau tombol "Run Code"
 
 ## Fitur Utama [#key-features]
 
@@ -43,6 +45,12 @@ Jalankan kode dalam berbagai bahasa pemrograman:
 
 LibreChat memulihkan file percakapan yang direferensikan ke dalam lingkungan Code Interpreter saat ini sebelum menjalankan Agent. Jika semua file Code Interpreter yang diperlukan gagal dipulihkan, proses eksekusi akan berhenti sebelum pemanggilan model dan meminta pengguna untuk melampirkan kembali file tersebut daripada melanjutkan dengan referensi yang kedaluwarsa.
 
+Ketika input percakapan akan dipasang (mount) pada tujuan sandbox yang sama, LibreChat akan menyelesaikan konflik tersebut sebelum eksekusi. File percakapan bersama ditetapkan sebelum file pribadi Agen; dalam setiap cakupan, penulisan konten terbaru akan mempertahankan tujuan aslinya. Jalur yang berkonflik akan diratakan jika diperlukan atau menerima akhiran yang diturunkan dari identitas, dan jalur `/mnt/data/...` yang telah diselesaikan akan disertakan dalam konteks file Agen. Hal ini juga mencakup unggahan dan output yang dihasilkan yang memiliki nama file yang sama, sehingga satu konflik tidak akan menolak setiap eksekusi Code Interpreter berikutnya dalam percakapan tersebut. Referensi seed duplikat yang tetap merujuk ke tujuan yang sudah diklaim akan dilewati alih-alih menggagalkan seluruh permintaan.
+
+Gambar sandbox ditransfer dalam jendela terbatas. Atur [`LIBRECHAT_CODE_SANDBOX_OUTPUT_MAX_SIZE`](/docs/configuration/dotenv#code-interpreter) agar sesuai dengan `SANDBOX_OUTPUT_MAX_SIZE` milik worker; LibreChat memperoleh jendela gambar aman terbesar dari anggaran tersebut dan dapat mempelajari batas per-layanan yang lebih kecil setelah satu kali pembacaan gagal. Gunakan `LIBRECHAT_CODE_IMAGE_CHUNK_BYTES` hanya jika penggantian jendela (override) yang tepat diperlukan. Artefak yang dihasilkan dan diunduh sebelumnya digunakan kembali dalam permintaan jika memungkinkan, sehingga menghindari pembacaan sandbox lainnya.
+
+Dalam grafik multi-Agent, berikan nama file yang berbeda untuk file yang bersifat pribadi bagi Agent yang berbeda. Setiap Agent menyelesaikan jalur file pribadinya sebelum grafik menggabungkan input mereka, sehingga file pribadi yang benar-benar berbeda yang secara independen mengklaim tujuan yang sama belum dapat diubah namanya secara konsisten pada saat penggabungan; tujuan yang pertama kali di-seed yang akan menang.
+
 ### Keamanan & Kenyamanan [#security--convenience]
 
 - Lingkungan eksekusi sandbox yang aman
@@ -54,25 +62,72 @@ LibreChat memulihkan file percakapan yang direferensikan ke dalam lingkungan Cod
 
 Programmatic Tool Calling memungkinkan Agen LibreChat untuk merutekan alat MCP yang dipilih melalui sandbox Code Interpreter. Alih-alih meminta model untuk memanggil setiap alat secara langsung, LibreChat menyediakan alat orkestrasi yang didukung oleh Code Interpreter; kode sandbox yang dihasilkan dapat memanggil stub alat yang terdaftar, menggunakan perulangan dan kondisional, memproses hasil antara, dan mengembalikan jawaban akhir.
 
-Sandbox masih belum menerima akses jaringan umum. Panggilan alat (tool calls) diperantarai melalui Code Interpreter Tool Call Server dan peta alat yang terdaftar di LibreChat, sehingga hanya alat yang tersedia bagi agen yang dapat dipanggil.
+Sandbox masih belum menerima akses jaringan umum. Panggilan alat (tool calls) diperantarai melalui Code Interpreter Tool Call Server. LibreChat memotong proyeksi kemampuan pemanggil langsung dengan registri tepercayanya, sehingga hanya alat terprogram aktif yang sudah terdaftar untuk Agen tersebut yang dapat dipanggil dan sebuah permintaan tidak dapat memperluas aksesnya sendiri.
+
+Alat terprogram memerlukan Code Interpreter pada Agent. Tombol pengalihnya tetap dinonaktifkan hingga Code Interpreter dipilih, dan menghapus Code Interpreter akan menghapus pilihan terprogram yang ada. LibreChat juga akan menghapus opsi pemanggil terprogram yang kedaluwarsa dari operasi pembuatan, pembaruan, duplikasi, dan pemulihan versi Agent ketika `execute_code` atau alat Code Interpreter tidak tersedia.
+
+Selama eksekusi terprogram, perluas kartu Code Interpreter untuk melihat pelacakan gaya terminal langsung dari panggilan alat internal dengan pratinjau argumen yang dibatasi, status, durasi, dan kegagalan. Pelacakan ini membantu memeriksa program saat dijalankan, tetapi tidak disimpan setelah halaman dimuat ulang.
 
 ### Eksekusi Kode Latar Belakang [#background-code-execution]
 
-Eksekusi latar belakang memungkinkan Agen untuk mengirimkan kode atau pekerjaan shell yang berjalan lama, melanjutkan percakapan, dan mengambil hasilnya nanti melalui `check_background_task`. Dalam obrolan LibreChat, ketika pekerjaan selesai, stdout dan file yang dihasilkan akan muncul pada panggilan kode asli. File yang dihasilkan akan disimpan untuk giliran berikutnya meskipun Agen belum melakukan polling pada tugas tersebut.
+Eksekusi latar belakang memungkinkan Agen untuk mengirimkan kode yang berjalan lama atau pekerjaan shell dan melanjutkan percakapan. Untuk Agen yang disimpan, penyelesaian khusus konten yang didukung dikirimkan secara otomatis dalam kelanjutan tindak lanjut secara default. `check_background_task` tetap tersedia untuk status eksplisit, kontrol, artefak langsung, dan pemulihan. Dalam obrolan LibreChat, saat pekerjaan selesai, stdout dan file yang dihasilkan muncul pada panggilan kode asli dan dipertahankan untuk giliran berikutnya.
 
 Fitur ini bersifat opt-in pada tingkat deployment. Tambahkan `run_in_background` bersama dengan `execute_code` di [kapabilitas endpoint Agents](/docs/configuration/librechat_yaml/object_structure/agents#capabilities), lalu aktifkan Code Interpreter pada agen tersebut. Eksekusi kode dan panggilan shell akan secara otomatis memenuhi syarat untuk dijalankan di latar belakang; nonaktifkan **Background execution** di pengaturan alat Code Interpreter jika agen ingin memilih untuk tidak menggunakannya. Model tetap akan memutuskan per panggilan apakah akan mengirimkan pekerjaan yang memenuhi syarat ke latar belakang.
 
-Status tugas latar belakang bersifat lokal terhadap proses dan tidak bertahan setelah aplikasi dimulai ulang atau berpindah antar replika. Pengiriman latar belakang juga tidak memperpanjang batas eksekusi layanan Code Interpreter; batas waktu sisi server normal pada deployment tetap berlaku.
+Eksekusi latar belakang biasa tetap bersifat lokal pada proses dan tidak bertahan jika pekerja aplikasi (app worker) terputus. Setelah hasil terminal yang hanya berisi konten disimpan, pengiriman otomatisnya bersifat persisten dan dapat berlanjut pada replika lain; tugas dengan artefak aktif masih memerlukan polling pada run pemiliknya. Atur [`endpoints.agents.backgroundTasks.completionWakeups: false`](/docs/configuration/librechat_yaml/object_structure/agents#backgroundtasks) untuk mewajibkan polling bagi setiap hasil. Pengiriman latar belakang tidak memperpanjang batas eksekusi layanan Code Interpreter; batas waktu sisi server (server-side timeout) normal pada deployment tetap berlaku.
 
 ### Sesi Kode Stateful [#stateful-code-sessions]
 
-Sesi kode stateful memungkinkan Agen LibreChat untuk menggunakan kembali satu ruang kerja sandbox Code Interpreter per percakapan. File, paket yang diinstal, dan status kerja biasanya terbawa di antara eksekusi, membuat analisis iteratif dan pembuatan file multi-langkah menjadi lebih efisien.
+Sesi kode stateful memungkinkan Agen LibreChat untuk menggunakan kembali satu ruang kerja sandbox Code Interpreter di seluruh eksekusi. File, paket yang diinstal, dan status kerja biasanya terbawa, membuat analisis iteratif dan pembuatan file multi-langkah menjadi lebih efisien. Setiap agen memilih satu cakupan ruang kerja:
+
+- **Ruang kerja pengguna (disarankan):** satu ruang kerja untuk pengguna yang masuk di seluruh agen yang mengaktifkan stateful
+- **Ruang kerja agen + pengguna:** satu ruang kerja untuk setiap kombinasi pengguna dan agen
+- **Ruang kerja percakapan:** satu ruang kerja untuk setiap pengguna dan percakapan
+
+Untuk Agen yang baru dibuat, cakupan awal berasal dari **Settings > Data Controls > Code execution > Default stateful workspace**. Pengaturan pribadi secara default adalah **User workspace**; mengubahnya tidak akan memodifikasi Agen yang sudah ada atau mengaktifkan sesi stateful. Administrator penyebaran dapat membatasi cakupan yang dapat dipilih dengan [`statefulCodeSessions.allowedEnvironments`](/docs/configuration/librechat_yaml/object_structure/agents#statefulcodesessions). Jika default pribadi yang disimpan menjadi tidak tersedia, Agen baru akan menggunakan cakupan pertama yang diizinkan; Agen yang sudah diaktifkan dengan cakupan yang kini tidak diizinkan harus dikonfigurasi ulang sebelum dapat dijalankan.
+
+Cakupan ruang kerja terpisah dari backend eksekusinya. Saat administrator mengonfigurasi [`statefulCodeSessions.environments`](/docs/configuration/librechat_yaml/object_structure/agents#statefulcodesessions) bernama, Agent Builder akan menambahkan pemilih **Execution environment**:
+
+- **Managed:** Code API stateful yang dioperasikan oleh deployment
+- **Dilampirkan:** sebuah bridge jarak jauh Code API yang kompatibel yang menyewakan pekerjaan ke worker `@librechat/code` outbound, seperti VM yang dikelola operator
+- **Personal:** pekerja `@librechat/code` yang terikat pada pemilik dan dipasangkan oleh pengguna terotorisasi melalui pengaturan LibreChat
+- **Deployment default:** satu lingkungan yang dikonfigurasi yang ditandai sebagai default
 
 <Callout type="warning" title="Sangat eksperimental">
   Stateful Code Sessions saat ini berada dalam tahap eksperimen awal. Perilaku, konfigurasi, karakteristik persistensi, dan integrasi dasarnya dapat berubah secara substansial. Jangan menganggap implementasi saat ini sebagai kontrak produksi yang stabil.
 </Callout>
 
-Fitur ini bersifat opt-in. Aktifkan `execute_code` dan `stateful_code_sessions` di [kapabilitas endpoint Agents](/docs/configuration/librechat_yaml/object_structure/agents#capabilities), aktifkan Code Interpreter pada agen, lalu nyalakan **Stateful code sessions** di pengaturan Lanjutan (Advanced settings) agen tersebut. Ruang kerja (workspace) dapat diatur ulang kapan saja. Simpan output penting di bawah `/mnt/data`, dan jangan mengandalkan status sesi sebagai penyimpanan permanen.
+Fitur ini bersifat opt-in. Aktifkan `execute_code` dan `stateful_code_sessions` di [kapabilitas endpoint Agents](/docs/configuration/librechat_yaml/object_structure/agents#capabilities), konfigurasikan rute stateful khusus dengan [`LIBRECHAT_CODE_BASEURL_STATEFUL`](/docs/configuration/dotenv#stateful-code-interpreter-endpoint) atau lingkungan bernama, aktifkan Code Interpreter pada agen, lalu nyalakan **Stateful code sessions** dan pilih backend eksekusi serta cakupan ruang kerjanya di bawah pengaturan Lanjutan (Advanced settings).
+
+Permintaan stateful akan gagal (fail closed) jika lingkungan yang dipilih tidak ada, tidak dapat diakses, atau tidak kompatibel; LibreChat tidak akan mengirimkannya ke `LIBRECHAT_CODE_BASEURL` atau secara diam-diam memilih backend bernama lainnya. Ketika tidak ada lingkungan bernama yang dikonfigurasi, `LIBRECHAT_CODE_BASEURL_STATEFUL` tetap menjadi rute stateful. Agen stateless akan terus menggunakan endpoint normal. LibreChat juga mengirimkan `X-CodeAPI-Expected-Profile: stateful`, sehingga layanan khusus tersebut harus mengiklankan profil `stateful`.
+
+Sesi stateful dan stateless tidak berbagi ruang kerja (workspace) yang sama. Ruang kerja stateful dapat diatur ulang kapan saja, terlepas dari cakupan yang dipilih. Simpan output penting di bawah `/mnt/data`, dan jangan mengandalkan status sesi sebagai penyimpanan permanen.
+
+File yang dibuat oleh panggilan `create_file` dan `edit_file` yang stateful akan muncul pada pesan asisten di bawah baris **Workspace changes** yang dapat diperluas. Baris ini mencantumkan setiap jalur yang diubah secara unik untuk respons tersebut dan menyediakan tindakan unduhan terautentikasi. Unduhan menggunakan alur file persisten LibreChat jika tersedia dan fallback Code Interpreter yang aman jika tidak. Baris tersebut merupakan catatan dari output yang dibuat, bukan snapshot workspace yang tahan lama; output stateless akan terus muncul sebagai lampiran inline biasa.
+
+#### Lingkungan terlampir dan pemasangan [#attached-environments-and-pairing]
+
+Attached environments require a matching experimental Code Interpreter remote-bridge build. The bridge remains LibreChat's authenticated policy, queue, and result boundary, while the `@librechat/code` worker connects outbound from the attached machine; the machine does not need an inbound public worker port. LibreChat does not prewarm attached environments.
+
+Operator dapat menyematkan (pin) lingkungan terlampir milik deployment ke satu worker dengan `workerId`, dan dapat menambahkan `pairing.workerId` ketika LibreChat harus mengeluarkan kode pairing administrator untuk rute yang sama. `pairing.tokenEnv` menamai variabel lingkungan yang berisi token administrator bridge; rahasia itu sendiri tidak boleh ada di dalam YAML. Control plane yang dipasangkan (paired) memerlukan HTTPS di luar pengembangan loopback.
+
+Untuk pekerja swalayan (self-service), konfigurasikan control plane terlampir milik deployment dengan `pairing.allowPrincipalWorkers: true` dan `pairing.tokenEnv`. Konfigurasi ini dapat menghilangkan ID pekerja dan hanya ada sebagai control plane pendaftaran; entri semacam itu tidak dapat dipilih untuk eksekusi dan tidak dapat menjadi default deployment.
+
+Pengguna dengan izin pengelolaan Code Environment kemudian dapat membuka **Settings > Code environments**, memberi nama lingkungan, memilih control plane yang disetujui, dan memilih **Connect VM**. LibreChat akan menampilkan perintah `librechat-code pair ...` satu kali pakai yang berumur pendek. Jalankan perintah tersebut pada VM pengguna, lalu mulai `@librechat/code` dengan `LIBRECHAT_CODE_SANDBOX_ENDPOINT` yang mengarah ke layanan sandbox mesin tersebut. UI akan mencantumkan lingkungan pengguna dan dapat mencabut serta menghapusnya nanti; file sandbox akan tetap berada di VM.
+
+Lingkungan pribadi terikat pada pengguna dan penyewa yang terautentikasi, dilindungi oleh ACL Lingkungan Kode, dan hanya diberikan ID yang divalidasi server serta URL dasar yang disetujui. LibreChat tidak mengekspos token administrator bridge atau URL operator arbitrer kepada klien. Menghapus lingkungan akan mencabut kredensial worker sebelum menghapus entri registri, dan penghapusan pengguna akan menjadwalkan pencabutan serta pembersihan yang sama dengan rekonsiliasi latar belakang untuk upaya yang terputus. Rute worker yang dipilih diterapkan secara konsisten pada Code Interpreter, shell, akses file yang dihasilkan, dan Pemanggilan Alat Terprogram (Programmatic Tool Calling).
+
+#### Izin alat attached-environment [#attached-environment-tool-permissions]
+
+Lingkungan terlampir (attached) dan pribadi (personal) menggunakan kebijakan persetujuan "tanya secara default" (ask-by-default) untuk penulisan file serta eksekusi perintah atau kode. Operasi baca-saja (read-only) dan pencarian tetap berjalan di bawah kebijakan alat reguler penyebaran tersebut. Jika administrator mengekspos salah satu kategori melalui [`configSchema.permissions`](/docs/configuration/librechat_yaml/object_structure/agents#statefulcodesessions), pengguna dengan izin manajemen Code Environment dapat memilih di antara nilai **Allow**, **Ask**, atau **Deny** yang diizinkan di bawah **Settings > Code environments**. Pengaturan yang hilang, kedaluwarsa, atau tidak diizinkan akan kembali secara aman ke **Ask**.
+
+Kontrol ini mencakup alat penulisan file, eksekusi shell dan kode, pemeriksaan kompilasi, dan Programmatic Tool Calling. Penulisan ke file Skill persisten masih memerlukan konfirmasi saat penulisan Skill tersedia, bahkan ketika penulisan file biasa diizinkan. Pengaturan ini tidak mengubah isolasi VM, jaringan, mount, eksekusi istimewa (privileged execution), ingress, egress, atau akses rahasia.
+
+Pengaturan eksplisit [`toolApproval.enabled: false`](/docs/configuration/librechat_yaml/object_structure/agents#toolapproval) pada deployment adalah penggantian darurat (emergency override) yang menonaktifkan garis dasar ini. Tanpa penggantian tersebut, pemanggil yang tidak dapat menyajikan dan melanjutkan permintaan persetujuan akan gagal secara tertutup (fails closed) alih-alih mengeksekusi alat lingkungan terlampir secara diam-diam.
+
+Pairing mengautentikasi transport pekerja jarak jauh; ini bukan batas sandbox. Jaga endpoint eksekusi lokal pekerja pada loopback atau jaringan pribadi dan gunakan mode isolasi yang sesuai untuk kode yang tidak tepercaya.
+
+Saat eksekusi aktif, panel detail kode dan shell yang diperluas akan mengikuti argumen yang di-stream ke bagian bawah. Menggulir ke atas akan menjeda perilaku mengikuti tersebut sehingga Anda dapat memeriksa output sebelumnya tanpa panel menarik tampilan menjauh.
 
 ## Menggunakan API [#using-the-api]
 
@@ -88,25 +143,66 @@ API memiliki dukungan kelas satu di LibreChat melalui metode-metode utama beriku
 
 4. **[Background Tool Calls](/docs/features/agents#background-tool-calls)**: Izinkan agen untuk mengirimkan kode yang memenuhi syarat di latar belakang dan melanjutkannya saat kode tersebut berjalan.
 
-5. **[Stateful Code Sessions](/docs/features/agents#stateful-code-sessions)**: Menggunakan kembali ruang kerja per-percakapan secara eksperimental di seluruh eksekusi kode agen.
+5. **[Stateful Code Sessions](/docs/features/agents#stateful-code-sessions)**: Menggunakan kembali ruang kerja (workspace) yang dicakup oleh pengguna, agen-dan-pengguna, atau percakapan secara eksperimental di seluruh eksekusi kode agen.
 
 ![Code Interpreter in LibreChat](/images/agents/run_code.png)
 
 ### Menyiapkan API key [#set-up-api-key]
 
-- **Penyiapan per-pengguna:** masukkan kunci API Anda di LibreChat saat diminta (menggunakan metode di atas)
-- **Pengaturan global:** gunakan variabel lingkungan `LIBRECHAT_CODE_API_KEY` di dalam file .env pada proyek Anda (memberikan akses ke semua pengguna)
+- **Penyiapan per-pengguna:** Masukkan kunci API Anda di LibreChat saat diminta.
+- **Pengaturan global:** Atur `LIBRECHAT_CODE_API_KEY` di dalam `.env` LibreChat untuk menyediakan satu kunci bagi semua pengguna.
+
+Layanan [ClickHouse/code-interpreter](https://github.com/ClickHouse/code-interpreter) saat ini menggunakan autentikasi JWT LibreChat di luar mode lokal. Kunci API tetap tersedia untuk deployment Code Interpreter yang kompatibel.
+
+### Autentikasi JWT yang di-host sendiri (self-hosted) [#self-hosted-jwt-authentication]
+
+Dengan autentikasi JWT, LibreChat menandatangani token bearer berumur pendek untuk pengguna yang terautentikasi pada setiap permintaan Code Interpreter. Layanan Code Interpreter memverifikasi kunci publik yang cocok dan menggunakan konteks pengguna dan penyewa yang telah ditandatangani untuk mengisolasi file dan sesi. Kunci penandatanganan privat tetap berada di LibreChat; Code Interpreter hanya menerima verifikator publiknya.
+
+Konfigurasikan LibreChat dengan:
+
+```env
+CODEAPI_AUTH_PROVIDER=librechat-jwt
+CODEAPI_JWT_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"
+CODEAPI_JWT_ALGORITHM=EdDSA
+CODEAPI_JWT_KID=lc-codeapi-2026-05
+CODEAPI_JWT_ISSUER=librechat
+CODEAPI_JWT_AUDIENCE=codeapi
+CODEAPI_JWT_TTL_SECONDS=300
+CODEAPI_JWT_MINT_CACHE_SECONDS=30
+CODEAPI_JWT_SINGLE_TENANT_ID=legacy
+```
+
+`CODEAPI_JWT_PRIVATE_KEY_BASE64` dapat menampung PEM yang dienkode base64 sebagai gantinya, dan `CODEAPI_JWT_PRIVATE_JWK_JSON` menerima JWK privat. LibreChat mendukung penandatanganan Ed25519 (`EdDSA`, default) dan RSA (`RS256`). Lihat [referensi variabel lingkungan](/docs/configuration/dotenv#code-interpreter-jwt-authentication) untuk setiap pengaturan di sisi LibreChat.
+
+Konfigurasikan Code Interpreter dengan verifier yang sesuai:
+
+```env
+LOCAL_MODE=false
+CODEAPI_AUTH_PROVIDER=librechat-jwt
+CODEAPI_JWT_ISSUER=librechat
+CODEAPI_JWT_AUDIENCE=codeapi
+CODEAPI_JWT_ALLOWED_ALGS=EdDSA
+CODEAPI_JWT_JWKS_JSON={"keys":[{"kty":"OKP","crv":"Ed25519","x":"...","kid":"lc-codeapi-2026-05","alg":"EdDSA"}]}
+CODEAPI_JWT_SINGLE_TENANT_ID=legacy
+```
+
+Penerbit, audiens, ID kunci, algoritma, dan kunci publik harus cocok dengan penanda tangan LibreChat. Code Interpreter juga dapat memuat kunci verifikator dari `CODEAPI_JWT_PUBLIC_KEY` ditambah `CODEAPI_JWT_KID`, atau dari `CODEAPI_JWT_PUBLIC_KEYS_DIR`; JWKS inline sangat praktis untuk rotasi. Jaga agar TTL token tetap pada atau di bawah `CODEAPI_JWT_MAX_TTL_SECONDS` layanan Code Interpreter, yang secara default diatur dan dibatasi pada 300 detik.
+
+Untuk checkout lokal, repositori Code Interpreter menyertakan helper yang menghasilkan kunci penandatanganan Ed25519 dan kunci execution-manifest yang cocok serta memperbarui kedua file `.env`:
+
+```bash
+node scripts/setup-local-auth-env.js --librechat /path/to/LibreChat
+```
+
+Penyebaran single-tenant dapat membiarkan `CODEAPI_JWT_SINGLE_TENANT_ID=legacy`, namun nilainya harus sama pada kedua layanan. Penyebaran multi-tenant harus menyediakan konteks tenant yang terautentikasi dan mengaktifkan `TENANT_ISOLATION_STRICT=true` di LibreChat serta `CODEAPI_TENANT_ISOLATION_STRICT=true` di Code Interpreter. Mode ketat (strict mode) akan menolak permintaan tanpa konteks tenant alih-alih menggunakan fallback single-tenant.
 
 ### Integrasi API Langsung [#direct-api-integration]
 
-Code Interpreter API dapat diintegrasikan ke dalam aplikasi apa pun menggunakan autentikasi API key yang sederhana:
-
-1. Deploy instans [code-interpreter](https://github.com/ClickHouse/code-interpreter) Anda sendiri dan buat API key
-2. Sertakan kunci API dalam permintaan Anda menggunakan header `x-api-key`
+Layanan yang di-hosting sendiri saat ini memerlukan bearer token yang memenuhi kontrak klaim JWT LibreChat. Integrasi langsung harus membuat token berumur pendek yang kompatibel dan mengirimkannya di header `Authorization: Bearer <token>`. Penyebaran yang kompatibel dengan API-key sebaliknya menerima kunci yang dikonfigurasi di header `x-api-key`. Jangan pernah menggunakan mode lokal tanpa autentikasi Code Interpreter pada endpoint publik atau produksi.
 
 ### URL dasar self-hosted [#self-hosted-base-url]
 
-Atur variabel lingkungan `LIBRECHAT_CODE_BASEURL` untuk mengarahkan LibreChat ke instans [code-interpreter](https://github.com/ClickHouse/code-interpreter) yang Anda host sendiri, beserta kunci API yang dibuat pada deployment tersebut, yang digunakan dengan cara yang sama seperti di atas.
+Atur `LIBRECHAT_CODE_BASEURL` untuk mengarahkan LibreChat ke instans [code-interpreter](https://github.com/ClickHouse/code-interpreter) yang Anda host sendiri, kemudian konfigurasikan [JWT authentication](#self-hosted-jwt-authentication). Untuk layanan yang kompatibel dengan API-key, atur `LIBRECHAT_CODE_API_KEY` sebagai gantinya. Sesi Agen stateful yang sangat eksperimental memerlukan rute profil `stateful` terpisah yang dikonfigurasi melalui [`LIBRECHAT_CODE_BASEURL_STATEFUL`](/docs/configuration/dotenv#stateful-code-interpreter-endpoint) atau bernama [`statefulCodeSessions.environments`](/docs/configuration/librechat_yaml/object_structure/agents#statefulcodesessions).
 
 ## Fungsionalitas Inti [#core-functionality]
 

@@ -88,6 +88,28 @@ LANGFUSE_BASE_URL=https://cloud.langfuse.com
 
 両方の環境変数が存在する場合、LibreChatはそれらを中央プロジェクトに使用し、**Settings → Langfuse** を非表示にします。`LANGFUSE_TRACING_ENABLED=false` または `LANGFUSE_SAMPLE_RATE=0` を設定すると、トレースとフィードバックスコアの両方が無効になります。サンプリングレートを小数で指定した場合、トレースごとに決定論的な判断が下されます。サンプリング対象外となったトレースには、その後のフィードバックスコアは付与されません。
 
+`LANGFUSE_BASE_URL` は標準的なベースURL設定です。以前の `LANGFUSE_HOST` および `LANGFUSE_BASEURL` という名称は互換性のためのエイリアスとして残されており、複数が設定されている場合は `LANGFUSE_BASE_URL` が優先されます。
+
+### 認証済みプロキシとゲートウェイ [#authenticated-proxies-and-gateways]
+
+Cloudflare Access、oauth2-proxy、またはその他の認証ゲートウェイの背後にあるセルフホスト型のLangfuseインスタンスについては、`librechat.yaml`でデプロイメントレベルのカスタムリクエストヘッダーを定義してください：
+
+```yaml filename="librechat.yaml"
+langfuse:
+  headers:
+    CF-Access-Client-Id: '${CF_ACCESS_CLIENT_ID}'
+    CF-Access-Client-Secret: '${CF_ACCESS_CLIENT_SECRET}'
+```
+
+LibreChatは、解決されたヘッダーをすべての直接的なLangfuseインターフェース（トレースおよびメディアのエクスポート、フィードバックスコアの作成と削除、プロジェクトIDの検索、および管理者資格情報の検証）に適用します。RESTリクエストにおいては、Langfuse自身の `Authorization` 資格情報が引き続き優先されます。値は `${ENV_VAR}` の補間をサポートしており、解決されない変数、保護されたインフラストラクチャシークレットの参照、空白の値、および無効なヘッダー名は警告とともに破棄されます。ヘッダー値は起動ログや管理設定の読み取り時にマスクされますが、リテラルな資格情報よりも環境変数の参照を使用することが推奨されます。
+
+これらのヘッダーはオペレーターが所有するものであり、YAMLでのみ設定可能です。これらはAdmin Panelや設定APIを通じて書き込んだり、MongoDBに保存したり、ユーザーごとの `{{...}}` プレースホルダーで埋めたりすることはできません。LibreChatは、設定でLangfuseのオリジンが正確に1つに解決される場合にのみ、これらのヘッダーを送信します。複数のセントラル、テナント、またはコレクターのオリジンが存在する場合、マップが安全に送信先を選択できないため、警告をログに記録し、カスタムヘッダーは送信されません。
+
+<Callout type="warning" title="ファンアウト制限">
+  fanout collectorは現在、`Authorization`ヘッダーのみをテナントのLangfuse送信先に転送します。
+カスタムの`langfuse.headers`は、LibreChatから単一のコレクターまたはLangfuseオリジンへの直接リクエストを認証することはできますが、別のプロキシの背後にあるテナント送信先へのコレクターの上流リクエストを認証することはできません。
+</Callout>
+
 ## テナントファンアウト (オプション) [#tenant-fanout-optional]
 
 Langfuse fanoutを使用すると、マルチテナントのLibreChatデプロイメントにおいて、各対象のトレースとそのメディアを、中央のLangfuseプロジェクトとテナント固有のプロジェクトの両方にエクスポートできます。この機能はオプトイン形式であり、ゲートウェイと内部のOpenTelemetryコレクターを追加します。fanoutがデプロイされていない場合、上記の通常の単一プロジェクトトレースは変更されません。
@@ -205,9 +227,23 @@ Redisは短命なワンタイムのメディアアップロードプランを保
 
 `LANGFUSE_FANOUT_CENTRAL_MEDIA_UPLOAD_DISABLED=true` を設定すると、LibreChat SDK がセントラルまたはフォールバックコレクタートレース用のメディアアップロードを作成するのを防ぐことができます。テナントルーティングされたメディアアップロードには影響しません。このアプリ側のスイッチは、ゲートウェイ側でアップロードが到達した後のセントラルメディア転送をブロックする `LANGFUSE_FANOUT_CENTRAL_MEDIA_EXPORT_DISABLED` とは異なります。
 
+メディア転送において、ファンアウトゲートウェイは設定されたLangfuseオーソリティによって返される絶対的なHTTPSアップロードターゲットのみを受け入れ、アップロードの `PUT` リクエストに対するリダイレクトには従いません。プライベートなMinIOホストを含むセルフホストのオブジェクトストレージは、返されるアップロードURLがHTTPSを使用している限り、引き続きサポートされます。プレーンなHTTPやリダイレクトに依存するメディアアップロードターゲットは、トレースのエクスポートが独立して継続される一方で、現在は失敗するように設定されています。
+
 トレースおよびメディアトラフィックはファンアウトゲートウェイを経由します。フィードバックスコアはLibreChatから直接送信されます。セントラルスコアは `LANGFUSE_PUBLIC_KEY`、`LANGFUSE_SECRET_KEY`、および `LANGFUSE_BASE_URL` を使用し、テナントスコアはテナントアプリの設定を使用します。
 
 すべてのゲートウェイ変数、カスタム送信先設定、メトリクス、スケーリング、およびRedisの動作については、[Langfuse fanout deployment reference](https://github.com/danny-avila/LibreChat/blob/dev/otel/langfuse-fanout/README.md)を参照してください。
+
+### 診断情報をエクスポート [#export-diagnostics]
+
+各トレースされたリクエストは、テナントのエクスポート決定を説明する低カーディナリティのOpenTelemetry属性を記録します。
+
+- `librechat.tenant.id` はテナントコンテキストを識別します
+- `librechat.langfuse.export_plan` は `central_only`、`tenant_fanout`、または `disabled` です。
+- `librechat.langfuse.export_reason` は `configured`、`collector_unconfigured`、`destination_unconfigured`、`emergency_disabled`、`fanout_disabled`、`missing_credentials`、または `tenant_disabled` です。
+
+ゲートウェイは `langfuse_fanout_trace_exports_total{destination,result,tenant_id}` も公開します。テナントのないバッチは `<unknown>` を使用し、混合テナントのバッチは `<multiple>` を使用し、不正な形式のテナントIDは `<invalid>` を使用します。ゲートウェイはプロセスごとに最大1,000個の異なる有効なテナントラベルを保持し、それ以降のIDは `<overflow>` に統合することでメトリクスのカーディナリティを制限します。認識されない送信先は、別のラベルを作成するのではなく `central` として記録されます。
+
+アプリ内での接続変更が成功すると、構造化イベント `librechat.langfuse.connection.changed` も書き込まれます。これには、テナント、構成および有効状態、送信先、検証結果、主な変更点、およびキーをログに記録することなく変更されたフィールドの完全なリストが含まれます。これらのフィールドを使用して、意図的な中央のみ（central-only）または無効化されたプランと、コレクター、送信先、または資格情報の構成の欠落を区別してください。
 
 ## LibreChat を再起動する [#restart-librechat]
 
@@ -222,11 +258,15 @@ docker compose up -d
 
 Langfuseが設定された状態でLibreChatを再起動すると、Langfuse UI上のすべてのチャットメッセージ応答に対して新しいトレースが表示されるようになります。
 
+LibreChat v0.8.8-rc2では、エージェントトレースのシェイピングが更新され、`StandardGraph`、`MultiAgentGraph`、および `AgentModelCall` のランタイム観測名が使用されるようになりました。アクティビティおよび推論ラベルの呼び出しは、それらが記述する作業の下にネストされます。トレースレベルの入力と出力もルート観測上に表現されます。以前の観測名やトレースレベルの入出力フィールドに依存している、保存済みのLangfuseフィルター、ダッシュボード、および評価を確認してください。
+
 ![LibreChat example trace](https://langfuse.com/images/cookbook/integration_librechat/librechat-example-trace.png)
 
 [Langfuse UIのトレースへのリンク](https://cloud.langfuse.com/project/cloramnkj0002jz088vzn1ja4/traces/57b4aa20a258a2e9e2d1ce2e4eacb21c?observation=06f5341a68d723b1&timestamp=2026-02-04T13%3A02%3A54.248Z&traceId=57b4aa20a258a2e9e2d1ce2e4eacb21c)
 
-`access:admin` および `manage:configs:langfuse` を持つ管理者は、会話の **Context Usage**（コンテキスト使用量）の内訳を開き、**View session in Langfuse**（Langfuseでセッションを表示）を選択することもできます。このリンクは、生成が完了し、かつ会話にアクティブなアプリ内Langfuse接続へ送信されたサンプリング済みトレースが少なくとも1つ含まれている場合にのみ表示されます。このリンクは、その接続の検証済み送信先およびプロジェクトを指します。環境管理の認証情報、無効化された接続、サンプリング対象外の会話、またはLangfuse設定へのアクセス権を持たないユーザーに対しては表示されません。
+`access:admin` および `manage:configs:langfuse` を持つ管理者は、会話の **Context Usage**（コンテキスト使用量）の内訳を開き、**View session in Langfuse**（Langfuseでセッションを表示）を選択できます。同じ操作は、Langfuse設定へのアクセス権を持つ、認証済みかつ同一テナントの管理者が共有会話を表示した際にも表示される場合があります。公開リンクや通常の共有リンクの閲覧者には表示されません。
+
+このリンクは、生成が完了し、かつ会話にアクティブなアプリ内Langfuse接続へ送信されたサンプリングトレースが少なくとも1つ含まれている場合にのみ表示されます。このリンクは、その接続の検証済み送信先およびプロジェクトを指します。環境管理の認証情報、無効化された接続、サンプリング対象外の会話、テナント間ビューアー、または必要なアクセス権を持たないユーザーに対しては表示されません。
 
 ## メッセージフィードバックスコア [#message-feedback-scores]
 

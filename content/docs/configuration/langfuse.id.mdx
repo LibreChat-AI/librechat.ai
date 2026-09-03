@@ -90,6 +90,30 @@ LANGFUSE_BASE_URL=https://cloud.langfuse.com
 
 Ketika kedua kunci lingkungan tersebut ada, LibreChat menggunakannya untuk proyek pusat dan menyembunyikan **Settings → Langfuse**. `LANGFUSE_TRACING_ENABLED=false` atau `LANGFUSE_SAMPLE_RATE=0` akan menonaktifkan pelacakan (traces) dan skor umpan balik. Pengambilan sampel fraksional membuat satu keputusan deterministik per pelacakan; pelacakan yang tidak diambil sampelnya tidak akan menerima skor umpan balik di kemudian hari.
 
+`LANGFUSE_BASE_URL` adalah pengaturan base-URL kanonik. Nama lama `LANGFUSE_HOST` dan `LANGFUSE_BASEURL` tetap menjadi alias kompatibilitas, dengan `LANGFUSE_BASE_URL` yang diutamakan jika lebih dari satu diatur.
+
+### Proksi dan Gateway Terautentikasi [#authenticated-proxies-and-gateways]
+
+Untuk instans Langfuse yang di-host sendiri di balik Cloudflare Access, oauth2-proxy, atau gateway autentikasi lainnya, tentukan header permintaan kustom tingkat deployment di `librechat.yaml`:
+
+```yaml filename="librechat.yaml"
+langfuse:
+  headers:
+    CF-Access-Client-Id: '${CF_ACCESS_CLIENT_ID}'
+    CF-Access-Client-Secret: '${CF_ACCESS_CLIENT_SECRET}'
+```
+
+LibreChat menerapkan header yang telah diselesaikan ke setiap permukaan Langfuse langsung: ekspor jejak dan media, pembuatan dan penghapusan skor umpan balik, pencarian identitas proyek, dan verifikasi kredensial admin. Kredensial `Authorization` milik Langfuse tetap menjadi otoritas pada permintaan REST. Nilai mendukung interpolasi `${ENV_VAR}`; variabel yang tidak terselesaikan, referensi rahasia infrastruktur yang dilindungi, nilai kosong, dan nama header yang tidak valid akan diabaikan dengan peringatan. Nilai header disamarkan dalam log startup dan pembacaan konfigurasi admin, namun referensi lingkungan tetap direkomendasikan dibandingkan kredensial literal.
+
+Header ini dimiliki oleh operator dan hanya tersedia dalam YAML. Header ini tidak dapat ditulis melalui Admin Panel atau API konfigurasi, disimpan di MongoDB, atau diisi dengan placeholder `{{...}}` per pengguna. LibreChat mengirimkannya hanya jika konfigurasi menentukan tepat satu origin Langfuse. Dengan adanya beberapa origin central, tenant, atau collector, sistem akan mencatat peringatan dan tidak mengirim header kustom karena pemetaan tidak dapat memilih penerima dengan aman.
+
+<Callout type="warning" title="Batasan fanout">
+  Kolektor fanout saat ini hanya meneruskan `Authorization` ke tujuan Langfuse penyewa.
+  `langfuse.headers` kustom dapat mengautentikasi permintaan langsung LibreChat ke satu kolektor atau
+  asal Langfuse, tetapi header tersebut tidak mengautentikasi permintaan upstream kolektor ke tujuan
+  penyewa di balik proksi lain.
+</Callout>
+
 ## Tenant Fanout (Opsional) [#tenant-fanout-optional]
 
 Langfuse fanout memungkinkan deployment LibreChat multi-tenant untuk mengekspor setiap trace yang memenuhi syarat beserta medianya ke proyek Langfuse pusat dan proyek khusus tenant. Fitur ini bersifat opsional (opt-in) dan menambahkan gateway serta kolektor OpenTelemetry internal; pelacakan satu proyek (single-project tracing) standar di atas tidak akan berubah jika fanout tidak di-deploy.
@@ -207,9 +231,23 @@ Ekspor tenant hanya terjadi ketika fanout dan URL collector diaktifkan, koneksi 
 
 Atur `LANGFUSE_FANOUT_CENTRAL_MEDIA_UPLOAD_DISABLED=true` untuk mencegah SDK LibreChat membuat unggahan media untuk pelacakan kolektor pusat atau cadangan; unggahan media yang dirutekan ke penyewa tidak berubah. Tombol sisi aplikasi ini berbeda dari `LANGFUSE_FANOUT_CENTRAL_MEDIA_EXPORT_DISABLED` di sisi gateway, yang memblokir penerusan media pusat setelah unggahan mencapai gateway.
 
+Untuk penerusan media, fanout gateway hanya menerima target unggahan HTTPS absolut yang dikembalikan oleh otoritas Langfuse yang dikonfigurasi dan tidak mengikuti pengalihan (redirect) pada permintaan `PUT` unggahan. Penyimpanan objek yang di-host sendiri (self-hosted), termasuk host MinIO pribadi, tetap didukung jika URL unggahan yang dikembalikan menggunakan HTTPS. Target unggahan media HTTP biasa atau yang bergantung pada pengalihan sekarang akan gagal (fail closed) sementara ekspor jejak (trace export) tetap berlanjut secara independen.
+
 Lalu lintas jejak dan media melewati fanout gateway. Skor umpan balik dikirim langsung dari LibreChat: skor pusat menggunakan `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, dan `LANGFUSE_BASE_URL`, sedangkan skor penyewa menggunakan konfigurasi aplikasi penyewa.
 
 Lihat [referensi deployment fanout Langfuse](https://github.com/danny-avila/LibreChat/blob/dev/otel/langfuse-fanout/README.md) untuk setiap variabel gateway, pengaturan tujuan kustom, metrik, penskalaan, dan perilaku Redis.
+
+### Ekspor Diagnostik [#export-diagnostics]
+
+Setiap permintaan yang dilacak mencatat atribut OpenTelemetry ber-kardinalitas rendah yang menjelaskan keputusan ekspor penyewa (tenant) tersebut:
+
+- `librechat.tenant.id` mengidentifikasi konteks penyewa (tenant)
+- `librechat.langfuse.export_plan` adalah `central_only`, `tenant_fanout`, atau `disabled`
+- `librechat.langfuse.export_reason` adalah `configured`, `collector_unconfigured`, `destination_unconfigured`, `emergency_disabled`, `fanout_disabled`, `missing_credentials`, atau `tenant_disabled`
+
+Gateway ini juga mengekspos `langfuse_fanout_trace_exports_total{destination,result,tenant_id}`. Batch tanpa tenant menggunakan `<unknown>`, batch multi-tenant menggunakan `<multiple>`, dan ID tenant yang cacat menggunakan `<invalid>`. Gateway menyimpan paling banyak 1.000 label tenant valid yang berbeda per proses dan menggabungkan ID selanjutnya di bawah `<overflow>`, untuk membatasi kardinalitas metrik; destinasi yang tidak dikenali dicatat sebagai `central` alih-alih membuat label lain.
+
+Perubahan koneksi dalam aplikasi yang berhasil juga menulis peristiwa terstruktur `librechat.langfuse.connection.changed`. Peristiwa ini mencakup tenant, status konfigurasi dan aktif, tujuan, hasil verifikasi, perubahan utama, dan daftar lengkap bidang yang diubah tanpa mencatat kunci apa pun. Gunakan bidang-bidang ini untuk membedakan rencana yang sengaja dibuat terpusat saja atau dinonaktifkan dari konfigurasi kolektor, tujuan, atau kredensial yang hilang.
 
 ## Restart LibreChat [#restart-librechat]
 
@@ -224,11 +262,15 @@ docker compose up -d
 
 Setelah LibreChat dimulai ulang dengan Langfuse yang telah dikonfigurasi, Anda akan melihat jejak (trace) baru untuk setiap respons pesan obrolan di UI Langfuse:
 
+LibreChat v0.8.8-rc2 memperbarui pembentukan jejak (trace shaping) Agen untuk menggunakan nama observasi runtime `StandardGraph`, `MultiAgentGraph`, dan `AgentModelCall`, dengan panggilan aktivitas dan label penalaran yang disarangkan di bawah pekerjaan yang dideskripsikannya. Input dan output tingkat jejak juga direpresentasikan pada observasi akar. Tinjau filter, dasbor, dan evaluasi Langfuse tersimpan yang bergantung pada nama observasi atau kolom input/output tingkat jejak sebelumnya.
+
 ![Contoh pelacakan LibreChat](https://langfuse.com/images/cookbook/integration_librechat/librechat-example-trace.png)
 
 [Tautan ke pelacakan di UI Langfuse](https://cloud.langfuse.com/project/cloramnkj0002jz088vzn1ja4/traces/57b4aa20a258a2e9e2d1ce2e4eacb21c?observation=06f5341a68d723b1&timestamp=2026-02-04T13%3A02%3A54.248Z&traceId=57b4aa20a258a2e9e2d1ce2e4eacb21c)
 
-Administrator dengan `access:admin` dan `manage:configs:langfuse` juga dapat membuka rincian **Context Usage** percakapan dan memilih **View session in Langfuse**. Tautan tersebut hanya muncul setelah pembuatan selesai dan ketika percakapan berisi setidaknya satu jejak (trace) sampel yang dikirim ke koneksi Langfuse dalam aplikasi yang aktif. Tautan tersebut mengarah ke tujuan dan proyek terverifikasi dari koneksi tersebut; tautan tidak ditampilkan untuk kredensial yang dikelola lingkungan, koneksi yang dinonaktifkan, percakapan yang tidak disampel, atau pengguna tanpa akses konfigurasi Langfuse.
+Administrator dengan `access:admin` dan `manage:configs:langfuse` dapat membuka rincian **Context Usage** percakapan dan memilih **View session in Langfuse**. Tindakan yang sama dapat muncul dalam percakapan yang dibagikan untuk administrator yang terautentikasi dan berada di penyewa (tenant) yang sama dengan akses konfigurasi Langfuse. Pengguna publik dan penampil tautan berbagi biasa tidak akan pernah melihatnya.
+
+Tautan tersebut hanya muncul setelah pembuatan selesai dan ketika percakapan berisi setidaknya satu jejak sampel yang dikirim ke koneksi Langfuse dalam aplikasi yang aktif. Tautan tersebut mengarah ke tujuan dan proyek terverifikasi dari koneksi tersebut; tautan tidak ditampilkan untuk kredensial yang dikelola lingkungan, koneksi yang dinonaktifkan, percakapan yang tidak disampel, penampil lintas penyewa, atau pengguna tanpa akses yang diperlukan.
 
 ## Skor Umpan Balik Pesan [#message-feedback-scores]
 

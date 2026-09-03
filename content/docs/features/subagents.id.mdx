@@ -13,6 +13,7 @@ Gunakan subagen untuk:
 - Riset sub-tugas yang mungkin menghasilkan output perantara yang panjang
 - Tinjauan lolos dengan agen khusus
 - Pekerjaan berat alat (tool-heavy) yang harus tetap berada di luar konteks induk
+- Alur kerja tim multi-agen yang harus dijalankan di balik satu tugas yang didelegasikan
 - Dekomposisi gaya paralel di mana induk mengoordinasikan dan meringkas
 
 ## Bagaimana Subagents Berbeda dari Agent Chain [#how-subagents-differ-from-agent-chain]
@@ -56,6 +57,27 @@ Pengaturan yang tersedia:
 - **Allow self-spawn**: memungkinkan agen untuk membuat salinan baru dari dirinya sendiri dalam konteks yang terisolasi. Fitur ini diaktifkan secara default saat subagents diaktifkan.
 - **Subagent tambahan**: memilih agen spesifik yang dapat dipicu oleh agen induk.
 
+Tim Agen yang disimpan disematkan sebagai `subagents.graphs` dalam payload pembuatan atau pembaruan Agen. Agent Builder saat ini mempertahankan definisi ini saat Anda mengedit pengaturan *self-spawn* dan pengaturan Agen individu, namun tidak membuat definisi graf. Setiap tim menamai graf asiklik berarah yang dibatasi, Agen entri-nya, dan Agen yang hasilnya dikembalikan ke induk:
+
+```yaml filename="agent saved-team subagent"
+subagents:
+  enabled: true
+  allowSelf: false
+  graphs:
+    - type: 'research_team'
+      name: 'Research team'
+      description: 'Researches a topic and reviews the findings'
+      agent_ids:
+        - 'agent_researcher'
+        - 'agent_reviewer'
+      entry_agent_id: 'agent_researcher'
+      result_agent_id: 'agent_reviewer'
+      edges:
+        - from: 'agent_researcher'
+          to: 'agent_reviewer'
+          edgeType: 'direct'
+```
+
 Bentuk agen yang setara:
 
 ```yaml filename="agent subagents"
@@ -85,7 +107,7 @@ modelSpecs:
         model: 'gpt-4o'
 ```
 
-Hanya `enabled` dan `allowSelf` yang dikirim ke klien dalam konfigurasi startup. Daftar izinkan `agent_ids` tetap berada di sisi server dan divalidasi terhadap batas subagen efektif, yang secara default adalah 10 dan dapat dikonfigurasi dengan [`endpoints.agents.maxSubagents`](/docs/configuration/librechat_yaml/object_structure/agents#maxsubagents). Payload permintaan klien tidak dapat menyediakan atau mengganti konfigurasi Subagent Model Specs.
+Hanya `enabled` dan `allowSelf` yang dikirim ke klien dalam konfigurasi startup. Daftar izin `agent_ids` tetap berada di sisi server dan divalidasi terhadap batas Subagent efektif, yang secara default adalah 10 dan dikonfigurasi dengan [`endpoints.agents.maxSubagents`](/docs/configuration/librechat_yaml/object_structure/agents#maxsubagents). Payload permintaan klien tidak dapat menyediakan atau mengganti konfigurasi Subagent Model Specs.
 
 ## Perilaku Runtime [#runtime-behavior]
 
@@ -93,10 +115,54 @@ Saat subagent diaktifkan, agen induk akan menerima tool `subagent`. Tool tersebu
 
 - `self`, jika `allowSelf` tidak bernilai false
 - Setiap child agent yang dikonfigurasi di dalam `agent_ids`
+- Setiap tim Agen yang tersimpan lengkap di `graphs`
 
-Agen anak berjalan dengan konteks terisolasi. Status pencarian alat induk dan konteks yang terakumulasi tidak disalin ke dalam eksekusi anak. Penggunaan model pada eksekusi anak ditagihkan ke dalam transaksi induk dan disertakan dalam total penggunaan induk. UI menampilkan eksekusi anak sebagai bagian aktivitas agen yang dapat diperluas dengan status, pembaruan ticker, dan hasil akhir lengkap, termasuk teks hasil yang dikirimkan secara bertahap saat anak melakukan streaming.
+Agen anak berjalan dengan konteks yang terisolasi. Status pencarian alat induk dan konteks yang terakumulasi tidak disalin ke dalam eksekusi anak. Penggunaan model anak di latar depan disertakan dalam transaksi induk dan total penggunaan; panggilan anak terpisah yang selesai setelah permintaan induk ditutup akan mencatat penggunaan secara independen. Kartu anak yang ringkas membuka panel samping aktivitas terpadu untuk eksekusi latar depan, grafik, warisan (legacy), dan terpisah, yang menampilkan detail siklus hidup terbatas, penalaran, alat, persetujuan, dan hasil yang sesuai dengan transport tersebut.
 
 Agen anak eksplisit diiklankan ke induk sebagai deskriptor ringan dan hanya melakukan inisialisasi penuh saat dipilih. Anak yang tidak digunakan tidak akan memuat model, tools, server MCP, file, atau Skills mereka. Saat pemanggilan, LibreChat memeriksa ulang izin tampilan dan identitas konfigurasi versi anak; jika akses dicabut atau konfigurasi yang disimpan berubah selama proses berjalan, anak tersebut akan gagal secara tertutup (fail closed) alih-alih mengeksekusi pengaturan yang kedaluwarsa.
+
+Ketika cabang paralel merujuk ke Agen anak yang sama, LibreChat mengevaluasi batas siklus dan kedalaman secara independen untuk setiap jalur penelusuran. Oleh karena itu, siklus pada satu cabang tidak membatalkan tautan Agen bersarang yang valid di cabang lain.
+
+Tim yang disimpan mengikuti resolusi malas (*lazy resolution*) dan pemeriksaan akses yang sama seperti anak individu. Saat dipilih, setiap anggota mempertahankan model, instruksi, alat, kredensial MCP, Skills, file, memori, profil Code Interpreter, dan identitas penagihan miliknya sendiri. LibreChat mengeksekusi tim sebagai satu grafik anak yang terisolasi, melakukan streaming progres yang sadar-anggota, dan mengembalikan output Agen hasil konfigurasi. Jika ada anggota yang disimpan tidak ditemukan, tidak dapat diakses, atau tidak valid, LibreChat akan melewati seluruh tim alih-alih menjalankan grafik parsial.
+
+Pada giliran berikutnya, LibreChat menyimpan panggilan sebelumnya dari alat anak dan tim yang dapat dijangkau dalam bentuk panggilan alat terstruktur, termasuk identitas server MCP yang telah diselesaikan jika diperlukan. Alat yang tidak lagi dapat dijangkau tidak akan ditambahkan ke proses yang sedang berjalan hanya karena alat tersebut muncul dalam riwayat.
+
+## Thread Subagen Terpisah [#detached-subagent-threads]
+
+Ketika `run_in_background` diaktifkan untuk endpoint Agents, Agent induk dapat melepaskan pekerjaan subagent dan melanjutkannya tanpa harus menunggu. LibreChat menyimpan setiap anak yang dilepaskan dengan silsilah eksekusi pribadi dan transkrip kanonik. Thread anak tetap berada di luar navigasi dan pencarian percakapan normal serta tidak dapat dibaca secara langsung; tampilan induk yang diotorisasi hanya menampilkan aktivitas anak yang terbatas.
+
+Child threads adalah catatan eksekusi yang hanya dapat dilihat (view-only). Pengguna tidak dapat mengedit atau menghapus child canonical secara langsung. Untuk child direct-Agent yang tahan lama dan telah selesai, **Continue in a new chat** akan memforking cabang yang telah selesai tersebut menjadi percakapan Agent normal yang dapat ditulis, sementara child aslinya tetap tersembunyi dan bersifat read-only. Panel aktivitas menjaga satu composer tetap terpasang selama proses berjalan dan di seluruh pengiriman tugas yang masuk, menjaga fokus dan panduan yang setengah diketik saat tampilan tugas baru dimuat. Pengiriman tetap tidak tersedia sampai tugas dapat menerima kontrol. Teks yang dimasukkan setelah penyelesaian akan dibawa ke dalam fork, dan fork yang gagal akan memulihkan draf di panel. Tindakan ini tidak tersedia untuk tampilan yang sedang berjalan, graph, anonymous-Agent, dan shared. Menghapus parent akan berdampak pada silsilah child-nya. Agent parent dapat melakukan polling, mengarahkan, mengantre, menginterupsi, membatalkan, mengumpulkan, dan nantinya melanjutkan child canonical melalui alat tugasnya; lease berbasis Mongo men-serialize kelanjutan tersebut di seluruh replika API.
+
+Panel aktivitas menyajikan giliran anak yang dipilih sebagai satu riwayat yang sadar-cabang. Gunakan **Load earlier activity** untuk membalik halaman ke belakang dan **Show full activity** pada suatu giliran untuk menampilkan detail proses lengkapnya yang dibatasi. Pemanggilan alat, persetujuan, hasil, kontrol, dan penalaran yang terlihat oleh pengguna dapat muncul. Teks penalaran dibatasi seperti sisa proyeksi lainnya dan ditandai jika terpotong; aktivitas yang dipertahankan oleh server lama mungkin hanya menampilkan penanda penalaran. Aktivitas yang dipertahankan secara biasa menggunakan batas per-item yang sama seperti aktivitas anak pribadi dan menyesuaikan akhiran terbaru yang berdekatan ke dalam anggaran aktivitas berseri 64 KB, sehingga pemberitahuan pemendekan hanya muncul jika konten yang bermakna dihilangkan. Ketika riwayat terpotong atau tidak tersedia, panel akan memberitahukannya alih-alih menyajikan tampilan parsial sebagai tampilan lengkap. Giliran peristiwa baru akan menetap di bagian bawah riwayat, giliran yang sedang berjalan menampilkan waktu yang telah berlalu, dan baris aktor menggunakan titik status dengan posisi tetap sehingga perubahan status tidak menggeser tata letak. Header mengambang yang ringkas memungkinkan riwayat untuk digulir di bawahnya, sementara komposer mengikuti dimensi obrolan utama. Pekerjaan yang sedang berjalan disampaikan melalui aktivitas streaming-nya alih-alih menggunakan chip status berjalan yang terpisah; status terminal yang tidak normal tetap diberi label.
+
+Dengan Redis diaktifkan, LibreChat mencatat pemilik eksekusi aktif dan merutekan permintaan poll, list, steer, queue, interrupt, cancel, dan collect dari replika API mana pun ke proses tersebut melalui pesan request/reply yang dibatasi dan memiliki masa berlaku. Panel aktivitas terbuka juga menerima pembaruan langsung (live updates) yang dicakup oleh tugas; kueri tahan lama selama dua detik tetap menjadi cadangan untuk peristiwa yang terlewat, penyambungan kembali, atau pemadaman Redis. Penyebaran proses tunggal dan non-Redis menggunakan jalur cepat dalam memori (in-memory fast path). Eksekutor langsung tidak dimigrasikan setelah proses pemiliknya dimulai ulang atau menghilang, namun transkrip anak yang didukung MongoDB, status terminal, penggunaan, riwayat, dan kelanjutan yang digerakkan oleh Agen di kemudian hari tetap bertahan secara independen. Hal ini tidak mengubah tugas yang terlepas menjadi API pekerjaan latar belakang publik.
+
+### Mengontrol Child yang Sedang Berjalan [#control-a-running-child]
+
+Dalam percakapan induk yang terautentikasi, buka panel aktivitas Subagent dan pilih tugas anak yang persisten. Saat tugas tersebut berjalan, ketik panduan dan kirimkan untuk melakukan pengarahan (steer) secara default. Pada desktop yang mendukung hover, menu tindakan kontrol kirim menawarkan **Steer**, **Queue**, dan **Interrupt** serta hanya menampilkan pintasan yang aktif di bawah pengaturan papan tik pengguna saat ini. Pada perangkat sentuh dan di panel modal, queue dan interrupt tetap tersedia sebagai kontrol ikon. Tanpa panduan yang dimasukkan, kontrol kirim menjadi **Cancel task**.
+
+- **Steer** menambahkan panduan pada batas aman berikutnya dari anak.
+- **Queue** menampung panduan untuk giliran berikutnya dalam tugas anak (child task).
+- **Interrupt** menghentikan pekerjaan anak saat ini pada batas yang aman dan menerapkan panduan baru.
+- **Cancel task** meminta pembatalan tanpa mengirimkan panduan.
+
+Kontrol yang diterima muncul dalam riwayat khusus tugas sebagai mengirim, menunggu, diterapkan, tidak diterapkan, atau gagal, beserta alasannya jika tersedia. Pilih **Withdraw** untuk menghapus panduan yang mengantre sebelum anak (child) menerapkannya. Panduan dibatasi hingga 4 KB. Setiap tugas menyimpan hingga 64 tanda terima otoritatif, sementara panel aktivitas menampilkan hingga 32; riwayat selesai yang lebih lama dihilangkan sebelum kontrol yang diterima dan aktif, dan UI melabeli riwayat yang dihilangkan atau panduan yang dipersingkat untuk ditampilkan.
+
+Kontrol yang berjalan akan tertutup saat anak (child) selesai, dan komposer yang sama beralih untuk melanjutkan anak yang memenuhi syarat dalam obrolan baru. LibreChat memverifikasi akses pengguna yang masuk ke induk (parent) dan anak, hubungan induk-anak mereka, serta kepemilikan penyewa pada setiap permintaan, dan menerapkan filter konten serta pemeriksaan moderasi yang dikonfigurasi ke panduan. Pengiriman berulang dari kontrol yang sama yang telah diterima akan mengembalikan tanda terima otoritatifnya alih-alih menerapkan instruksi tersebut dua kali. Percakapan yang dibagikan tetap bersifat hanya-baca (read-only) dan tidak menampilkan kontrol ini.
+
+Percakapan yang dibagikan hanya dapat menampilkan aktivitas terbatas yang sudah disertakan dalam payload bagikan. Tampilannya bersifat hanya-baca (read-only), menghilangkan kontrol persetujuan dan pemilih turunan yang persisten, serta tidak pernah membuka jalur kueri utas turunan yang terautentikasi.
+
+### Aktivitas Anak Berbasis Peristiwa (Event-Driven) [#event-driven-child-activity]
+
+Child Agents yang dilanjutkan melalui [Agents API event binding](/docs/features/agents_api#event-driven-child-agents) tidak berasal dari kartu alat `subagent`. Dalam percakapan induk yang terautentikasi, LibreChat justru menambahkan satu baris aktor ringkas di bawah pesan yang memiliki binding tersebut. Membukanya akan menggunakan kembali panel aktivitas Subagent, dengan pemilih untuk aktor dan gilirannya, ditambah aktivitas run-step, alat, pesan, dan penanda penalaran secara langsung (live). Pemicu kejadian eksternal ditampilkan sebagai baris pemicu pengguna normal dengan detail tipe kejadian, sumber, waktu kejadian, dan tindakan yang diharapkan yang dapat diperluas. Ketika pengiriman baru memilih tugas lain dalam thread anak yang sama, giliran yang ada tetap terlihat sementara tugas baru dimuat dan hanya placeholder streaming-nya yang ditambahkan; status dan kontrol khusus tugas tidak pernah dipinjam dari tampilan yang dipertahankan. Halaman sebelumnya dan aktivitas penuh per giliran menggunakan riwayat anak yang terbatas dan hanya-baca yang sama.
+
+Proyeksi induk sengaja dibatasi: ia mengembalikan paling banyak 64 utas anak, menyimpan hingga 20 tugas terbaru per anak dari jendela sumber terbatas yang dibagikan, dan membatasi respons pada 96 KB. UI melaporkan riwayat yang terpotong alih-alih menyiratkan bahwa tampilan yang melebihi batas adalah lengkap. Memulai giliran lain akan mempromosikan aktor yang lebih lama ke dalam jendela anak terbaru. Utas anak ini tetap tersembunyi dari navigasi biasa dan tidak dapat ditemukan dari induk atau penyewa lain.
+
+### Kelanjutan Induk Otomatis [#automatic-parent-continuation]
+
+Setelah child yang terlepas (detached) selesai, LibreChat menyimpan hasil terminal atau error-nya dan, secara default, mengirimkan kelanjutan idempoten ke Agent induk yang tersimpan pada cabang yang tepat yang meluncurkannya. Pengiriman menunggu saat cabang induk tersebut sedang berjalan, dijeda, atau diselesaikan. Induk yang dilanjutkan menerima manifes terbatas dari tugas-tugas saudara (sibling) yang relevan alih-alih melakukan polling yang sibuk, dan obrolan menyajikan bangun tersebut dalam kartu tugas yang dapat diciutkan.
+
+Pengiriman penyelesaian otomatis diaktifkan ketika [`endpoints.agents.backgroundTasks.completionWakeups`](/docs/configuration/librechat_yaml/object_structure/agents#backgroundtasks) dihilangkan atau bernilai `true`. Atur ke `false` untuk menjaga agar anak (child) yang terlepas (detached) hanya melakukan polling. Anak yang dibatalkan akan diabaikan, dan Agen induk (parent) yang bersifat sementara (ephemeral) tidak didukung karena tidak ada konfigurasi tersimpan yang dapat dipulihkan. Eksekusi anak yang terlepas memiliki konteks eksekusinya sendiri, sehingga penyelesaian atau pembatalan permintaan induk asli tidak membatalkan pekerjaan yang dimiliki secara independen. Induk masih dapat mengumpulkan hasil anak yang persisten melalui alat tugasnya.
 
 ## Batasan [#limits]
 
@@ -105,10 +171,16 @@ LibreChat memberlakukan batasan ini untuk menjaga grafik subagent tetap terbatas
 <OptionTable
   options={[
     [
-      'MAX_SUBAGENTS',
+      'endpoints.agents.maxSubagents',
       'Number',
-      'Subagen eksplisit maksimum per agen induk. Dapat dikonfigurasi melalui `endpoints.agents.maxSubagents`, hingga 50.',
+      'Jumlah entri maksimum dalam setiap daftar `agent_ids` atau `graphs` Agen induk. Dapat dikonfigurasi dari 1 hingga 50.',
       '10',
+    ],
+    [
+      'MAX_GRAPH_SUBAGENT_MEMBERS',
+      'Number',
+      'Jumlah anggota maksimum dalam satu tim Agen yang disimpan.',
+      '32',
     ],
     ['MAX_SUBAGENT_DEPTH', 'Number', 'Jumlah lompatan subagen eksplisit maksimum dari agen akar.', '5'],
     [
@@ -134,15 +206,16 @@ endpoints:
     maxSubagents: 20
 ```
 
-Nilai yang dikonfigurasi berlaku untuk permintaan pembuatan, pembaruan, dan duplikasi agen, untuk daftar izin `subagents.agent_ids` pada Model Specs, serta untuk pemilih subagen di Agent Builder. Lihat [maxSubagents](/docs/configuration/librechat_yaml/object_structure/agents#maxsubagents) untuk referensi lengkapnya. Batas kedalaman, simpul grafik, dan konfigurasi eksekusi di atas bersifat tetap.
+Nilai yang dikonfigurasi berlaku untuk permintaan pembuatan, pembaruan, dan duplikasi Agen untuk `subagents.agent_ids` dan `subagents.graphs`, untuk daftar izin `subagents.agent_ids` pada Model Specs, serta untuk pemilih subagen di Agent Builder. Lihat [maxSubagents](/docs/configuration/librechat_yaml/object_structure/agents#maxsubagents) untuk referensi lengkapnya. Batas per anggota tim, kedalaman, node grafik, dan konfigurasi eksekusi di atas bersifat tetap.
 
 ## Kontrol Akses [#access-control]
 
-Agen anak yang dikonfigurasi harus terlihat oleh pengguna. Jika pengguna tidak memiliki akses lihat ke agen yang direferensikan, LibreChat akan melewati subagen tersebut. Untuk permintaan pembuatan dan pembaruan, entri `subagents.agent_ids` yang tidak valid atau tidak sah akan ditolak.
+Agen anak yang dikonfigurasi dan setiap anggota tim yang disimpan harus terlihat oleh pengguna. Jika pengguna tidak memiliki akses lihat ke Agen yang dirujuk secara individu, LibreChat akan melewati subagen tersebut. Tim yang disimpan bersifat semua-atau-tidak-sama-sekali dan akan dilewati jika ada anggota yang tidak tersedia. Permintaan pembuatan dan pembaruan akan menolak referensi yang hilang atau tidak sah, tipe spawn duplikat, grafik tim yang siklik atau terputus, anggota entri atau hasil yang tidak valid, dan konfigurasi yang melebihi batas di atas.
 
 ## Tips Desain [#design-tips]
 
 - Aktifkan self-spawn ketika agen induk sudah memiliki cakupan yang jelas dan hanya memerlukan konteks baru untuk sub-tugas.
 - Tambahkan child agents spesifik ketika tugas memerlukan model, set instruksi, set alat, atau daftar izin keterampilan yang berbeda.
+- Gunakan tim yang disimpan jika beberapa Agent harus berjalan sebagai satu alur kerja yang didelegasikan dengan satu hasil yang dikembalikan ke induk.
 - Jaga agar deskripsi anak tetap jelas. Induk menggunakan nama dan deskripsi setiap anak untuk memilih target delegasi yang tepat.
 - Gunakan subagent untuk pekerjaan perantara yang harus mengembalikan hasil ringkas, bukan untuk pengalihan permanen ke jalur percakapan lain.

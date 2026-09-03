@@ -1,23 +1,24 @@
 ---
 title: Agents API (Beta)
 icon: Plug
-description: 通过兼容 OpenAI 和 Open Responses API 的端点以编程方式访问 LibreChat 智能体
+description: 运行 LibreChat 智能体并通过编程 API 发送经过身份验证的事件
 ---
 
 <Callout type="warning" title="测试版功能">
 Agents API 目前处于测试阶段。随着我们向稳定版本迭代，endpoint、请求/响应格式以及行为可能会发生变化。
 </Callout>
 
-LibreChat 通过两个兼容 API 的接口公开您的智能体，允许外部应用程序、脚本和服务以编程方式与您的智能体进行交互。
+LibreChat 通过推理和事件交付 API 将 agent 暴露给外部应用程序、脚本和服务。
 
 ## 概述 [#overview]
 
-Agents API 提供了两个接口：
+Agents API 提供了两个推理接口和经过身份验证的事件交付：
 
 - **兼容 OpenAI 的聊天补全 (Chat Completions)** — `POST /api/agents/v1/chat/completions`
 - **Open Responses API** — `POST /api/agents/v1/responses`
+- **智能体事件** — `POST /api/agents/v1/events`
 
-两者均通过 API keys 进行身份验证并支持流式响应，这使得将 LibreChat 智能体集成到已使用 OpenAI SDK 或类似工具的现有工作流程中变得非常简单。
+推理接口支持 API-key 身份验证、可选的 OIDC 身份验证以及流式响应。Agent Events 使用 Remote Agents API-key 身份验证，以便 LibreChat 可以将每次交付绑定到稳定的源身份。
 
 LibreChat 正在采用 [Open Responses](https://www.openresponses.org/) 作为其服务智能体的首选 API 框架。虽然 Chat Completions endpoint 为现有的兼容 OpenAI 的工具提供了向后兼容性，但 Open Responses endpoint 代表了未来的发展方向。
 
@@ -86,6 +87,10 @@ curl -X POST https://your-librechat-instance/api/agents/v1/responses \
 </Callout>
 
 请参阅 [Agents Endpoint - remoteApi](/docs/configuration/librechat_yaml/object_structure/agents#remoteapi) 以获取所有配置选项。
+
+<Callout type="warning" title="Agent Events 需要 API key">
+  Agent Events 端点不支持仅使用 OIDC 进行身份验证。在创建绑定、加入事件队列以及轮询交付状态时，请使用 Remote Agents API 密钥。
+</Callout>
 
 ## Endpoints [#endpoints]
 
@@ -156,9 +161,144 @@ curl -X POST https://your-librechat-instance/api/agents/v1/responses \
   }'
 ```
 
+## Agent 事件 [#agent-events]
+
+Agent Events 允许经过身份验证的控制器或源适配器向 Agent 交付持久化工作。事件交付是一项测试版功能，其请求、响应和运行时行为可能会发生变化。
+
+这些 endpoint 使用经过身份验证的用户、租户和 API 密钥；目标 Agent 必须在该用户的现有 Remote Agents 权限下可见。Agent Event 请求也使用专用的 [`rateLimits.agentEvents`](/docs/configuration/librechat_yaml/object_structure/config#ratelimits) 存储桶。
+
+### 交付事件 [#deliver-an-event]
+
+```http
+POST /api/agents/v1/events
+Authorization: Bearer <REMOTE_AGENTS_API_KEY>
+Idempotency-Key: webhook-42-resource-7
+Content-Type: application/json
+
+{
+  "mode": "fire",
+  "event": {
+    "id": "resource-7-ready-3",
+    "type": "resource.ready",
+    "occurredAt": 1786967999000,
+    "payload": { "resourceId": "resource-7" }
+  },
+  "target": { "agentId": "agent_abc123" },
+  "input": "Resource resource-7 is ready. Inspect it and report the result.",
+  "orderingKey": "resource-7"
+}
+```
+
+发送一个 `Idempotency-Key` 请求头，并在重试相同的源事件到目标投递时重复使用它。该键必须包含 1-256 个字母、数字或字符 `._~:/+=-`。使用相同的键但提供不同的投递内容会导致冲突。
+
+调用方提供事件 `id`、`type`、`occurredAt` 和经过清理的 `payload`。LibreChat 会将调用方提供的任何 `event.source` 替换为经过身份验证的 API 密钥标识，并推导出用户、租户、请求 ID 和接收时间。请勿在事件负载中放置凭据或传输密钥，因为已接收的投递会被持久化存储。
+
+`orderingKey` 是可选的。当来自不同来源的交付内容必须针对同一资源保持顺序时，请使用一个稳定的值。
+
+成功的请求会返回 `202 Accepted`、一个不透明的交付 `id`、其当前状态以及一个 `Location` 标头。请轮询该位置：
+
+```http
+GET /api/agents/v1/events/{delivery_id}
+Authorization: Bearer <SAME_REMOTE_AGENTS_API_KEY>
+```
+
+交付状态可以是 `pending`、`leased`、`succeeded` 或 `dead`。状态响应包含尝试次数和时间戳，并在处理完成后包含结果或公开错误；它不会暴露存储的有效负载、排序键、重试历史记录或工作进程标识。状态访问权限仅限于同一用户、租户和 API 密钥来源。
+
+对于绑定的 `continue` 而言，`succeeded` 表示 Agent 的回合已被准入，而非请求的工作已完成。因此，其状态还公开了一个持久的 `handling` 生命周期：`started`，随后是 `applied`、`completed_no_action`、`failed` 或 `cancelled` 中的确切一个。
+
+支持 Action 的源可以包含一个带有工具名称和可选参数子集的 `expectedAction`。只有当该确切的生成过程完成，且主机观察到的工具证据与契约匹配时，LibreChat 才会报告 `applied`；模型生成的文本绝不会被接受为证明。`fire`、`steer` 和未绑定的 `continue` 交付会拒绝 `expectedAction`。
+
+成功的 `fire` 结果包含后续 `steer` 事件可以定位的对话和生成标识。
+
+### 事件驱动的子智能体 (Event-Driven Child Agents) [#event-driven-child-agents]
+
+外部系统可以将源参与者（source actor）绑定到直接子 Agent，然后在后续事件中继续该子对话。在 API 密钥身份、绑定所有权、父级关系和 Agent 授权检查成功后，绑定的子对话延续将自动进行；无需单独的功能开关。
+
+使用将用于后续轮次的同一个 API 密钥来注册该 actor：
+
+```http
+POST /api/agents/v1/events/bindings
+Authorization: Bearer <REMOTE_AGENTS_API_KEY>
+Idempotency-Key: championship-7-player-hanae
+Content-Type: application/json
+
+{
+  "actorId": "hanae-kobayashi",
+  "parentConversationId": "director-conversation-id",
+  "parentMessageId": "director-message-id",
+  "target": { "agentId": "agent_hanae" }
+}
+```
+
+`actorId` 最多可包含 128 个字符。父级必须是普通的 Agent 对话，且目标必须配置为该 Agent 的直接子 Agent（Subagent）或允许的自生成（self-spawn）对象。新建绑定返回 `201`；幂等重放返回 `200`。两种响应均包含 `id`、`actorId`、`agentId` 和 `threadId`。
+
+使用返回的绑定 ID 发送后续轮次：
+
+```http
+POST /api/agents/v1/events
+Authorization: Bearer <SAME_REMOTE_AGENTS_API_KEY>
+Idempotency-Key: game-12-ply-17-hanae
+Content-Type: application/json
+
+{
+  "mode": "continue",
+  "bindingId": "evtbind_...",
+  "event": {
+    "id": "game-12-ply-17",
+    "type": "chess.turn.ready",
+    "occurredAt": 1786968000000,
+    "payload": { "gameId": "game-12", "expectedPly": 17 }
+  },
+  "input": "Your clock is running. Read the position and submit one legal move.",
+  "expectedAction": {
+    "tool": "submit_move",
+    "arguments": { "gameId": "game-12" }
+  }
+}
+```
+
+LibreChat 在分发前立即从绑定中解析子 Agent、线程、最新分支叶节点和排序通道。调用者提供的目标和排序字段无法重定向已绑定的延续。请求的 `Idempotency-Key` 将成为该子轮次在交付重试、生成租约、持久化消息、实时活动以及后续 HITL 恢复过程中的稳定公共标识。
+
+每个绑定都有一个自动的持久化邮箱。其下一个事件会保持排队状态，直到当前轮次达到 `applied`、`completed_no_action`、`failed` 或 `cancelled` 状态；不同的绑定保持独立，可以并行运行。仅当轮次已初始化且兼容时，才会尝试检查点续传。如果检查点缺失或无法恢复，LibreChat 将回退到持久化消息历史记录，且不会削弱接收、授权或预期操作的检查。
+
+一个绑定的 actor 可以为“询问用户 (Ask User)”或工具批准操作进行暂停。LibreChat 会在公开待处理操作之前持久化确切的签名挂起状态，并且该绑定的邮箱将保持阻塞，直到同一个 actor 调用恢复或结算为止。Event Actors 需要持久化的 MongoDB 检查点程序；`type: memory` 不兼容。LibreChat 会协商生成协议 v2 并自动选择检查点或历史记录延续。现有的 protocol-v1 工作将保留在持久化历史记录路径上，直到其耗尽。有关混合版本部署要求，请参阅 [Generation Protocol Compatibility](/docs/configuration/redis#generation-protocol-compatibility)。
+
+### 合并观测事件 [#coalescing-observational-events]
+
+能够证明多个绑定的 `continue` 事件是可互换观测结果的来源，可以为它们赋予相同的由源定义的 `coalesce.key`：
+
+```json
+{
+  "mode": "continue",
+  "bindingId": "evtbind_...",
+  "event": {
+    "id": "championship-7-game-12-move-18",
+    "type": "chess.move.completed",
+    "occurredAt": 1786968000750,
+    "payload": { "gameId": "game-12", "ply": 18 }
+  },
+  "input": "A tournament game advanced.",
+  "coalesce": { "key": "championship-commentary" }
+}
+```
+
+LibreChat 最多收集 750 毫秒内的兼容事件，且限制最多 8 个事件，总大小不超过 512 KiB 的信封。子级会接收到一个确定性的批处理文档，但每个源事件都会保留其各自的 `Idempotency-Key`、投递记录和回执。
+
+仅对非可操作性观察使用合并（coalescing）。对于 `fire`、`steer`、未绑定的 `continue` 以及带有 `expectedAction` 的交付，该操作将被拒绝；请勿将其用于命令、批准、HITL 请求、围栏（fences）或其个体时序至关重要的事件。
+
+在已认证的父对话中，每个绑定的参与者（actor）都会显示在其所属的父消息下方。Subagent 面板可以在参与者和轮次之间切换、加载更早期的活动，并展开一个轮次以显示其完整的绑定活动。事件详情包括类型、来源、发生时间和预期操作。可见的运行步骤、工具、消息和推理标记均包含在内，但不包含原始推理文本。父索引从绑定的源窗口中最多返回 64 个子线程和每个子线程 20 个最近的任务，报告截断而非暗示完整性，并将响应限制在 96 KB 以内。它经过父级、用户和租户授权；绑定、源密钥 ID、租约令牌和工作进程状态不包含在投影中。
+
+子线程在正常的对话导航中保持隐藏，对人类聊天路由而言是只读的，继承父线程的临时或过期策略，并限制为仅限一级直接子级。仅凭绑定 ID 无法获得访问权限；延续（continuations）的作用域仅限于创建它的用户、租户和 API key。
+
+### 分离式事件执行者操作 [#detached-event-actor-actions]
+
+Event Actor 回合可以分离符合条件的 Actions 并持久地完成它们。在 Action 运行期间，交付过程保持在其处理生命周期内；持久的终端证据会恢复原始的已签名 actor 调用，并且只有最终宿主观察到的工具证据才能满足 `expectedAction`。重放和竞争副本无法两次启动同一个已保留的 Action。如果 LibreChat 无法确定外部副作用是否已经开始，它会隔离该启动操作，而不是盲目地重试。
+
+当选定的内置生成存储声明支持时，LibreChat 会自动启用此内部补全工作。内存存储在单个进程中运行启动、补全和延续，并且在进程退出后无法恢复该工作。Redis 生成流增加了持久化重启恢复和副本切换功能。在混合版本排空期间，能力所有权交付和恢复记录对旧的声明者保持不可见；不存在操作员管理的生产者标志。
+
 ## Token Usage Tracking [#token-usage-tracking]
 
-所有 Agents API 请求都会根据用户的余额跟踪令牌使用情况（如果已配置令牌消耗）。输入和输出令牌都会被计算在内，包括支持缓存令牌的提供商（OpenAI、Anthropic）的缓存令牌。
+当配置了代币支出时，所有 Agent API 推理请求都会根据用户的余额跟踪代币使用情况。流式和非流式响应都会将所有计费的初级 Agent 和子 Agent 模型调用汇总到顶层总计中。响应还包括不含身份信息的 `primary` 和 `subagent` 代币明细。在提供商报告的情况下，还会包含缓存和推理代币的详细信息。
 
 ## 路线图 [#roadmap]
 
@@ -168,6 +308,8 @@ curl -X POST https://your-librechat-instance/api/agents/v1/responses \
 ## 相关文档 [#related-documentation]
 
 - [Agents](/docs/features/agents) — 创建和配置 agents
+- [Subagents](/docs/features/subagents) — 配置直接子 Agent
+- [Agents Endpoint Configuration](/docs/configuration/librechat_yaml/object_structure/agents) — 事件运行时与身份验证设置
 - [界面配置 — remoteAgents](/docs/configuration/librechat_yaml/object_structure/interface#remoteagents) — 访问控制设置
 - [Token Usage](/docs/configuration/token_usage) — 配置 Token 消耗与余额
 - [Open Responses Specification](https://www.openresponses.org/) — 开放推理标准

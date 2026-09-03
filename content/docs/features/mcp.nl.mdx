@@ -49,15 +49,17 @@ LibreChat geeft geconfigureerde MCP-servers direct weer in het chatgedeelte bij 
 - Wanneer geselecteerd, worden alle tools van die server beschikbaar voor je huidige model
 - Snelle toegang tot MCP tools zonder een agent aan te maken, waardoor meerdere servers tegelijkertijd kunnen worden gebruikt
 
-Om te voorkomen dat MCP servers in het chat-dropdownmenu verschijnen (en ze alleen beschikbaar te houden voor agents), stel [`chatMenu: false`](/docs/configuration/librechat_yaml/object_structure/mcp_servers#chatmenu) in je configuratie in:
+Om een MCP server buiten de reguliere chatselectie te houden, stelt u [`chatMenu: false`](/docs/configuration/librechat_yaml/object_structure/mcp_servers#chatmenu) in uw configuratie in:
 
 ```yaml
 mcpServers:
   internal-tools:
     command: npx
     args: ['-y', 'internal-mcp-server']
-    chatMenu: false # Only available in agent builder
+    chatMenu: false # Not selectable in regular chat
 ```
+
+Deze instelling wordt afgedwongen bij chatverzoeken en in de kiezer, zodat een verouderde opgeslagen selectie niet kan blijven gebruikmaken van een verborgen server. Het verwijdert de server niet uit opgeslagen Agents of uit een Model Specs die deze expliciet toewijst. LibreChat laat ook servers weg die een gebruiker alleen kan bereiken via een geautoriseerde Agent in de reguliere chatkiezer en het verzoekpad.
 
 ### Met Agents [#with-agents]
 
@@ -264,7 +266,7 @@ Initialisatiefouten maken nu onderscheid tussen een onbereikbare server, ontbrek
 
 Als een Agent expliciet MCP tools verwacht, maar er geen kunnen worden opgelost bij de start van de run, dan beëindigt LibreChat de run met begeleiding over verbinding en toegang in plaats van deze stilzwijgend uit te voeren zonder die tools.
 
-MCP-servers die `notifications/tools/list_changed` uitzenden, kunnen hun toolcatalogus bijwerken zonder dat LibreChat opnieuw hoeft te worden opgestart. LibreChat haalt de huidige lijst op van de actieve verbinding, publiceert toegevoegde tools en stopt met het adverteren van tools die de server heeft verwijderd. Bij herverbindingen wordt de catalogus ook gesynchroniseerd voordat de verbinding als gereed wordt beschouwd.
+MCP-servers die `notifications/tools/list_changed` uitzenden, kunnen hun toolcatalogus bijwerken zonder dat LibreChat opnieuw hoeft te worden opgestart. LibreChat haalt de huidige lijst op van de live-verbinding, publiceert toegevoegde tools en stopt met het adverteren van tools die de server heeft verwijderd. Bij herverbindingen wordt de catalogus ook gesynchroniseerd voordat de verbinding als gereed wordt beschouwd. Beheerde snapshot-verversingen en cold-server discovery delen één procesbrede gate met drie operaties. Eenmaal toegelaten, blijft elke operatie begrensd door de deadline van de tool-lijst of de per-server discovery, inclusief een eventuele kortere `initTimeout`, zodat traag cataloguswerk geen slot voor onbepaalde tijd kan bezet houden.
 
 Voor streamable HTTP-servers kan een herverbinding kortstondig een HTTP `409` retourneren wanneer de server nog een verouderde standalone SSE-stream voor de oude sessie vasthoudt. LibreChat behandelt dit als tijdelijk, verbreekt de verouderde sessie en bouwt de verbinding automatisch opnieuw op; er is geen actie van de operator nodig wanneer het herstel slaagt. Als de opnieuw opgebouwde verbinding ook faalt, blijft LibreChat de onderliggende verbindingsfout tonen.
 
@@ -320,6 +322,10 @@ Beschikbare placeholders zijn onder andere:
 
 YAML-gedefinieerde MCP-servers kunnen ook gebruikmaken van `{{LIBRECHAT_OPENID_*}}`, `{{LIBRECHAT_GRAPH_*}}` en `{{LIBRECHAT_BODY_*}}` placeholders. `{{LIBRECHAT_BODY_*}}` waarden zijn request-scoped, dus LibreChat maakt verbindingen aan voor de actieve run, hergebruikt deze bij tool-aanroepen binnen die run, en ruimt ze op wanneer het verzoek eindigt. Request-scoped servers worden uitgesloten van de persistente tool-cache, zodat verzoek-specifieke headers en URL's niet buiten de actieve run worden hergebruikt. Omdat hun tool-lijst niet kan worden opgelost voordat er een chatverzoek bestaat, stelt de Agent Builder één runtime-tools selectie beschikbaar voor de volledige server en lost deze tools op tijdens runtime. Het voltooien van OAuth slaat de autorisatie op, maar stelt de verbinding uit totdat de eerste run de request-context levert. User-, OpenID- en Graph-placeholders zijn user-scoped; HTTP-transports verversen hun opgeloste headers vóór elke tool-aanroep zonder dat ze zelf opnieuw verbinding hoeven te maken.
 
+`{{LIBRECHAT_GRAPH_ACCESS_TOKEN}}` wisselt het herbruikbare OpenID-toegangstoken van de gebruiker uit via de Microsoft on-behalf-of flow. [`GRAPH_API_SCOPES`](/docs/configuration/dotenv#microsoft-graph-api--entra-id-integration) stelt de gevraagde, door spaties gescheiden scopes in en is standaard `https://graph.microsoft.com/.default`. Dit staat los van `OPENID_GRAPH_SCOPES`, dat het zoeken naar personen en groepen configureert.
+
+De `{{LIBRECHAT_BODY_PARENTMESSAGEID}}` placeholder wordt ingevuld voor native Agent-chats, OpenAI-compatibele Agents API-aanroepen en legacy Assistants-runs. Open Responses heeft geen equivalent voor de parent-message identiteit en faalt (fails closed) wanneer een MCP-server die waarde vereist. Zie de [MCP server placeholder referentie](/docs/configuration/librechat_yaml/object_structure/mcp_servers#headers).
+
 ### Serverinstructies [#server-instructions]
 
 `serverInstructions` is een LibreChat-functie die dynamisch geconfigureerde instructies toevoegt wanneer een tool van die MCP-server wordt geselecteerd:
@@ -358,6 +364,8 @@ mcpServers:
 ```
 
 **Opmerking**: Als bewerkingen nog steeds voortijdig worden afgebroken, controleer dan uw proxyconfiguratie (bijv. nginx, traefik, enz.), aangezien deze verbindingen voortijdig kan verbreken vanwege standaard time-outs.
+
+Wanneer een gebruiker op **Stop** drukt tijdens een Agent tool-aanroep op de voorgrond, stuurt LibreChat het annuleringssignaal voor de run door naar MCP. Voor Streamable HTTP-servers verstuurt de MCP SDK `notifications/cancelled`; de server moet die notificatie respecteren om zijn eigen werk te stoppen. Losgekoppelde achtergrondaanroepen behouden opzettelijk een afzonderlijke levenscyclus en worden niet geannuleerd met de beurt op de voorgrond.
 
 ### Door de gebruiker verstrekte inloggegevens [#user-provided-credentials]
 
@@ -497,6 +505,8 @@ LibreChat verwerkt OAuth-tokens op intelligente wijze:
 - **Automatische vernieuwing**: Wanneer refresh tokens beschikbaar zijn, vernieuwt LibreChat automatisch verlopen access tokens
 - **Stille 401-herstel**: Als een OAuth MCP-verbinding halverwege een sessie een authenticatieweigering ontvangt, coördineert LibreChat één begrensde verversings- en herverbindingspoging per gebruiker en server. Gelijktijdige aanroepers delen dat herstelresultaat voordat LibreChat een nieuwe authenticatieprompt toont.
 - **Sessiebeheer**: Elke gebruiker onderhoudt zijn eigen OAuth-sessies voor omgevingen met meerdere gebruikers
+
+Als een opgeslagen Agent-stream opnieuw wordt geladen of hervat terwijl een MCP-autorisatieprompt nog in behandeling is, reconstrueert LibreChat die prompt vanuit de duurzame generatiestatus. Voltooide, geannuleerde, mislukte of verlopen prompts worden niet hersteld.
 
 Opgeslagen OAuth-clients en tokens zijn gebonden aan de MCP server-URL en de OAuth-client/endpoint-instellingen. Het wijzigen van deze instellingen vereist dat gebruikers zich opnieuw authenticeren. Wanneer u een via de UI aangemaakte server bewerkt die een opgeslagen `client_secret` behoudt, moet u het secret opnieuw invoeren bij het wijzigen van een bindingsveld zoals de server-URL, client-ID, autorisatie-URL, token-URL of token-authenticatiemethode.
 

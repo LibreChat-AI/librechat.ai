@@ -13,6 +13,7 @@ Użyj subagentów do:
 - Podzadania badawcze, które mogą generować długie dane wyjściowe pośrednie
 - Przegląd przechodzi przez wyspecjalizowanego agenta
 - Praca wymagająca dużej liczby narzędzi, która powinna pozostać poza kontekstem nadrzędnym
+- Przepływy pracy zespołów wieloagentowych, które powinny być wykonywane w ramach jednego delegowanego zadania
 - Dekompozycja w stylu równoległym, w której element nadrzędny koordynuje i podsumowuje
 
 ## Czym subagenci różnią się od łańcucha agentów (Agent Chain) [#how-subagents-differ-from-agent-chain]
@@ -56,6 +57,27 @@ Dostępne ustawienia:
 - **Allow self-spawn**: pozwala agentowi na utworzenie nowej kopii samego siebie w izolowanym kontekście. Jest to domyślnie włączone, gdy włączone są subagenty.
 - **Dodatkowe subagenty**: wybiera konkretne agenty, które mogą być wywoływane przez agenta nadrzędnego.
 
+Zapisane zespoły Agentów są osadzone jako `subagents.graphs` w ładunkach (payloads) tworzenia lub aktualizacji Agenta. Obecny Kreator Agentów (Agent Builder) zachowuje te definicje podczas edycji ustawień samoczynnego wyzwalania (self-spawn) oraz poszczególnych Agentów, ale nie służy do tworzenia definicji grafów. Każdy zespół nazywa ograniczony skierowany graf acykliczny, jego Agenta wejściowego oraz Agenta, którego wynik jest zwracany do rodzica:
+
+```yaml filename="agent saved-team subagent"
+subagents:
+  enabled: true
+  allowSelf: false
+  graphs:
+    - type: 'research_team'
+      name: 'Research team'
+      description: 'Researches a topic and reviews the findings'
+      agent_ids:
+        - 'agent_researcher'
+        - 'agent_reviewer'
+      entry_agent_id: 'agent_researcher'
+      result_agent_id: 'agent_reviewer'
+      edges:
+        - from: 'agent_researcher'
+          to: 'agent_reviewer'
+          edgeType: 'direct'
+```
+
 Równoważny kształt agenta:
 
 ```yaml filename="agent subagents"
@@ -85,7 +107,7 @@ modelSpecs:
         model: 'gpt-4o'
 ```
 
-Tylko `enabled` oraz `allowSelf` są wysyłane do klientów w konfiguracji startowej. Lista dozwolonych `agent_ids` pozostaje po stronie serwera i jest weryfikowana względem efektywnego limitu subagentów, który domyślnie wynosi 10 i można go skonfigurować za pomocą [`endpoints.agents.maxSubagents`](/docs/configuration/librechat_yaml/object_structure/agents#maxsubagents). Ładunki żądań klienta nie mogą dostarczać ani nadpisywać konfiguracji Subagent w Model Specs.
+Tylko `enabled` oraz `allowSelf` są wysyłane do klientów w konfiguracji startowej. Lista dozwolonych `agent_ids` pozostaje po stronie serwera i jest weryfikowana względem efektywnego limitu Subagentów, który domyślnie wynosi 10 i jest konfigurowany za pomocą [`endpoints.agents.maxSubagents`](/docs/configuration/librechat_yaml/object_structure/agents#maxsubagents). Ładunki żądań klienta nie mogą dostarczać ani nadpisywać konfiguracji Subagentów w ramach Model Specs.
 
 ## Zachowanie w czasie wykonywania (Runtime Behavior) [#runtime-behavior]
 
@@ -93,10 +115,54 @@ Gdy podagenci są włączeni, agent nadrzędny otrzymuje narzędzie `subagent`. 
 
 - `self`, gdy `allowSelf` nie jest ustawione na false
 - Każdy skonfigurowany agent podrzędny w `agent_ids`
+- Każdy kompletny zapisany zespół Agentów w `graphs`
 
-Agenci podrzędni działają w izolowanym kontekście. Stan wyszukiwania narzędzi nadrzędnych oraz zgromadzony kontekst nie są kopiowane do uruchomienia podrzędnego. Zużycie modelu przez uruchomienie podrzędne jest doliczane do transakcji nadrzędnej i uwzględniane w całkowitym zużyciu nadrzędnym. Interfejs użytkownika pokazuje uruchomienie podrzędne jako rozwijaną część aktywności agenta ze statusem, aktualizacjami w czasie rzeczywistym oraz pełnym wynikiem końcowym, w tym tekstem wyniku dostarczanym przyrostowo podczas strumieniowania przez proces podrzędny.
+Agenty podrzędne działają w izolowanym kontekście. Stan wyszukiwania narzędzi nadrzędnych oraz zgromadzony kontekst nie są kopiowane do uruchomienia podrzędnego. Użycie modelu przez agenta podrzędnego działającego na pierwszym planie jest wliczane do transakcji nadrzędnej i sumy użycia; odłączone wywołania podrzędne, które kończą się po zamknięciu żądania nadrzędnego, rejestrują użycie niezależnie. Kompaktowa karta podrzędna otwiera ujednolicony panel boczny aktywności dla uruchomień na pierwszym planie, grafowych, starszych (legacy) oraz odłączonych, pokazując szczegóły ograniczonego cyklu życia, rozumowania, narzędzi, zatwierdzeń i wyników odpowiednie dla danego transportu.
 
 Jawne agenty podrzędne są reklamowane nadrzędnemu jako lekkie deskryptory i inicjują się w pełni dopiero po wybraniu. Nieużywane elementy podrzędne nie ładują swojego modelu, narzędzi, serwerów MCP, plików ani umiejętności. W momencie wywołania LibreChat ponownie sprawdza uprawnienia do widoku oraz wersjonowaną tożsamość konfiguracji elementu podrzędnego; jeśli dostęp został cofnięty lub zapisana konfiguracja uległa zmianie w trakcie działania, element podrzędny kończy działanie w sposób bezpieczny (fail-closed) zamiast wykonywać nieaktualne ustawienia.
+
+Gdy równoległe gałęzie odwołują się do tego samego podrzędnego Agenta, LibreChat niezależnie ocenia limity cykli i głębokości dla każdej ścieżki przejścia. Cykl w jednej gałęzi nie powoduje zatem odrzucenia poprawnych zagnieżdżonych linków do Agentów w innej gałęzi.
+
+Zapisane zespoły podlegają tym samym zasadom leniwego rozwiązywania (lazy resolution) i kontroli dostępu, co poszczególne elementy podrzędne. Po wybraniu, każdy członek zachowuje własny model, instrukcje, narzędzia, poświadczenia MCP, umiejętności (Skills), pliki, pamięć, profil Code Interpreter oraz tożsamość rozliczeniową. LibreChat wykonuje zespół jako jeden odizolowany graf podrzędny, przesyła strumieniowo postępy z uwzględnieniem członków i zwraca wynik skonfigurowanego Agenta. Jeśli jakikolwiek utrwalony członek jest nieobecny, niedostępny lub nieprawidłowy, LibreChat pomija cały zespół zamiast uruchamiać częściowy graf.
+
+W kolejnych turach LibreChat przechowuje wcześniejsze wywołania z dostępnych narzędzi podrzędnych i zespołowych w ustrukturyzowanej formie wywołania narzędzia, uwzględniając w razie potrzeby rozpoznaną tożsamość serwera MCP. Narzędzia, które nie są już dostępne, nie są dodawane do aktywnego uruchomienia tylko dlatego, że pojawiają się w historii.
+
+## Odłączone wątki subagenta [#detached-subagent-threads]
+
+Gdy `run_in_background` jest włączone dla endpointu Agents, nadrzędny Agent może odłączyć zadania podagenta i kontynuować pracę bez czekania na ich zakończenie. LibreChat utrwala każdego odłączonego potomka z prywatną linią wykonania i kanonicznym zapisem rozmowy. Wątki potomne pozostają poza normalną nawigacją i wyszukiwaniem konwersacji i nie mogą być odczytywane bezpośrednio; autoryzowany widok nadrzędny eksponuje jedynie ograniczone działania potomne.
+
+Wątki podrzędne (child threads) to rekordy wykonania przeznaczone wyłącznie do odczytu. Użytkownik nie może edytować ani usuwać kanonicznego wątku podrzędnego w miejscu jego wystąpienia. W przypadku ukończonego, trwałego wątku podrzędnego typu direct-Agent, opcja **Continue in a new chat** rozgałęzia dokładnie ukończoną gałąź do oddzielnej, normalnej i edytowalnej konwersacji typu Agent, pozostawiając oryginalny wątek podrzędny ukrytym i dostępnym tylko do odczytu. Panel aktywności utrzymuje jeden aktywny edytor (composer) przez cały czas trwania uruchomienia oraz podczas dostarczania przychodzących zadań, zachowując fokus i częściowo wpisane wskazówki w trakcie ładowania widoku nowego zadania. Przesyłanie pozostaje niedostępne, dopóki zadanie nie będzie mogło przyjąć kontroli. Tekst wprowadzony po zakończeniu jest przenoszony do rozgałęzienia, a nieudane rozgałęzienie przywraca szkic w panelu. Ta akcja jest niedostępna dla uruchomionych, grafowych, anonimowych widoków typu Agent oraz widoków współdzielonych. Usunięcie elementu nadrzędnego powoduje kaskadowe usunięcie jego linii podrzędnej. Nadrzędny Agent może odpytywać, sterować, kolejkować, przerywać, anulować, zbierać i później kontynuować kanoniczny wątek podrzędny za pomocą narzędzi zadań; dzierżawy oparte na Mongo serializują te kontynuacje pomiędzy replikami API.
+
+Panel aktywności prezentuje tury wybranego elementu podrzędnego jako jedną historię uwzględniającą rozgałęzienia. Użyj **Load earlier activity**, aby przewijać wstecz, oraz **Show full activity** przy danej turze, aby wyświetlić szczegóły jej pełnego, ograniczonego przebiegu. Mogą się tu pojawić wywołania narzędzi, zatwierdzenia, wyniki, kontrolki oraz rozumowanie widoczne dla użytkownika. Tekst rozumowania jest ograniczony, podobnie jak reszta projekcji, i oznaczony w przypadku ucięcia; aktywność zapisana przez starsze serwery może zawierać jedynie znacznik rozumowania. Zwykła zapisana aktywność wykorzystuje te same limity na element, co aktywność prywatna elementu podrzędnego, i mieści ciągły najnowszy sufiks w budżecie 64 KB na zserializowaną aktywność, więc powiadomienie o skróceniu pojawia się tylko wtedy, gdy pominięto istotną treść. Gdy historia jest ucięta lub niedostępna, panel informuje o tym zamiast prezentować częściowy widok jako kompletny. Nowe tury zdarzeń pojawiają się na dole historii, trwające tury pokazują upływający czas, a wiersze aktorów używają kropek statusu o stałej pozycji, dzięki czemu zmiany statusu nie przesuwają układu. Kompaktowy, pływający nagłówek pozwala na przewijanie historii pod nim, podczas gdy kompozytor dostosowuje się do wymiarów głównego czatu. Trwające zadania są przekazywane poprzez strumieniową aktywność, a nie oddzielny znacznik statusu uruchomienia; nietypowe stany końcowe pozostają oznaczone etykietami.
+
+Gdy Redis jest włączony, LibreChat rejestruje aktywnego właściciela wykonania i kieruje żądania typu poll, list, steer, queue, interrupt, cancel oraz collect z dowolnej repliki API do tego procesu za pośrednictwem ograniczonych czasowo komunikatów typu request/reply. Otwarty panel aktywności otrzymuje również aktualizacje na żywo w zakresie zadań; dwusekundowe trwałe zapytanie pozostaje rozwiązaniem awaryjnym w przypadku pominiętych zdarzeń, ponownych połączeń lub awarii Redis. Wdrożenia jednoprocesowe oraz te bez Redis korzystają ze ścieżki szybkiej w pamięci (in-memory). Aktywny wykonawca nie jest migrowany po ponownym uruchomieniu lub zniknięciu procesu właściciela, ale wspierany przez MongoDB podrzędny zapis (transcript), stan terminala, użycie, historia oraz późniejsza kontynuacja sterowana przez Agenta przetrwają niezależnie. Nie zmienia to odłączonych zadań w publiczne API zadań w tle (background-job API).
+
+### Kontrola uruchomionego procesu potomnego [#control-a-running-child]
+
+W uwierzytelnionej kon会話 nadrzędnej otwórz panel aktywności Subagent i wybierz trwałe zadanie podrzędne. Podczas gdy zadanie to jest uruchomione, wpisz wskazówki i prześlij je, aby domyślnie sterować jego przebiegiem. Na komputerach stacjonarnych z obsługą najechania kursorem, menu akcji kontrolki wysyłania oferuje opcje **Steer** (Steruj), **Queue** (Kolejkuj) i **Interrupt** (Przerwij) oraz pokazuje tylko skróty aktywne w bieżących ustawieniach klawiatury użytkownika. Na urządzeniach dotykowych oraz w panelu modalnym, opcje kolejkowania i przerywania pozostają dostępne jako kontrolki ikon. Jeśli nie wprowadzono żadnych wskazówek, kontrolka wysyłania zmienia się w **Cancel task** (Anuluj zadanie).
+
+- **Steer** dodaje wskazówki przy następnej bezpiecznej granicy dziecka.
+- **Queue** przechowuje wskazówki dla późniejszej tury w zadaniu podrzędnym.
+- **Interrupt** zatrzymuje bieżącą pracę elementu podrzędnego w bezpiecznym punkcie i stosuje nowe wytyczne.
+- **Cancel task** żąda anulowania bez wysyłania wskazówek.
+
+Zaakceptowane kontrolki pojawiają się w historii specyficznej dla zadania jako wysyłane, oczekujące, zastosowane, niezastosowane lub nieudane, wraz z podaniem przyczyny, jeśli jest dostępna. Wybierz **Withdraw**, aby usunąć zakolejkowane wskazówki, zanim proces podrzędny je zastosuje. Wskazówki są ograniczone do 4 KB. Każde zadanie przechowuje do 64 autorytatywnych potwierdzeń, podczas gdy panel aktywności wyświetla do 32; starsza ukończona historia jest pomijana przed aktywnymi zaakceptowanymi kontrolkami, a interfejs użytkownika oznacza pominiętą historię lub wskazówki skrócone na potrzeby wyświetlania.
+
+Elementy sterujące uruchamiania zamykają się, gdy element podrzędny zostanie ustalony, a ten sam kompozytor przełącza się na kontynuowanie kwalifikującego się elementu podrzędnego w nowym czacie. LibreChat weryfikuje dostęp zalogowanego użytkownika do elementu nadrzędnego i podrzędnego, ich relację nadrzędny-podrzędny oraz własność dzierżawy przy każdym żądaniu, a także stosuje skonfigurowane filtry zawartości i kontrole moderacji do wskazówek. Wielokrotne dostarczenie tego samego zaakceptowanego elementu sterującego zwraca jego autorytatywne potwierdzenie zamiast dwukrotnego zastosowania instrukcji. Udostępnione konwersacje pozostają w trybie tylko do odczytu i nie udostępniają tych elementów sterujących.
+
+Udostępnione konwersacje mogą wyświetlać tylko ograniczone aktywności zawarte w ładunku udostępniania. Ich widok jest tylko do odczytu, pomija kontrolki zatwierdzania i selektory trwałych elementów podrzędnych oraz nigdy nie otwiera uwierzytelnionej ścieżki zapytania wątku podrzędnego.
+
+### Aktywność podrzędna sterowana zdarzeniami [#event-driven-child-activity]
+
+Child Agents kontynuowane poprzez [powiązanie zdarzeń Agents API](/docs/features/agents_api#event-driven-child-agents) nie pochodzą z karty narzędzia `subagent`. W uwierzytelnionej konwersacji nadrzędnej LibreChat dodaje zamiast tego jeden kompaktowy wiersz aktora pod wiadomością, która posiada to powiązanie. Jego otwarcie powoduje ponowne użycie panelu aktywności Subagent, z selektorami dla aktora i jego tur, a także aktywnością w czasie rzeczywistym dotyczącą kroków uruchomienia, narzędzi, wiadomości i znaczników rozumowania. Zewnętrzne wyzwalacze zdarzeń są renderowane jako zwykłe wiersze wyzwalane przez użytkownika z możliwością rozwinięcia szczegółów typu zdarzenia, źródła, czasu wystąpienia i oczekiwanej akcji. Gdy nowe dostarczenie wybiera inne zadanie w tym samym wątku podrzędnym, istniejące tury pozostają widoczne, podczas gdy nowe zadanie się ładuje i dołączany jest tylko jego symbol zastępczy strumieniowania; status i kontrolki specyficzne dla zadania nigdy nie są zapożyczane z zachowanego widoku. Wcześniejsze strony i pełna aktywność dla poszczególnych tur korzystają z tej samej ograniczonej, tylko do odczytu historii podrzędnej.
+
+Projekcja nadrzędna jest celowo ograniczona: zwraca maksymalnie 64 wątki podrzędne, przechowuje do 20 ostatnich zadań na wątek podrzędny ze współdzielonego ograniczonego okna źródłowego i ogranicza odpowiedź do 96 KB. Interfejs użytkownika informuje o obciętej historii, zamiast sugerować, że widok przekraczający limit jest kompletny. Rozpoczęcie kolejnej tury promuje starszego aktora do okna ostatnich wątków podrzędnych. Te wątki podrzędne pozostają ukryte przed zwykłą nawigacją i nie można ich odkryć z poziomu innego elementu nadrzędnego lub dzierżawcy.
+
+### Automatyczna kontynuacja nadrzędna [#automatic-parent-continuation]
+
+Po zakończeniu pracy odłączonego procesu potomnego (detached child), LibreChat utrwala jego wynik końcowy lub błąd i domyślnie wysyła idempotentną kontynuację do zapisanego nadrzędnego Agenta w tej samej gałęzi, w której został uruchomiony. Dostarczenie oczekuje, dopóki gałąź nadrzędna jest uruchomiona, wstrzymana lub finalizowana. Wznowiony proces nadrzędny otrzymuje ograniczony manifest istotnych zadań równorzędnych zamiast ich ciągłego odpytywania, a czat prezentuje wznowienie w zwijanej karcie zadania.
+
+Automatyczne dostarczanie uzupełnień jest włączone, gdy [`endpoints.agents.backgroundTasks.completionWakeups`](/docs/configuration/librechat_yaml/object_structure/agents#backgroundtasks) jest pominięte lub ustawione na `true`. Ustaw tę wartość na `false`, aby zachować odłączone procesy potomne wyłącznie w trybie odpytywania (poll-only). Anulowane procesy potomne są ignorowane, a efemeryczne Agenty nadrzędne nie są obsługiwane, ponieważ nie ma zapisanej konfiguracji do przywrócenia. Wykonanie odłączonego procesu potomnego posiada własny kontekst uruchomienia, więc zakończenie lub przerwanie pierwotnego żądania nadrzędnego nie anuluje niezależnie wykonywanej pracy. Proces nadrzędny nadal może zbierać trwałe wyniki procesów potomnych za pomocą swoich narzędzi zadań (task tools).
 
 ## Limity [#limits]
 
@@ -105,10 +171,16 @@ LibreChat egzekwuje te limity, aby utrzymać grafy subagentów w określonych gr
 <OptionTable
   options={[
     [
-      'MAX_SUBAGENTS',
+      'endpoints.agents.maxSubagents',
       'Number',
-      'Maksymalna liczba jawnych subagentów na agenta nadrzędnego. Konfigurowalne przez `endpoints.agents.maxSubagents`, do 50.',
+      'Maksymalna liczba wpisów na listę `agent_ids` lub `graphs` nadrzędnego Agenta. Konfigurowalna w zakresie od 1 do 50.',
       '10',
+    ],
+    [
+      'MAX_GRAPH_SUBAGENT_MEMBERS',
+      'Number',
+      'Maksymalna liczba członków w jednym zapisanym zespole Agentów.',
+      '32',
     ],
     ['MAX_SUBAGENT_DEPTH', 'Number', 'Maksymalna liczba jawnych przeskoków subagenta od agenta głównego.', '5'],
     [
@@ -134,15 +206,16 @@ endpoints:
     maxSubagents: 20
 ```
 
-Skonfigurowana wartość ma zastosowanie do żądań tworzenia, aktualizacji i duplikowania agentów, do list dozwolonych `subagents.agent_ids` w Model Specs oraz do selektora subagentów w kreatorze Agent Builder. Zobacz [maxSubagents](/docs/configuration/librechat_yaml/object_structure/agents#maxsubagents), aby uzyskać pełną dokumentację. Powyższe limity głębokości, węzłów grafu i konfiguracji uruchomieniowej są stałe.
+Skonfigurowana wartość ma zastosowanie do żądań tworzenia, aktualizacji i duplikowania Agentów zarówno dla `subagents.agent_ids`, jak i `subagents.graphs`, do list dozwolonych `subagents.agent_ids` w Model Specs oraz do selektora subagentów w Kreatorze Agentów (Agent Builder). Zobacz [maxSubagents](/docs/configuration/librechat_yaml/object_structure/agents#maxsubagents), aby uzyskać pełną dokumentację. Limity dotyczące poszczególnych członków zespołu, głębokości, węzłów grafu oraz konfiguracji uruchomieniowej wymienione powyżej są stałe.
 
 ## Kontrola dostępu [#access-control]
 
-Skonfigurowane agenty podrzędne muszą być widoczne dla użytkownika. Jeśli użytkownik nie posiada uprawnień do wyświetlania powiązanego agenta, LibreChat pomija tego podagenta. W przypadku żądań utworzenia i aktualizacji, nieprawidłowe lub nieautoryzowane wpisy `subagents.agent_ids` są odrzucane.
+Skonfigurowane agenty podrzędne oraz każdy zapisany członek zespołu muszą być widoczne dla użytkownika. Jeśli użytkownik nie posiada uprawnień do wyświetlania poszczególnego przywołanego Agenta, LibreChat pomija tego podagenta. Zapisany zespół traktowany jest jako całość i jest pomijany, jeśli którykolwiek z jego członków jest niedostępny. Żądania tworzenia i aktualizacji odrzucają brakujące lub nieautoryzowane odniesienia, zduplikowane typy spawn, cykliczne lub rozłączone grafy zespołów, nieprawidłowych członków wejściowych lub wynikowych oraz konfiguracje przekraczające powyższe limity.
 
 ## Wskazówki dotyczące projektowania [#design-tips]
 
 - Włącz funkcję self-spawn, gdy agent nadrzędny ma już odpowiedni zakres i potrzebuje jedynie świeżego kontekstu dla podzadania.
 - Dodaj określonych agentów podrzędnych, gdy zadanie wymaga innego modelu, zestawu instrukcji, zestawu narzędzi lub listy dozwolonych umiejętności.
+- Użyj zapisanego zespołu (team), gdy kilka Agentów powinno działać jako jeden delegowany przepływ pracy z pojedynczym wynikiem zwracanym do elementu nadrzędnego.
 - Dbaj o przejrzystość opisów elementów podrzędnych. Element nadrzędny używa nazwy i opisu każdego elementu podrzędnego, aby wybrać odpowiedni cel delegowania.
 - Używaj subagentów do prac pośrednich, które powinny zwracać zwięzły wynik, a nie do stałego przekazywania zadań do innej ścieżki konwersacji.

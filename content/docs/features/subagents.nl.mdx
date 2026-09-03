@@ -11,6 +11,7 @@ Gebruik subagents voor:
 - Onderzoek subtaken die lange tussenresultaten kunnen genereren
 - Beoordelingsrondes met een gespecialiseerde agent
 - Tool-intensief werk dat buiten de bovenliggende context moet blijven
+- Multi-agent team-workflows die achter één gedelegeerde taak moeten worden uitgevoerd
 - Decompositie in parallelle stijl waarbij de ouder coördineert en samenvat
 
 ## Hoe Subagents verschillen van Agent Chain [#how-subagents-differ-from-agent-chain]
@@ -54,6 +55,27 @@ Beschikbare instellingen:
 - **Allow self-spawn**: laat de agent een nieuwe kopie van zichzelf aanmaken in een geïsoleerde context. Dit is standaard ingeschakeld wanneer subagents zijn ingeschakeld.
 - **Aanvullende subagents**: selecteert specifieke agents die de parent mag aanmaken.
 
+Opgeslagen Agent-teams zijn ingebed als `subagents.graphs` in de payloads voor het aanmaken of bijwerken van Agents. De huidige Agent Builder behoudt deze definities terwijl je de instellingen voor self-spawn en individuele Agents bewerkt, maar het maakt zelf geen grafiekdefinities aan. Elk team benoemt een begrensde gerichte acyclische graaf, de bijbehorende entry Agent, en de Agent wiens resultaat wordt teruggegeven aan de parent:
+
+```yaml filename="agent saved-team subagent"
+subagents:
+  enabled: true
+  allowSelf: false
+  graphs:
+    - type: 'research_team'
+      name: 'Research team'
+      description: 'Researches a topic and reviews the findings'
+      agent_ids:
+        - 'agent_researcher'
+        - 'agent_reviewer'
+      entry_agent_id: 'agent_researcher'
+      result_agent_id: 'agent_reviewer'
+      edges:
+        - from: 'agent_researcher'
+          to: 'agent_reviewer'
+          edgeType: 'direct'
+```
+
 Gelijkwaardige agentvorm:
 
 ```yaml filename="agent subagents"
@@ -83,7 +105,7 @@ modelSpecs:
         model: 'gpt-4o'
 ```
 
-Alleen `enabled` en `allowSelf` worden naar clients verzonden in de startup-configuratie. De `agent_ids` allowlist blijft aan de serverzijde en wordt gevalideerd tegen de effectieve limiet voor subagents, die standaard op 10 staat en configureerbaar is via [`endpoints.agents.maxSubagents`](/docs/configuration/librechat_yaml/object_structure/agents#maxsubagents). Client-request payloads kunnen de Model Specs Subagent-configuratie niet aanleveren of overschrijven.
+Alleen `enabled` en `allowSelf` worden naar clients verzonden in de startup-configuratie. De `agent_ids` allowlist blijft aan de serverzijde en wordt gevalideerd tegen de effectieve Subagent-limiet, die standaard op 10 staat en wordt geconfigureerd met [`endpoints.agents.maxSubagents`](/docs/configuration/librechat_yaml/object_structure/agents#maxsubagents). Client-request payloads kunnen de Subagent-configuratie van Model Specs niet leveren of overschrijven.
 
 ## Runtime Gedrag [#runtime-behavior]
 
@@ -91,10 +113,54 @@ Wanneer subagents zijn ingeschakeld, ontvangt de parent agent een `subagent` too
 
 - `self`, wanneer `allowSelf` niet false is
 - Elke geconfigureerde onderliggende agent in `agent_ids`
+- Elk volledig opgeslagen Agent-team in `graphs`
 
-Child agents draaien met een geïsoleerde context. De tool-search-status van de parent en de verzamelde context worden niet gekopieerd naar de child-run. Het modelgebruik van de child-run wordt gefactureerd bij de parent-transactie en opgenomen in de gebruikstotalen van de parent. De UI toont de child-run als een uitklapbaar agent-activiteitsonderdeel met status, ticker-updates en het volledige eindresultaat, inclusief resultaattekst die incrementeel werd geleverd terwijl de child streamde.
+Child agents draaien met een geïsoleerde context. De tool-search status van de parent en de verzamelde context worden niet gekopieerd naar de child-run. Het gebruik van het child-model op de voorgrond wordt opgenomen in de transactie en de gebruikstotalen van de parent; losgekoppelde child-aanroepen die eindigen nadat het parent-verzoek is gesloten, registreren het gebruik onafhankelijk. De compacte child-kaart opent een uniform zijpaneel voor activiteiten voor runs op de voorgrond, grafiek-, legacy- en losgekoppelde runs, en toont details over de begrensde levenscyclus, redenering, tools, goedkeuring en resultaten die passen bij dat transport.
 
 Expliciete child agents worden aan de parent geadverteerd als lichtgewicht descriptors en initialiseren pas volledig wanneer ze worden geselecteerd. Ongebruikte children laden hun model, tools, MCP servers, bestanden of Skills niet. Bij aanroeping controleert LibreChat opnieuw de weergavemachtigingen en de geversioneerde configuratie-identiteit van de child; als de toegang is ingetrokken of de opgeslagen configuratie tijdens de uitvoering is gewijzigd, faalt de child veilig (fail-closed) in plaats van verouderde instellingen uit te voeren.
+
+Wanneer parallelle vertakkingen naar dezelfde onderliggende Agent verwijzen, evalueert LibreChat de limieten voor cycli en diepte onafhankelijk voor elk doorlooppad. Een cyclus op de ene vertakking verwerpt daarom geen geldige geneste Agent-koppelingen op een andere vertakking.
+
+Opgeslagen teams volgen dezelfde 'lazy resolution' en toegangscontroles als individuele kinderen. Wanneer geselecteerd, behoudt elk lid zijn eigen model, instructies, tools, MCP-referenties, Skills, bestanden, geheugen, Code Interpreter-profiel en facturatie-identiteit. LibreChat voert het team uit als één geïsoleerde kindergrafiek, streamt de voortgang per lid en retourneert de uitvoer van de geconfigureerde resultaat-Agent. Als een opgeslagen lid ontbreekt, ontoegankelijk of ongeldig is, slaat LibreChat het hele team over in plaats van een gedeeltelijke grafiek uit te voeren.
+
+In latere beurten behoudt LibreChat eerdere aanroepen van bereikbare child- en team-tools in een gestructureerde tool-call vorm, inclusief de opgeloste MCP server-identiteit waar nodig. Tools die niet langer bereikbaar zijn, worden niet aan de actieve run toegevoegd enkel omdat ze in de geschiedenis voorkomen.
+
+## Losgekoppelde subagent-threads [#detached-subagent-threads]
+
+Wanneer `run_in_background` is ingeschakeld voor het Agents endpoint, kan een bovenliggende Agent subagent-taken loskoppelen en doorgaan zonder daarop te wachten. LibreChat slaat elk losgekoppeld kind op met een private uitvoeringslijn en een canoniek transcript. Kind-threads blijven buiten de normale gespreksnavigatie en zoekopdrachten en kunnen niet direct worden gelezen; de geautoriseerde weergave van de ouder toont alleen begrensde activiteit van het kind.
+
+Child threads zijn alleen-lezen uitvoeringsrecords. Een gebruiker kan het canonieke kind niet ter plekke bewerken of verwijderen. Voor een voltooid duurzaam direct-Agent kind, splitst **Continue in a new chat** de exacte voltooide vertakking af naar een afzonderlijke normale, beschrijfbare Agent-conversatie, terwijl het oorspronkelijke kind verborgen en alleen-lezen blijft. Het activiteitenpaneel houdt één composer gemonteerd gedurende de uitvoering en over inkomende taakleveringen heen, waardoor de focus en halfgetypte instructies behouden blijven terwijl een nieuwe taakweergave wordt geladen. Inzending blijft onbeschikbaar totdat de taak besturingselementen kan accepteren. Tekst die na afwikkeling is ingevoerd, wordt meegenomen naar de fork, en een mislukte fork herstelt het concept in het paneel. Deze actie is niet beschikbaar voor actieve, grafiek-, anonieme-Agent- en gedeelde weergaven. Het verwijderen van de ouder werkt door naar de afstammingslijn van het kind. De ouder-Agent kan het canonieke kind pollen, sturen, in de wachtrij plaatsen, onderbreken, annuleren, verzamelen en later voortzetten via zijn taaktools; Mongo-gebaseerde leases serialiseren die voortzettingen over API-replica's heen.
+
+Het activiteitenpaneel presenteert de beurten van het geselecteerde kind als één branch-bewuste geschiedenis. Gebruik **Load earlier activity** om terug te bladeren en **Show full activity** bij een beurt om het volledige begrensde uitvoeringsdetail te onthullen. Tool-aanroepen, goedkeuringen, resultaten, besturingselementen en voor de gebruiker zichtbare redeneringen kunnen verschijnen. Redeneringstekst is begrensd zoals de rest van de projectie en gemarkeerd wanneer deze is ingekort; activiteiten die door oudere servers zijn opgeslagen, tonen mogelijk alleen een redeneringsmarkering. Gewone opgeslagen activiteiten gebruiken dezelfde limieten per item als privé-kindactiviteiten en passen een aaneengesloten nieuwste achtervoegsel in een geserialiseerd activiteitenbudget van 64 KB, dus de inkortingsmelding verschijnt alleen wanneer zinvolle inhoud is weggelaten. Wanneer de geschiedenis is ingekort of niet beschikbaar is, meldt het paneel dit in plaats van een gedeeltelijke weergave als volledig te presenteren. Nieuwe gebeurtenisbeurten nestelen zich onderaan de geschiedenis, lopende beurten tonen de verstreken tijd en actor-rijen gebruiken statusstippen met een vaste positie, zodat statuswijzigingen de lay-out niet verschuiven. Een compacte zwevende koptekst laat de geschiedenis eronder scrollen, terwijl de composer de afmetingen van de hoofdchat volgt. Lopend werk wordt overgebracht door de streaming-activiteit in plaats van een aparte status-chip; abnormale terminale statussen blijven gelabeld.
+
+Met Redis ingeschakeld registreert LibreChat de actieve uitvoerings-eigenaar en routeert het poll-, list-, steer-, queue-, interrupt-, cancel- en collect-verzoeken van elke API-replica naar dat proces via begrensde, verlopende request/reply-berichten. Het open activiteitspaneel ontvangt ook live-updates op taakniveau; een duurzame query van twee seconden blijft de fallback voor gemiste gebeurtenissen, herverbindingen of Redis-storingen. Implementaties met één proces en zonder Redis gebruiken het in-memory fast path. Een live executor wordt niet gemigreerd nadat het eigenaarproces opnieuw is opgestart of verdwenen, maar het door MongoDB ondersteunde kind-transcript, de terminalstatus, het gebruik, de geschiedenis en de latere door Agent aangestuurde voortzetting blijven onafhankelijk bestaan. Dit verandert losgekoppelde taken niet in een publieke background-job API.
+
+### Een draaiend kindproces beheren [#control-a-running-child]
+
+Open in een geauthenticeerd bovenliggend gesprek het Subagent-activiteitenpaneel en selecteer een duurzame onderliggende taak. Terwijl die taak wordt uitgevoerd, typ je instructies en verzend je deze om standaard bij te sturen. Op een desktop die hover-functionaliteit ondersteunt, biedt het actiemenu van de verzendknop **Steer**, **Queue** en **Interrupt**, en worden alleen sneltoetsen getoond die actief zijn onder de huidige toetsenbordinstellingen van de gebruiker. Op aanraakapparaten en in het modale paneel blijven queue en interrupt beschikbaar als pictogramknoppen. Als er geen instructies zijn ingevoerd, verandert de verzendknop in **Cancel task**.
+
+- **Steer** voegt begeleiding toe bij de volgende veilige grens van het kind.
+- **Queue** bevat richtlijnen voor een latere beurt in de onderliggende taak.
+- **Interrupt** stopt het huidige werk van het kind op een veilige grens en past nieuwe richtlijnen toe.
+- **Cancel task** verzoekt om annulering zonder begeleiding te sturen.
+
+Geaccepteerde besturingselementen verschijnen in een taakspecifieke geschiedenis als verzonden, wachtend, toegepast, niet toegepast of mislukt, met een reden indien beschikbaar. Kies **Withdraw** om de in de wachtrij geplaatste begeleiding te verwijderen voordat het kindproces deze toepast. Begeleiding is beperkt tot 4 KB. Elke taak slaat tot 64 officiële ontvangstbewijzen op, terwijl het activiteitenpaneel er maximaal 32 weergeeft; oudere voltooide geschiedenis wordt weggelaten vóór actieve geaccepteerde besturingselementen, en de UI labelt weggelaten geschiedenis of begeleiding die is ingekort voor weergave.
+
+Actieve besturingselementen sluiten wanneer het kind tot rust komt, en dezelfde composer schakelt over naar het voortzetten van een in aanmerking komend kind in een nieuwe chat. LibreChat verifieert bij elk verzoek de toegang van de aangemelde gebruiker tot de ouder en het kind, hun ouder-kindrelatie en het eigendom van de tenant, en past de geconfigureerde inhoudsfilters en moderatiecontroles toe op de begeleiding. Herhaalde aflevering van hetzelfde geaccepteerde besturingselement retourneert het officiële ontvangstbewijs in plaats van de instructie twee keer toe te passen. Gedeelde gesprekken blijven alleen-lezen en stellen deze besturingselementen niet bloot.
+
+Gedeelde gesprekken kunnen alleen de begrensde activiteit weergeven die al in de share-payload is opgenomen. De weergave is alleen-lezen, laat goedkeuringscontroles en selectievakjes voor duurzame sub-threads weg en opent nooit het pad voor geauthenticeerde sub-thread-query's.
+
+### Event-Driven Child Activity [#event-driven-child-activity]
+
+Child Agents die worden voortgezet via een [Agents API event binding](/docs/features/agents_api#event-driven-child-agents) zijn niet afkomstig van een `subagent` tool card. In de geauthenticeerde ouder-conversatie voegt LibreChat in plaats daarvan één compacte actor-rij toe onder het bericht dat de binding bezit. Het openen hiervan hergebruikt het Subagent-activiteitenpaneel, met selectievakjes voor de actor en zijn beurten, plus live run-step, tool, bericht en reasoning-marker activiteit. Externe event-triggers worden weergegeven als normale user-trigger rijen met uitvouwbare details over het event-type, de bron, het tijdstip van voorkomen en de verwachte actie. Wanneer een nieuwe levering een andere taak in dezelfde child-thread selecteert, blijven de bestaande beurten zichtbaar terwijl de nieuwe taak laadt en alleen de streaming-placeholder wordt toegevoegd; taakspecifieke status en bedieningselementen worden nooit overgenomen van de behouden weergave. Eerdere pagina's en volledige activiteit per beurt maken gebruik van dezelfde begrensde, alleen-lezen child-geschiedenis.
+
+De bovenliggende projectie is bewust begrensd: deze retourneert maximaal 64 onderliggende threads, behoudt tot 20 recente taken per kind vanuit een gedeeld begrensd bronvenster en beperkt de respons tot 96 KB. De UI rapporteert afgekapte geschiedenis in plaats van te suggereren dat een weergave die de limiet overschrijdt volledig is. Het starten van een nieuwe beurt promoveert een oudere actor naar het venster met recente kinderen. Deze onderliggende threads blijven verborgen voor normale navigatie en kunnen niet worden ontdekt vanuit een andere ouder of tenant.
+
+### Automatische bovenliggende voortzetting [#automatic-parent-continuation]
+
+Nadat een losgekoppeld kindproces is voltooid, behoudt LibreChat het terminale resultaat of de foutmelding en stuurt standaard een idempotente voortzetting naar de opgeslagen ouder-Agent op precies de vertakking die het heeft gestart. De aflevering wacht terwijl die ouder-vertakking actief is, gepauzeerd is of wordt afgerond. De hervatte ouder ontvangt een begrensd manifest van relevante zustertaken in plaats van deze via busy-polling op te vragen, en de chat presenteert de activering in een inklapbare taakkaart.
+
+Automatische voltooiingslevering is ingeschakeld wanneer [`endpoints.agents.backgroundTasks.completionWakeups`](/docs/configuration/librechat_yaml/object_structure/agents#backgroundtasks) wordt weggelaten of op `true` staat. Zet dit op `false` om losgekoppelde kinderen alleen via polling te laten werken. Geannuleerde kinderen worden genegeerd en efemere ouder-Agents worden niet ondersteund omdat er geen opgeslagen configuratie is om te herstellen. De uitvoering van een losgekoppeld kind bezit zijn eigen uitvoeringscontext, dus het afronden of afbreken van het oorspronkelijke ouderverzoek annuleert het onafhankelijk eigendom van het werk niet. De ouder kan nog steeds duurzame resultaten van het kind verzamelen via zijn taaktools.
 
 ## Limieten [#limits]
 
@@ -103,10 +169,16 @@ LibreChat dwingt deze limieten af om subagent-grafen begrensd te houden:
 <OptionTable
   options={[
     [
-      'MAX_SUBAGENTS',
+      'endpoints.agents.maxSubagents',
       'Number',
-      'Maximaal aantal expliciete subagents per bovenliggende agent. Configureerbaar via `endpoints.agents.maxSubagents`, tot 50.',
+      'Maximaal aantal items in elke bovenliggende `agent_ids` of `graphs` lijst van een Agent. Configureerbaar van 1 tot 50.',
       '10',
+    ],
+    [
+      'MAX_GRAPH_SUBAGENT_MEMBERS',
+      'Number',
+      'Maximaal aantal leden in één opgeslagen Agent-team.',
+      '32',
     ],
     ['MAX_SUBAGENT_DEPTH', 'Number', 'Maximaal aantal expliciete subagent-hops vanaf een root-agent.', '5'],
     [
@@ -132,15 +204,16 @@ endpoints:
     maxSubagents: 20
 ```
 
-De geconfigureerde waarde is van toepassing op verzoeken voor het aanmaken, bijwerken en dupliceren van agents, op de `subagents.agent_ids` allowlists van Model Specs, en op de subagent-kiezer in de Agent Builder. Zie [maxSubagents](/docs/configuration/librechat_yaml/object_structure/agents#maxsubagents) voor de volledige referentie. De bovenstaande limieten voor diepte, graafknooppunten en run-configuratie zijn vast.
+De geconfigureerde waarde is van toepassing op verzoeken voor het aanmaken, bijwerken en dupliceren van Agents voor zowel `subagents.agent_ids` als `subagents.graphs`, op de `subagents.agent_ids` allowlists van Model Specs, en op de subagent-kiezer in de Agent Builder. Zie [maxSubagents](/docs/configuration/librechat_yaml/object_structure/agents#maxsubagents) voor de volledige referentie. De bovenstaande limieten per teamlid, diepte, grafiekknooppunt en run-configuratie zijn vast.
 
 ## Toegangscontrole [#access-control]
 
-Geconfigureerde child agents moeten zichtbaar zijn voor de gebruiker. Als de gebruiker geen weergavetoegang heeft tot een verwezen agent, slaat LibreChat die subagent over. Voor aanmaak- en updateverzoeken worden ongeldige of ongeautoriseerde `subagents.agent_ids` vermeldingen geweigerd.
+Geconfigureerde child agents en elk opgeslagen teamlid moeten zichtbaar zijn voor de gebruiker. Als de gebruiker geen weergavetoegang heeft tot een individueel gerefereerde Agent, slaat LibreChat die subagent over. Een opgeslagen team is alles-of-niets en wordt overgeslagen als een lid niet beschikbaar is. Aanvragen voor het aanmaken en bijwerken wijzen ontbrekende of ongeautoriseerde referenties, dubbele spawn-types, cyclische of niet-verbonden teamgrafieken, ongeldige entry- of resultaatleden, en configuraties die de bovenstaande limieten overschrijden, af.
 
 ## Ontwerptips [#design-tips]
 
 - Schakel self-spawn in wanneer de bovenliggende agent al goed is afgebakend en enkel een nieuwe context nodig heeft voor een deeltaak.
 - Voeg specifieke child agents toe wanneer de taak een ander model, instructieset, toolset of skill allowlist vereist.
+- Gebruik een opgeslagen team wanneer meerdere Agents als één gedelegeerde workflow moeten draaien, waarbij één enkel resultaat wordt teruggegeven aan de parent.
 - Houd beschrijvingen van kinderen duidelijk. De ouder gebruikt de naam en beschrijving van elk kind om het juiste delegatiedoel te kiezen.
 - Gebruik subagents voor tussenliggend werk dat een compact resultaat moet opleveren, niet voor permanente overdrachten naar een ander gespreksverloop.

@@ -1,15 +1,120 @@
 ---
-title: Mesaj Filtresi Nesne Yapısı
+title: İçerik Filtresi Nesne Yapısı
 icon: ShieldAlert
 ---
 
 ## Genel Bakış [#overview]
 
-`messageFilter` nesnesi, sunucu tarafı mesaj filtrelerini yapılandırır. Desteklenen filtre türü `messageFilter.pii` şeklindedir.
+LibreChat iki sunucu tarafı filtre yapılandırması sağlar:
 
-`messageFilter.pii`, gönderilen mesaj metnini, metin denetlemeye, model isteğine veya mesaj kalıcılığına ulaşmadan önce kimlik bilgisi benzeri başlangıç kalıplarıyla veya operatör tarafından tanımlanan düzenli ifadelerle eşleşip eşleşmediğine göre reddeder.
+- `filters`, mesajlar, istemler, aracı kurumlar (agents), dosyalar, yetenekler, bellekler, araçlar ve diğer yeniden kullanılabilir içerikler genelindeki seçili alanlara kaynağa duyarlı ilkeler uygular.
+- `messageFilter`, eski mesaj metni filtresidir. Mevcut dağıtımlar, `filters.messages` kısmına geçiş yaparken bunu kullanmaya devam edebilirler.
 
-## Örnek [#example]
+Her ikisi de isteğe bağlıdır (opt-in). Her ikisi de yapılandırıldığında, her iki politika da uygulanır.
+
+<Callout type="warning" title="Yalnızca temel yapılandırma">
+  `filters` yalnızca temel `librechat.yaml` dosyasından yüklenir. Veritabanı, rol, grup ve kullanıcı geçersiz kılmaları (overrides) bunu ekleyemez, değiştiremez veya kaldıramaz. Çoklu kopya (multi-replica) dağıtımında, her kopyayı birlikte dağıtın veya yeniden başlatın ve politikayı aktif olarak kabul etmeden önce her birinin aynı temel yapılandırmayı yüklediğini doğrulayın.
+</Callout>
+
+## Kaynak Duyarlı Filtreler [#source-aware-filters]
+
+Her kaynağın isteğe bağlı bir `pii` politikası vardır. Bu kapsamı devre dışı bırakmak için `filters` kısmını, bir kaynağı veya onun `pii` bloğunu çıkarın.
+
+```yaml filename="librechat.yaml"
+filters:
+  messages:
+    unattributedAssistantContent: model_output
+    pii:
+      action: audit
+      fields: [text, summary, attachment_reference]
+      starterPatterns: [sk_prefix, bearer_header, api_key_header]
+      customPatterns:
+        - id: organization_identifier
+          label: Organization identifier
+          regex: 'ORG-[A-Z0-9]{12}'
+  files:
+    pii:
+      fields: [name, content, extracted_text, transcript]
+      uninspectable: block
+  skills:
+    pii:
+      fields: [name, description, instructions, imported_text, file_text]
+```
+
+### Pattern Yapılandırması [#pattern-configuration]
+
+Etkinleştirilen her kaynak için:
+
+- `action` öğesini atlayın veya eşleşmeleri reddetmek için `block` olarak ayarlayın. İçeriği reddetmeden, değiştirmeden veya sansürlemeden bulguları kaydeden bir gölge dağıtım (shadow rollout) için `action: audit` olarak ayarlayın.
+- Her kaynak için desteklenen tüm alanları incelemek üzere `fields` kısmını atlayın. Açık bir liste, 1 ile 256 arasında desteklenen alan adı içermelidir.
+- Tüm başlangıç kataloğunu etkinleştirmek için `starterPatterns` öğesini atlayın. Herhangi bir `customPatterns` öğesini korurken başlangıç desenlerini devre dışı bırakmak için bunu `[]` olarak ayarlayın.
+- `customPatterns` öğesini bir `id`, kullanıcıya görünen bir `label` ve `regex` ile yapılandırın.
+
+Denetim modu, operatörlerin yaptırımdan önce bulguları ölçebilmesi için yapılandırılmış tüm parçaları ve kuralları değerlendirir. Her bilgi düzeyi denetim kaydı; eylemi, dedektörü, kuralı, etiketi, kaynağı, alanı ve kökeni tanımlar ancak eşleşen metni veya kaynak içeriği asla içermez. Denetim modu redaksiyon sağlamaz; desteklenmeyen eylem değerleri yapılandırma yüklendiğinde reddedilir.
+
+Actions, kaynak bazında bağımsız olarak yapılandırılır; bu sayede bir kaynak denetim (audit) yaparken diğeri engelleme (block) yapabilir. `filters.files.pii.uninspectable: block` kuralı, ilgili kaynağın desen eylemi `audit` olarak ayarlanmış olsa bile, opak veya boyutu aşılmış seçili dosya içerikleri için bağımsız, başarısızlık durumunda kapalı (fail-closed) bir kural olarak kalmaya devam eder.
+
+Yerleşik başlangıç modeli kimlikleri (starter pattern IDs) şunlardır:
+
+- `sk_prefix`: `sk-` tarzı belirteç (token) önekleri.
+- `bearer_header`: metin içindeki bearer token'ları.
+- `api_key_header`: `api-key` başlık biçimli metin.
+
+Özel desenler, RE2JS'in sınırlı, doğrusal zamanlı düzenli ifade sözdizimini kullanır. Geriye dönük başvurular (backreferences) ve ileriye/geriye bakış (lookaround) desteklenmez ve bazı kaçış karakterleri JavaScript düzenli ifadelerinden farklıdır. LibreChat, yapılandırmayı yüklerken geçersiz veya desteklenmeyen desenleri reddeder.
+
+### Desteklenen Kaynaklar ve Alanlar [#supported-sources-and-fields]
+
+| Kaynak | Desteklenen alanlar |
+| --- | --- |
+| `messages` | `name`, `text`, `summary`, `quote`, `answer`, `decision_response`, `decision_reason`, `content_part`, `attachment_reference`, `assembled_context` |
+| `prompts` | `name`, `description`, `oneliner`, `category`, `command`, `text`, `preset_text`, `system`, `context`, `instructions`, `additional_instructions`, `greeting`, `example_input`, `example_output` |
+| `agentInstructions` | `name`, `category`, `description`, `instructions`, `additional_instructions`, `edge_description`, `edge_prompt`, `edge_prompt_key`, `artifacts`, `support_contact_name`, `support_contact_email` |
+| `conversationStarters` | `text` |
+| `conversationTitles` | `title` |
+| `feedback` | `text` |
+| `skills` | `name`, `display_title`, `description`, `category`, `frontmatter`, `instructions`, `imported_text`, `file_name`, `file_text` |
+| `memories` | `key`, `value`, `summary` |
+| `files` | `name`, `content`, `extracted_text`, `transcript`, `uri` |
+| `toolArguments` | `name`, `arguments`, `output` |
+| `modelParameters` | `stop`, `request_fields`, `response_format`, `metadata` |
+| `actionMetadata` | `raw_spec`, `domain`, `privacy_policy_url`, `authorization_type`, `custom_auth_header`, `authorization_content_type`, `authorization_url`, `client_url`, `scope`, `token_exchange_method`, `api_key`, `oauth_client_id`, `oauth_client_secret` |
+
+### Mesaj Kaynağı [#message-provenance]
+
+`filters.messages.unattributedAssistantContent`, köken bilgisi olmayan eski asistan içeriğinin nasıl sınıflandırılacağını kontrol eder:
+
+- `model_output` (varsayılan): atfedilmemiş asistan içeriğini model çıktısı olarak ele alarak eski davranışı korur.
+- `inspect`: aksi belirtilmemiş asistan içeriğini, seçili ek projeksiyonları dahil olmak üzere, gönderilmiş içerik olarak ele alır. Açıkça model çıktısı olarak işaretlenmiş asistan içeriği muaf tutulmaya devam eder.
+
+Bu sınıflandırma, `filters.messages.pii` atlandığında bile etkinleştirilmiş bir eski `messageFilter.pii` politikasını etkileyebilir. Geriye dönük incelemeye güvenmeden önce eski kayıtların envanterini çıkarın veya bunları taşıyın.
+
+### İncelenemeyen Dosyalar [#uninspectable-files]
+
+`filters.files.pii.uninspectable`, LibreChat'in inceleyemediği, opak veya boyutu çok büyük içerikler dahil olmak üzere seçili dosya içeriğini kontrol eder:
+
+- `allow` (varsayılan): uyumluluğu korur ve içeriğe izin verir.
+- `block`: sağlayıcı veya depolama tarafındaki yan etkilerden önce onu reddeder.
+
+`block` özelliğini dikkatli bir şekilde kullanıma sunun. Bu özellik, incelenebilir metin eklenene kadar eski dosyaların yeniden kullanım için erişilemez hale gelmesine neden olabilir.
+
+### Saklanan ve Yeniden Kullanılan İçerik [#stored-and-reused-content]
+
+Bir politikayı etkinleştirmek veya değiştirmek, depolanan kayıtları yeniden yazmaz veya silmez. LibreChat, korunan içerik gönderildiğinde, kopyalandığında, paylaşıldığında, yeniden kullanıldığında veya modele bağlandığında mevcut politikayı uygular.
+
+Güvenli meta veri düzenlemeleri yine de başarılı olabilir, bu nedenle engellenen kayıtlar onarılabilir durumda kalır. Yönetim görünümlerinde, engellenen istem veya hazır ayar alanları `contentFilterBlocked: true` ile boş görünebilir; engellenen istem grupları doğrudan erişimde hata döndürür ve koleksiyon ile yeniden kullanım yanıtlarından çıkarılır. Reddedilen bir arka plan bellek güncellemesi, ana sohbet yanıtı devam ederken atlanabilir.
+
+Kaynak duyarlı metin eşleşmelerini engellemek, `content_filter_block` ile HTTP `400` hatası döndürür. İncelenemeyen dosya reddetmeleri ise `content_filter_uninspectable` kullanır.
+
+### Sınırlar [#limits]
+
+- Kaynak başına 256'ya kadar alan, başlangıç desenleri veya özel desenler.
+- Tüm yapılandırma genelinde 256 adede kadar özel desen.
+- Desen kimlikleri (IDs) 256 karaktere kadar, etiketler 512 karaktere kadar ve regex'ler 512 karaktere kadar.
+- Toplam 8.192 regex karakteri ve 8.192 derlenmiş filtre yönergesi.
+
+## Eski `messageFilter` [#legacy-messagefilter]
+
+`messageFilter.pii`, moderasyon, model istekleri veya kalıcılıktan önce, `message_filter_pii_block` ile eşleşen kullanıcı tarafından sağlanan mesaj metnini reddeder. Yalnızca engelleme odaklı kalır ve `action` kabul etmez. Dosya içeriklerini veya `filters` kapsamında ele alınan diğer yeniden kullanılabilir kaynakları incelemez.
 
 ```yaml filename="librechat.yaml"
 messageFilter:
@@ -24,63 +129,4 @@ messageFilter:
         regex: 'sk-ant-[A-Za-z0-9_-]{20,}'
 ```
 
-## Alanlar [#fields]
-
-### messageFilter.pii
-
-<OptionTable
-  options={[
-    [
-      'pii.starterPatterns',
-      'Array of Strings',
-      'Etkinleştirilecek yerleşik başlangıç deseni kimliklerinin isteğe bağlı alt kümesi. Tüm başlangıç desenlerini etkinleştirmek için boş bırakın.',
-      'starterPatterns: [sk_prefix, bearer_header]',
-    ],
-    [
-      'pii.customPatterns',
-      'Array of Objects',
-      'Operatör tanımlı desenler. Her girdi `id`, `label` ve `regex` gerektirir.',
-      '',
-    ],
-  ]}
-/>
-
-**Yerleşik başlangıç deseni kimlikleri:**
-
-- `sk_prefix`: `sk-` stili belirteç önekleriyle eşleşir.
-- `bearer_header`: metindeki bearer token'ları eşleştirir.
-- `api_key_header`: `api-key` başlık biçimindeki metinlerle eşleşir.
-
-### customPatterns
-
-<OptionTable
-  options={[
-    ['id', 'String', 'Günlükler ve hata ayıklama için kullanılan kararlı desen kimliği.', 'id: anthropic_api_key'],
-    [
-      'label',
-      'String',
-      'Red mesajında gösterilen, insan tarafından okunabilir etiket.',
-      'label: Anthropic API key',
-    ],
-    [
-      'regex',
-      'String',
-      'RE2 düzenli ifadesi. LibreChat bunu yapılandırma yükleme zamanında doğrular ve küresel olarak uygular.',
-      "regex: 'sk-ant-[A-Za-z0-9_-]{20,}'",
-    ],
-  ]}
-/>
-
-Özel desenler, doğrusal zamanlı RE2 motorunu kullanır. Geriye dönük başvurular (backreferences) ve ileriye/geriye bakış (lookaround) desteklenmez ve bazı kaçış dizileri JavaScript düzenli ifadelerinden farklılık gösterir. LibreChat, yapılandırmayı yüklerken RE2'nin derleyemediği desenleri reddeder.
-
-## Davranış [#behavior]
-
-Gönderilen mesaj metni yapılandırılmış bir PII kalıbıyla eşleştiğinde, LibreChat `message_filter_pii_block` ile birlikte HTTP `400` hatası döndürür ve çağrıyı yapan taraftan eşleşen kimlik bilgisi türünü kaldırmasını isteyen bir mesaj iletir.
-
-Filtre şunları kontrol eder:
-
-- LibreChat arayüzü aracılığıyla gönderilen sohbet rotası kullanıcı metni.
-- OpenAI uyumlu Chat Completions isteklerinde, arayan tarafından sağlanan tüm mesaj rolleri genelindeki metin içeriği.
-- OpenAI uyumlu Yanıtlar isteklerindeki tüm arayan tarafından sağlanan mesaj rolleri genelindeki metin içeriği.
-
-Filtre, istek gövdesinde sağlanan metni değerlendirir. Dosya içeriklerini taramaz.
+Eski filtre, OpenAI uyumlu Chat Completions ve Responses isteklerindeki tüm roller genelinde chat-route kullanıcı metnini ve çağrı yapan tarafından sağlanan metni kontrol eder. Yukarıda açıklanan aynı yerleşik kimlikleri ve doğrusal zamanlı özel-regex kurallarını kullanır.

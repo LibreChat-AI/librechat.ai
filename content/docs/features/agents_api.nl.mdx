@@ -2,24 +2,25 @@
 title: Agents API (Bèta)
 icon: Plug
 description: >-
-  Toegang krijgen tot LibreChat-agents via OpenAI-compatibele en Open Responses
-  API-endpoints
+  Voer LibreChat agents uit en verstuur geauthenticeerde events via
+  programmatische API's
 ---
 
 <Callout type="warning" title="Bètafunctie">
 De Agents API bevindt zich momenteel in bèta. Endpoints, request/response-formaten en gedrag kunnen veranderen naarmate we toewerken naar een stabiele release.
 </Callout>
 
-LibreChat stelt je agents beschikbaar via twee API-compatibele interfaces, waardoor externe applicaties, scripts en services programmatisch met je agents kunnen communiceren.
+LibreChat stelt agents bloot aan externe applicaties, scripts en services via inference- en event-delivery-API's.
 
 ## Overzicht [#overview]
 
-De Agents API biedt twee interfaces:
+De Agents API biedt twee inferentie-interfaces en geauthenticeerde event-levering:
 
 - **OpenAI-compatibele Chat Completions** — `POST /api/agents/v1/chat/completions`
 - **Open Responses API** — `POST /api/agents/v1/responses`
+- **Agent Events** — `POST /api/agents/v1/events`
 
-Beide worden geverifieerd via API-sleutels en ondersteunen streaming-antwoorden, waardoor het eenvoudig is om LibreChat-agents te integreren in bestaande workflows die al gebruikmaken van OpenAI SDK's of vergelijkbare tools.
+De inference-interfaces ondersteunen API-key authenticatie, optionele OIDC-authenticatie en streaming-responses. Agent Events gebruiken Remote Agents API-key authenticatie zodat LibreChat elke levering kan koppelen aan een stabiele bronidentiteit.
 
 LibreChat adopteert [Open Responses](https://www.openresponses.org/) als zijn primaire API-framework voor het bedienen van agents. Hoewel de Chat Completions endpoint achterwaartse compatibiliteit biedt met bestaande OpenAI-compatibele tools, vertegenwoordigt de Open Responses endpoint de toekomstige richting.
 
@@ -88,6 +89,10 @@ curl -X POST https://your-librechat-instance/api/agents/v1/responses \
 </Callout>
 
 Zie [Agents Endpoint - remoteApi](/docs/configuration/librechat_yaml/object_structure/agents#remoteapi) voor alle configuratieopties.
+
+<Callout type="warning" title="Agent Events vereisen een API-sleutel">
+  OIDC-only authenticatie wordt niet ondersteund voor de Agent Events endpoints. Gebruik een Remote Agents API key bij het aanmaken van bindingen, het in de wachtrij plaatsen van events en het opvragen van de afleverstatus.
+</Callout>
 
 ## Endpoints [#endpoints]
 
@@ -158,9 +163,144 @@ curl -X POST https://your-librechat-instance/api/agents/v1/responses \
   }'
 ```
 
+## Agent Events [#agent-events]
+
+Agent Events stellen een geauthenticeerde controller of bronadapter in staat om duurzaam werk aan een Agent te leveren. Event delivery is een bèta-functionaliteit en het gedrag van de aanvraag, het antwoord en de runtime kan veranderen.
+
+De endpoints gebruiken de geauthenticeerde gebruiker, tenant en API-sleutel; de doel-Agent moet zichtbaar zijn voor die gebruiker onder de bestaande Remote Agents-machtigingen. Agent Event-verzoeken gebruiken ook de toegewezen [`rateLimits.agentEvents`](/docs/configuration/librechat_yaml/object_structure/config#ratelimits) bucket.
+
+### Een event afleveren [#deliver-an-event]
+
+```http
+POST /api/agents/v1/events
+Authorization: Bearer <REMOTE_AGENTS_API_KEY>
+Idempotency-Key: webhook-42-resource-7
+Content-Type: application/json
+
+{
+  "mode": "fire",
+  "event": {
+    "id": "resource-7-ready-3",
+    "type": "resource.ready",
+    "occurredAt": 1786967999000,
+    "payload": { "resourceId": "resource-7" }
+  },
+  "target": { "agentId": "agent_abc123" },
+  "input": "Resource resource-7 is ready. Inspect it and report the result.",
+  "orderingKey": "resource-7"
+}
+```
+
+Stuur exact één `Idempotency-Key` header en hergebruik deze bij het opnieuw proberen van dezelfde aflevering van brongebeurtenis naar doel. De sleutel moet 1-256 letters, cijfers of de tekens `._~:/+=-` bevatten. Het hergebruiken van een sleutel met andere afleveringsinhoud resulteert in een conflict.
+
+De aanroeper levert de `id`, `type`, `occurredAt` en de opgeschoonde `payload` van het event. LibreChat vervangt elke door de aanroeper opgegeven `event.source` door de identiteit van de geauthenticeerde API-sleutel en leidt de gebruiker, tenant, request ID en ontvangsttijd af. Plaats geen inloggegevens of transportgeheimen in event-payloads, omdat geaccepteerde leveringen worden opgeslagen.
+
+`orderingKey` is optioneel. Gebruik een stabiele waarde wanneer leveringen van verschillende bronnen voor dezelfde resource in de juiste volgorde moeten blijven.
+
+Een succesvol verzoek retourneert `202 Accepted`, een ondoorzichtig `id` voor de aflevering, de huidige status ervan en een `Location` header. Poll die locatie:
+
+```http
+GET /api/agents/v1/events/{delivery_id}
+Authorization: Bearer <SAME_REMOTE_AGENTS_API_KEY>
+```
+
+De levering kan `pending`, `leased`, `succeeded` of `dead` zijn. De statusrespons bevat pogingen en tijdstempels plus een resultaat of publieke fout wanneer deze is afgehandeld; het stelt de opgeslagen payload, sorteersleutel, herhalingsgeschiedenis of worker-identiteit niet bloot. Status-toegang is beperkt tot dezelfde gebruiker, tenant en API-sleutelbron.
+
+Voor een gebonden `continue` betekent `succeeded` dat de Agent-beurt werd toegelaten, niet dat het gevraagde werk is voltooid. De status ervan stelt daarom ook een duurzame `handling` levenscyclus bloot: `started`, gevolgd door precies één van `applied`, `completed_no_action`, `failed` of `cancelled`.
+
+Action-aware bronnen kunnen een `expectedAction` bevatten met een toolnaam en een optionele subset van argumenten. LibreChat rapporteert `applied` alleen wanneer die specifieke generatie is voltooid met door de host waargenomen tool-bewijs dat overeenkomt met het contract; door het model geschreven proza wordt nooit geaccepteerd als bewijs. `fire`-, `steer`- en ongebonden `continue`-leveringen wijzen `expectedAction` af.
+
+Succesvolle `fire` resultaten bevatten de conversatie- en generatie-identiteit waarop een latere `steer` gebeurtenis zich kan richten.
+
+### Event-Driven Child Agents [#event-driven-child-agents]
+
+Een extern systeem kan een bron-actor binden aan een direct onderliggende Agent, en vervolgens datzelfde onderliggende gesprek voortzetten over verschillende events heen. Gebonden voortzettingen van onderliggende processen zijn automatisch nadat de API-key identiteit, het eigendom van de binding, de ouder-kindrelatie en de autorisatiecontroles voor de Agent zijn geslaagd; er is geen afzonderlijke functie-schakelaar.
+
+Registreer de actor met dezelfde API-sleutel die de latere beurten zal afleveren:
+
+```http
+POST /api/agents/v1/events/bindings
+Authorization: Bearer <REMOTE_AGENTS_API_KEY>
+Idempotency-Key: championship-7-player-hanae
+Content-Type: application/json
+
+{
+  "actorId": "hanae-kobayashi",
+  "parentConversationId": "director-conversation-id",
+  "parentMessageId": "director-message-id",
+  "target": { "agentId": "agent_hanae" }
+}
+```
+
+`actorId` kan maximaal 128 tekens bevatten. De parent moet een gewoon Agent-gesprek zijn en de target moet geconfigureerd zijn als een van de directe Subagents van die Agent of als een toegestane self-spawn. Een nieuwe binding retourneert `201`; een idempotente replay retourneert `200`. Beide antwoorden bevatten `id`, `actorId`, `agentId` en `threadId`.
+
+Verstuur latere beurten met de geretourneerde binding ID:
+
+```http
+POST /api/agents/v1/events
+Authorization: Bearer <SAME_REMOTE_AGENTS_API_KEY>
+Idempotency-Key: game-12-ply-17-hanae
+Content-Type: application/json
+
+{
+  "mode": "continue",
+  "bindingId": "evtbind_...",
+  "event": {
+    "id": "game-12-ply-17",
+    "type": "chess.turn.ready",
+    "occurredAt": 1786968000000,
+    "payload": { "gameId": "game-12", "expectedPly": 17 }
+  },
+  "input": "Your clock is running. Read the position and submit one legal move.",
+  "expectedAction": {
+    "tool": "submit_move",
+    "arguments": { "gameId": "game-12" }
+  }
+}
+```
+
+LibreChat lost de child Agent, thread, laatste branch leaf en ordering lane op vanuit de binding onmiddellijk vóór verzending. Door de aanroeper opgegeven target- en ordering-velden kunnen een gebonden continuatie niet omleiden. De `Idempotency-Key` van het verzoek wordt de stabiele publieke identiteit voor die child turn gedurende bezorgingspogingen, generatie-leasing, opgeslagen berichten, live activiteit en een latere HITL-hervatting.
+
+Elke binding heeft een automatische duurzame mailbox. Het volgende event blijft in de wachtrij staan totdat de huidige beurt `applied`, `completed_no_action`, `failed` of `cancelled` bereikt; verschillende bindingen blijven onafhankelijk en kunnen parallel draaien. Het hervatten van een checkpoint wordt alleen geprobeerd voor een compatibele geïnitialiseerde beurt. Als een checkpoint ontbreekt of niet kan worden hersteld, valt LibreChat terug op de duurzame berichtgeschiedenis zonder de controles voor ontvangst, autorisatie of verwachte actie te verzwakken.
+
+Een gebonden actor kan pauzeren voor 'Ask User' of goedkeuring van een tool. LibreChat behoudt de exacte ondertekende onderbreking voordat de lopende actie wordt blootgesteld, en de mailbox van de binding blijft geblokkeerd totdat diezelfde actor-aanroep wordt hervat of afgehandeld. Event Actors vereisen de duurzame MongoDB checkpointer; `type: memory` is niet compatibel. LibreChat onderhandelt over generatieprotocol v2 en selecteert automatisch checkpoint of geschiedenis-voortzetting. Bestaand protocol-v1 werk blijft op het duurzame-geschiedenispad totdat het is afgehandeld. Zie [Generation Protocol Compatibility](/docs/configuration/redis#generation-protocol-compatibility) voor vereisten bij implementaties met gemengde versies.
+
+### Coalescing Observational Events [#coalescing-observational-events]
+
+Bronnen die kunnen aantonen dat verschillende gebonden `continue` events uitwisselbare observaties zijn, kunnen ze dezelfde door de bron gedefinieerde `coalesce.key` geven:
+
+```json
+{
+  "mode": "continue",
+  "bindingId": "evtbind_...",
+  "event": {
+    "id": "championship-7-game-12-move-18",
+    "type": "chess.move.completed",
+    "occurredAt": 1786968000750,
+    "payload": { "gameId": "game-12", "ply": 18 }
+  },
+  "input": "A tournament game advanced.",
+  "coalesce": { "key": "championship-commentary" }
+}
+```
+
+LibreChat verzamelt compatibele events gedurende maximaal 750 ms, met een maximum van 8 events en 512 KiB aan gecombineerde envelopes. Het child ontvangt één deterministisch batch-document, maar elk bron-event behoudt zijn eigen `Idempotency-Key`, afleveringsrecord en ontvangstbevestiging.
+
+Gebruik coalescing alleen voor niet-actiegerichte observaties. Het wordt geweigerd voor `fire`, `steer`, ongebonden `continue` en leveringen met `expectedAction`; gebruik het niet voor commando's, goedkeuringen, HITL-verzoeken, fences of gebeurtenissen waarvan de individuele timing van belang is.
+
+In de geauthenticeerde ouder-conversatie verschijnt elke gekoppelde actor onder het bijbehorende ouderelement. Het Subagent-paneel kan schakelen tussen actors en beurten, eerdere activiteiten laden en een beurt uitvouwen om de volledige gekoppelde activiteit te tonen. Gebeurtenisdetails bevatten het type, de bron, het tijdstip van optreden en de verwachte actie. Zichtbare run-stappen, tools, berichten en redeneermarkeringen zijn inbegrepen, zonder de ruwe redeneertekst. De ouderindex retourneert maximaal 64 child-threads en 20 recente taken per child vanuit een begrensd bronvenster, rapporteert truncatie in plaats van volledigheid te suggereren, en beperkt de respons tot 96 KB. Het is geautoriseerd op basis van ouder, gebruiker en tenant; bindingen, bron-sleutel-ID's, lease-tokens en worker-status zijn niet inbegrepen in de projectie.
+
+De child thread blijft verborgen voor normale gespreksnavigatie en is alleen-lezen voor menselijke chatroutes, erft het tijdelijke of verloopbeleid van de parent, en is beperkt tot één direct-child niveau. Een binding ID alleen verleent geen toegang; continuations zijn beperkt tot de gebruiker, tenant en API key die deze heeft aangemaakt.
+
+### Losgekoppelde Event Actor-acties [#detached-event-actor-actions]
+
+Event Actor-beurten kunnen in aanmerking komende Actions loskoppelen en deze duurzaam voltooien. De levering blijft in de afhandelingslevenscyclus terwijl de Action wordt uitgevoerd; duurzaam terminaal bewijs hervat de oorspronkelijke ondertekende actor-aanroep, en alleen het resulterende, door de host waargenomen tool-bewijs kan voldoen aan `expectedAction`. Replays en concurrerende replica's kunnen niet tweemaal dezelfde gereserveerde Action starten. Als LibreChat niet kan bepalen of een extern neveneffect is begonnen, plaatst het de lancering in quarantaine in plaats van deze blindelings opnieuw te proberen.
+
+LibreChat schakelt dit interne voltooiingswerk automatisch in wanneer de geselecteerde ingebouwde generatie-opslag ondersteuning hiervoor adverteert. De in-memory opslag voert het opstarten, voltooien en continueren uit in één proces en kan dat werk niet herstellen nadat het proces is afgesloten. Redis-generatiestreams voegen duurzaam herstel na een herstart en replica-overdracht toe. Door de capability beheerde leverings- en herstelrecords blijven onzichtbaar voor oudere claimers tijdens een mixed-version drain; er is geen door de operator beheerde producer-vlag.
+
 ## Tokengebruik bijhouden [#token-usage-tracking]
 
-Alle Agents API-verzoeken houden het tokengebruik bij ten opzichte van het saldo van de gebruiker (wanneer token-uitgaven zijn geconfigureerd). Zowel input- als output-tokens worden geteld, inclusief cache-tokens voor providers die deze ondersteunen (OpenAI, Anthropic).
+Alle API-inferentieverzoeken voor Agents houden het tokengebruik bij ten opzichte van het saldo van de gebruiker wanneer tokenuitgaven zijn geconfigureerd. Zowel streaming- als niet-streaming-antwoorden aggregeren elke gefactureerde primaire-Agent en Subagent modelaanroep in de totalen op het hoogste niveau. Het antwoord bevat ook identiteitsvrije `primary` en `subagent` token-overzichten. Details over cache- en redeneertokens worden opgenomen waar de provider deze rapporteert.
 
 ## Roadmap [#roadmap]
 
@@ -170,6 +310,8 @@ Alle Agents API-verzoeken houden het tokengebruik bij ten opzichte van het saldo
 ## Gerelateerde documentatie [#related-documentation]
 
 - [Agents](/docs/features/agents) — Agents maken en configureren
+- [Subagents](/docs/features/subagents) — Directe onderliggende Agents configureren
+- [Agents Endpoint Configuration](/docs/configuration/librechat_yaml/object_structure/agents) — Event runtime- en authenticatie-instellingen
 - [Interface Configuration — remoteAgents](/docs/configuration/librechat_yaml/object_structure/interface#remoteagents) — Instellingen voor toegangscontrole
 - [Token Usage](/docs/configuration/token_usage) — Tokenverbruik en saldo configureren
 - [Open Responses Specification](https://www.openresponses.org/) — De open inferentiestandaard

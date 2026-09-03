@@ -21,8 +21,10 @@ LibreChatのCode Interpreter APIは、シンプルなAPIインターフェース
 ## はじめに [#getting-started]
 
 1. [code-interpreter](https://github.com/ClickHouse/code-interpreter) サービスをデプロイします（Docker Compose または Helm を使用。リポジトリの README を参照してください）
-2. `LIBRECHAT_CODE_BASEURL` および `LIBRECHAT_CODE_API_KEY` 環境変数を使用して、LibreChat をそれに向けるように設定します。
-3. LibreChatのAgentsまたは「Run Code」ボタンを使用して、安全にコードの実行やファイルの生成を開始します。
+2. `LIBRECHAT_CODE_BASEURL` を使用して LibreChat をそこへ向けてください。
+3. 現在のオープンソースサービス向けに [LibreChat JWT authentication](#self-hosted-jwt-authentication) を設定するか、APIキー互換のデプロイメント用に `LIBRECHAT_CODE_API_KEY` を設定してください。
+4. ステートフルなAgentセッションを試すには、個別の `stateful` プロファイルのCode Interpreterルートをデプロイし、`LIBRECHAT_CODE_BASEURL_STATEFUL` または名前付きの [`statefulCodeSessions.environments`](/docs/configuration/librechat_yaml/object_structure/agents#statefulcodesessions) を設定してください。
+5. LibreChatのAgentsまたは「Run Code」ボタンを使用して、安全にコードの実行やファイルの生成を開始します。
 
 ## 主な機能 [#key-features]
 
@@ -41,6 +43,12 @@ LibreChatのCode Interpreter APIは、シンプルなAPIインターフェース
 
 LibreChatは、エージェントの実行前に、参照されている会話ファイルを現在のCode Interpreter環境に復元します。必要なCode Interpreterファイルがすべて復元に失敗した場合、実行はモデルの呼び出し前に停止し、古い参照のまま続行するのではなく、ユーザーにファイルの再添付を求めます。
 
+会話の入力が同じサンドボックスの送信先にマウントされる場合、LibreChatは実行前に競合を解決します。共有会話ファイルはエージェント専用ファイルよりも先に割り当てられます。各スコープ内では、最新のコンテンツ書き込みが元の送信先を保持します。競合するパスは必要に応じてフラット化されるか、識別子由来のサフィックスが付与され、解決された `/mnt/data/...` パスがエージェントのファイルコンテキストに含まれます。これには、同じファイル名を共有するアップロードと生成された出力も含まれるため、1つの競合によって会話内のその後のCode Interpreterの実行がすべて拒否されることはありません。すでに要求済みの送信先に解決される重複したシード参照は、リクエスト全体を失敗させるのではなくスキップされます。
+
+Sandboxイメージは、制限付きウィンドウ内で転送されます。[`LIBRECHAT_CODE_SANDBOX_OUTPUT_MAX_SIZE`](/docs/configuration/dotenv#code-interpreter) をワーカーの `SANDBOX_OUTPUT_MAX_SIZE` と一致するように設定してください。LibreChatはその予算から最大の安全なイメージウィンドウを導出し、読み取りに1度失敗した後は、より小さなサービスごとの制限を学習できます。`LIBRECHAT_CODE_IMAGE_CHUNK_BYTES` は、正確なウィンドウのオーバーライドが必要な場合にのみ使用してください。以前にダウンロードされた生成済みアーティファクトは、可能な限りリクエスト内で再利用され、再度Sandboxから読み取ることを回避します。
+
+マルチエージェントグラフでは、異なるAgent専用のファイルにはそれぞれ異なるファイル名を付けてください。各Agentはグラフがそれらの入力を結合する前に自身のプライベートなファイルパスを解決するため、独立して同じ宛先を指定している実質的に異なるプライベートファイルは、マージ時に一貫して名前を変更することがまだできません。最初にシードされた宛先が優先されます。
+
 ### セキュリティと利便性 [#security--convenience]
 
 - 安全なサンドボックス化された実行環境
@@ -52,25 +60,72 @@ LibreChatは、エージェントの実行前に、参照されている会話�
 
 Programmatic Tool Calling（プログラムによるツール呼び出し）を使用すると、LibreChatのAgentは選択したMCPツールをCode Interpreterのサンドボックス経由でルーティングできるようになります。モデルに各ツールを直接呼び出すよう指示する代わりに、LibreChatはCode Interpreterによってバックアップされたオーケストレーションツールを提供します。生成されたサンドボックスコードは、登録されたツールスタブの呼び出し、ループや条件分岐の使用、中間結果の処理を行い、最終的な回答を返すことができます。
 
-サンドボックスは依然として一般的なネットワークアクセスを受け取りません。ツール呼び出しは Code Interpreter Tool Call Server および LibreChat の登録済みツールマップを介して仲介されるため、エージェントが利用可能なツールのみが呼び出し可能です。
+サンドボックスは依然として一般的なネットワークアクセスを受け取りません。ツール呼び出しは、Code Interpreter Tool Call Server を介して仲介されます。LibreChat は、ライブの呼び出し元機能プロジェクションと信頼されたレジストリを照合するため、エージェントに対して既に登録されているアクティブなプログラムツールのみが呼び出し可能であり、リクエストが自身のアクセス権を拡張することはできません。
+
+Programmatic tools（プログラムツール）を使用するには、AgentでCode Interpreterを有効にする必要があります。Code Interpreterが選択されるまで、これらのトグルは無効のままとなり、Code Interpreterを削除すると既存のProgrammaticの選択内容はクリアされます。また、`execute_code` または Code Interpreterツールが利用できない場合、LibreChatはAgentの作成、更新、複製、およびバージョン復元操作から、無効となったprogrammatic callerオプションを削除します。
+
+プログラム実行中、Code Interpreterカードを展開すると、ツール呼び出しの内部トレースをターミナル形式でリアルタイムに確認できます。これには、引数のプレビュー（制限付き）、ステータス、実行時間、および失敗の内容が含まれます。このトレースは実行中のプログラムを調査するのに役立ちますが、ページをリロードすると保持されません。
 
 ### Background Code Execution [#background-code-execution]
 
-バックグラウンド実行により、Agentは長時間実行されるコードやシェル作業をディスパッチし、会話を継続し、後で `check_background_task` を通じて結果を取得できるようになります。LibreChatのチャットでは、作業が完了すると、標準出力と生成されたファイルが元のコード呼び出し箇所に表示されます。生成されたファイルは、Agentがまだタスクをポーリングしていない場合でも、後続のターンに向けて保持されます。
+バックグラウンド実行により、Agentは長時間実行されるコードやシェル作業をディスパッチし、会話を継続することができます。保存されたAgentの場合、サポートされているコンテンツのみの完了は、デフォルトでフォローアップの継続として自動的に配信されます。`check_background_task`は、明示的なステータス、制御、ライブアーティファクト、およびリカバリのために引き続き利用可能です。LibreChatのチャットでは、作業が完了すると、stdoutと生成されたファイルが元のコード呼び出しに表示され、後続のターンに向けて保持されます。
 
 この機能は、デプロイメントレベルでオプトインする必要があります。[Agents endpoint capabilities](/docs/configuration/librechat_yaml/object_structure/agents#capabilities) の `execute_code` と並べて `run_in_background` を追加し、エージェントで Code Interpreter を有効にしてください。コード実行とシェル呼び出しは自動的にバックグラウンド実行の対象となります。エージェントがオプトアウトすべき場合は、Code Interpreter ツールの設定で **Background execution** をオフにしてください。モデルは、対象となる作業をバックグラウンドで実行するかどうかを呼び出しごとに判断します。
 
-バックグラウンドタスクの状態はプロセスローカルであり、アプリの再起動やレプリカ間の移動では保持されません。また、バックグラウンドディスパッチは Code Interpreter サービスの実行制限を延長するものではなく、デプロイメントの通常のサーバーサイドタイムアウトが引き続き適用されます。
+通常のバックグラウンド実行はプロセスローカルのままであり、アプリワーカーが失われると存続しません。コンテンツのみのターミナル結果が永続化されると、その自動配信は永続的となり、別のレプリカで継続される可能性があります。ライブアーティファクトを持つタスクは、引き続き所有する実行環境でのポーリングを必要とします。すべての結果に対してポーリングを要求するには、[`endpoints.agents.backgroundTasks.completionWakeups: false`](/docs/configuration/librechat_yaml/object_structure/agents#backgroundtasks) を設定してください。バックグラウンドディスパッチは、Code Interpreterサービスの実行制限を延長するものではありません。デプロイメントの通常のサーバーサイドタイムアウトが引き続き適用されます。
 
 ### ステートフルなコードセッション [#stateful-code-sessions]
 
-Stateful code sessions（ステートフルなコードセッション）により、LibreChat Agentは1つの会話につき1つのCode Interpreterサンドボックスワークスペースを再利用できるようになります。ファイル、インストール済みのパッケージ、および作業状態は通常、実行間で引き継がれるため、反復的な分析や複数ステップのファイル生成がより効率的になります。
+Stateful code sessions（ステートフルなコードセッション）により、LibreChat Agentは実行間でCode Interpreterのサンドボックスワークスペースを再利用できるようになります。ファイル、インストール済みのパッケージ、および作業状態が通常引き継がれるため、反復的な分析や複数ステップのファイル生成がより効率的になります。各エージェントは、以下のいずれかのワークスペーススコープを選択します。
+
+- **ユーザーワークスペース（推奨）:** ステートフルが有効なエージェント全体で、サインインしたユーザーに対して1つのワークスペースを提供します。
+- **エージェント + ユーザーワークスペース:** 各ユーザーとエージェントの組み合わせにつき1つのワークスペース
+- **Conversation workspace:** 各ユーザーおよび各会話につき1つのワークスペース
+
+新しく作成されたAgentの初期スコープは、**設定 > データコントロール > コード実行 > デフォルトのステートフルワークスペース**から取得されます。個人の設定はデフォルトで**ユーザーワークスペース**になっています。これを変更しても、既存のAgentが変更されたり、ステートフルセッションが有効になったりすることはありません。デプロイメント管理者は、[`statefulCodeSessions.allowedEnvironments`](/docs/configuration/librechat_yaml/object_structure/agents#statefulcodesessions)を使用して、選択可能なスコープを制限できます。保存された個人のデフォルトが利用できなくなった場合、新しいAgentは許可された最初のスコープを使用します。許可されなくなったスコープを持つ既存の有効なAgentは、実行する前に再設定する必要があります。
+
+ワークスペースのスコープは、その実行バックエンドとは分離されています。管理者が名前付きの [`statefulCodeSessions.environments`](/docs/configuration/librechat_yaml/object_structure/agents#statefulcodesessions) を設定すると、Agent Builder に **Execution environment** セレクターが追加されます。
+
+- **Managed:** デプロイメントによって運用されるステートフルな Code API
+- **添付:** オペレーターが管理するVMなどのアウトバウンドの `@librechat/code` ワーカーに作業を委託する、互換性のあるCode APIリモートブリッジ
+- **Personal:** 認可されたユーザーがLibreChatの設定を通じてペアリングした、オーナーに紐づく `@librechat/code` ワーカー
+- **Deployment default:** デフォルトとしてマークされた設定済みの環境
 
 <Callout type="warning" title="非常に実験的">
   Stateful Code Sessionsは初期の実験段階にあります。その動作、設定、永続性の特性、および基盤となる統合は大幅に変更される可能性があります。現在の実装を安定した本番環境向けの契約として扱わないでください。
 </Callout>
 
-この機能はオプトイン形式です。[Agents endpoint capabilities](/docs/configuration/librechat_yaml/object_structure/agents#capabilities) で `execute_code` と `stateful_code_sessions` を有効にし、エージェントで Code Interpreter を有効にした後、その詳細設定で **Stateful code sessions** をオンにしてください。ワークスペースはいつでもリセットされる可能性があります。重要な出力は `/mnt/data` に保存し、それ以外でセッション状態を永続的なストレージとして信頼しないでください。
+この機能はオプトイン形式です。[Agents endpoint capabilities](/docs/configuration/librechat_yaml/object_structure/agents#capabilities) で `execute_code` および `stateful_code_sessions` を有効にし、[`LIBRECHAT_CODE_BASEURL_STATEFUL`](/docs/configuration/dotenv#stateful-code-interpreter-endpoint) または名前付き環境を使用して専用のステートフルルートを設定し、エージェントで Code Interpreter を有効にした上で、詳細設定（Advanced settings）から **Stateful code sessions** をオンにし、実行バックエンドとワークスペーススコープを選択してください。
+
+Statefulリクエストは、選択された環境が見つからない、アクセスできない、または互換性がない場合に失敗（fail closed）します。LibreChatはそれらを`LIBRECHAT_CODE_BASEURL`に送信したり、別の名前付きバックエンドを自動的に選択したりすることはありません。名前付き環境が設定されていない場合、`LIBRECHAT_CODE_BASEURL_STATEFUL`が引き続きステートフルなルートとなります。ステートレスなエージェントは、通常のendpointを引き続き使用します。また、LibreChatは`X-CodeAPI-Expected-Profile: stateful`を送信するため、専用サービスは`stateful`プロファイルをアドバタイズする必要があります。
+
+ステートフルセッションとステートレスセッションは、ライブワークスペースを共有しません。ステートフルワークスペースは、選択されたスコープに関係なく、いつでもリセットされる可能性があります。重要な出力は `/mnt/data` に保存し、それ以外のセッション状態を永続的なストレージとして信頼しないでください。
+
+statefulな `create_file` および `edit_file` 呼び出しによって作成されたファイルは、アシスタントメッセージ内の展開可能な **Workspace changes** 行に表示されます。ここには、その応答で変更された各固有のパスがリストされ、認証済みのダウンロードアクションが提供されます。ダウンロードには、利用可能な場合はLibreChatの永続化されたファイルフローが使用され、それ以外の場合は安全なCode Interpreterフォールバックが使用されます。この行は作成された出力の記録であり、永続的なワークスペースのスナップショットではありません。ステートレスな出力は、引き続き通常のインライン添付ファイルとして表示されます。
+
+#### 接続された環境とペアリング [#attached-environments-and-pairing]
+
+Attached environmentsには、対応する実験的なCode Interpreter remote-bridgeビルドが必要です。bridgeはLibreChatの認証済みポリシー、キュー、および結果の境界として機能し、`@librechat/code`ワーカーは接続されたマシンからアウトバウンドで接続します。そのため、マシン側でインバウンドのパブリックワーカーポートを開放する必要はありません。LibreChatはAttached environmentsを事前起動（prewarm）しません。
+
+オペレーターは、デプロイメント所有の接続済み環境を `workerId` を使用して特定のワーカーに固定でき、LibreChatが同じルートに対して管理者ペアリングコードを発行する必要がある場合は `pairing.workerId` を追加できます。`pairing.tokenEnv` は、ブリッジ管理者トークンを含む環境変数を指定します。シークレット自体を YAML に含めてはなりません。ペアリングされたコントロールプレーンには、ループバック開発環境以外では HTTPS が必須です。
+
+セルフサービスワーカーの場合は、`pairing.allowPrincipalWorkers: true` および `pairing.tokenEnv` を使用して、デプロイメント所有の接続済みコントロールプレーンを設定してください。これはワーカーIDの両方を省略し、登録用コントロールプレーンとしてのみ存在させることも可能です。そのようなエントリは実行用として選択できず、デプロイメントのデフォルトにすることもできません。
+
+Code Environment管理権限を持つユーザーは、**Settings > Code environments**を開き、環境に名前を付け、承認済みのコントロールプレーンを選択して、**Connect VM**を選択できます。LibreChatは、短期間有効な一度限りの`librechat-code pair ...`コマンドを表示します。これをユーザーのVM上で実行し、`LIBRECHAT_CODE_SANDBOX_ENDPOINT`がそのマシンのサンドボックスサービスを指すように設定して、`@librechat/code`を開始します。UIにはユーザーの環境が一覧表示され、後から取り消しや削除を行うことができます。サンドボックスファイルはVM上に残ります。
+
+パーソナル環境は、認証されたユーザーとテナントに紐付けられ、Code Environment ACLによって保護されており、サーバーで検証されたIDと承認済みのベースURLのみが割り当てられます。LibreChatは、ブリッジ管理者トークンや任意のオペレーターURLをクライアントに公開しません。環境を削除すると、レジストリからエントリが削除される前にワーカーの認証情報が無効化されます。また、ユーザーが削除されると、同様の無効化とクリーンアップがスケジュールされ、中断された試行に対してはバックグラウンドでの照合が行われます。選択されたワーカーのルートは、Code Interpreter、シェル、生成されたファイルへのアクセス、およびプログラムによるツール呼び出し（Programmatic Tool Calling）に一貫して適用されます。
+
+#### Attached-environment tool permissions [#attached-environment-tool-permissions]
+
+Attached および personal 環境では、ファイルの書き込みやコマンドまたはコードの実行に対して、デフォルトで「確認を求める（ask-by-default）」承認ポリシーが適用されます。読み取り専用操作および検索操作は、デプロイメントの通常のツールポリシーに従って継続されます。管理者が [`configSchema.permissions`](/docs/configuration/librechat_yaml/object_structure/agents#statefulcodesessions) を通じていずれかのカテゴリを公開している場合、Code Environment 管理権限を持つユーザーは、**Settings > Code environments** にて、許可された **Allow**（許可）、**Ask**（確認）、**Deny**（拒否）の値から選択できます。設定が欠落している、古い、または許可されていない場合は、安全のために **Ask** にフォールバックされます。
+
+これらのコントロールは、ファイル作成ツール、シェルおよびコード実行、コンパイルチェック、およびプログラムによるツール呼び出し（Programmatic Tool Calling）を対象としています。通常のファイル書き込みが許可されている場合でも、スキル作成機能が有効なときは、永続的なスキルファイルへの書き込みには引き続き確認が必要です。これらの設定は、VMの分離、ネットワーク、マウント、特権実行、イングレス、エグレス、またはシークレットアクセスを変更するものではありません。
+
+デプロイメントの明示的な [`toolApproval.enabled: false`](/docs/configuration/librechat_yaml/object_structure/agents#toolapproval) 設定は、このベースラインを無効にする緊急オーバーライドです。このオーバーライドがない場合、承認リクエストを提示および再開できない呼び出し元は、アタッチされた環境のツールをサイレントに実行するのではなく、失敗して終了（fails closed）します。
+
+ペアリングはリモートワーカーのトランスポートを認証するものであり、サンドボックスの境界ではありません。ワーカーのローカル実行 endpoint はループバックまたはプライベートネットワーク上に維持し、信頼できないコードに対しては適切な分離モードを使用してください。
+
+実行がアクティブな間、展開されたコードおよびシェルの詳細ペインは、ストリーミングされる引数に合わせて自動的に最下部までスクロールします。上方向にスクロールするとこの追従動作が一時停止されるため、ペインによって表示領域が勝手に移動されることなく、以前の出力を確認できます。
 
 ## APIの使用 [#using-the-api]
 
@@ -86,25 +141,66 @@ LibreChatでは、以下の主要な方法を通じてAPIがファーストク�
 
 4. **[Background Tool Calls](/docs/features/agents#background-tool-calls)**: エージェントが適切なコードをバックグラウンドで実行し、その実行中も処理を継続できるようにします。
 
-5. **[Stateful Code Sessions](/docs/features/agents#stateful-code-sessions)**: エージェントのコード実行全体で、会話ごとのワークスペースを実験的に再利用します。
+5. **[Stateful Code Sessions](/docs/features/agents#stateful-code-sessions)**: ユーザー単位、エージェントとユーザーの組み合わせ単位、または会話単位のワークスペースを、エージェントのコード実行間で実験的に再利用します。
 
 ![LibreChatでのコードインタープリター](/images/agents/run_code.png)
 
 ### APIキーの設定 [#set-up-api-key]
 
-- **ユーザーごとのセットアップ:** プロンプトが表示されたら、LibreChatにAPIキーを入力します（上記の方法を使用してください）。
-- **グローバル設定:** プロジェクトの .env ファイルで `LIBRECHAT_CODE_API_KEY` 環境変数を使用します（すべてのユーザーにアクセス権を付与します）
+- **ユーザーごとのセットアップ:** プロンプトが表示されたら、LibreChatにAPIキーを入力してください。
+- **グローバル設定:** LibreChatの `.env` で `LIBRECHAT_CODE_API_KEY` を設定すると、すべてのユーザーに対して1つのキーを提供できます。
+
+現在の [ClickHouse/code-interpreter](https://github.com/ClickHouse/code-interpreter) サービスは、ローカルモード以外では LibreChat JWT 認証を使用します。API キーは、互換性のある Code Interpreter デプロイメントで引き続き利用可能です。
+
+### セルフホスト型 JWT 認証 [#self-hosted-jwt-authentication]
+
+JWT認証を使用すると、LibreChatは各Code Interpreterリクエストにおいて、認証済みユーザーに対して短期間有効なベアラートークンに署名します。Code Interpreterサービスは一致する公開鍵を検証し、署名されたユーザーおよびテナントコンテキストを使用してファイルとセッションを分離します。秘密の署名鍵はLibreChat内に保持され、Code Interpreterは公開検証鍵のみを受け取ります。
+
+LibreChatの設定方法:
+
+```env
+CODEAPI_AUTH_PROVIDER=librechat-jwt
+CODEAPI_JWT_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"
+CODEAPI_JWT_ALGORITHM=EdDSA
+CODEAPI_JWT_KID=lc-codeapi-2026-05
+CODEAPI_JWT_ISSUER=librechat
+CODEAPI_JWT_AUDIENCE=codeapi
+CODEAPI_JWT_TTL_SECONDS=300
+CODEAPI_JWT_MINT_CACHE_SECONDS=30
+CODEAPI_JWT_SINGLE_TENANT_ID=legacy
+```
+
+`CODEAPI_JWT_PRIVATE_KEY_BASE64` には代わりにbase64エンコードされたPEMを保持させることができ、`CODEAPI_JWT_PRIVATE_JWK_JSON` はプライベートJWKを受け入れます。LibreChatはEd25519（デフォルトの `EdDSA`）およびRSA（`RS256`）署名をサポートしています。LibreChat側のすべての設定については、[環境変数リファレンス](/docs/configuration/dotenv#code-interpreter-jwt-authentication) を参照してください。
+
+対応するベリファイアを使用して Code Interpreter を設定します:
+
+```env
+LOCAL_MODE=false
+CODEAPI_AUTH_PROVIDER=librechat-jwt
+CODEAPI_JWT_ISSUER=librechat
+CODEAPI_JWT_AUDIENCE=codeapi
+CODEAPI_JWT_ALLOWED_ALGS=EdDSA
+CODEAPI_JWT_JWKS_JSON={"keys":[{"kty":"OKP","crv":"Ed25519","x":"...","kid":"lc-codeapi-2026-05","alg":"EdDSA"}]}
+CODEAPI_JWT_SINGLE_TENANT_ID=legacy
+```
+
+発行者、オーディエンス、キーID、アルゴリズム、および公開鍵は、LibreChatの署名者と一致している必要があります。Code Interpreterは、`CODEAPI_JWT_PUBLIC_KEY`と`CODEAPI_JWT_KID`、または`CODEAPI_JWT_PUBLIC_KEYS_DIR`から検証用キーを読み込むことも可能です。インラインのJWKSはローテーションに便利です。トークンのTTLは、Code Interpreterサービスの`CODEAPI_JWT_MAX_TTL_SECONDS`以下に維持してください。この値はデフォルトで300秒であり、上限も300秒に設定されています。
+
+ローカルでのチェックアウトの場合、Code Interpreterリポジトリには、対応するEd25519署名キーと実行マニフェストキーを生成し、両方の `.env` ファイルを更新するヘルパーが含まれています。
+
+```bash
+node scripts/setup-local-auth-env.js --librechat /path/to/LibreChat
+```
+
+シングルテナント環境でのデプロイでは `CODEAPI_JWT_SINGLE_TENANT_ID=legacy` のままでも構いませんが、その値は両方のサービスで一致している必要があります。マルチテナント環境でのデプロイでは、認証されたテナントコンテキストを提供し、LibreChatで `TENANT_ISOLATION_STRICT=true` を、Code Interpreterで `CODEAPI_TENANT_ISOLATION_STRICT=true` をそれぞれ有効にする必要があります。Strictモードでは、シングルテナントのフォールバックを使用する代わりに、テナントコンテキストのないリクエストを拒否します。
 
 ### 直接API統合 [#direct-api-integration]
 
-Code Interpreter APIは、シンプルなAPIキー認証を使用して任意のアプリケーションに統合できます：
-
-1. 独自の [code-interpreter](https://github.com/ClickHouse/code-interpreter) インスタンスをデプロイし、APIキーを作成します
-2. `x-api-key` ヘッダーを使用して、リクエストに API キーを含めてください。
+現在のセルフホスト型サービスは、LibreChatのJWTクレーム契約を満たすベアラートークンを必要とします。直接統合を行う場合は、互換性のある短命トークンを発行し、`Authorization: Bearer <token>` ヘッダーで送信する必要があります。一方、APIキー互換のデプロイメントでは、設定されたキーを `x-api-key` ヘッダーで受け入れます。公開エンドポイントや本番環境のエンドポイントでは、Code Interpreterの認証不要なローカルモードを決して使用しないでください。
 
 ### セルフホストのベースURL [#self-hosted-base-url]
 
-`LIBRECHAT_CODE_BASEURL` 環境変数を設定して、LibreChat がセルフホストしている [code-interpreter](https://github.com/ClickHouse/code-interpreter) インスタンスを指すようにします。また、そのデプロイメントで生成された API キーを上記と同様の方法で使用してください。
+`LIBRECHAT_CODE_BASEURL` を設定して、LibreChat をセルフホスト型の [code-interpreter](https://github.com/ClickHouse/code-interpreter) インスタンスに向け、その後 [JWT 認証](#self-hosted-jwt-authentication) を設定します。API キー互換サービスの場合は、代わりに `LIBRECHAT_CODE_API_KEY` を設定してください。非常に実験的なステートフルな Agent セッションには、[`LIBRECHAT_CODE_BASEURL_STATEFUL`](/docs/configuration/dotenv#stateful-code-interpreter-endpoint) を通じて設定された個別の `stateful` プロファイルルート、または名前付きの [`statefulCodeSessions.environments`](/docs/configuration/librechat_yaml/object_structure/agents#statefulcodesessions) が必要です。
 
 ## コア機能 [#core-functionality]
 

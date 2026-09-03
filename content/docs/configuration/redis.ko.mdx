@@ -12,10 +12,11 @@ description: 'LibreChat에서 캐싱, 세션 저장소 및 수평적 확장을 �
 - [연결 유형](#connection-types)
 - [보안 구성](#security-configuration)
 - [고급 옵션](#advanced-options)
+- [복제본 장애 조치 복구](#replica-failover-recovery)
 - [성능 튜닝](#performance-tuning)
 - [구성 예시](#configuration-examples)
 - [재개 가능한 스트림](#resumable-streams)
-- [Generation Protocol Rollout](#generation-protocol-rollout)
+- [Generation Protocol Compatibility](#generation-protocol-compatibility)
 - [Stream Delta Coalescing](#stream-delta-coalescing)
 - [MCP Catalog Coordination](#mcp-catalog-coordination)
 
@@ -210,6 +211,18 @@ REDIS_PING_INTERVAL=300
 - 간격은 초 단위로 지정되며 IoRedis 및 Keyv Redis 클라이언트 모두에 적용됩니다.
 - 예시 값: `300` (5분), `600` (10분), `60` (1분)
 
+### 복제본 장애 조치 복구 (Replica Failover Recovery) [#replica-failover-recovery]
+
+Sentinel 장애 조치(failover) 중에 강등된 Redis 복제본은 기존 소켓을 열어둔 상태에서 `READONLY`로 쓰기 요청을 거부할 수 있습니다. LibreChat은 비클러스터 Keyv 클라이언트에서 이러한 응답을 감지하면, 오래된 연결을 끊고 재연결을 수행하여 애플리케이션을 재시작하지 않고도 현재 기본(primary) 노드를 확인할 수 있도록 합니다.
+
+```bash
+# Minimum interval between forced recovery attempts, in milliseconds
+# Default: 5000
+REDIS_READONLY_RECOVERY_INTERVAL=5000
+```
+
+이 간격은 쓰기 실패가 급증하는 동안 재연결 시도를 디바운스(debounce)합니다. Redis Cluster 클라이언트는 네이티브 클러스터 토폴로지 및 리다이렉트 처리를 사용하므로 제외됩니다.
+
 ### 선택적 인메모리 캐싱 [#selective-in-memory-caching]
 
 Redis가 활성화된 경우에도 특정 캐시 네임스페이스가 인메모리 스토리지를 사용하도록 강제합니다:
@@ -325,27 +338,22 @@ REDIS_URI=redis://127.0.0.1:6379
 # USE_REDIS_STREAMS=true  # Enabled by default when USE_REDIS=true
 ```
 
-### Generation Protocol 배포 [#generation-protocol-rollout]
+### Generation Protocol Compatibility [#generation-protocol-compatibility]
 
-v2 생성 프로토콜은 현재 Agent 실행에서 사용되는 내구성 있는 큐(durable queue), 중단(interrupt), 일시 중지/재개(pause/resume), 복구 보장 기능을 추가합니다. Redis 기반 배포는 `GENERATION_PROTOCOL_VERSION`이 설정되지 않은 경우 의도적으로 프로토콜 v1을 유지하므로, 롤링 업그레이드 중에 서로 다른 LibreChat 버전을 실행하는 복제본들이 공존할 수 있습니다.
+현재 LibreChat 클라이언트는 모든 내장 생성 저장소와 자동으로 생성 프로토콜 v2를 협상합니다. 별도의 배포 설정은 필요하지 않습니다. 명시적 또는 저장된 protocol-v1 마커가 있는 기존 생성물은 완료될 때까지 스티어링(steering), 일시 중지/재개, 재시도 및 복구 과정을 통해 변경 불가능한 v1 동작을 유지합니다.
 
-2단계 롤아웃을 사용하세요:
+롤링 업그레이드를 수행하려면, 실행 중인 모든 API 및 워커 이미지에 v2 호환성 브리지가 포함되어야 합니다:
 
-1. `GENERATION_PROTOCOL_VERSION`이 설정되지 않았거나 `1`로 설정된 **모든** 복제본(replica)에 v2 지원 LibreChat 이미지를 배포하세요.
-2. 이전 이미지에서 소유한 활성 생성 작업이 완료되거나 비워질 때까지 기다리십시오.
-3. `GENERATION_PROTOCOL_VERSION=2`를 설정하고 동일한 이미지를 다시 배포하세요.
+- 모든 API 및 워커 이미지는 LibreChat `v0.8.8-rc1` 이상을 실행합니다.
+- Helm chart `2.0.8` 이상 버전은 호환되는 기본 이미지를 선택합니다. 사용자 지정 이미지 재정의는 여전히 위의 이미지 요구 사항을 충족해야 합니다.
 
-```bash filename=".env"
-USE_REDIS=true
-USE_REDIS_STREAMS=true
-GENERATION_PROTOCOL_VERSION=2
-```
+이전 릴리스에서 업그레이드할 때는 콜드 핸드오프(cold handoff)를 수행하십시오. 새 이미지를 시작하기 전에 모든 이전 API 및 워커 복제본을 중지해야 합니다. 이는 v2 이전 버전과 자동 v2 바이너리가 Redis에서 생성 상태를 공유하는 것을 방지합니다.
 
 <Callout type="warning" title="롤링 배포 안전성">
-  모든 복제본(replica)이 지원할 때까지 프로토콜 v2를 활성화하지 마십시오. v2 세대가 시작된 후에는 해당 세대가 모두 소진될 때까지 v2 이전의 LibreChat 이미지로 롤백하지 마십시오. 이전 버전의 복제본은 Redis 상태에서 안전하게 작동할 수 없습니다.
+  현재 복제본과 동일한 Redis 생성 상태에서 `v0.8.8-rc1`보다 이전 릴리스를 실행하지 마십시오. 해당 호환성 하한선 아래로 롤백하기 전에, 먼저 현재 복제본과 protocol-v2 세대가 모두 비워졌는지(drained) 확인하십시오.
 </Callout>
 
-인메모리 생성 스트림은 복제본 간에 상태를 공유하지 않으며 기본적으로 프로토콜 v2를 사용하므로, 이 전환이 필요하지 않습니다.
+In-memory generation streams는 프로토콜 v2를 자동으로 협상하며 프로세스 간에 생성 상태를 공유하지 않습니다.
 
 ### Stream Delta Coalescing [#stream-delta-coalescing]
 

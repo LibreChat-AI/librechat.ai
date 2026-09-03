@@ -1,15 +1,120 @@
 ---
-title: Estrutura do Objeto de Filtro de Mensagens
+title: Estrutura do Objeto de Filtro de Conteúdo
 icon: ShieldAlert
 ---
 
 ## Visão geral [#overview]
 
-O objeto `messageFilter` configura filtros de mensagem no lado do servidor. O tipo de filtro suportado é `messageFilter.pii`.
+O LibreChat fornece duas configurações de filtro no lado do servidor:
 
-`messageFilter.pii` rejeita o texto da mensagem enviada que corresponda a padrões iniciais com formato de credenciais ou expressões regulares definidas pelo operador antes que o texto chegue à moderação, a uma solicitação de modelo ou à persistência da mensagem.
+- `filters` aplica uma política sensível à origem a campos selecionados em mensagens, prompts, agentes, arquivos, habilidades, memórias, ferramentas e outros conteúdos reutilizáveis.
+- `messageFilter` é o filtro de texto de mensagem legado. Implantações existentes podem continuar usando-o enquanto migram para `filters.messages`.
 
-## Exemplo [#example]
+Ambos são opt-in. Quando ambos estão configurados, ambas as políticas são aplicadas.
+
+<Callout type="warning" title="Apenas configuração base">
+  `filters` é carregado apenas a partir do `librechat.yaml` base. Substituições de banco de dados, função, grupo e usuário não podem adicionar, alterar ou removê-lo. Em uma implantação com múltiplas réplicas, implemente ou reinicie cada réplica simultaneamente e verifique se cada uma carregou a mesma configuração base antes de considerar a política como ativa.
+</Callout>
+
+## Filtros com Reconhecimento de Origem [#source-aware-filters]
+
+Cada fonte possui uma política `pii` opcional. Omita `filters`, uma fonte ou seu bloco `pii` para deixar esse escopo desativado.
+
+```yaml filename="librechat.yaml"
+filters:
+  messages:
+    unattributedAssistantContent: model_output
+    pii:
+      action: audit
+      fields: [text, summary, attachment_reference]
+      starterPatterns: [sk_prefix, bearer_header, api_key_header]
+      customPatterns:
+        - id: organization_identifier
+          label: Organization identifier
+          regex: 'ORG-[A-Z0-9]{12}'
+  files:
+    pii:
+      fields: [name, content, extracted_text, transcript]
+      uninspectable: block
+  skills:
+    pii:
+      fields: [name, description, instructions, imported_text, file_text]
+```
+
+### Configuração de Padrão [#pattern-configuration]
+
+Para cada fonte habilitada:
+
+- Omita `action` ou defina-o como `block` para rejeitar correspondências. Defina `action: audit` para um lançamento gradual (shadow rollout) que registra as descobertas sem rejeitar, alterar ou ocultar o conteúdo.
+- Omita `fields` para inspecionar todos os campos suportados para essa fonte. Uma lista explícita deve conter entre 1 e 256 nomes de campos suportados.
+- Omita `starterPatterns` para habilitar o catálogo completo de iniciantes. Defina como `[]` para desabilitar os padrões de iniciante enquanto mantém quaisquer `customPatterns`.
+- Configure `customPatterns` com um `id`, um `label` voltado para o usuário e um `regex`.
+
+O modo de auditoria avalia todos os fragmentos e regras configurados para que os operadores possam medir as descobertas antes da aplicação. Cada registro de auditoria de nível informativo identifica a ação, o detector, a regra, o rótulo, a origem, o campo e a procedência, mas nunca inclui o texto correspondente ou o conteúdo de origem. O modo de auditoria não fornece redação; valores de ação não suportados são rejeitados quando a configuração é carregada.
+
+As Actions são configuradas independentemente por fonte, portanto, uma fonte pode auditar enquanto outra bloqueia. `filters.files.pii.uninspectable: block` permanece como uma regra independente de falha fechada (fail-closed) para conteúdo de arquivo selecionado opaco ou muito grande, mesmo quando a ação de padrão dessa fonte for `audit`.
+
+Os IDs de padrão inicial integrados são:
+
+- `sk_prefix`: prefixos de token no estilo `sk-`.
+- `bearer_header`: tokens bearer no texto.
+- `api_key_header`: texto no formato de cabeçalho `api-key`.
+
+Padrões personalizados usam a sintaxe de expressão regular de tempo linear e limitada do RE2JS. Backreferences e lookaround não são suportados, e alguns escapes diferem das expressões regulares do JavaScript. O LibreChat rejeita padrões inválidos ou não suportados ao carregar a configuração.
+
+### Fontes e Campos Suportados [#supported-sources-and-fields]
+
+| Fonte | Campos suportados |
+| --- | --- |
+| `messages` | `name`, `text`, `summary`, `quote`, `answer`, `decision_response`, `decision_reason`, `content_part`, `attachment_reference`, `assembled_context` |
+| `prompts` | `name`, `description`, `oneliner`, `category`, `command`, `text`, `preset_text`, `system`, `context`, `instructions`, `additional_instructions`, `greeting`, `example_input`, `example_output` |
+| `agentInstructions` | `name`, `category`, `description`, `instructions`, `additional_instructions`, `edge_description`, `edge_prompt`, `edge_prompt_key`, `artifacts`, `support_contact_name`, `support_contact_email` |
+| `conversationStarters` | `text` |
+| `conversationTitles` | `title` |
+| `feedback` | `text` |
+| `skills` | `name`, `display_title`, `description`, `category`, `frontmatter`, `instructions`, `imported_text`, `file_name`, `file_text` |
+| `memories` | `key`, `value`, `summary` |
+| `files` | `name`, `content`, `extracted_text`, `transcript`, `uri` |
+| `toolArguments` | `name`, `arguments`, `output` |
+| `modelParameters` | `stop`, `request_fields`, `response_format`, `metadata` |
+| `actionMetadata` | `raw_spec`, `domain`, `privacy_policy_url`, `authorization_type`, `custom_auth_header`, `authorization_content_type`, `authorization_url`, `client_url`, `scope`, `token_exchange_method`, `api_key`, `oauth_client_id`, `oauth_client_secret` |
+
+### Procedência da Mensagem [#message-provenance]
+
+`filters.messages.unattributedAssistantContent` controla como o conteúdo de assistente legado sem proveniência é classificado:
+
+- `model_output` (padrão): preserva o comportamento legado ao tratar conteúdo do assistente sem atribuição como saída do modelo.
+- `inspect`: trata conteúdo do assistente que, de outra forma, não seria atribuído, incluindo projeções de anexos selecionados, como conteúdo enviado. O conteúdo do assistente explicitamente marcado como saída do modelo permanece isento.
+
+Essa classificação pode afetar uma política `messageFilter.pii` legada habilitada, mesmo quando `filters.messages.pii` for omitido. Inventarie ou migre registros antigos antes de depender de uma inspeção retroativa.
+
+### Arquivos não inspecionáveis [#uninspectable-files]
+
+`filters.files.pii.uninspectable` controla o conteúdo de arquivos selecionados que o LibreChat não consegue inspecionar, incluindo conteúdo opaco ou muito grande:
+
+- `allow` (padrão): preserva a compatibilidade e permite o conteúdo.
+- `block`: rejeita-o antes de efeitos colaterais do provedor ou armazenamento.
+
+Implemente o `block` deliberadamente. Isso pode tornar arquivos mais antigos indisponíveis para reutilização até que o texto inspecionável esteja presente.
+
+### Conteúdo Armazenado e Reutilizado [#stored-and-reused-content]
+
+Ativar ou alterar uma política não reescreve nem exclui registros armazenados. O LibreChat aplica a política atual quando o conteúdo protegido é enviado, copiado, compartilhado, reutilizado ou torna-se vinculado ao modelo.
+
+Edições seguras de metadados ainda podem ser bem-sucedidas, portanto, registros bloqueados permanecem reparáveis. Em visualizações de gerenciamento, campos de prompt ou predefinições bloqueados podem aparecer em branco com `contentFilterBlocked: true`; grupos de prompts bloqueados retornam um erro na recuperação direta e são omitidos das respostas de coleção e reutilização. Uma atualização de memória em segundo plano rejeitada pode ser ignorada enquanto a resposta principal do chat continua.
+
+Bloqueios de correspondências de texto com reconhecimento de origem retornam HTTP `400` com `content_filter_block`. Rejeições de arquivos não inspecionáveis usam `content_filter_uninspectable`.
+
+### Limites [#limits]
+
+- Até 256 campos, padrões iniciais ou padrões personalizados por fonte.
+- Até 256 padrões personalizados em toda a configuração.
+- IDs de padrão de até 256 caracteres, rótulos de até 512 caracteres e regexes de até 512 caracteres.
+- Até 8.192 caracteres regex totais e 8.192 instruções de filtro compiladas.
+
+## `messageFilter` legado [#legacy-messagefilter]
+
+`messageFilter.pii` rejeita o texto da mensagem fornecido pelo chamador que corresponda antes da moderação, solicitações de modelo ou persistência com `message_filter_pii_block`. Ele permanece apenas como bloqueio e não aceita `action`. Ele não inspeciona o conteúdo de arquivos ou as outras fontes reutilizáveis cobertas por `filters`.
 
 ```yaml filename="librechat.yaml"
 messageFilter:
@@ -24,63 +129,4 @@ messageFilter:
         regex: 'sk-ant-[A-Za-z0-9_-]{20,}'
 ```
 
-## Campos [#fields]
-
-### messageFilter.pii
-
-<OptionTable
-  options={[
-    [
-      'pii.starterPatterns',
-      'Array of Strings',
-      'Subconjunto opcional de ids de padrões iniciais integrados a serem habilitados. Omita para habilitar todos os padrões iniciais.',
-      'starterPatterns: [sk_prefix, bearer_header]',
-    ],
-    [
-      'pii.customPatterns',
-      'Array of Objects',
-      'Padrões definidos pelo operador. Cada entrada requer `id`, `label` e `regex`.',
-      '',
-    ],
-  ]}
-/>
-
-**Ids de padrão inicial integrados:**
-
-- `sk_prefix`: corresponde a prefixos de token no estilo `sk-`.
-- `bearer_header`: corresponde a tokens bearer no texto.
-- `api_key_header`: corresponde a texto no formato de cabeçalho `api-key`.
-
-### customPatterns
-
-<OptionTable
-  options={[
-    ['id', 'String', 'ID de padrão estável usado para logs e depuração.', 'id: anthropic_api_key'],
-    [
-      'label',
-      'String',
-      'Rótulo legível por humanos exibido na mensagem de rejeição.',
-      'label: Anthropic API key',
-    ],
-    [
-      'regex',
-      'String',
-      'Expressão regular RE2. O LibreChat a valida no momento do carregamento da configuração e a aplica globalmente.',
-      "regex: 'sk-ant-[A-Za-z0-9_-]{20,}'",
-    ],
-  ]}
-/>
-
-Padrões personalizados usam o mecanismo RE2 de tempo linear. Backreferences e lookaround não são suportados, e alguns escapes diferem das expressões regulares do JavaScript. O LibreChat rejeita padrões que o RE2 não consegue compilar ao carregar a configuração.
-
-## Comportamento [#behavior]
-
-Quando o texto da mensagem enviada corresponde a um padrão de PII configurado, o LibreChat retorna um HTTP `400` com `message_filter_pii_block` e uma mensagem solicitando que o autor da chamada remova o tipo de credencial correspondente.
-
-O filtro verifica:
-
-- Rota de chat para o texto do usuário enviado através da interface do LibreChat.
-- Conteúdo de texto em todas as funções de mensagem fornecidas pelo chamador em solicitações de Chat Completions compatíveis com OpenAI.
-- Conteúdo de texto em todas as funções de mensagem fornecidas pelo chamador em solicitações de Respostas compatíveis com OpenAI.
-
-O filtro avalia o texto fornecido no corpo da requisição. Ele não verifica o conteúdo de arquivos.
+O filtro legado verifica o texto do usuário na rota de chat e o texto fornecido pelo chamador em todas as funções nas solicitações de Chat Completions e Responses compatíveis com OpenAI. Ele utiliza os mesmos IDs integrados e regras de regex personalizadas de tempo linear descritos acima.

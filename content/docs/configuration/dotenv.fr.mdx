@@ -93,6 +93,27 @@ Consultez [Express.js - trust proxy](https://expressjs.com/en/guide/behind-proxi
   options={[['TRUST_PROXY', 'number', 'Spécifie le nombre de sauts.', 'TRUST_PROXY=1']]}
 />
 
+### En-tête de locataire approuvé (Trusted Tenant Header) [#trusted-tenant-header]
+
+`TRUST_TENANT_HEADER` contrôle si LibreChat accepte `X-Tenant-Id` avant l'authentification sur les arborescences de routes `/oauth`, `/api/auth` et `/api/share`. Il est désactivé par défaut ; lorsqu'il est désactivé, ces routes ignorent l'en-tête.
+
+<OptionTable
+  options={[
+    [
+      'TRUST_TENANT_HEADER',
+      'boolean',
+      'Faire confiance à X-Tenant-Id sur les routes de pré-authentification. À activer uniquement derrière un proxy de confiance qui remplace les valeurs fournies par le client.',
+      'TRUST_TENANT_HEADER=false',
+    ],
+  ]}
+/>
+
+<Callout type="warning" title="Ne pas faire confiance aux en-têtes de locataire fournis par le client">
+  Activez ce paramètre uniquement lorsqu'un reverse proxy de confiance supprime toute valeur `X-Tenant-Id` entrante et définit lui-même l'ID de tenant faisant autorité. Sinon, un client non approuvé pourrait choisir le contexte de tenant utilisé avant l'authentification. LibreChat enregistre un avertissement de sécurité lorsque ce paramètre est activé.
+</Callout>
+
+Lorsque `TENANT_ISOLATION_STRICT` est activé mais que `TRUST_TENANT_HEADER` est désactivé, LibreChat avertit au démarrage que les en-têtes de tenant de pré-authentification seront ignorés.
+
 ### Configuration des identifiants [#credentials-configuration]
 
 LibreChat utilise `CREDS_KEY` et `CREDS_IV` pour chiffrer les identifiants pris en charge stockés dans la base de données. Configurez des valeurs fixes et uniques pour la production et partagez les mêmes valeurs sur chaque réplique.
@@ -122,11 +143,21 @@ LibreChat utilise `CREDS_KEY` et `CREDS_IV` pour chiffrer les identifiants pris 
 
 Lorsque l'une des variables `CREDS_KEY`, `CREDS_IV`, `JWT_SECRET` ou `JWT_REFRESH_SECRET` est vide, LibreChat réutilise d'abord une valeur valide provenant du fichier d'identifiants temporaire. Si aucune n'existe, il génère une valeur cryptographiquement aléatoire et écrit le fichier avec des permissions restreintes au propriétaire uniquement. Les valeurs d'environnement explicites sont toujours prioritaires. LibreChat refuse d'utiliser `.env` ou `.env.example` comme chemin de fichier généré, empêchant ainsi le remplacement accidentel de l'un ou l'autre de ces fichiers de configuration.
 
+LibreChat refuse également de démarrer lorsque `JWT_SECRET` ou `JWT_REFRESH_SECRET` utilise encore l'une des valeurs par défaut publiées et obsolètes, que la valeur provienne de l'environnement ou du fichier d'identifiants temporaires. Générez des remplacements uniques plutôt que de conserver d'anciens exemples de secrets dans un déploiement.
+
 Les fichiers Docker Compose fournis conservent `/app/data/.env.temp` dans le volume `librechat-data`, de sorte qu'un déploiement Compose unique puisse redémarrer sans modifier ces valeurs générées. Si le fichier ne peut pas être conservé, les valeurs sont locales au processus et les sessions ou les enregistrements chiffrés pourraient devenir inaccessibles après un redémarrage.
 
 <Callout type="warning" title="Définir des valeurs permanentes pour la production">
   La génération temporaire est une commodité d'amorçage, et non un système de rotation des identifiants. Avant toute utilisation en production, générez des valeurs permanentes avec le [Credentials Generator](/toolkit/creds_generator), stockez-les dans votre gestionnaire de secrets et fournissez les mêmes valeurs à chaque réplique. La modification d'une clé établie ne ré-encrypte pas les enregistrements existants. LibreChat enregistre les empreintes des identifiants dans la base de données et avertit en cas de dérive des valeurs actives ; ne remplacez pas ce marqueur au lieu d'effectuer une migration contrôlée.
 </Callout>
+
+### En-têtes de sécurité et politique de sécurité du contenu (Content Security Policy) [#security-headers-and-content-security-policy]
+
+LibreChat envoie par défaut les en-têtes de base HSTS, framing, content-type, opener, resource et referrer. `SECURITY_HEADERS=false` les désactive tous et sert également d'interrupteur global pour la CSP.
+
+La CSP basée sur les nonce est une option séparée activée par `CSP_ENABLED=true` et configurée par défaut en mode rapport uniquement. Commencez avec `CSP_REPORT_ONLY=true`, inspectez les violations et ajoutez uniquement les origines requises par votre déploiement avant de procéder à l'application stricte. Lorsque la CSP est active, le shell SPA est toujours envoyé avec `Cache-Control: no-store` afin que son nonce par réponse ne puisse pas être réutilisé depuis le cache.
+
+Consultez [HTTP Security Headers](/docs/configuration/security_headers) pour connaître toutes les variables de base et CSP, les valeurs acceptées, les valeurs par défaut, les remplacements de liste source et les conseils de déploiement.
 
 ### Gestion des fichiers statiques [#static-file-handling]
 
@@ -372,6 +403,12 @@ LibreChat dispose d'un système de journalisation centralisé intégré, consult
       'DEBUG_CONSOLE=false',
     ],
     [
+      'CONSOLE_LOG_LEVEL',
+      'string',
+      'Définit la verbosité de la console sur error, warn, info, http, verbose, debug, activity, silly ou silent. La valeur par défaut est info, ou debug lorsque DEBUG_CONSOLE=true ; une valeur explicite est prioritaire.',
+      '# CONSOLE_LOG_LEVEL=info',
+    ],
+    [
       'LOG_TO_FILE',
       'boolean',
       'Définir sur false pour désactiver les transports Winston basés sur des fichiers tout en conservant la journalisation console disponible.',
@@ -414,6 +451,7 @@ Remarque :
 
 - `DEBUG_LOGGING` peut être utilisé avec `DEBUG_CONSOLE` ou `CONSOLE_JSON`, mais pas les deux en même temps.
 - `DEBUG_CONSOLE` et `CONSOLE_JSON` sont mutuellement exclusifs.
+- `CONSOLE_LOG_LEVEL=silent` désactive la sortie console sans désactiver la journalisation dans les fichiers. Les valeurs invalides reviennent à la valeur par défaut normale et émettent un avertissement.
 - `CONSOLE_JSON` : Lors de la gestion des journaux de console dans les déploiements cloud (tels que GCP ou AWS), l'activation de cette option permettra de vider les journaux avec un horodatage UTC et de les formater au format JSON.
   - Voir : [feat: Add CONSOLE_JSON](https://github.com/danny-avila/LibreChat/pull/2146)
 
@@ -473,6 +511,8 @@ Utilisez les variables Langfuse standard pour un projet d'observabilité central
 />
 
 Dans un déploiement à locataire unique sans identifiants d'environnement `LANGFUSE_PUBLIC_KEY` et `LANGFUSE_SECRET_KEY` complets, un administrateur autorisé peut configurer une connexion chiffrée sous **Settings → Langfuse**. Les identifiants d'environnement complets ont priorité et masquent ce paramètre. Les déploiements en éventail (fanout) utilisent le même paramètre pour la connexion du locataire lorsque le fanout et l'exportation du locataire sont activés.
+
+`LANGFUSE_BASE_URL` est canonique. `LANGFUSE_HOST` et `LANGFUSE_BASEURL` restent des alias de compatibilité et ne sont consultés dans cet ordre que lorsque le paramètre canonique est absent.
 
 ### Traçage OpenTelemetry [#opentelemetry-tracing]
 
@@ -837,6 +877,24 @@ Pour des options de configuration et de personnalisation détaillées, consultez
       '# TAVILY_EXTRACT_URL=',
     ],
     [
+      'KEENABLE_API_KEY',
+      'string',
+      'Clé API Keenable optionnelle pour la recherche et la récupération de pages. Les endpoints publics fonctionnent sans clé ; une clé augmente leurs limites de débit.',
+      '# KEENABLE_API_KEY=',
+    ],
+    [
+      'KEENABLE_API_URL',
+      'string',
+      'URL d\'API de recherche Keenable personnalisée facultative.',
+      '# KEENABLE_API_URL=',
+    ],
+    [
+      'KEENABLE_FETCH_URL',
+      'string',
+      'URL d\'API de récupération de page Keenable personnalisée optionnelle utilisée lorsque scraperProvider est keenable.',
+      '# KEENABLE_FETCH_URL=',
+    ],
+    [
       'FIRECRAWL_API_KEY',
       'string',
       'Clé API pour le service de scraping Firecrawl. Obtenez votre clé sur https://docs.firecrawl.dev/introduction#api-key',
@@ -870,7 +928,7 @@ Pour des options de configuration et de personnalisation détaillées, consultez
   ]}
 />
 
-**Note** : Ces noms de variables peuvent être personnalisés dans votre fichier de configuration `librechat.yaml`. Par exemple, vous pourriez utiliser `CUSTOM_SERPER_KEY` au lieu de `SERPER_API_KEY` en le configurant dans les paramètres de recherche web. Consultez la documentation sur la [Web Search Configuration](/docs/configuration/librechat_yaml/object_structure/web_search) pour plus de détails sur la personnalisation des noms de variables.
+**Note** : La plupart des noms de variables peuvent être personnalisés dans votre fichier de configuration `librechat.yaml`. Par exemple, vous pourriez utiliser `CUSTOM_SERPER_KEY` au lieu de `SERPER_API_KEY` en le configurant dans les paramètres de recherche web. `KEENABLE_FETCH_URL` est uniquement disponible via les variables d'environnement. Consultez la documentation sur la [Configuration de la recherche web](/docs/configuration/librechat_yaml/object_structure/web_search) pour plus de détails.
 
 ### Anthropic [#anthropic]
 
@@ -894,7 +952,7 @@ voir : [Anthropic Endpoint](/docs/configuration/pre_configured_ai/anthropic)
       'ANTHROPIC_MODELS',
       'string',
       'Liste séparée par des virgules des modèles Anthropic à utiliser.',
-      '# ANTHROPIC_MODELS=claude-fable-5,claude-opus-5,claude-opus-4-8,claude-opus-4-7,claude-sonnet-5,claude-sonnet-4-6,claude-opus-4-6,claude-opus-4-20250514,claude-3-7-sonnet-20250219,claude-3-5-sonnet-20241022,claude-3-5-haiku-20241022',
+      '# ANTHROPIC_MODELS=claude-fable-5-1,claude-fable-5,claude-opus-5,claude-opus-4-8,claude-opus-4-7,claude-sonnet-5,claude-sonnet-4-6,claude-opus-4-6,claude-opus-4-20250514,claude-3-7-sonnet-20250219,claude-3-5-sonnet-20241022,claude-3-5-haiku-20241022',
     ],
     [
       'ANTHROPIC_REVERSE_PROXY',
@@ -915,7 +973,7 @@ voir : [Anthropic Endpoint](/docs/configuration/pre_configured_ai/anthropic)
 
 > **Remarque :** Doit être compatible avec l'Anthropic endpoint. De plus, les modèles Claude 2 et Claude 3 sont les plus performants pour cette tâche, les modèles `claude-3-haiku` étant les moins coûteux.
 
-Claude Fable 5 est inclus dans la liste par défaut des modèles Anthropic. Les modèles de classe Fable/Mythos utilisent le comportement Anthropic moderne dans LibreChat : contexte de 1M, prise en charge de la réflexion adaptative (adaptive thinking), prise en charge de la mise en cache des prompts (prompt caching), et gestion de `thinkingDisplay` pour les sorties de raisonnement résumées ou omises.
+Claude Fable 5.1 et Fable 5 sont inclus dans la liste par défaut des modèles Anthropic. Les modèles de classe Fable/Mythos utilisent le comportement Anthropic moderne dans LibreChat : 1M de contexte, prise en charge de la réflexion adaptative (adaptive thinking), prise en charge de la mise en cache des invites (prompt caching) et gestion de `thinkingDisplay` pour les résultats de raisonnement résumés ou omis.
 
 #### Anthropic via Vertex AI [#anthropic-via-vertex-ai]
 
@@ -986,14 +1044,14 @@ Voir : [Configuration d'AWS Bedrock](/docs/configuration/pre_configured_ai/bedro
       'BEDROCK_AWS_MODELS',
       'string',
       'Liste séparée par des virgules des IDs de modèles Bedrock. Si omis, tous les modèles pris en charge connus sont inclus.',
-      '# BEDROCK_AWS_MODELS=global.anthropic.claude-fable-5,global.anthropic.claude-opus-5,global.anthropic.claude-opus-4-8,global.anthropic.claude-opus-4-7,global.anthropic.claude-sonnet-5,global.anthropic.claude-sonnet-4-6,meta.llama3-1-8b-instruct-v1:0',
+      '# BEDROCK_AWS_MODELS=global.anthropic.claude-fable-5-1,global.anthropic.claude-fable-5,global.anthropic.claude-opus-5,global.anthropic.claude-opus-4-8,global.anthropic.claude-opus-4-7,global.anthropic.claude-sonnet-5,global.anthropic.claude-sonnet-4-6,meta.llama3-1-8b-instruct-v1:0',
     ],
   ]}
 />
 
 > **Note :** Vous pouvez omettre les clés d'accès pour utiliser la chaîne d'identification AWS par défaut (variables d'environnement, identifiants SSO, fichiers d'identifiants partagés ou service de métadonnées d'instance EC2/ECS). Voir [AWS Bedrock Setup](/docs/configuration/pre_configured_ai/bedrock) pour plus de détails.
 
-Les modèles de classe Claude Fable/Mythos sur Bedrock sont uniquement destinés aux profils d'inférence. Utilisez un ID de profil tel que `us.anthropic.claude-fable-5` et activez le paramètre de partage de données Anthropic requis dans la console Bedrock ou via l'API Data Retention avant de les invoquer.
+Les modèles de classe Claude Fable/Mythos sur Bedrock sont uniquement destinés aux profils d'inférence. Utilisez un ID de profil tel que `global.anthropic.claude-fable-5-1` et activez le paramètre de partage de données Anthropic requis dans la console Bedrock ou via l'API Data Retention avant de les invoquer.
 
 ### BingAI [#bingai]
 
@@ -1047,13 +1105,13 @@ Suivez ces instructions pour configurer le [Google Endpoint](/docs/configuration
       'GOOGLE_MODELS',
       'string',
       'Modèles Google Gemini API disponibles, séparés par des virgules.',
-      'GOOGLE_MODELS=gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.1-pro-preview,gemini-3.1-pro-preview-customtools,gemini-3.1-flash-lite-preview,gemini-2.5-pro,gemini-2.5-flash,gemini-2.5-flash-lite,gemini-2.0-flash,gemini-2.0-flash-lite',
+      'GOOGLE_MODELS=gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.1-pro-preview,gemini-3.1-pro-preview-customtools,gemini-3.1-flash-lite-preview,gemini-2.5-pro,gemini-2.5-flash,gemini-2.5-flash-lite,gemini-2.0-flash,gemini-2.0-flash-lite',
     ],
     [
       'GOOGLE_MODELS',
       'string',
       'Modèles Vertex AI Google disponibles, séparés par des virgules.',
-      'GOOGLE_MODELS=gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.1-pro-preview,gemini-3.1-pro-preview-customtools,gemini-3.1-flash-lite-preview,gemini-2.5-pro,gemini-2.5-flash,gemini-2.5-flash-lite,gemini-2.0-flash-001,gemini-2.0-flash-lite-001',
+      'GOOGLE_MODELS=gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.1-pro-preview,gemini-3.1-pro-preview-customtools,gemini-3.1-flash-lite-preview,gemini-2.5-pro,gemini-2.5-flash,gemini-2.5-flash-lite,gemini-2.0-flash-001,gemini-2.0-flash-lite-001',
     ],
     [
       'GOOGLE_TITLE_MODEL',
@@ -1336,13 +1394,19 @@ L'API Code Interpreter fournit un environnement sécurisé pour l'exécution de 
     [
       'LIBRECHAT_CODE_BASEURL',
       'string',
-      'URL de base pour votre service Code Interpreter.',
+      'URL de base pour le service normal et sans état de l\'interpréteur de code.',
       '# LIBRECHAT_CODE_BASEURL=https://your-custom-domain.com',
+    ],
+    [
+      'LIBRECHAT_CODE_BASEURL_STATEFUL',
+      'string',
+      'URL de base par défaut de l\'interpréteur de code pour les sessions d\'agent avec état hautement expérimentales lorsqu\'aucun profil statefulCodeSessions nommé n\'est sélectionné. Le service doit annoncer le profil stateful.',
+      '# LIBRECHAT_CODE_BASEURL_STATEFUL=https://your-stateful-code-domain.com',
     ],
     [
       'CODE_SANDBOX_PREWARM',
       'boolean',
-      'Précharger les bacs à sable (sandboxes) avec état par conversation en parallèle avec la génération du modèle. Définir sur false pour désactiver. Par défaut : true.',
+      'Précharger les sandboxes avec état sélectionnées en parallèle avec la génération du modèle. Définir sur false pour désactiver. Par défaut : true.',
       '# CODE_SANDBOX_PREWARM=true',
     ],
     [
@@ -1352,13 +1416,128 @@ L'API Code Interpreter fournit un environnement sécurisé pour l'exécution de 
       '# CODE_SANDBOX_COLD_AFTER_MS=2100000',
     ],
     [
+      'LIBRECHAT_CODE_SANDBOX_OUTPUT_MAX_SIZE',
+      'number',
+      "Budget de stdout du Sandbox en octets utilisé pour dériver les tailles de fenêtre de lecture d'image. Faites correspondre le SANDBOX_OUTPUT_MAX_SIZE du runner pour minimiser les allers-retours d'exécution. Par défaut : 65536.",
+      '# LIBRECHAT_CODE_SANDBOX_OUTPUT_MAX_SIZE=65536',
+    ],
+    [
       'LIBRECHAT_CODE_IMAGE_CHUNK_BYTES',
       'number',
-      'Octets lus par bloc d\'image sandbox. Réduisez cette valeur lorsque le runner a une limite stdout plus petite. Par défaut : 32768.',
-      '# LIBRECHAT_CODE_IMAGE_CHUNK_BYTES=32768',
+      'Nombre exact d\'octets lus par fenêtre d\'image de sandbox. Remplace la taille dérivée de LIBRECHAT_CODE_SANDBOX_OUTPUT_MAX_SIZE ; laisser non défini sauf si une valeur de remplacement exacte est requise.',
+      '# LIBRECHAT_CODE_IMAGE_CHUNK_BYTES=',
+    ],
+    [
+      'CODE_ENVIRONMENT_PAIRING_USER_MAX',
+      'number',
+      'Nombre maximal de demandes de jumelage code-worker en libre-service par utilisateur pendant une fenêtre de limitation de débit. Par défaut : 5.',
+      '# CODE_ENVIRONMENT_PAIRING_USER_MAX=5',
+    ],
+    [
+      'CODE_ENVIRONMENT_PAIRING_USER_WINDOW',
+      'number',
+      'Fenêtre de limite de débit pour le jumelage des code-workers en libre-service en minutes. Par défaut : 60.',
+      '# CODE_ENVIRONMENT_PAIRING_USER_WINDOW=60',
     ],
   ]}
 />
+
+Si un worker a une limite de stdout inférieure à celle configurée, LibreChat réduit et mémorise la fenêtre d'image pour cette URL de base de Code Interpreter après une lecture échouée. Faire correspondre les deux budgets permet d'éviter cette requête de découverte rejetée et de réduire la pression sur la limite de taux d'exécution de Code Interpreter.
+
+### Authentification JWT pour Code Interpreter [#code-interpreter-jwt-authentication]
+
+Le service [ClickHouse/code-interpreter](https://github.com/ClickHouse/code-interpreter) auto-hébergé actuel vérifie les jetons bearer LibreChat à courte durée de vie en dehors du mode local. Définissez `CODEAPI_AUTH_PROVIDER=librechat-jwt` pour activer la création de jetons, puis fournissez à Code Interpreter la clé publique correspondant au signataire privé de LibreChat. Consultez [Self-hosted JWT authentication](/docs/features/code_interpreter#self-hosted-jwt-authentication) pour la configuration du service associé et l'assistant de génération de clés.
+
+<OptionTable
+  options={[
+    [
+      'CODEAPI_AUTH_PROVIDER',
+      'string',
+      'Définissez sur librechat-jwt pour générer des jetons porteurs (bearer tokens) Code Interpreter par utilisateur. La valeur compatibility active également la génération, mais ClickHouse/code-interpreter attend librechat-jwt.',
+      '# CODEAPI_AUTH_PROVIDER=librechat-jwt',
+    ],
+    [
+      'CODEAPI_JWT_ENABLED',
+      'boolean',
+      'Active explicitement la génération de JWT pour Code Interpreter lorsque CODEAPI_AUTH_PROVIDER n\'est pas librechat-jwt ou les deux. Par défaut : false.',
+      '# CODEAPI_JWT_ENABLED=true',
+    ],
+    [
+      'CODEAPI_JWT_PRIVATE_KEY',
+      'string',
+      'Clé de signature privée Ed25519 ou RSA au format PEM. Les séquences \\n échappées sont converties en retours à la ligne.',
+      '# CODEAPI_JWT_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\\n..."',
+    ],
+    [
+      'CODEAPI_JWT_PRIVATE_KEY_BASE64',
+      'string',
+      'Clé privée PEM encodée en Base64. Utilisée lorsque CODEAPI_JWT_PRIVATE_KEY n\'est pas défini.',
+      '# CODEAPI_JWT_PRIVATE_KEY_BASE64=',
+    ],
+    [
+      'CODEAPI_JWT_PRIVATE_JWK_JSON',
+      'string',
+      'Clé de signature privée au format JWK JSON. Utilisée lorsque les deux paramètres PEM ne sont pas définis.',
+      '# CODEAPI_JWT_PRIVATE_JWK_JSON={"kty":"OKP",...}',
+    ],
+    [
+      'CODEAPI_JWT_ALGORITHM',
+      'string',
+      'Algorithme de signature : EdDSA ou RS256. Par défaut : EdDSA.',
+      '# CODEAPI_JWT_ALGORITHM=EdDSA',
+    ],
+    [
+      'CODEAPI_JWT_KID',
+      'string',
+      'ID de clé de signature inclus dans l\'en-tête du jeton. Doit identifier la clé de vérification Code Interpreter correspondante. Par défaut : lc-codeapi-2026-05.',
+      '# CODEAPI_JWT_KID=lc-codeapi-2026-05',
+    ],
+    [
+      'CODEAPI_JWT_ISSUER',
+      'string',
+      'Émetteur de jetons ; doit correspondre à Code Interpreter. Par défaut : librechat.',
+      '# CODEAPI_JWT_ISSUER=librechat',
+    ],
+    [
+      'CODEAPI_JWT_AUDIENCE',
+      'string',
+      'Audience du jeton ; doit correspondre à Code Interpreter. Par défaut : codeapi.',
+      '# CODEAPI_JWT_AUDIENCE=codeapi',
+    ],
+    [
+      'CODEAPI_JWT_TTL_SECONDS',
+      'number',
+      'Durée de vie du jeton Bearer en secondes. Les valeurs invalides ou supérieures sont ramenées à la valeur par défaut et maximale de 300 secondes.',
+      '# CODEAPI_JWT_TTL_SECONDS=300',
+    ],
+    [
+      'CODEAPI_JWT_MINT_CACHE_SECONDS',
+      'number',
+      'Durée pendant laquelle LibreChat peut réutiliser un jeton pour le même contexte authentifié. Valeur par défaut et maximale : 30 secondes.',
+      '# CODEAPI_JWT_MINT_CACHE_SECONDS=30',
+    ],
+    [
+      'CODEAPI_JWT_SINGLE_TENANT_ID',
+      'string',
+      'ID de locataire de secours lorsque l\'isolation stricte des locataires est désactivée et qu\'aucun contexte de locataire n\'est disponible. Doit correspondre à Code Interpreter. Par défaut : legacy.',
+      '# CODEAPI_JWT_SINGLE_TENANT_ID=legacy',
+    ],
+  ]}
+/>
+
+Au moins une source de clé privée est requise lorsque la génération de JWT est activée. Si plus d'une est définie, LibreChat vérifie `CODEAPI_JWT_PRIVATE_KEY`, puis `CODEAPI_JWT_PRIVATE_KEY_BASE64`, et enfin `CODEAPI_JWT_PRIVATE_JWK_JSON`. `CODEAPI_JWT_KEY_ID` demeure un alias de compatibilité pour `CODEAPI_JWT_KID`.
+
+Pour un déploiement multi-tenant, activez `TENANT_ISOLATION_STRICT=true` dans LibreChat et `CODEAPI_TENANT_ISOLATION_STRICT=true` dans Code Interpreter. Les requêtes sans contexte de tenant authentifié échoueront alors au lieu d'utiliser `CODEAPI_JWT_SINGLE_TENANT_ID`.
+
+### Point de terminaison Stateful Code Interpreter [#stateful-code-interpreter-endpoint]
+
+[`stateful_code_sessions`](/docs/configuration/librechat_yaml/object_structure/agents#capabilities) est hautement expérimental et nécessite une route Code Interpreter distincte. Configurez la route par défaut avec `LIBRECHAT_CODE_BASEURL_STATEFUL`, ou définissez des backends nommés, gérés ou attachés, sous [`endpoints.agents.statefulCodeSessions.environments`](/docs/configuration/librechat_yaml/object_structure/agents#statefulcodesessions). Le service sélectionné doit exécuter le profil `stateful` ; LibreChat envoie `X-CodeAPI-Expected-Profile: stateful` avec les requêtes avec état.
+
+Les requêtes avec état (stateful) ne reviennent jamais à `LIBRECHAT_CODE_BASEURL`. Si l'environnement nommé sélectionné n'est pas disponible, ou si ni une valeur par défaut nommée ni `LIBRECHAT_CODE_BASEURL_STATEFUL` n'est configurée, LibreChat arrête l'exécution de l'Agent avec une erreur de configuration. Les agents sans état (stateless) continuent d'utiliser `LIBRECHAT_CODE_BASEURL`, et les deux profils d'exécution ne partagent pas d'espace de travail actif.
+
+Chaque Agent peut limiter son espace de travail avec état à l'utilisateur connecté, à l'utilisateur et à l'Agent ensemble, ou à l'utilisateur et à la conversation. Voir [Stateful Code Sessions](/docs/features/code_interpreter#stateful-code-sessions) pour la configuration et les limitations de persistance.
+
+Les environnements attachés nommés peuvent également exposer un plan de contrôle de pairage en libre-service avec `pairing.allowPrincipalWorkers: true`. Les utilisateurs autorisés gèrent ces workers liés au propriétaire sous **Paramètres > Environnements de code** ; les entrées réservées au pairage ne remplacent pas `LIBRECHAT_CODE_BASEURL_STATEFUL` et ne peuvent pas servir de déploiement par défaut.
 
 ## Artifacts [#artifacts]
 
@@ -1540,6 +1719,62 @@ Configurez la fonctionnalité de liens de conversation partagés.
 
 `ALLOW_SHARED_LINKS` est l'interrupteur global de la fonctionnalité. Les permissions de rôle contrôlent désormais qui peut créer des liens partagés, les partager avec des utilisateurs authentifiés, ou les rendre visibles par tous ; voir [`interface.sharedLinks`](/docs/configuration/librechat_yaml/object_structure/interface#sharedlinks). `ALLOW_SHARED_LINKS_PUBLIC` contrôle uniquement si les liens partagés publiquement peuvent être consultés sans authentification. `SHARED_LINKS_SNAPSHOT_FILES` est une option globale de remplacement pour les instantanés de fichiers des liens partagés et peut désactiver la diffusion d'instantanés pour chaque lien lorsqu'elle est définie sur `false`.
 
+## Discussions planifiées [#scheduled-chats]
+
+<OptionTable
+  options={[
+    [
+      'SCHEDULES_SINGLE_PROCESS',
+      'boolean',
+      'Permet les discussions planifiées sans Redis uniquement lorsqu\'un seul processus LibreChat est en cours d\'exécution. Ne jamais activer ceci pour plusieurs processus ou réplicas.',
+      'SCHEDULES_SINGLE_PROCESS=true',
+    ],
+    [
+      'SCHEDULES_DISABLED',
+      'boolean',
+      'Arrêt global d\'urgence pour les occurrences de Scheduled Chat automatiques et l\'exécution immédiate (Run now). Les définitions restent enregistrées. Par défaut : false.',
+      'SCHEDULES_DISABLED=true',
+    ],
+  ]}
+/>
+
+Les Scheduled Chats sont expérimentaux et désactivés tant que [`interface.schedules`](/docs/configuration/librechat_yaml/object_structure/interface#schedules) n'est pas configuré. Les déploiements multi-répliques nécessitent `USE_REDIS_STREAMS=true` ; un déploiement sans flux Redis partagés échouera à écrire les planifications, sauf s'il déclare explicitement une topologie à processus unique avec `SCHEDULES_SINGLE_PROCESS=true`. Un Agent planifié pouvant se mettre en pause pour une demande utilisateur (Ask User) ou une approbation d'outil nécessite toujours `USE_REDIS_STREAMS=true` ainsi qu'un point de contrôle partagé durable ; la valeur par défaut intégrée est MongoDB. Voir [Scheduled Chats](/docs/features/scheduled_chats) pour la configuration et le comportement lors de l'exécution.
+
+## Agent Event Runtime [#agent-event-runtime]
+
+<OptionTable
+  options={[
+    [
+      'AGENT_TRIGGERS_SELF_URL',
+      'string',
+      'Joker de compatibilité pour endpoints.agents.eventDriven.selfUrl. URL de base utilisée par l\'hôte d\'événements Agent pour réintégrer, poursuivre et diriger l\'admission.',
+      '# AGENT_TRIGGERS_SELF_URL=http://127.0.0.1:3080',
+    ],
+    [
+      'AGENT_EVENT_USER_MAX',
+      'number',
+      'Solution de repli de compatibilité pour rateLimits.agentEvents.userMax. Nombre maximal de requêtes d\'événements d\'agent par principal de clé API dans la fenêtre configurée. Par défaut : 40.',
+      'AGENT_EVENT_USER_MAX=40',
+    ],
+    [
+      'AGENT_EVENT_USER_WINDOW',
+      'number',
+      'Solution de repli de compatibilité pour rateLimits.agentEvents.userWindowInMinutes. Fenêtre de limite de débit des événements d\'agent en minutes. Par défaut : 1.',
+      'AGENT_EVENT_USER_WINDOW=1',
+    ],
+  ]}
+/>
+
+Préférez [`endpoints.agents.eventDriven.selfUrl`](/docs/configuration/librechat_yaml/object_structure/agents#eventdriven) et [`rateLimits.agentEvents`](/docs/configuration/librechat_yaml/object_structure/config#ratelimits) dans `librechat.yaml`. `AGENT_TRIGGERS_SELF_URL` et les variables de limitation de débit restent des solutions de secours pour la compatibilité ; une valeur YAML explicitement configurée est prioritaire.
+
+Les continuations enfants liées, les continuations parentes de Subagent détachées et l'achèvement des Action détachées de l'Event Actor sont automatiques. Les variables obsolètes `ENABLE_AGENT_EVENT_CHILD_TURNS`, `ENABLE_SUBAGENT_COMPLETION_WAKEUPS` et `AGENT_TRIGGERS_DETACHED_ACTIONS_PRODUCER_ENABLED` ne sont plus lues.
+
+Le stockage de génération en mémoire prend en charge l'achèvement détaché de l'Event Actor local au processus tant que le processus reste actif. Les flux de génération Redis ajoutent une récupération durable après redémarrage et un transfert de réplica. Consultez [Generation Protocol Compatibility](/docs/configuration/redis#generation-protocol-compatibility) avant un déploiement avec des versions mixtes.
+
+Laissez `AGENT_TRIGGERS_SELF_URL` non défini pour le chemin normal de l'écouteur lié (bound-listener). Ne le définissez que lorsque l'admission d'événements internes doit traverser une autre origine HTTP, telle qu'une porte d'entrée TLS. La valeur doit être une URL HTTP ou HTTPS sans identifiants intégrés.
+
+LibreChat expose une API Agent Events authentifiée ; elle n'expose pas de webhook non authentifié. L'identité par clé API, les permissions des Remote Agents, l'accès aux cibles, l'idempotence et la limite de débit dédiée aux Agent Events protègent l'entrée. Des files d'attente basées sur MongoDB, des boîtes aux lettres d'acteurs, des accusés de réception, des baux, des tentatives de réessai et des lettres mortes prennent en charge les workers à travers les réplicas. Voir [Agent Event Delivery](/docs/features/agents#agent-event-delivery) et [Agents API - Agent Events](/docs/features/agents_api#agent-events) pour le comportement et des exemples.
+
 ## Système utilisateur [#user-system]
 
 Cette section contient la configuration pour :
@@ -1548,6 +1783,21 @@ Cette section contient la configuration pour :
 - [Solde/Utilisation des jetons](#balance)
 - [Inscription et connexions sociales](#registration-and-login)
 - [Réinitialisation du mot de passe par e-mail](#password-reset)
+
+### Aperçu administrateur [#admin-insights]
+
+<OptionTable
+  options={[
+    [
+      'ENABLE_INSIGHTS',
+      'boolean',
+      'Active le tableau de bord Insights basé sur MongoDB pour les administrateurs disposant des capacités requises. Par défaut : false.',
+      'ENABLE_INSIGHTS=false',
+    ],
+  ]}
+/>
+
+Lorsqu'elle est activée, la fonctionnalité Insights reste restreinte aux comptes disposant du rôle `ADMIN` ainsi que des permissions `access:admin` et `read:insights`. Les requêtes sont limitées au locataire (tenant-scoped) et exposent des métriques d'activité persistantes ainsi que des métadonnées de conversations récentes. Consultez [Admin Insights](/docs/features/insights) pour les définitions des métriques et les détails d'accès.
 
 ### Contrôles de conversation des agents [#agent-conversation-controls]
 
@@ -1651,6 +1901,8 @@ Empêche les attaques par force brute et les inscriptions de spam en limitant le
     ],
   ]}
 />
+
+Le budget de tentatives de connexion est partagé par l'API de connexion locale et les navigations OAuth sociales ou fédérées de haut niveau provenant de la même adresse IP. Une connexion API rejetée reçoit la réponse JSON `429` existante. Une navigation par navigateur `/oauth/*` limitée en débit ou bannie redirige vers `/login?redirect=false` avec un code d'erreur localisé au lieu de rendre un document JSON ; `redirect=false` empêche une redirection OpenID automatique de déclencher immédiatement à nouveau le limiteur.
 
 #### Limitation du taux de réinitialisation de mot de passe et de vérification d'e-mail [#password-reset-and-email-verification-rate-limiting]
 
@@ -1887,6 +2139,8 @@ LibreChat applique des limites distinctes basées sur l'IP pour la demande d'e-m
     ],
   ]}
 />
+
+Les tentatives de génération d'Agent idempotentes confirmées contournent l'admission ordinaire des messages par utilisateur afin que la récupération puisse se poursuivre, mais elles passent tout de même par le limiteur d'IP partagé lorsque `LIMIT_MESSAGE_IP` est activé. Les livraisons déclenchées par un Agent de confiance restent exemptées de cette limite d'IP côté navigateur.
 
 ##### Limiteur de TTL des pièces jointes en file d'attente : [#queued-attachment-ttl-limiter]
 
@@ -2534,7 +2788,7 @@ Pour plus d'informations :
     [
       'OPENID_ROLE_SYNC_FALLBACK_ROLE',
       'string',
-      'Rôle LibreChat attribué lorsqu\'aucun rôle prioritaire ne correspond. Le repli est prioritaire lorsqu\'il est configuré.',
+      'Rôle LibreChat attribué lorsqu\'aucun rôle prioritaire ne correspond. La solution de secours fait autorité lorsqu\'elle est configurée. L\'authentification via l\'API Remote Agents traite une liste de dépassement de groupe Entra non résolue comme vide, cette solution de secours s\'y applique donc également.',
       'OPENID_ROLE_SYNC_FALLBACK_ROLE=USER',
     ],
     [
@@ -2654,6 +2908,12 @@ LibreChat prend en charge la réutilisation des jetons d'accès et de rafraîchi
       'OPENID_REUSE_MAX_SESSION_AGE_MS=900000',
     ],
     [
+      'OPENID_REFRESH_BRIDGE_GRACE_MS',
+      'number',
+      'Courte fenêtre de récupération pour un jeton d\'actualisation renouvelé pendant que LibreChat publie la session OpenID actualisée. Par défaut : 60000 ms / 1 minute.',
+      'OPENID_REFRESH_BRIDGE_GRACE_MS=60000',
+    ],
+    [
       'OPENID_JWKS_URL_CACHE_ENABLED',
       'boolean',
       'Activer la mise en cache des résultats de vérification de la clé de signature.',
@@ -2692,7 +2952,7 @@ LibreChat prend en charge la réutilisation des jetons d'accès et de rafraîchi
   ]}
 />
 
-`OPENID_REUSE_MAX_SESSION_AGE_MS` accepte des expressions arithmétiques comme `SESSION_EXPIRY`. Augmentez cette valeur vers la durée de vie du jeton d'accès de l'IdP lorsque votre fournisseur révoque le jeton d'accès précédent lors du rafraîchissement, afin que les consommateurs en aval, tels que les serveurs MCP, puissent terminer l'utilisation d'un jeton porteur toujours valide.
+`OPENID_REUSE_MAX_SESSION_AGE_MS` et `OPENID_REFRESH_BRIDGE_GRACE_MS` acceptent des expressions arithmétiques comme `SESSION_EXPIRY`. Augmentez la durée de session vers la durée de vie du jeton d'accès de l'IdP lorsque votre fournisseur révoque le jeton d'accès précédent lors du rafraîchissement, afin que les consommateurs en aval, tels que les serveurs MCP, puissent terminer l'utilisation d'un jeton porteur toujours valide. Augmentez la période de grâce du pont uniquement lorsque la persistance lente de la session ou la publication inter-répliques nécessite plus que la minute par défaut pour publier un jeton renouvelé.
 
 <Callout type="note" title="Note">
   Pour des étapes de configuration détaillées et les prérequis, consultez [Re-use OpenID Tokens for Login Session](/docs/configuration/authentication/OAuth2-OIDC/token-reuse).
@@ -2722,8 +2982,16 @@ Lorsque vous utilisez Azure Entra ID (anciennement Azure AD) comme fournisseur O
       'Étendues de l\'API Microsoft Graph nécessaires pour la recherche de personnes/groupes. Les étendues par défaut permettent d\'accéder aux profils utilisateur et aux appartenances aux groupes.',
       'OPENID_GRAPH_SCOPES=User.Read,People.Read,GroupMember.Read.All,User.ReadBasic.All',
     ],
+    [
+      'GRAPH_API_SCOPES',
+      'string',
+      'Scopes Microsoft Graph séparés par des espaces demandés par l\'échange OBO pour les espaces réservés {{LIBRECHAT_GRAPH_ACCESS_TOKEN}} dans les serveurs MCP définis en YAML. Par défaut : https://graph.microsoft.com/.default.',
+      '# GRAPH_API_SCOPES=https://graph.microsoft.com/.default',
+    ],
   ]}
 />
+
+`GRAPH_API_SCOPES` est distinct de `OPENID_GRAPH_SCOPES` : le premier contrôle les jetons Graph résolus dans la configuration MCP, tandis que le second contrôle la recherche de personnes et de groupes dans Entra ID.
 
 <Callout type="warning" title="Prérequis importants">
   - Vous devez avoir Azure Entra ID configuré comme votre fournisseur OpenID - **La réutilisation des jetons OpenID DOIT être activée** (`OPENID_REUSE_TOKENS=true`) - cette fonctionnalité ne fonctionnera pas sans cela - Votre enregistrement d'application Azure doit disposer des autorisations Microsoft Graph API appropriées - Pour la fonctionnalité de recherche de groupe, le consentement de l'administrateur peut être requis pour certaines étendues (scopes) de l'API Graph.
@@ -2823,6 +3091,18 @@ Une seule méthode d'authentification peut être active à la fois.
       'string',
       'Le secret pour le stockage de session SAML.',
       'SAML_SESSION_SECRET=',
+    ],
+    [
+      'SAML_NAME_ID_FORMAT',
+      'string',
+      'Format NameID stable demandé à l\'IdP. Les identifiants persistants sont recommandés ; les identifiants temporaires sont rejetés.',
+      '# SAML_NAME_ID_FORMAT=urn:oasis:names:tc:SAML:2.0:nameid-format:persistent',
+    ],
+    [
+      'SAML_IDP_ISSUER',
+      'string',
+      'ID d\'entité IdP attendu. Lorsqu\'il est défini, les assertions avec un émetteur manquant ou différent sont rejetées.',
+      'SAML_IDP_ISSUER=',
     ],
     [
       'SAML_EMAIL_CLAIM',
@@ -3356,12 +3636,6 @@ Pour une configuration détaillée et des exemples, consultez : **[Guide de conf
       '# USE_REDIS_STREAMS=true',
     ],
     [
-      'GENERATION_PROTOCOL_VERSION',
-      'integer',
-      'Protocole de flux de génération (1 ou 2). Les déploiements basés sur Redis utilisent par défaut la v1, compatible avec les mises à jour progressives, jusqu\'à une transition explicite ; les flux en mémoire utilisent par défaut la v2.',
-      '# GENERATION_PROTOCOL_VERSION=2',
-    ],
-    [
       'STREAM_DELTA_COALESCE_MS',
       'integer',
       'Regroupez les publications delta du flux Redis dans ce nombre de millisecondes. Laisser vide ou à 0 désactive le regroupement ; 25 est recommandé et les valeurs sont plafonnées à 1000.',
@@ -3422,6 +3696,12 @@ Pour une configuration détaillée et des exemples, consultez : **[Guide de conf
       '# REDIS_MAX_LISTENERS=40',
     ],
     [
+      'REDIS_READONLY_RECOVERY_INTERVAL',
+      'number',
+      'Nombre minimal de millisecondes entre les tentatives de reconnexion forcée de Keyv après des réponses READONLY lors d\'un basculement standalone ou Sentinel. Par défaut : 5000.',
+      '# REDIS_READONLY_RECOVERY_INTERVAL=5000',
+    ],
+    [
       'REDIS_PING_INTERVAL',
       'number',
       'Intervalle de ping en secondes pour maintenir les connexions. Par défaut : 0 (désactivé). À définir uniquement en cas de délais d\'attente.',
@@ -3469,10 +3749,11 @@ Pour une configuration détaillée et des exemples, consultez : **[Guide de conf
 Notes :
 
 - Lorsque `USE_REDIS=true`, vous devez fournir `REDIS_URI` ou l'application générera une erreur.
-- Pour les flux de génération basés sur Redis, déployez d'abord la version compatible v2 sur chaque réplica avec `GENERATION_PROTOCOL_VERSION` non défini (ou `1`). Une fois que les anciennes générations actives sont terminées, définissez-le sur `2` lors d'un second déploiement. Ne revenez pas à une image antérieure à la v2 tant que des générations v2 restent actives. Voir [Generation Protocol Rollout](/docs/configuration/redis#generation-protocol-rollout).
+- Les clients LibreChat actuels négocient automatiquement le protocole de génération v2. La variable obsolète `GENERATION_PROTOCOL_VERSION` n'est plus lue. Consultez [Compatibilité du protocole de génération](/docs/configuration/redis#generation-protocol-compatibility) avant de mélanger les versions de publication ou d'effectuer un retour à une version antérieure.
 - Activez `STREAM_DELTA_COALESCE_MS` uniquement après que chaque réplica prend en charge les trames par lots (batch frames). Les anciens abonnés abandonnent les trames fusionnées. Voir [Stream Delta Coalescing](/docs/configuration/redis#stream-delta-coalescing).
 - Pour le mode Redis Cluster, fournissez plusieurs URI : `redis://node1:7001,redis://node2:7002,redis://node3:7003` (le mode cluster est détecté automatiquement).
 - Pour les services Redis gérés à point de terminaison unique qui partitionnent les clés en interne, gardez `USE_REDIS_CLUSTER=false` et définissez `REDIS_CLUSTER_SAFE_DELETE=true` si les effacements de cache échouent avec des erreurs `CROSSSLOT`.
+- `REDIS_READONLY_RECOVERY_INTERVAL` temporise les tentatives de reconnexion de Keyv après qu'un basculement a laissé un socket ouvert attaché à un réplica en lecture seule rétrogradé. Les clients Redis Cluster utilisent leur propre gestion native de la topologie à la place.
 - Utilisez le protocole `rediss://` pour les connexions TLS et définissez `REDIS_CA` si votre autorité de certification (CA) n'est pas publiquement approuvée.
 - `REDIS_KEY_PREFIX_VAR` et `REDIS_KEY_PREFIX` sont mutuellement exclusifs.
 - **AWS Elasticache avec TLS** : Elasticache peut nécessiter l'utilisation d'un dnsLookup alternatif pour les connexions TLS. Définissez `REDIS_USE_ALTERNATIVE_DNS_LOOKUP=true` si vous utilisez Elasticache avec TLS. Consultez la [documentation ioredis](https://www.npmjs.com/package/ioredis) pour plus de détails.

@@ -2,24 +2,25 @@
 title: API Agen (Beta)
 icon: Plug
 description: >-
-  Akses agen LibreChat secara terprogram melalui endpoint API yang kompatibel
-  dengan OpenAI dan Open Responses
+  Jalankan agen LibreChat dan kirimkan peristiwa terautentikasi melalui API
+  terprogram
 ---
 
 <Callout type="warning" title="Fitur Beta">
 Agents API saat ini dalam tahap beta. Endpoint, format permintaan/tanggapan, dan perilaku dapat berubah seiring kami melakukan iterasi menuju rilis stabil.
 </Callout>
 
-LibreChat mengekspos agen Anda melalui dua antarmuka yang kompatibel dengan API, memungkinkan aplikasi, skrip, dan layanan eksternal untuk berinteraksi dengan agen Anda secara terprogram.
+LibreChat mengekspos agen ke aplikasi, skrip, dan layanan eksternal melalui API inferensi dan pengiriman acara.
 
 ## Ikhtisar [#overview]
 
-API Agents menyediakan dua antarmuka:
+Agents API menyediakan dua antarmuka inferensi dan pengiriman peristiwa terautentikasi:
 
 - **Chat Completions yang kompatibel dengan OpenAI** — `POST /api/agents/v1/chat/completions`
 - **API Respons Terbuka** — `POST /api/agents/v1/responses`
+- **Peristiwa Agen** — `POST /api/agents/v1/events`
 
-Keduanya diautentikasi melalui API key dan mendukung respons streaming, sehingga memudahkan integrasi agen LibreChat ke dalam alur kerja yang sudah ada yang telah menggunakan SDK OpenAI atau perangkat serupa.
+Antarmuka inferensi mendukung autentikasi API-key, autentikasi OIDC opsional, dan respons streaming. Agent Events menggunakan autentikasi API-key Remote Agents agar LibreChat dapat mengikat setiap pengiriman ke identitas sumber yang stabil.
 
 LibreChat mengadopsi [Open Responses](https://www.openresponses.org/) sebagai kerangka kerja API utamanya untuk melayani agen. Meskipun endpoint Chat Completions menyediakan kompatibilitas mundur dengan perangkat yang kompatibel dengan OpenAI yang sudah ada, endpoint Open Responses mewakili arah masa depan.
 
@@ -88,6 +89,10 @@ curl -X POST https://your-librechat-instance/api/agents/v1/responses \
 </Callout>
 
 Lihat [Agents Endpoint - remoteApi](/docs/configuration/librechat_yaml/object_structure/agents#remoteapi) untuk semua opsi konfigurasi.
+
+<Callout type="warning" title="Agent Events memerlukan kunci API">
+  Autentikasi khusus OIDC tidak didukung untuk endpoint Agent Events. Gunakan kunci API Remote Agents saat membuat binding, mengantrekan peristiwa, dan melakukan polling status pengiriman.
+</Callout>
 
 ## Endpoints [#endpoints]
 
@@ -158,9 +163,144 @@ curl -X POST https://your-librechat-instance/api/agents/v1/responses \
   }'
 ```
 
+## Peristiwa Agen [#agent-events]
+
+Agent Events memungkinkan pengontrol atau adaptor sumber yang terautentikasi untuk mengirimkan pekerjaan yang tahan lama ke sebuah Agent. Pengiriman event adalah kemampuan beta dan perilaku permintaan, respons, serta runtime-nya dapat berubah.
+
+Endpoint menggunakan pengguna yang terautentikasi, tenant, dan API key; Agent target harus terlihat oleh pengguna tersebut di bawah izin Remote Agents yang ada. Permintaan Agent Event juga menggunakan bucket [`rateLimits.agentEvents`](/docs/configuration/librechat_yaml/object_structure/config#ratelimits) khusus.
+
+### Kirimkan Event [#deliver-an-event]
+
+```http
+POST /api/agents/v1/events
+Authorization: Bearer <REMOTE_AGENTS_API_KEY>
+Idempotency-Key: webhook-42-resource-7
+Content-Type: application/json
+
+{
+  "mode": "fire",
+  "event": {
+    "id": "resource-7-ready-3",
+    "type": "resource.ready",
+    "occurredAt": 1786967999000,
+    "payload": { "resourceId": "resource-7" }
+  },
+  "target": { "agentId": "agent_abc123" },
+  "input": "Resource resource-7 is ready. Inspect it and report the result.",
+  "orderingKey": "resource-7"
+}
+```
+
+Kirim tepat satu header `Idempotency-Key` dan gunakan kembali saat mencoba ulang pengiriman source-event-to-target yang sama. Kunci tersebut harus berisi 1-256 huruf, angka, atau karakter `._~:/+=-`. Menggunakan kembali kunci dengan konten pengiriman yang berbeda akan menghasilkan konflik.
+
+Pemanggil menyediakan `id`, `type`, `occurredAt`, dan `payload` yang telah dibersihkan untuk event tersebut. LibreChat mengganti `event.source` yang disediakan pemanggil dengan identitas kunci API yang terautentikasi serta menentukan pengguna, tenant, ID permintaan, dan waktu penerimaan. Jangan sertakan kredensial atau rahasia transport dalam payload event karena pengiriman yang diterima akan disimpan secara permanen.
+
+`orderingKey` bersifat opsional. Gunakan nilai yang stabil jika pengiriman dari sumber yang berbeda harus tetap berurutan untuk sumber daya yang sama.
+
+Permintaan yang berhasil akan mengembalikan `202 Accepted`, `id` pengiriman yang buram (opaque), statusnya saat ini, dan header `Location`. Lakukan polling pada lokasi tersebut:
+
+```http
+GET /api/agents/v1/events/{delivery_id}
+Authorization: Bearer <SAME_REMOTE_AGENTS_API_KEY>
+```
+
+Pengiriman dapat berstatus `pending`, `leased`, `succeeded`, atau `dead`. Respons status mencakup percobaan dan stempel waktu ditambah hasil atau kesalahan publik saat diselesaikan; respons ini tidak menampilkan payload yang disimpan, kunci pengurutan, riwayat percobaan ulang, atau identitas pekerja. Akses status dibatasi pada pengguna, penyewa, dan sumber API key yang sama.
+
+Untuk `continue` yang terikat, `succeeded` berarti giliran Agen telah diterima, bukan berarti pekerjaan yang diminta telah selesai. Oleh karena itu, statusnya juga menampilkan siklus hidup `handling` yang tahan lama: `started`, diikuti oleh tepat satu dari `applied`, `completed_no_action`, `failed`, atau `cancelled`.
+
+Sumber yang sadar akan tindakan (action-aware) dapat menyertakan `expectedAction` dengan nama alat dan subset argumen opsional. LibreChat melaporkan `applied` hanya ketika pembuatan tersebut selesai dengan bukti alat yang diamati oleh host yang cocok dengan kontrak; prosa yang dibuat oleh model tidak pernah diterima sebagai bukti. Pengiriman `fire`, `steer`, dan `continue` yang tidak terikat akan menolak `expectedAction`.
+
+Hasil `fire` yang berhasil mencakup identitas percakapan dan pembuatan yang dapat ditargetkan oleh peristiwa `steer` di kemudian hari.
+
+### Agen Anak Berbasis Peristiwa (Event-Driven Child Agents) [#event-driven-child-agents]
+
+Sistem eksternal dapat mengikat aktor sumber ke Agen anak langsung, kemudian melanjutkan percakapan anak yang sama di seluruh peristiwa. Kelanjutan anak yang terikat bersifat otomatis setelah pemeriksaan identitas API-key, kepemilikan pengikatan, hubungan induk, dan otorisasi Agen berhasil; tidak ada fitur toggle terpisah.
+
+Daftarkan aktor dengan kunci API yang sama yang akan mengirimkan giliran berikutnya:
+
+```http
+POST /api/agents/v1/events/bindings
+Authorization: Bearer <REMOTE_AGENTS_API_KEY>
+Idempotency-Key: championship-7-player-hanae
+Content-Type: application/json
+
+{
+  "actorId": "hanae-kobayashi",
+  "parentConversationId": "director-conversation-id",
+  "parentMessageId": "director-message-id",
+  "target": { "agentId": "agent_hanae" }
+}
+```
+
+`actorId` dapat berisi hingga 128 karakter. Induknya harus berupa percakapan Agent biasa, dan targetnya harus dikonfigurasi sebagai salah satu Subagent langsung dari Agent tersebut atau self-spawn yang diizinkan. Binding baru mengembalikan `201`; replay idempoten mengembalikan `200`. Kedua respons menyertakan `id`, `actorId`, `agentId`, dan `threadId`.
+
+Kirim giliran nanti dengan ID binding yang dikembalikan:
+
+```http
+POST /api/agents/v1/events
+Authorization: Bearer <SAME_REMOTE_AGENTS_API_KEY>
+Idempotency-Key: game-12-ply-17-hanae
+Content-Type: application/json
+
+{
+  "mode": "continue",
+  "bindingId": "evtbind_...",
+  "event": {
+    "id": "game-12-ply-17",
+    "type": "chess.turn.ready",
+    "occurredAt": 1786968000000,
+    "payload": { "gameId": "game-12", "expectedPly": 17 }
+  },
+  "input": "Your clock is running. Read the position and submit one legal move.",
+  "expectedAction": {
+    "tool": "submit_move",
+    "arguments": { "gameId": "game-12" }
+  }
+}
+```
+
+LibreChat menyelesaikan Agent anak, thread, leaf cabang terbaru, dan jalur pengurutan dari binding segera sebelum dispatch. Bidang target dan pengurutan yang disediakan pemanggil tidak dapat mengalihkan kelanjutan yang terikat. `Idempotency-Key` permintaan menjadi identitas publik yang stabil untuk giliran anak tersebut di seluruh percobaan ulang pengiriman, penyewaan generasi, pesan yang dipertahankan, aktivitas langsung, dan resume HITL di kemudian hari.
+
+Setiap binding memiliki kotak surat persisten otomatis. Kejadian berikutnya tetap berada dalam antrean hingga giliran saat ini mencapai `applied`, `completed_no_action`, `failed`, atau `cancelled`; binding yang berbeda tetap independen dan dapat berjalan secara paralel. Kelanjutan checkpoint hanya dicoba untuk giliran yang diinisialisasi dan kompatibel. Jika checkpoint hilang atau tidak dapat dipulihkan, LibreChat akan kembali ke riwayat pesan persisten tanpa melemahkan pemeriksaan penerimaan, otorisasi, atau tindakan yang diharapkan.
+
+Aktor yang terikat (bound actor) dapat menjeda untuk Ask User atau persetujuan alat. LibreChat menyimpan penangguhan yang ditandatangani secara tepat sebelum mengekspos tindakan yang tertunda, dan kotak surat binding tetap diblokir hingga pemanggilan aktor yang sama dilanjutkan atau diselesaikan. Event Actors memerlukan checkpointer MongoDB yang tahan lama; `type: memory` tidak kompatibel. LibreChat menegosiasikan protokol generasi v2 dan memilih checkpoint atau kelanjutan riwayat secara otomatis. Pekerjaan protokol-v1 yang ada tetap berada di jalur riwayat yang tahan lama hingga selesai. Lihat [Generation Protocol Compatibility](/docs/configuration/redis#generation-protocol-compatibility) untuk persyaratan penerapan versi campuran.
+
+### Menggabungkan Peristiwa Observasional [#coalescing-observational-events]
+
+Sumber yang dapat membuktikan bahwa beberapa kejadian `continue` yang terikat merupakan observasi yang dapat dipertukarkan dapat memberikan mereka `coalesce.key` yang ditentukan oleh sumber yang sama:
+
+```json
+{
+  "mode": "continue",
+  "bindingId": "evtbind_...",
+  "event": {
+    "id": "championship-7-game-12-move-18",
+    "type": "chess.move.completed",
+    "occurredAt": 1786968000750,
+    "payload": { "gameId": "game-12", "ply": 18 }
+  },
+  "input": "A tournament game advanced.",
+  "coalesce": { "key": "championship-commentary" }
+}
+```
+
+LibreChat mengumpulkan peristiwa yang kompatibel hingga 750 ms, dengan maksimal 8 peristiwa dan 512 KiB dari gabungan amplop. Anak menerima satu dokumen batch deterministik, tetapi setiap peristiwa sumber tetap memiliki `Idempotency-Key`, catatan pengiriman, dan tanda terimanya sendiri.
+
+Gunakan coalescing hanya untuk observasi yang tidak memerlukan tindakan. Metode ini ditolak untuk `fire`, `steer`, `continue` yang tidak terikat, dan pengiriman dengan `expectedAction`; jangan gunakan untuk perintah, persetujuan, permintaan HITL, fence, atau peristiwa yang waktu kejadiannya sangat penting.
+
+Dalam percakapan induk yang terautentikasi, setiap aktor yang terikat muncul di bawah pesan induk pemiliknya. Panel Subagent dapat beralih antara aktor dan giliran, memuat aktivitas sebelumnya, dan memperluas giliran untuk menampilkan aktivitas terikatnya secara penuh. Detail peristiwa mencakup jenis, sumber, waktu kejadian, dan tindakan yang diharapkan. Langkah-langkah proses, alat, pesan, dan penanda penalaran yang terlihat disertakan tanpa teks penalaran mentah. Indeks induk mengembalikan paling banyak 64 utas anak dan 20 tugas terbaru per anak dari jendela sumber terikat, melaporkan pemotongan alih-alih menyiratkan kelengkapan, dan membatasi respons pada 96 KB. Ini diotorisasi oleh induk, pengguna, dan penyewa; pengikatan, ID kunci sumber, token sewa, dan status pekerja tidak disertakan dalam proyeksi.
+
+Thread anak tetap tersembunyi dari navigasi percakapan normal dan bersifat read-only terhadap rute chat manusia, mewarisi kebijakan sementara atau kedaluwarsa induknya, serta dibatasi hingga satu tingkat anak langsung. ID binding saja tidak memberikan akses; kelanjutan (continuations) dicakupkan pada pengguna, tenant, dan API key yang membuatnya.
+
+### Tindakan Aktor Peristiwa Terlepas (Detached Event Actor Actions) [#detached-event-actor-actions]
+
+Giliran Event Actor dapat melepaskan Action yang memenuhi syarat dan menyelesaikannya secara durable. Pengiriman tetap berada dalam siklus hidup penanganannya saat Action berjalan; bukti terminal yang durable melanjutkan pemanggilan aktor yang ditandatangani semula, dan hanya bukti alat yang diamati host yang dihasilkan yang dapat memenuhi `expectedAction`. Replay dan replika yang bersaing tidak dapat meluncurkan Action yang dicadangkan yang sama dua kali. Jika LibreChat tidak dapat menentukan apakah efek samping eksternal telah dimulai, LibreChat akan mengkarantina peluncuran tersebut alih-alih mencobanya kembali secara membabi buta.
+
+LibreChat memungkinkan pekerjaan penyelesaian internal ini secara otomatis ketika penyimpanan generasi bawaan yang dipilih mengiklankan dukungan. Penyimpanan dalam memori menjalankan peluncuran, penyelesaian, dan kelanjutan dalam satu proses dan tidak dapat memulihkan pekerjaan tersebut setelah proses keluar. Aliran generasi Redis menambahkan pemulihan mulai ulang yang tahan lama dan serah terima replika. Catatan pengiriman dan pemulihan yang dimiliki kapabilitas tetap tidak terlihat oleh pengklaim yang lebih lama selama pengurasan versi campuran; tidak ada tanda produser yang dikelola operator.
+
 ## Pelacakan Penggunaan Token [#token-usage-tracking]
 
-Semua permintaan API Agents melacak penggunaan token terhadap saldo pengguna (ketika penggunaan token dikonfigurasi). Baik token input maupun output dihitung, termasuk token cache untuk penyedia yang mendukungnya (OpenAI, Anthropic).
+Semua permintaan inferensi API Agents melacak penggunaan token terhadap saldo pengguna saat pengeluaran token dikonfigurasi. Baik respons streaming maupun non-streaming menggabungkan setiap panggilan model primary-Agent dan Subagent yang ditagih ke dalam total tingkat atas. Respons tersebut juga menyertakan rincian token `primary` dan `subagent` tanpa identitas. Detail token cache dan reasoning disertakan jika penyedia melaporkannya.
 
 ## Roadmap [#roadmap]
 
@@ -170,6 +310,8 @@ Semua permintaan API Agents melacak penggunaan token terhadap saldo pengguna (ke
 ## Dokumentasi Terkait [#related-documentation]
 
 - [Agents](/docs/features/agents) — Membuat dan mengonfigurasi agents
+- [Subagents](/docs/features/subagents) — Mengonfigurasi Agent turunan langsung
+- [Konfigurasi Endpoint Agents](/docs/configuration/librechat_yaml/object_structure/agents) — Pengaturan runtime acara dan autentikasi
 - [Konfigurasi Antarmuka — remoteAgents](/docs/configuration/librechat_yaml/object_structure/interface#remoteagents) — Pengaturan kontrol akses
 - [Token Usage](/docs/configuration/token_usage) — Mengonfigurasi penggunaan token dan saldo
 - [Open Responses Specification](https://www.openresponses.org/) — Standar inferensi terbuka

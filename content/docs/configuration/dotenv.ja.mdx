@@ -91,6 +91,27 @@ req.socket.remoteAddress が最初のホップとなり、残りは X-Forwarded-
   options={[['TRUST_PROXY', 'number', 'ホップ数を指定します。', 'TRUST_PROXY=1']]}
 />
 
+### Trusted Tenant Header [#trusted-tenant-header]
+
+`TRUST_TENANT_HEADER` は、`/oauth`、`/api/auth`、および `/api/share` ルートツリーにおいて、認証前に LibreChat が `X-Tenant-Id` を受け入れるかどうかを制御します。デフォルトでは無効になっており、無効な間はこれらのルートでヘッダーは無視されます。
+
+<OptionTable
+  options={[
+    [
+      'TRUST_TENANT_HEADER',
+      'boolean',
+      '事前認証ルートで X-Tenant-Id を信頼します。クライアントから提供された値を置き換える信頼できるプロキシの背後でのみ有効にしてください。',
+      'TRUST_TENANT_HEADER=false',
+    ],
+  ]}
+/>
+
+<Callout type="warning" title="クライアントから提供されたテナントヘッダーを信頼しないでください">
+  信頼できるリバースプロキシがすべての受信 `X-Tenant-Id` 値を削除し、権限のあるテナントID自体を設定する場合にのみ、この設定を有効にしてください。そうでない場合、信頼できないクライアントが認証前に使用されるテナントコンテキストを選択できてしまう可能性があります。この設定が有効な場合、LibreChatはセキュリティ警告をログに記録します。
+</Callout>
+
+`TENANT_ISOLATION_STRICT` が有効で `TRUST_TENANT_HEADER` が無効な場合、LibreChat は起動時に、事前認証されたテナントヘッダーが無視される旨の警告を表示します。
+
 ### 認証情報の構成 [#credentials-configuration]
 
 LibreChatは、データベースに保存されるサポート対象の認証情報を暗号化するために `CREDS_KEY` および `CREDS_IV` を使用します。本番環境では固定された一意の値を設定し、すべてのレプリカ間で同じ値を共有してください。
@@ -120,11 +141,21 @@ LibreChatは、データベースに保存されるサポート対象の認証�
 
 `CREDS_KEY`、`CREDS_IV`、`JWT_SECRET`、または `JWT_REFRESH_SECRET` のいずれかが空の場合、LibreChat はまず一時的な認証情報ファイルから有効な値を再利用します。存在しない場合は、暗号学的にランダムな値を生成し、所有者のみがアクセス可能な権限でそのファイルを書き込みます。明示的な環境変数の値が常に優先されます。LibreChat は `.env` や `.env.example` を生成先のファイルパスとして使用することを拒否し、これらの設定ファイルが誤って上書きされるのを防ぎます。
 
+LibreChatは、`JWT_SECRET` または `JWT_REFRESH_SECRET` が公開されている廃止済みのデフォルト値のいずれかを使用している場合、環境変数から値が提供されているか、一時的な認証情報ファイルから提供されているかにかかわらず、起動を拒否します。古いサンプルシークレットをデプロイメントに持ち込むのではなく、一意の代替値を生成してください。
+
 同梱されている Docker Compose ファイルは、`/app/data/.env.temp` を `librechat-data` ボリューム内に永続化するため、単一の Compose デプロイメントであれば、これらの生成された値を変更することなく再起動が可能です。ファイルが永続化できない場合、値はプロセスローカルとなり、再起動後にセッションや暗号化されたレコードにアクセスできなくなる可能性があります。
 
 <Callout type="warning" title="本番環境用に永続的な値を設定する">
   一時的な生成はブートストラップの利便性を目的としたものであり、認証情報のローテーションシステムではありません。本番環境で使用する前に、[Credentials Generator](/toolkit/creds_generator) を使用して永続的な値を生成し、シークレットマネージャーに保存した上で、すべてのレプリカに同じ値を提供してください。確立されたキーを変更しても、既存のレコードが再暗号化されることはありません。LibreChatはデータベース内に認証情報のフィンガープリントを記録しており、アクティブな値に差異が生じた場合に警告を表示します。制御された移行を実行せずに、そのマーカーを上書きしないでください。
 </Callout>
+
+### セキュリティヘッダーとコンテンツセキュリティポリシー (Content Security Policy) [#security-headers-and-content-security-policy]
+
+LibreChatは、デフォルトでベースラインのHSTS、フレーミング、content-type、opener、リソース、およびリファラーヘッダーを送信します。`SECURITY_HEADERS=false`を設定するとこれらすべてが無効になり、グローバルなCSPキルスイッチとしても機能します。
+
+NonceベースのCSPは、`CSP_ENABLED=true` で個別にオプトインする必要があり、デフォルトではレポートのみのモードになっています。まずは `CSP_REPORT_ONLY=true` で開始し、違反を調査した上で、デプロイに必要なオリジンのみを追加してから適用してください。CSPが有効な場合、SPAシェルは常に `Cache-Control: no-store` を付与して送信されるため、レスポンスごとのnonceがキャッシュから再利用されることはありません。
+
+すべてのベースラインおよびCSP変数、許容される値、デフォルト値、ソースリストのオーバーライド、およびロールアウトのガイダンスについては、[HTTP Security Headers](/docs/configuration/security_headers) を参照してください。
 
 ### 静的ファイルの処理 [#static-file-handling]
 
@@ -370,6 +401,12 @@ LibreChatには組み込みの中央ロギング機能があります。詳細�
       'DEBUG_CONSOLE=false',
     ],
     [
+      'CONSOLE_LOG_LEVEL',
+      'string',
+      'コンソールの詳細度を error、warn、info、http、verbose、debug、activity、silly、または silent に設定します。デフォルトは info ですが、DEBUG_CONSOLE=true の場合は debug になります。明示的な値が優先されます。',
+      '# CONSOLE_LOG_LEVEL=info',
+    ],
+    [
       'LOG_TO_FILE',
       'boolean',
       'falseに設定すると、コンソールログを有効にしたまま、ファイルベースのWinstonトランスポートを無効にできます。',
@@ -412,6 +449,7 @@ LibreChatには組み込みの中央ロギング機能があります。詳細�
 
 - `DEBUG_LOGGING` は `DEBUG_CONSOLE` または `CONSOLE_JSON` のいずれかと併用できますが、両方を同時に使用することはできません。
 - `DEBUG_CONSOLE` と `CONSOLE_JSON` は相互排他的です。
+- `CONSOLE_LOG_LEVEL=silent` は、ファイルへのログ出力を無効にすることなく、コンソール出力を無効にします。無効な値が指定された場合は通常のデフォルト値にフォールバックし、警告が出力されます。
 - `CONSOLE_JSON`: クラウド環境（GCPやAWSなど）でコンソールログを扱う際、これを有効にするとログがUTCタイムスタンプ付きのJSON形式で出力されます。
   - 参照: [feat: Add CONSOLE_JSON](https://github.com/danny-avila/LibreChat/pull/2146)
 
@@ -471,6 +509,8 @@ LibreChatには組み込みの中央ロギング機能があります。詳細�
 />
 
 完全な `LANGFUSE_PUBLIC_KEY` および `LANGFUSE_SECRET_KEY` 環境認証情報がないシングルテナントデプロイメントでは、権限を持つ管理者が **Settings → Langfuse** から暗号化された接続を1つ設定できます。環境認証情報が完全に入力されている場合は、それが優先され、その設定は非表示になります。ファンアウトデプロイメントでは、ファンアウトおよびテナントエクスポートが有効な場合、テナント接続に対して同じ設定が使用されます。
+
+`LANGFUSE_BASE_URL` が標準です。`LANGFUSE_HOST` および `LANGFUSE_BASEURL` は互換性のためのエイリアスとして維持されており、標準の設定が存在しない場合にのみ、その順序で参照されます。
 
 ### OpenTelemetry Tracing [#opentelemetry-tracing]
 
@@ -836,6 +876,24 @@ Web検索機能により、LibreChat内でインターネット検索が可能�
       '# TAVILY_EXTRACT_URL=',
     ],
     [
+      'KEENABLE_API_KEY',
+      'string',
+      '検索およびページ取得のためのオプションのKeenable APIキーです。パブリックエンドポイントはキーなしで動作しますが、キーを使用するとレート制限が緩和されます。',
+      '# KEENABLE_API_KEY=',
+    ],
+    [
+      'KEENABLE_API_URL',
+      'string',
+      'オプションのカスタムKeenable検索API URL。',
+      '# KEENABLE_API_URL=',
+    ],
+    [
+      'KEENABLE_FETCH_URL',
+      'string',
+      'scraperProviderがkeenableの場合に使用される、オプションのカスタムKeenableページ取得API URL。',
+      '# KEENABLE_FETCH_URL=',
+    ],
+    [
       'FIRECRAWL_API_KEY',
       'string',
       'FirecrawlスクレイパーサービスのAPIキー。キーは https://docs.firecrawl.dev/introduction#api-key から取得してください。',
@@ -869,7 +927,7 @@ Web検索機能により、LibreChat内でインターネット検索が可能�
   ]}
 />
 
-**注意**: これらの変数名は `librechat.yaml` 設定ファイルでカスタマイズ可能です。例えば、ウェブ検索設定で設定することにより、`SERPER_API_KEY` の代わりに `CUSTOM_SERPER_KEY` を使用することができます。変数名のカスタマイズに関する詳細は、[Web Search Configuration](/docs/configuration/librechat_yaml/object_structure/web_search) のドキュメントを参照してください。
+**Note**: Most variable names can be customized in your `librechat.yaml` configuration file. For example, you could use `CUSTOM_SERPER_KEY` instead of `SERPER_API_KEY` by configuring it in the web search settings. `KEENABLE_FETCH_URL` is environment-only. See the [Web Search Configuration](/docs/configuration/librechat_yaml/object_structure/web_search) documentation for details.
 
 ### Anthropic [#anthropic]
 
@@ -893,7 +951,7 @@ Web検索機能により、LibreChat内でインターネット検索が可能�
       'ANTHROPIC_MODELS',
       'string',
       '使用するAnthropicモデルのカンマ区切りリスト。',
-      '# ANTHROPIC_MODELS=claude-fable-5,claude-opus-5,claude-opus-4-8,claude-opus-4-7,claude-sonnet-5,claude-sonnet-4-6,claude-opus-4-6,claude-opus-4-20250514,claude-3-7-sonnet-20250219,claude-3-5-sonnet-20241022,claude-3-5-haiku-20241022',
+      '# ANTHROPIC_MODELS=claude-fable-5-1,claude-fable-5,claude-opus-5,claude-opus-4-8,claude-opus-4-7,claude-sonnet-5,claude-sonnet-4-6,claude-opus-4-6,claude-opus-4-20250514,claude-3-7-sonnet-20250219,claude-3-5-sonnet-20241022,claude-3-5-haiku-20241022',
     ],
     [
       'ANTHROPIC_REVERSE_PROXY',
@@ -914,7 +972,7 @@ Web検索機能により、LibreChat内でインターネット検索が可能�
 
 > **注:** Anthropic endpoint と互換性がある必要があります。また、Claude 2 および Claude 3 モデルがこのタスクに最適であり、`claude-3-haiku` モデルが最も安価です。
 
-Claude Fable 5は、デフォルトのAnthropicモデルリストに含まれています。Fable/Mythosクラスのモデルは、LibreChatにおける最新のAnthropicの動作（1Mのコンテキスト、適応型推論のサポート、プロンプトキャッシングのサポート、および要約または省略された推論出力に対する`thinkingDisplay`の処理）を使用します。
+Claude Fable 5.1 および Fable 5 は、デフォルトの Anthropic モデルリストに含まれています。Fable/Mythos クラスのモデルは、LibreChat において最新の Anthropic の動作を使用します。これには、1M のコンテキスト、適応型思考（adaptive thinking）のサポート、プロンプトキャッシングのサポート、および要約または省略された推論出力を処理するための `thinkingDisplay` が含まれます。
 
 #### Vertex AI 経由の Anthropic [#anthropic-via-vertex-ai]
 
@@ -985,14 +1043,14 @@ Google Cloud Vertex AI経由でAnthropic Claudeモデルを使用することも
       'BEDROCK_AWS_MODELS',
       'string',
       'BedrockモデルIDのカンマ区切りリスト。省略した場合は、サポートされている既知の全モデルが含まれます。',
-      '# BEDROCK_AWS_MODELS=global.anthropic.claude-fable-5,global.anthropic.claude-opus-5,global.anthropic.claude-opus-4-8,global.anthropic.claude-opus-4-7,global.anthropic.claude-sonnet-5,global.anthropic.claude-sonnet-4-6,meta.llama3-1-8b-instruct-v1:0',
+      '# BEDROCK_AWS_MODELS=global.anthropic.claude-fable-5-1,global.anthropic.claude-fable-5,global.anthropic.claude-opus-5,global.anthropic.claude-opus-4-8,global.anthropic.claude-opus-4-7,global.anthropic.claude-sonnet-5,global.anthropic.claude-sonnet-4-6,meta.llama3-1-8b-instruct-v1:0',
     ],
   ]}
 />
 
 > **注:** アクセスキーを省略すると、デフォルトの AWS 認証情報チェーン（環境変数、SSO 認証情報、共有認証情報ファイル、または EC2/ECS インスタンスメタデータサービス）が使用されます。詳細は [AWS Bedrock Setup](/docs/configuration/pre_configured_ai/bedrock) を参照してください。
 
-Bedrock上のClaude Fable/Mythosクラスのモデルは、推論プロファイル専用です。`us.anthropic.claude-fable-5` のようなプロファイルIDを使用し、呼び出す前にBedrockコンソールまたはData Retention APIで必要なAnthropicデータ共有設定を有効にしてください。
+Bedrock上のClaude Fable/Mythosクラスのモデルは、推論プロファイル専用です。`global.anthropic.claude-fable-5-1` のようなプロファイルIDを使用し、呼び出す前にBedrockコンソールまたはData Retention APIで必要なAnthropicデータ共有設定を有効にしてください。
 
 ### BingAI [#bingai]
 
@@ -1046,13 +1104,13 @@ Bing（Sydney、ジェイルブレイク、Bing Image Creatorにも使用）
       'GOOGLE_MODELS',
       'string',
       '利用可能なGemini API Googleモデル（カンマ区切り）。',
-      'GOOGLE_MODELS=gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.1-pro-preview,gemini-3.1-pro-preview-customtools,gemini-3.1-flash-lite-preview,gemini-2.5-pro,gemini-2.5-flash,gemini-2.5-flash-lite,gemini-2.0-flash,gemini-2.0-flash-lite',
+      'GOOGLE_MODELS=gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.1-pro-preview,gemini-3.1-pro-preview-customtools,gemini-3.1-flash-lite-preview,gemini-2.5-pro,gemini-2.5-flash,gemini-2.5-flash-lite,gemini-2.0-flash,gemini-2.0-flash-lite',
     ],
     [
       'GOOGLE_MODELS',
       'string',
       '利用可能なVertex AI Googleモデル（カンマ区切り）。',
-      'GOOGLE_MODELS=gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.1-pro-preview,gemini-3.1-pro-preview-customtools,gemini-3.1-flash-lite-preview,gemini-2.5-pro,gemini-2.5-flash,gemini-2.5-flash-lite,gemini-2.0-flash-001,gemini-2.0-flash-lite-001',
+      'GOOGLE_MODELS=gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.1-pro-preview,gemini-3.1-pro-preview-customtools,gemini-3.1-flash-lite-preview,gemini-2.5-pro,gemini-2.5-flash,gemini-2.5-flash-lite,gemini-2.0-flash-001,gemini-2.0-flash-lite-001',
     ],
     [
       'GOOGLE_TITLE_MODEL',
@@ -1335,13 +1393,19 @@ Code Interpreter APIは、コードの実行とファイルの管理を行うた
     [
       'LIBRECHAT_CODE_BASEURL',
       'string',
-      'Code InterpreterサービスのベースURL。',
+      '通常のステートレスなCode InterpreterサービスのベースURL。',
       '# LIBRECHAT_CODE_BASEURL=https://your-custom-domain.com',
+    ],
+    [
+      'LIBRECHAT_CODE_BASEURL_STATEFUL',
+      'string',
+      '名前付きのstatefulCodeSessions環境が選択されていない場合に、試験的なステートフルAgentセッションで使用されるデフォルトのCode InterpreterベースURL。このサービスはstatefulプロファイルをアドバタイズする必要があります。',
+      '# LIBRECHAT_CODE_BASEURL_STATEFUL=https://your-stateful-code-domain.com',
     ],
     [
       'CODE_SANDBOX_PREWARM',
       'boolean',
-      'モデル生成と並行して、ステートフルな会話ごとのサンドボックスをプリウォームします。無効にするにはfalseに設定してください。デフォルト: true。',
+      'モデル生成と並行して、選択されたステートフルサンドボックスをプリウォームします。無効にするにはfalseに設定してください。デフォルト: true。',
       '# CODE_SANDBOX_PREWARM=true',
     ],
     [
@@ -1351,13 +1415,128 @@ Code Interpreter APIは、コードの実行とファイルの管理を行うた
       '# CODE_SANDBOX_COLD_AFTER_MS=2100000',
     ],
     [
+      'LIBRECHAT_CODE_SANDBOX_OUTPUT_MAX_SIZE',
+      'number',
+      "画像読み取りウィンドウサイズの算出に使用されるSandboxのstdoutバッファサイズ（バイト単位）。実行のラウンドトリップを最小限に抑えるため、ランナーのSANDBOX_OUTPUT_MAX_SIZEと一致させてください。デフォルト: 65536。",
+      '# LIBRECHAT_CODE_SANDBOX_OUTPUT_MAX_SIZE=65536',
+    ],
+    [
       'LIBRECHAT_CODE_IMAGE_CHUNK_BYTES',
       'number',
-      'サンドボックスイメージチャンクごとに読み込まれるバイト数。ランナーのstdout制限が小さい場合は、この値を下げてください。デフォルト: 32768。',
-      '# LIBRECHAT_CODE_IMAGE_CHUNK_BYTES=32768',
+      'サンドボックスイメージウィンドウごとの正確な読み取りバイト数。LIBRECHAT_CODE_SANDBOX_OUTPUT_MAX_SIZEから導出されるサイズを上書きします。正確な上書きが必要な場合を除き、設定しないでください。',
+      '# LIBRECHAT_CODE_IMAGE_CHUNK_BYTES=',
+    ],
+    [
+      'CODE_ENVIRONMENT_PAIRING_USER_MAX',
+      'number',
+      '1つのレート制限ウィンドウ内における、ユーザーあたりの最大セルフサービス・コードワーカー・ペアリングリクエスト数。デフォルト: 5。',
+      '# CODE_ENVIRONMENT_PAIRING_USER_MAX=5',
+    ],
+    [
+      'CODE_ENVIRONMENT_PAIRING_USER_WINDOW',
+      'number',
+      'セルフサービスコードワーカーペアリングのレート制限ウィンドウ（分単位）。デフォルト: 60。',
+      '# CODE_ENVIRONMENT_PAIRING_USER_WINDOW=60',
     ],
   ]}
 />
+
+If a worker has a smaller stdout cap than configured, LibreChat narrows and remembers the image window for that Code Interpreter base URL after a failed read. Matching the two budgets avoids that discarded discovery request and reduces pressure on the Code Interpreter execution rate limit.
+
+### Code Interpreter JWT認証 [#code-interpreter-jwt-authentication]
+
+現在セルフホストされている [ClickHouse/code-interpreter](https://github.com/ClickHouse/code-interpreter) サービスは、ローカルモード以外で短期間有効な LibreChat ベアラートークンを検証します。トークンの発行を有効にするには `CODEAPI_AUTH_PROVIDER=librechat-jwt` を設定し、LibreChat の秘密署名者と一致する公開鍵を Code Interpreter に提供してください。ペアとなるサービスの設定および鍵生成ヘルパーについては、[Self-hosted JWT authentication](/docs/features/code_interpreter#self-hosted-jwt-authentication) を参照してください。
+
+<OptionTable
+  options={[
+    [
+      'CODEAPI_AUTH_PROVIDER',
+      'string',
+      'librechat-jwtに設定すると、ユーザーごとのCode Interpreterベアラートークンが発行されます。互換性値も発行を有効にしますが、ClickHouse/code-interpreterはlibrechat-jwtを想定しています。',
+      '# CODEAPI_AUTH_PROVIDER=librechat-jwt',
+    ],
+    [
+      'CODEAPI_JWT_ENABLED',
+      'boolean',
+      'CODEAPI_AUTH_PROVIDER が librechat-jwt または both ではない場合に、Code Interpreter の JWT 発行を明示的に有効にします。デフォルト: false。',
+      '# CODEAPI_JWT_ENABLED=true',
+    ],
+    [
+      'CODEAPI_JWT_PRIVATE_KEY',
+      'string',
+      'PEM形式のEd25519またはRSA秘密署名鍵。エスケープされた\\nシーケンスは改行に変換されます。',
+      '# CODEAPI_JWT_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\\n..."',
+    ],
+    [
+      'CODEAPI_JWT_PRIVATE_KEY_BASE64',
+      'string',
+      'Base64エンコードされたPEM秘密鍵。CODEAPI_JWT_PRIVATE_KEYが設定されていない場合に使用されます。',
+      '# CODEAPI_JWT_PRIVATE_KEY_BASE64=',
+    ],
+    [
+      'CODEAPI_JWT_PRIVATE_JWK_JSON',
+      'string',
+      'JWK JSON形式のプライベート署名キー。PEM設定がいずれも未設定の場合に使用されます。',
+      '# CODEAPI_JWT_PRIVATE_JWK_JSON={"kty":"OKP",...}',
+    ],
+    [
+      'CODEAPI_JWT_ALGORITHM',
+      'string',
+      '署名アルゴリズム: EdDSA または RS256。デフォルト: EdDSA。',
+      '# CODEAPI_JWT_ALGORITHM=EdDSA',
+    ],
+    [
+      'CODEAPI_JWT_KID',
+      'string',
+      'トークンヘッダーに含まれる署名キーID。対応するCode Interpreter検証キーを識別する必要があります。デフォルト: lc-codeapi-2026-05。',
+      '# CODEAPI_JWT_KID=lc-codeapi-2026-05',
+    ],
+    [
+      'CODEAPI_JWT_ISSUER',
+      'string',
+      'トークン発行者。Code Interpreterと一致する必要があります。デフォルト: librechat。',
+      '# CODEAPI_JWT_ISSUER=librechat',
+    ],
+    [
+      'CODEAPI_JWT_AUDIENCE',
+      'string',
+      'トークンオーディエンス。Code Interpreterと一致する必要があります。デフォルト: codeapi。',
+      '# CODEAPI_JWT_AUDIENCE=codeapi',
+    ],
+    [
+      'CODEAPI_JWT_TTL_SECONDS',
+      'number',
+      'Bearerトークンの有効期間（秒）。無効な値や300秒を超える値は、デフォルトかつ最大値である300秒として扱われます。',
+      '# CODEAPI_JWT_TTL_SECONDS=300',
+    ],
+    [
+      'CODEAPI_JWT_MINT_CACHE_SECONDS',
+      'number',
+      'LibreChatが同じ認証済みコンテキストに対してトークンを再利用できる期間。デフォルトおよび最大値：30秒。',
+      '# CODEAPI_JWT_MINT_CACHE_SECONDS=30',
+    ],
+    [
+      'CODEAPI_JWT_SINGLE_TENANT_ID',
+      'string',
+      '厳格なテナント分離が無効で、テナントコンテキストが利用できない場合のフォールバックテナントID。Code Interpreterと一致させる必要があります。デフォルト: legacy。',
+      '# CODEAPI_JWT_SINGLE_TENANT_ID=legacy',
+    ],
+  ]}
+/>
+
+JWT発行が有効な場合、少なくとも1つの秘密鍵ソースが必要です。複数が設定されている場合、LibreChatは `CODEAPI_JWT_PRIVATE_KEY`、次に `CODEAPI_JWT_PRIVATE_KEY_BASE64`、最後に `CODEAPI_JWT_PRIVATE_JWK_JSON` の順でチェックします。`CODEAPI_JWT_KEY_ID` は引き続き `CODEAPI_JWT_KID` の互換性エイリアスとして機能します。
+
+マルチテナント環境でのデプロイを行う場合は、LibreChatで `TENANT_ISOLATION_STRICT=true` を、Code Interpreterで `CODEAPI_TENANT_ISOLATION_STRICT=true` を有効にしてください。これにより、認証されたテナントコンテキストを持たないリクエストは、`CODEAPI_JWT_SINGLE_TENANT_ID` を使用する代わりに失敗するようになります。
+
+### ステートフルなCode Interpreterエンドポイント [#stateful-code-interpreter-endpoint]
+
+[`stateful_code_sessions`](/docs/configuration/librechat_yaml/object_structure/agents#capabilities) は非常に実験的な機能であり、個別の Code Interpreter ルートを必要とします。`LIBRECHAT_CODE_BASEURL_STATEFUL` を使用してデフォルトルートを設定するか、[`endpoints.agents.statefulCodeSessions.environments`](/docs/configuration/librechat_yaml/object_structure/agents#statefulcodesessions) の下に名前付きのマネージドまたはアタッチされたバックエンドを定義してください。選択されたサービスは `stateful` プロファイルで実行されている必要があります。LibreChat はステートフルなリクエストとともに `X-CodeAPI-Expected-Profile: stateful` を送信します。
+
+Statefulなリクエストは、決して `LIBRECHAT_CODE_BASEURL` にフォールバックしません。選択された名前付き環境が利用できない場合、または名前付きのデフォルトも `LIBRECHAT_CODE_BASEURL_STATEFUL` も設定されていない場合、LibreChatは設定エラーによりAgentの実行を停止します。StatelessなAgentは引き続き `LIBRECHAT_CODE_BASEURL` を使用し、これら2つの実行プロファイルはライブワークスペースを共有しません。
+
+各Agentは、そのステートフルなワークスペースのスコープを、サインイン中のユーザー、ユーザーとAgentの組み合わせ、またはユーザーと会話の組み合わせに設定できます。設定および永続化の制限については、[Stateful Code Sessions](/docs/features/code_interpreter#stateful-code-sessions) を参照してください。
+
+名前付きアタッチ環境では、`pairing.allowPrincipalWorkers: true` を使用してセルフサービスのペアリングコントロールプレーンを公開することもできます。権限を持つユーザーは、**Settings > Code environments** からそれらのオーナーに紐付いたワーカーを管理します。ペアリング専用のエントリは `LIBRECHAT_CODE_BASEURL_STATEFUL` を置き換えるものではなく、デプロイのデフォルトとして機能させることはできません。
 
 ## Artifacts [#artifacts]
 
@@ -1539,6 +1718,62 @@ Speech-to-Text (STT) および Text-to-Speech (TTS) サービスを設定しま�
 
 `ALLOW_SHARED_LINKS` は機能全体のスイッチです。共有リンクを作成できるユーザー、認証済みユーザーと共有できるユーザー、または誰でも閲覧可能にできるユーザーは、ロール権限によって制御されるようになりました。詳細は [`interface.sharedLinks`](/docs/configuration/librechat_yaml/object_structure/interface#sharedlinks) を参照してください。`ALLOW_SHARED_LINKS_PUBLIC` は、公開共有リンクを認証なしで閲覧できるかどうかのみを制御します。`SHARED_LINKS_SNAPSHOT_FILES` は共有リンクのファイルスナップショットに対するグローバルなオーバーライドであり、`false` に設定するとすべてのリンクに対してスナップショットの提供を無効にできます。
 
+## Scheduled Chats [#scheduled-chats]
+
+<OptionTable
+  options={[
+    [
+      'SCHEDULES_SINGLE_PROCESS',
+      'boolean',
+      '単一のLibreChatプロセスが実行されている場合にのみ、RedisなしでScheduled Chatsを許可します。複数のプロセスやレプリカに対しては絶対に有効にしないでください。',
+      'SCHEDULES_SINGLE_PROCESS=true',
+    ],
+    [
+      'SCHEDULES_DISABLED',
+      'boolean',
+      '自動化されたScheduled Chatの実行および「今すぐ実行」に対する緊急のグローバル停止。定義は保存されたままとなります。デフォルト: false。',
+      'SCHEDULES_DISABLED=true',
+    ],
+  ]}
+/>
+
+Scheduled Chats（スケジュールされたチャット）は実験的な機能であり、[`interface.schedules`](/docs/configuration/librechat_yaml/object_structure/interface#schedules) が設定されるまで無効化されています。マルチレプリカ構成のデプロイメントでは `USE_REDIS_STREAMS=true` が必須です。共有Redisストリームを使用しないデプロイメントでスケジュール書き込みを行う場合は、`SCHEDULES_SINGLE_PROCESS=true` を指定して、真のシングルプロセス構成であることを明示しない限り、書き込みは失敗します。「Ask User（ユーザーへの確認）」やツール承認のために一時停止できるスケジュールされたAgentには、常に `USE_REDIS_STREAMS=true` と永続的な共有チェックポインターが必要です（組み込みのデフォルトはMongoDBです）。セットアップおよび実行時の動作については、[Scheduled Chats](/docs/features/scheduled_chats) を参照してください。
+
+## Agent Event Runtime [#agent-event-runtime]
+
+<OptionTable
+  options={[
+    [
+      'AGENT_TRIGGERS_SELF_URL',
+      'string',
+      'endpoints.agents.eventDriven.selfUrl の互換性フォールバック。Agentイベントホストが fire、continue、および admission を再実行するために使用するベースURL。',
+      '# AGENT_TRIGGERS_SELF_URL=http://127.0.0.1:3080',
+    ],
+    [
+      'AGENT_EVENT_USER_MAX',
+      'number',
+      'rateLimits.agentEvents.userMax の互換性フォールバック。設定された期間内における、APIキー主体ごとの最大エージェントイベントリクエスト数。デフォルト: 40。',
+      'AGENT_EVENT_USER_MAX=40',
+    ],
+    [
+      'AGENT_EVENT_USER_WINDOW',
+      'number',
+      'rateLimits.agentEvents.userWindowInMinutes の互換性フォールバック。エージェントイベントのレート制限ウィンドウ（分単位）。デフォルト: 1。',
+      'AGENT_EVENT_USER_WINDOW=1',
+    ],
+  ]}
+/>
+
+`librechat.yaml` 内の [`endpoints.agents.eventDriven.selfUrl`](/docs/configuration/librechat_yaml/object_structure/agents#eventdriven) および [`rateLimits.agentEvents`](/docs/configuration/librechat_yaml/object_structure/config#ratelimits) を優先してください。`AGENT_TRIGGERS_SELF_URL` およびレート制限関連の変数は互換性のためのフォールバックとして残されていますが、YAML で明示的に設定された値が優先されます。
+
+バインドされた子コンティニュエーション、デタッチされたSubagent親コンティニュエーション、およびEvent Actorのデタッチされたアクション完了は自動的に行われます。廃止された `ENABLE_AGENT_EVENT_CHILD_TURNS`、`ENABLE_SUBAGENT_COMPLETION_WAKEUPS`、および `AGENT_TRIGGERS_DETACHED_ACTIONS_PRODUCER_ENABLED` 変数は読み込まれなくなりました。
+
+インメモリ生成ストアは、プロセスが生存している間、プロセスローカルなEvent Actorによるデタッチされた完了をサポートします。Redis生成ストリームは、永続的な再起動リカバリとレプリカのハンドオフを追加します。混在バージョンのデプロイを行う前に、[Generation Protocol Compatibility](/docs/configuration/redis#generation-protocol-compatibility) を参照してください。
+
+通常のバウンドリスナーパスを使用する場合は、`AGENT_TRIGGERS_SELF_URL` を設定しないでください。内部イベントの受け入れが TLS フロントドアなどの別の HTTP オリジンを経由する必要がある場合にのみ設定してください。値には、認証情報を含まない HTTP または HTTPS URL を指定する必要があります。
+
+LibreChatは認証済みのAgent Events APIを公開していますが、認証なしのwebhookは公開していません。APIキーによる識別、Remote Agentsの権限、ターゲットアクセス、冪等性、および専用のAgent Eventレート制限によって、インバウンド通信が保護されています。MongoDBベースの順序付けレーン、アクターメールボックス、受信確認、リース、再試行、およびデッドレターが、レプリカ間でのワーカーをサポートします。動作や例については、[Agent Event Delivery](/docs/features/agents#agent-event-delivery) および [Agents API - Agent Events](/docs/features/agents_api#agent-events) を参照してください。
+
 ## ユーザーシステム [#user-system]
 
 このセクションには、以下の設定が含まれています：
@@ -1547,6 +1782,21 @@ Speech-to-Text (STT) および Text-to-Speech (TTS) サービスを設定しま�
 - [残高/トークン使用量](#balance)
 - [登録とソーシャルログイン](#registration-and-login)
 - [メールパスワードリセット](#password-reset)
+
+### 管理者インサイト [#admin-insights]
+
+<OptionTable
+  options={[
+    [
+      'ENABLE_INSIGHTS',
+      'boolean',
+      '必要な権限を持つ管理者が、MongoDBベースのInsightsダッシュボードを利用できるようにします。デフォルト: false。',
+      'ENABLE_INSIGHTS=false',
+    ],
+  ]}
+/>
+
+有効にすると、Insightsは`ADMIN`ロールに加え、`access:admin`および`read:insights`権限を持つアカウントにのみ制限されます。クエリはテナント単位でスコープされ、永続化されたアクティビティメトリクスと最近の会話メタデータを公開します。メトリクスの定義とアクセス権の詳細については、[Admin Insights](/docs/features/insights)を参照してください。
 
 ### エージェント会話コントロール [#agent-conversation-controls]
 
@@ -1650,6 +1900,8 @@ Speech-to-Text (STT) および Text-to-Speech (TTS) サービスを設定しま�
     ],
   ]}
 />
+
+ログイン試行のバッファは、ローカルログインAPIと、同一IPからのトップレベルのソーシャルまたはフェデレーションOAuthナビゲーション間で共有されます。拒否されたAPIログインは、既存のJSON `429` レスポンスを受け取ります。レート制限またはブロックされた `/oauth/*` ブラウザナビゲーションは、JSONドキュメントをレンダリングする代わりに、ローカライズされたエラーコードを伴って `/login?redirect=false` に戻ります。`redirect=false` は、自動的なOpenIDリダイレクトによって即座に再び制限に抵触することを防ぎます。
 
 #### パスワードリセットとメール認証のレート制限 [#password-reset-and-email-verification-rate-limiting]
 
@@ -1886,6 +2138,8 @@ LibreChatは、メールのリクエストと、そのメールから取得し�
     ],
   ]}
 />
+
+確認済みの冪等性を持つエージェント生成の再試行は、通常のユーザーごとのメッセージ受付をバイパスするため復旧を続行できますが、`LIMIT_MESSAGE_IP` が有効な場合は共有IP制限を通過します。信頼されたエージェントトリガーによる配信は、ブラウザ向けのIP境界からは引き続き除外されます。
 
 ##### キューに入れられた添付ファイルのTTLリミッター: [#queued-attachment-ttl-limiter]
 
@@ -2533,7 +2787,7 @@ LibreChatは、メールのリクエストと、そのメールから取得し�
     [
       'OPENID_ROLE_SYNC_FALLBACK_ROLE',
       'string',
-      '優先されるロールが一致しない場合に割り当てられるLibreChatロール。設定されている場合、このフォールバックが優先されます。',
+      '優先されるロールが一致しない場合に割り当てられるLibreChatロールです。設定されている場合、このフォールバックが優先されます。Remote Agents API認証では、解決できないEntraグループのオーバーフローリストは空として扱われるため、このフォールバックが適用されます。',
       'OPENID_ROLE_SYNC_FALLBACK_ROLE=USER',
     ],
     [
@@ -2653,6 +2907,12 @@ LibreChatは、ユーザー認証状態を管理するために、OpenID Connect
       'OPENID_REUSE_MAX_SESSION_AGE_MS=900000',
     ],
     [
+      'OPENID_REFRESH_BRIDGE_GRACE_MS',
+      'number',
+      'LibreChatが更新されたOpenIDセッションを公開する間、ローテーションされたリフレッシュトークンに対して短いリカバリウィンドウを設けます。デフォルト: 60000 ms / 1分。',
+      'OPENID_REFRESH_BRIDGE_GRACE_MS=60000',
+    ],
+    [
       'OPENID_JWKS_URL_CACHE_ENABLED',
       'boolean',
       '署名キー検証結果のキャッシュを有効にする。',
@@ -2691,7 +2951,7 @@ LibreChatは、ユーザー認証状態を管理するために、OpenID Connect
   ]}
 />
 
-`OPENID_REUSE_MAX_SESSION_AGE_MS` は `SESSION_EXPIRY` と同様に算術式を受け付けます。プロバイダーがリフレッシュ時に以前のアクセストークンを無効化する場合、MCPサーバーなどのダウンストリームのコンシューマーが有効なベアラートークンを使い終えられるよう、IdPのアクセストークンの有効期間に合わせてこの値を増やしてください。
+`OPENID_REUSE_MAX_SESSION_AGE_MS` および `OPENID_REFRESH_BRIDGE_GRACE_MS` は、`SESSION_EXPIRY` と同様に算術式を受け付けます。プロバイダーがリフレッシュ時に以前のアクセストークンを無効化する場合、MCPサーバーなどのダウンストリームのコンシューマーが有効なベアラートークンを使い終えられるよう、セッションの有効期間をIdPのアクセストークンの有効期限に向けて延長してください。ブリッジの猶予期間（grace period）を増やすのは、セッションの永続化が遅い場合や、クロスレプリカの公開においてローテーションされたトークンを公開するためにデフォルトの1分以上の時間が必要な場合に限定してください。
 
 <Callout type="note" title="注記">
   詳細な設定手順と前提条件については、[Re-use OpenID Tokens for Login Session](/docs/configuration/authentication/OAuth2-OIDC/token-reuse) を参照してください。
@@ -2721,8 +2981,16 @@ Azure Entra ID (旧 Azure AD) を OpenID プロバイダーとして使用する
       'ユーザーやグループの検索に必要なMicrosoft Graph APIスコープ。デフォルトのスコープにより、ユーザープロファイルおよびグループメンバーシップへのアクセスが可能になります。',
       'OPENID_GRAPH_SCOPES=User.Read,People.Read,GroupMember.Read.All,User.ReadBasic.All',
     ],
+    [
+      'GRAPH_API_SCOPES',
+      'string',
+      'YAMLで定義されたMCPサーバー内の {{LIBRECHAT_GRAPH_ACCESS_TOKEN}} プレースホルダーに対して、OBO交換で要求されるスペース区切りのMicrosoft Graphスコープ。デフォルト: https://graph.microsoft.com/.default',
+      '# GRAPH_API_SCOPES=https://graph.microsoft.com/.default',
+    ],
   ]}
 />
+
+`GRAPH_API_SCOPES` は `OPENID_GRAPH_SCOPES` とは別物です。前者は MCP 設定に解決される Graph トークンを制御し、後者は Entra ID のユーザーおよびグループ検索を制御します。
 
 <Callout type="warning" title="重要な前提条件">
   - Azure Entra IDをOpenIDプロバイダーとして構成する必要があります。**OpenIDトークンの再利用を有効にする必要があります** (`OPENID_REUSE_TOKENS=true`)。この機能は、これが有効でないと動作しません。Azureアプリの登録には、適切なMicrosoft Graph API権限が必要です。グループ検索機能については、特定のGraph APIスコープに対して管理者の同意が必要になる場合があります。
@@ -2822,6 +3090,18 @@ OpenID が有効な場合、SAML 認証は自動的に無効になります。
       'string',
       'SAMLセッションストレージ用のシークレット。',
       'SAML_SESSION_SECRET=',
+    ],
+    [
+      'SAML_NAME_ID_FORMAT',
+      'string',
+      'IdPから要求されるStable NameID形式。永続的識別子（Persistent identifiers）が推奨され、一時的識別子（transient identifiers）は拒否されます。',
+      '# SAML_NAME_ID_FORMAT=urn:oasis:names:tc:SAML:2.0:nameid-format:persistent',
+    ],
+    [
+      'SAML_IDP_ISSUER',
+      'string',
+      '期待されるIdPエンティティID。設定した場合、発行者が欠落しているか異なるアサーションは拒否されます。',
+      'SAML_IDP_ISSUER=',
     ],
     [
       'SAML_EMAIL_CLAIM',
@@ -3355,12 +3635,6 @@ Redisは、LibreChatに大幅なパフォーマンスの向上をもたらし、
       '# USE_REDIS_STREAMS=true',
     ],
     [
-      'GENERATION_PROTOCOL_VERSION',
-      'integer',
-      '生成ストリームプロトコル（1または2）。Redisバックエンドのデプロイメントは、明示的に切り替えるまでローリングアップグレードに対応したv1がデフォルトとなります。インメモリのストリームはv2がデフォルトです。',
-      '# GENERATION_PROTOCOL_VERSION=2',
-    ],
-    [
       'STREAM_DELTA_COALESCE_MS',
       'integer',
       'Redisストリームのデルタ公開をこのミリ秒数以内でバッチ処理します。未設定または0でバッチ処理を無効化します。25が推奨され、値の上限は1000です。',
@@ -3421,6 +3695,12 @@ Redisは、LibreChatに大幅なパフォーマンスの向上をもたらし、
       '# REDIS_MAX_LISTENERS=40',
     ],
     [
+      'REDIS_READONLY_RECOVERY_INTERVAL',
+      'number',
+      'スタンドアロンまたはSentinelのフェイルオーバー中に、READONLY応答後のKeyvの強制再接続試行間隔の最小ミリ秒数。デフォルト: 5000。',
+      '# REDIS_READONLY_RECOVERY_INTERVAL=5000',
+    ],
+    [
       'REDIS_PING_INTERVAL',
       'number',
       '接続を維持するためのPing間隔（秒）。デフォルト：0（無効）。タイムアウトが発生する場合のみ設定してください。',
@@ -3468,10 +3748,11 @@ Redisは、LibreChatに大幅なパフォーマンスの向上をもたらし、
 注記:
 
 - `USE_REDIS=true` の場合、`REDIS_URI` を指定する必要があります。指定しない場合、アプリケーションはエラーをスローします。
-- Redisでバックアップされた生成ストリームの場合、まずは `GENERATION_PROTOCOL_VERSION` を設定しない（または `1` にする）状態で、v2対応のリリースをすべてのレプリカにデプロイしてください。古いアクティブな生成が完了した後、2回目のロールアウトでこの値を `2` に設定します。v2の生成がアクティブな間は、v2以前のイメージにロールバックしないでください。詳細は [Generation Protocol Rollout](/docs/configuration/redis#generation-protocol-rollout) を参照してください。
+- 現在のLibreChatクライアントは、生成プロトコルv2を自動的にネゴシエーションします。廃止された `GENERATION_PROTOCOL_VERSION` 変数は読み込まれなくなりました。リリースバージョンを混在させる場合やロールバックを行う前に、[Generation Protocol Compatibility](/docs/configuration/redis#generation-protocol-compatibility) を参照してください。
 - すべてのレプリカがバッチフレームをサポートした後にのみ、`STREAM_DELTA_COALESCE_MS` を有効にしてください。古いサブスクライバーは、結合されたフレームをドロップします。詳細は [Stream Delta Coalescing](/docs/configuration/redis#stream-delta-coalescing) を参照してください。
 - Redis Clusterモードの場合は、複数のURIを指定してください：`redis://node1:7001,redis://node2:7002,redis://node3:7003`（クラスターモードは自動的に検出されます）。
 - 内部でキーをシャードするシングルエンドポイントのマネージドRedisサービスを使用する場合は、`USE_REDIS_CLUSTER=false` を維持し、キャッシュのクリア時に `CROSSSLOT` エラーが発生する場合は `REDIS_CLUSTER_SAFE_DELETE=true` を設定してください。
+- `REDIS_READONLY_RECOVERY_INTERVAL` は、フェイルオーバーによって降格した読み取り専用レプリカに開いたままのソケットが残された後、Keyvの再接続試行をデバウンスします。Redis Clusterクライアントは、代わりに独自のトポロジ処理を使用します。
 - TLS接続には `rediss://` プロトコルを使用し、CAがパブリックに信頼されていない場合は `REDIS_CA` を設定してください。
 - `REDIS_KEY_PREFIX_VAR` と `REDIS_KEY_PREFIX` は相互に排他的です。
 - **AWS Elasticache with TLS**: Elasticacheでは、TLS接続のために代替の dnsLookup を使用する必要がある場合があります。Elasticache with TLSを使用している場合は、`REDIS_USE_ALTERNATIVE_DNS_LOOKUP=true` を設定してください。詳細については、[ioredis documentation](https://www.npmjs.com/package/ioredis) を参照してください。

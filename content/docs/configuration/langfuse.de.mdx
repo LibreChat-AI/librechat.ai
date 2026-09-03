@@ -90,6 +90,28 @@ LANGFUSE_BASE_URL=https://cloud.langfuse.com
 
 Wenn beide Umgebungsschlüssel vorhanden sind, verwendet LibreChat diese für das zentrale Projekt und blendet **Settings → Langfuse** aus. `LANGFUSE_TRACING_ENABLED=false` oder `LANGFUSE_SAMPLE_RATE=0` deaktiviert sowohl Traces als auch Feedback-Scores. Fraktionales Sampling trifft eine deterministische Entscheidung pro Trace; nicht gesampelte Traces erhalten keine späteren Feedback-Scores.
 
+`LANGFUSE_BASE_URL` ist die kanonische Basis-URL-Einstellung. Die älteren Namen `LANGFUSE_HOST` und `LANGFUSE_BASEURL` bleiben als Kompatibilitäts-Aliase erhalten, wobei `LANGFUSE_BASE_URL` Vorrang hat, wenn mehr als einer gesetzt ist.
+
+### Authentifizierte Proxys und Gateways [#authenticated-proxies-and-gateways]
+
+Für eine selbst gehostete Langfuse-Instanz hinter Cloudflare Access, oauth2-proxy oder einem anderen authentifizierenden Gateway definieren Sie benutzerdefinierte Request-Header auf Deployment-Ebene in der `librechat.yaml`:
+
+```yaml filename="librechat.yaml"
+langfuse:
+  headers:
+    CF-Access-Client-Id: '${CF_ACCESS_CLIENT_ID}'
+    CF-Access-Client-Secret: '${CF_ACCESS_CLIENT_SECRET}'
+```
+
+LibreChat wendet die aufgelösten Header auf jede direkte Langfuse-Oberfläche an: Trace- und Medienexport, Erstellung und Löschung von Feedback-Scores, Projekt-Identitätsabfrage und Überprüfung von Admin-Anmeldeinformationen. Die eigene `Authorization`-Anmeldeinformation von Langfuse bleibt bei REST-Anfragen maßgeblich. Werte unterstützen `${ENV_VAR}`-Interpolation; nicht aufgelöste Variablen, Verweise auf geschützte Infrastruktur-Geheimnisse, leere Werte und ungültige Headernamen werden mit einer Warnung verworfen. Header-Werte werden in Startprotokollen und beim Auslesen der Admin-Konfiguration maskiert, dennoch werden Umgebungsverweise gegenüber literalen Anmeldeinformationen empfohlen.
+
+Diese Header befinden sich im Besitz des Betreibers und sind nur in YAML verfügbar. Sie können nicht über das Admin-Panel oder die Konfigurations-API geschrieben, in MongoDB gespeichert oder mit benutzerbezogenen `{{...}}` Platzhaltern befüllt werden. LibreChat sendet sie nur, wenn die Konfiguration genau einen Langfuse-Ursprung auflöst. Bei mehreren zentralen, Mandanten- oder Collector-Ursprüngen wird eine Warnung protokolliert und es werden keine benutzerdefinierten Header gesendet, da die Zuordnung den Empfänger nicht sicher auswählen kann.
+
+<Callout type="warning" title="Fanout-Begrenzung">
+  Der Fanout-Collector leitet derzeit nur `Authorization` an Langfuse-Mandantenziele weiter.
+  Benutzerdefinierte `langfuse.headers` können die direkte Anfrage von LibreChat an einen einzelnen Collector oder Langfuse-Ursprung authentifizieren, sie authentifizieren jedoch nicht die Upstream-Anfrage des Collectors an ein Mandantenziel hinter einem anderen Proxy.
+</Callout>
+
 ## Tenant Fanout (Optional) [#tenant-fanout-optional]
 
 Langfuse Fanout ermöglicht es einer Multi-Tenant-Bereitstellung von LibreChat, jeden berechtigten Trace sowie dessen Medien sowohl an ein zentrales Langfuse-Projekt als auch an ein mandantenspezifisches Projekt zu exportieren. Die Funktion ist optional und fügt ein Gateway sowie einen internen OpenTelemetry-Collector hinzu; das normale Single-Project-Tracing wie oben beschrieben bleibt unverändert, wenn Fanout nicht bereitgestellt wird.
@@ -207,9 +229,23 @@ Der Tenant-Export erfolgt nur, wenn Fanout und die Collector-URL aktiviert sind,
 
 Setzen Sie `LANGFUSE_FANOUT_CENTRAL_MEDIA_UPLOAD_DISABLED=true`, um zu verhindern, dass das LibreChat SDK Medien-Uploads für zentrale oder Fallback-Collector-Traces erstellt; mandantengeroutete Medien-Uploads bleiben unverändert. Dieser app-seitige Schalter unterscheidet sich von dem gateway-seitigen `LANGFUSE_FANOUT_CENTRAL_MEDIA_EXPORT_DISABLED`, welcher die zentrale Medienweiterleitung blockiert, nachdem ein Upload das Gateway erreicht hat.
 
+Für die Medienweiterleitung akzeptiert das Fanout-Gateway nur absolute HTTPS-Upload-Ziele, die von der konfigurierten Langfuse-Autorität zurückgegeben werden, und folgt keinen Weiterleitungen bei `PUT`-Upload-Anfragen. Selbst gehosteter Objektspeicher, einschließlich privater MinIO-Hosts, wird weiterhin unterstützt, sofern die zurückgegebene Upload-URL HTTPS verwendet. Einfache HTTP- oder von Weiterleitungen abhängige Medien-Upload-Ziele schlagen nun fehl (fail closed), während der Trace-Export unabhängig davon fortgesetzt wird.
+
 Trace- und Medientraffic laufen über das Fanout-Gateway. Feedback-Bewertungen werden direkt von LibreChat gesendet: Zentrale Bewertungen verwenden `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` und `LANGFUSE_BASE_URL`, während Mandanten-Bewertungen die App-Konfiguration des Mandanten verwenden.
 
 Siehe die [Langfuse fanout deployment reference](https://github.com/danny-avila/LibreChat/blob/dev/otel/langfuse-fanout/README.md) für alle Gateway-Variablen, die Einrichtung benutzerdefinierter Ziele, Metriken, Skalierung und das Redis-Verhalten.
+
+### Diagnosedaten exportieren [#export-diagnostics]
+
+Jede nachverfolgte Anfrage zeichnet OpenTelemetry-Attribute mit niedriger Kardinalität auf, die ihre Entscheidung zum Mandanten-Export erläutern:
+
+- `librechat.tenant.id` identifiziert den Mandantenkontext
+- `librechat.langfuse.export_plan` ist `central_only`, `tenant_fanout` oder `disabled`
+- `librechat.langfuse.export_reason` ist `configured`, `collector_unconfigured`, `destination_unconfigured`, `emergency_disabled`, `fanout_disabled`, `missing_credentials` oder `tenant_disabled`
+
+Das Gateway stellt außerdem `langfuse_fanout_trace_exports_total{destination,result,tenant_id}` bereit. Ein Batch ohne Tenant verwendet `<unknown>`, ein Batch mit gemischten Tenants verwendet `<multiple>` und eine fehlerhafte Tenant-ID verwendet `<invalid>`. Das Gateway speichert maximal 1.000 verschiedene gültige Tenant-Labels pro Prozess und fasst spätere IDs unter `<overflow>` zusammen, um die Kardinalität der Metriken zu begrenzen; unbekannte Ziele werden als `central` erfasst, anstatt ein weiteres Label zu erstellen.
+
+Erfolgreiche In-App-Verbindungsänderungen schreiben außerdem das strukturierte Ereignis `librechat.langfuse.connection.changed`. Es enthält den Mandanten, den konfigurierten und aktivierten Status, das Ziel, das Verifizierungsergebnis, die primäre Änderung sowie eine vollständige Liste der geänderten Felder, ohne dabei einen der Schlüssel zu protokollieren. Verwenden Sie diese Felder, um zwischen einem beabsichtigten Plan, der nur zentral oder deaktiviert ist, und einer fehlenden Konfiguration von Collector, Ziel oder Anmeldeinformationen zu unterscheiden.
 
 ## LibreChat neu starten [#restart-librechat]
 
@@ -224,11 +260,15 @@ docker compose up -d
 
 Sobald LibreChat mit konfiguriertem Langfuse neu gestartet wurde, sehen Sie in der Langfuse UI für jede Chat-Nachrichtenantwort einen neuen Trace:
 
+LibreChat v0.8.8-rc2 aktualisiert das Agent-Trace-Shaping auf die Verwendung der Laufzeit-Beobachtungsnamen `StandardGraph`, `MultiAgentGraph` und `AgentModelCall`, wobei Aktivitäts- und Reasoning-Label-Aufrufe unter der Arbeit verschachtelt sind, die sie beschreiben. Trace-Level-Eingaben und -Ausgaben werden ebenfalls in den Root-Beobachtungen dargestellt. Überprüfen Sie gespeicherte Langfuse-Filter, Dashboards und Auswertungen, die von den früheren Beobachtungsnamen oder Trace-Level-Eingabe-/Ausgabefeldern abhängen.
+
 ![LibreChat Beispiel-Trace](https://langfuse.com/images/cookbook/integration_librechat/librechat-example-trace.png)
 
 [Link zum Trace in der Langfuse UI](https://cloud.langfuse.com/project/cloramnkj0002jz088vzn1ja4/traces/57b4aa20a258a2e9e2d1ce2e4eacb21c?observation=06f5341a68d723b1&timestamp=2026-02-04T13%3A02%3A54.248Z&traceId=57b4aa20a258a2e9e2d1ce2e4eacb21c)
 
-Administratoren mit `access:admin` und `manage:configs:langfuse` können außerdem die **Context Usage**-Aufschlüsselung der Konversation öffnen und **View session in Langfuse** auswählen. Der Link erscheint erst, nachdem die Generierung abgeschlossen ist und die Konversation mindestens einen gesampelten Trace enthält, der an die aktive In-App-Langfuse-Verbindung gesendet wurde. Er verweist auf das verifizierte Ziel und Projekt dieser Verbindung; er wird nicht angezeigt für umgebungsverwaltete Anmeldedaten, deaktivierte Verbindungen, nicht gesampelte Konversationen oder Benutzer ohne Zugriff auf die Langfuse-Konfiguration.
+Administratoren mit `access:admin` und `manage:configs:langfuse` können die Aufschlüsselung der **Kontextnutzung** (Context Usage) einer Konversation öffnen und **Sitzung in Langfuse anzeigen** (View session in Langfuse) auswählen. Die gleiche Aktion kann in einer geteilten Konversation für einen authentifizierten Administrator desselben Mandanten mit Zugriff auf die Langfuse-Konfiguration erscheinen. Öffentliche und normale Betrachter von geteilten Links sehen dies niemals.
+
+Der Link erscheint erst, nachdem die Generierung abgeschlossen ist und die Konversation mindestens einen gesampelten Trace enthält, der an die aktive In-App-Langfuse-Verbindung gesendet wurde. Er verweist auf das verifizierte Ziel und Projekt dieser Verbindung; er wird nicht angezeigt für umgebungsverwaltete Anmeldedaten, deaktivierte Verbindungen, nicht gesampelte Konversationen, mandantenübergreifende Betrachter oder Benutzer ohne die erforderlichen Zugriffsrechte.
 
 ## Message Feedback Scores [#message-feedback-scores]
 

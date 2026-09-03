@@ -46,15 +46,17 @@ ${DOMAIN_SERVER}/api/mcp/<server-name>/oauth/callback
 - 选中后，来自该服务器的所有工具都将可供您当前的模型使用
 - 无需创建智能体即可快速访问 MCP 工具，并允许同时使用多个服务器
 
-若要禁止 MCP 服务器出现在聊天下拉菜单中（仅保留在智能体中使用），请在您的配置中设置 [`chatMenu: false`](/docs/configuration/librechat_yaml/object_structure/mcp_servers#chatmenu)：
+若要将 MCP server 从常规聊天选择中排除，请在您的配置中设置 [`chatMenu: false`](/docs/configuration/librechat_yaml/object_structure/mcp_servers#chatmenu)：
 
 ```yaml
 mcpServers:
   internal-tools:
     command: npx
     args: ['-y', 'internal-mcp-server']
-    chatMenu: false # Only available in agent builder
+    chatMenu: false # Not selectable in regular chat
 ```
+
+此设置在聊天请求以及选择器中强制执行，因此过期的已保存选择无法继续使用已隐藏的服务器。它不会从已保存的 Agents 或明确指定该服务器的 Model Specs 中移除该服务器。LibreChat 还会从常规聊天选择器和请求路径中省略用户只能通过已授权 Agent 访问的服务器。
 
 ### 使用 Agents [#with-agents]
 
@@ -261,7 +263,7 @@ LibreChat 会在聊天下拉菜单和设置面板中显示动态状态图标，�
 
 如果一个 Agent 明确需要 MCP 工具，但在运行开始时无法解析任何工具，LibreChat 将会终止运行并提供连接和访问指导，而不是在没有这些工具的情况下静默运行。
 
-发送 `notifications/tools/list_changed` 的 MCP servers 可以在无需重启 LibreChat 的情况下更新其工具目录。LibreChat 会从实时连接中获取当前列表，发布新增的工具，并停止通告服务器已移除的工具。在连接被视为就绪之前，重新连接也会同步目录。
+发送 `notifications/tools/list_changed` 的 MCP 服务器可以在无需重启 LibreChat 的情况下更新其工具目录。LibreChat 会从实时连接中获取当前列表，发布新增工具，并停止通告服务器已移除的工具。在连接被视为就绪之前，重新连接也会同步目录。受管理的快照刷新和冷服务器发现共享一个进程范围内的三操作门控。一旦准入，每个操作都会受到其工具列表或单服务器发现截止时间的限制，包括任何更短的 `initTimeout`，因此缓慢的目录工作无法无限期地占用槽位。
 
 对于可流式传输的 HTTP 服务器，当服务器仍为旧会话保留陈旧的 SSE 流时，重新连接可能会短暂返回 HTTP `409`。LibreChat 会将其视为瞬态错误，自动销毁陈旧会话并重建连接；如果恢复成功，则无需操作员进行任何干预。如果重建后的连接依然失败，LibreChat 将继续抛出底层的连接错误。
 
@@ -317,6 +319,10 @@ mcpServers:
 
 YAML 定义的 MCP 服务器也可以使用 `{{LIBRECHAT_OPENID_*}}`、`{{LIBRECHAT_GRAPH_*}}` 和 `{{LIBRECHAT_BODY_*}}` 占位符。`{{LIBRECHAT_BODY_*}}` 的值是请求作用域的，因此 LibreChat 会为当前运行创建连接，在运行期间的工具调用中复用这些连接，并在请求结束时进行清理。请求作用域的服务器会被排除在持久化工具缓存之外，以确保请求特定的标头和 URL 不会在当前运行之外被复用。由于它们的工具列表无法在聊天请求存在之前解析，Agent Builder 会为整个服务器公开一个运行时工具选择，并在运行时解析其工具。完成 OAuth 会存储授权信息，但会推迟连接，直到首次运行提供请求上下文为止。用户、OpenID 和 Graph 占位符是用户作用域的；HTTP 传输会在每次工具调用前刷新其解析后的标头，而无需自行重新连接。
 
+`{{LIBRECHAT_GRAPH_ACCESS_TOKEN}}` 通过 Microsoft on-behalf-of 流程交换用户的可重用 OpenID 访问令牌。[`GRAPH_API_SCOPES`](/docs/configuration/dotenv#microsoft-graph-api--entra-id-integration) 用于设置请求的以空格分隔的作用域，默认值为 `https://graph.microsoft.com/.default`。这与配置人员和组搜索的 `OPENID_GRAPH_SCOPES` 是相互独立的。
+
+`{{LIBRECHAT_BODY_PARENTMESSAGEID}}` 占位符适用于原生 Agent 聊天、兼容 OpenAI 的 Agents API 调用以及旧版 Assistants 运行。Open Responses 没有等效的父消息标识，当 MCP 服务器需要该值时会失败并关闭。请参阅 [MCP 服务器占位符参考](/docs/configuration/librechat_yaml/object_structure/mcp_servers#headers)。
+
 ### 服务器指令 [#server-instructions]
 
 `serverInstructions` 是 LibreChat 的一项功能，当选中来自该 MCP server 的任何工具时，它会自动动态添加已配置的指令：
@@ -355,6 +361,8 @@ mcpServers:
 ```
 
 **注意**：如果操作仍然被中断，请检查您的代理配置（例如 nginx、traefik 等），这些配置可能会因默认超时设置而过早断开连接。
+
+当用户在前端 Agent 工具调用期间按下 **Stop** 时，LibreChat 会将运行取消信号转发给 MCP。对于可流式传输的 HTTP 服务器，MCP SDK 会发送 `notifications/cancelled`；服务器必须响应此通知以停止其自身的工作。分离的后台调用会特意保持独立的生命周期，并且不会随前端轮次一起被取消。
 
 ### 用户提供的凭据 [#user-provided-credentials]
 
@@ -494,6 +502,8 @@ LibreChat 会智能处理 OAuth 令牌：
 - **自动刷新**：当存在刷新令牌时，LibreChat 会自动更新过期的访问令牌
 - **静默 401 恢复**：如果 MCP OAuth 连接在会话期间收到身份验证拒绝，LibreChat 会为每个用户和服务器协调一次有界的刷新和重连尝试。并发调用者将在 LibreChat 弹出新的身份验证提示之前共享该恢复结果。
 - **会话管理**：在多用户环境中，每个用户维护其各自的 OAuth 会话
+
+如果已保存的 Agent 流在 MCP 授权提示仍处于挂起状态时被重新加载或恢复，LibreChat 将根据持久化生成状态重建该提示。已完成、已取消、已失败或已过期的提示不会被恢复。
 
 存储的 OAuth 客户端和令牌绑定到 MCP 服务器 URL 以及 OAuth 客户端/endpoint 设置。更改这些设置需要用户重新进行身份验证。在编辑保留了存储的 `client_secret` 的 UI 创建的服务器时，如果更改了绑定字段（例如服务器 URL、客户端 ID、授权 URL、令牌 URL 或令牌身份验证方法），则需要重新输入该密钥。
 

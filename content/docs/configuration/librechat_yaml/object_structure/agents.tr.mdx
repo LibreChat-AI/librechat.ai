@@ -12,6 +12,7 @@ endpoints:
   agents:
     recursionLimit: 50
     maxRecursionLimit: 100
+    maxSubagents: 20
     maxToolCallArgBytes: 65536
     maxDeltaEventsPerTurn: 100000
     maxToolCallArgBytesByTool:
@@ -29,9 +30,34 @@ endpoints:
     activityModel: gpt-4.1-nano
     activityPhaseLabel: true
     activityPhaseMaxPerRun: 5
-    maxSubagents: 10 # Maximum explicit subagents per agent (1-50)
     skills:
       maxCatalogSkills: 20
+    statefulCodeSessions:
+      allowedEnvironments: ['user', 'agent-user', 'conversation']
+      environments:
+        - id: managed-default
+          name: Managed Code API
+          type: managed
+          baseURL: https://code.example.com/v1
+          default: true
+        - id: engineering-vm
+          name: Engineering VM
+          type: attached
+          baseURL: https://code-bridge.example.com/v1
+          pairing:
+            workerId: engineering-vm
+            tokenEnv: CODE_BRIDGE_ADMIN_TOKEN
+        - id: personal-workers
+          name: Personal Code Workers
+          type: attached
+          baseURL: https://code-bridge.example.com/v1
+          pairing:
+            allowPrincipalWorkers: true
+            tokenEnv: CODE_BRIDGE_ADMIN_TOKEN
+    # eventDriven:
+    #   selfUrl: https://librechat.internal
+    backgroundTasks:
+      completionWakeups: true
     toolApproval:
       enabled: true
       mode: default
@@ -56,7 +82,7 @@ endpoints:
       'recursionLimit',
       'Number',
       'Bir ajanın bir çalışmada atabileceği varsayılan adım sayısını belirler.',
-      'Controls recursion depth to prevent infinite loops. When limit is reached, raises GraphRecursionError. This value can be configured from the UI up to the maxRecursionLimit.',
+      'Controls recursion depth to prevent infinite loops. When the limit is reached, LibreChat preserves the partial turn and offers Keep going or Answer now. This value can be configured from the UI up to maxRecursionLimit.',
     ],
   ]}
 />
@@ -242,7 +268,9 @@ allowedProviders:
 
 **Varsayılan:** `["deferred_tools", "execute_code", "file_search", "web_search", "artifacts", "subagents", "actions", "context", "skills", "memory", "ask_user_question", "tools", "chain", "ocr"]`
 
-`programmatic_tools`, `stateful_code_sessions`, `run_in_background` ve `tool_intents` isteğe bağlıdır ve açıkça eklenmeleri gerekir. Programmatic tools ve stateful sessions ayrıca `execute_code` ve uyumlu bir Code Interpreter dağıtımı gerektirir. Background code execution ise `run_in_background`, `execute_code` ve Code Interpreter gerektirir.
+`programmatic_tools`, `stateful_code_sessions`, `run_in_background` ve `tool_intents` isteğe bağlıdır ve açıkça eklenmelidir. Programmatic tools ve stateful sessions ayrıca `execute_code` ve uyumlu bir Code Interpreter dağıtımı gerektirir. Agent Builder, Code Interpreter olmadan Programmatic MCP seçimlerini devre dışı bırakır ve sunucu, kod yürütme özelliği mevcut olmadığında eski programmatic caller seçeneklerini kaldırır. `run_in_background`, Code Interpreter araçlarını varsayılan olarak uygun hale getirir ve uygun MCP, Plugin ve Action araçları için araç bazında katılıma izin verir; arka planda kod yürütme işlemi de `execute_code` ve Code Interpreter gerektirir.
+
+`stateful_code_sessions` oldukça deneyseldir. [`LIBRECHAT_CODE_BASEURL_STATEFUL`](/docs/configuration/dotenv#stateful-code-interpreter-endpoint) veya [`statefulCodeSessions.environments`](#statefulcodesessions) ile yapılandırılmış ayrı bir `stateful` profilli Code Interpreter rotası gerektirir. Stateful istekler, normal stateless hizmete geri dönmek yerine başarısız olur. Agent Builder içinde, etkinleştirilen her Agent; kullanıcı, ajan-ve-kullanıcı veya konuşma çalışma alanı kapsamını ve adlandırılmış arka uçlar yapılandırıldığında bir yürütme ortamını seçer. Yeni Agent'lar, kullanıcının kişisel kapsam varsayılanı ve dağıtımın varsayılan yürütme ortamı ile başlar.
 
 **Örnek:**
 
@@ -265,9 +293,11 @@ capabilities:
   - 'tools'
   - 'chain'
   - 'ocr'
-  # Optional: reuse one Code Interpreter workspace per conversation.
+  # Optional and highly experimental: reuse a user-, agent-and-user-, or
+  # conversation-scoped workspace. Requires LIBRECHAT_CODE_BASEURL_STATEFUL
+  # or a named statefulCodeSessions environment.
   # - 'stateful_code_sessions'
-  # Optional: allow selected eligible MCP and Code Interpreter tools to run as background tasks.
+  # Optional: allow eligible Code Interpreter, MCP, Plugin, and Action tools to run as background tasks.
   # - 'run_in_background'
   # Optional: show live model-written intent labels for native and selected MCP tools.
   # - 'tool_intents'
@@ -275,13 +305,152 @@ capabilities:
 
 **Not:** Bu alan isteğe bağlıdır. Atlanırsa, varsayılan davranış, varsayılan değerde listelenen tüm yetenekleri dahil etmektir.
 
-## toolApproval
+## statefulCodeSessions
 
-Ajan araç çağrıları için insan denetimini kontrol eder. Bu özellik varsayılan olarak devre dışıdır. Etkinleştirildiğinde, eşleşen çağrılar kullanıcı onaylama, reddetme veya argümanları düzenleme gibi izin verilen bir karar gönderene kadar duraklatılır.
+Son derece deneysel durum bilgili (stateful) Code Interpreter çalışma alanları için paylaşım kapsamlarını ve isteğe bağlı yürütme arka uçlarını yapılandırır.
+
+<Callout type="warning" title="Son derece deneysel">
+  Stateful Code Sessions, adlandırılmış yürütme ortamları, bağlı çalışanlar (attached workers) ve eşleştirme (pairing) özellikleri erken deneme aşamasındadır. Bunların davranışları, yapılandırmaları, kalıcılık özellikleri ve entegrasyon protokolleri önemli ölçüde değişebilir.
+</Callout>
 
 <OptionTable
   options={[
-    ['enabled', 'Boolean', 'Agents endpoint için araç onayını etkinleştirir.', 'false'],
+    [
+      'allowedEnvironments',
+      'Array/List of Strings',
+      'İzin verilen durum bilgili çalışma alanı kapsamları: `user`, `agent-user` ve/veya `conversation`.',
+      '["user", "agent-user", "sohbet"]',
+    ],
+    [
+      'environments',
+      'Array of Objects',
+      'Agent Builder\'da gösterilen isteğe bağlı adlandırılmış yönetilen veya ekli Code API ortamları.',
+      'Unset; LIBRECHAT_CODE_BASEURL_STATEFUL remains the stateful endpoint',
+    ],
+  ]}
+/>
+
+```yaml filename="endpoints / agents / statefulCodeSessions"
+statefulCodeSessions:
+  allowedEnvironments:
+    - 'user'
+    - 'agent-user'
+    - 'conversation'
+  environments:
+    - id: managed-default
+      name: Managed Code API
+      type: managed
+      baseURL: https://code.example.com/v1
+      default: true
+    - id: engineering-vm
+      name: Engineering VM
+      type: attached
+      baseURL: https://code-bridge.example.com/v1
+      owner: deployment
+      pairing:
+        workerId: engineering-vm
+        tokenEnv: CODE_BRIDGE_ADMIN_TOKEN
+    - id: personal-workers
+      name: Personal Code Workers
+      type: attached
+      baseURL: https://code-bridge.example.com/v1
+      owner: deployment
+      configSchema:
+        permissions:
+          fileWrite:
+            allowed: [allow, ask, deny]
+            default: ask
+          commandExecution:
+            allowed: [ask, deny]
+            default: ask
+      pairing:
+        allowPrincipalWorkers: true
+        tokenEnv: CODE_BRIDGE_ADMIN_TOKEN
+```
+
+`allowedEnvironments`, blok mevcut olduğunda gereklidir ve en az bir çalışma alanı kapsamı (workspace scope) içermelidir. Üç kapsamın tamamına izin vermek ve durum bilgisi olan (stateful) işleri [`LIBRECHAT_CODE_BASEURL_STATEFUL`](/docs/configuration/dotenv#stateful-code-interpreter-endpoint) üzerinden yönlendirmeye devam etmek için bloğun tamamını atlayın. Kişisel varsayılan ve Agent Builder yalnızca izin verilen değerlere izin verir. Bir yönetici politikayı sıkılaştırırsa, kaydedilmiş bir kişisel varsayılan görünür kalır ancak devre dışı bırakılır ve yeni Agent'lar izin verilen ilk kapsamı kullanır. Mevcut etkinleştirilmiş Agent'lar kaydedilmiş kapsamlarını korurlar, ancak artık izin verilmeyen bir kapsam, Agent yeniden yapılandırılana kadar çalışma zamanında başarısız olur.
+
+`environments` boş olmadığında, her giriş benzersiz bir `id`, bir görünen `name`, `managed` veya `attached` şeklinde bir `type` ve sorgu dizisi ya da fragman içermeyen bir HTTP(S) `baseURL` gerektirir. Liste çalıştırılabilir ortamlar içeriyorsa, bu girişlerden tam olarak bir tanesi `default: true` olarak ayarlanmalıdır. Agent Builder daha sonra bir **Execution environment** seçicisi ekler; bunu **Deployment default** üzerinde bırakmak, söz konusu varsayılan girişi kullanır. Yalnızca self-servis eşleştirme kontrol düzlemlerini içeren bir liste varsayılan değer gerektirmez. Daha sonra kaldırılan veya artık erişilemeyen bir ortamı adlandıran bir Agent, başka bir arka uca geri dönmek yerine başarısız olur (fail closed).
+
+- `managed` doğrudan operatör tarafından yönetilen durum bilgisi olan (stateful) bir Code API'sine işaret eder.
+- `attached`, işi bir dış `@librechat/code` çalışanına kiralayan uyumlu bir Code API `remote-bridge` arka ucunu işaret eder. Çalışan, gelen bir genel bağlantı noktası gerektirmez, ancak yerel yürütme endpoint'inin yine de uygun yalıtıma ihtiyacı vardır.
+- `workerId`, isteğe bağlı olarak ekli bir ortamı tek bir giden çalışana (outbound worker) yönlendirir. Yalnızca sunucu tarafında çalışır ve istemci başlatma yapılandırması aracılığıyla dışa aktarılmaz.
+- `owner` varsayılan olarak `deployment` değerini alır. Principal sahipli ortamlar, LibreChat'in kimlik doğrulamalı Code Environments API'si aracılığıyla oluşturulur, ACL'ler ile korunur ve yalnızca yetkili istekler için birleştirilir; istemci tarafından sağlanan URL'leri deployment YAML dosyasına yerleştirmeyin.
+- `pairing` isteğe bağlıdır ve yalnızca dağıtımın sahip olduğu `attached` girdileri için geçerlidir. `pairing.workerId`, kaydedilecek operatör yönetimindeki bir çalışanı tanımlarken, `pairing.allowPrincipalWorkers: true` yetkili kullanıcıların sahip tabanlı çalışanları bu kontrol düzlemine kaydetmesine olanak tanır. `pairing` mevcut olduğunda bu alanlardan en az birinin girilmesi zorunludur.
+- `pairing.tokenEnv`, köprü yöneticisi belirtecini içeren ortam değişkenini adlandırır; asla belirtecin kendisini içermez. Eşleştirme, loopback geliştirme haricinde HTTPS gerektirir.
+- `configSchema.permissions`, yetkili sahiplerin **Ayarlar > Kod ortamları** altında kişisel ortamlar için `fileWrite` ve `commandExecution` politikasını isteğe bağlı olarak seçmelerine olanak tanır. Her alan, `allow`, `ask` ve/veya `deny` içeren boş olmayan bir `allowed` listesi gerektirir; `default` değeri atlandığında `ask` olarak kabul edilir ve `allowed` listesinde yer almalıdır. LibreChat, yönetici listesinin dışındaki kayıtlı değerleri reddeder.
+- `settings` kısmını deployment YAML dosyasında yapılandırmayın. LibreChat, bu istek kapsamlı alanı, kimliği doğrulanmış sahibin sunucu tarafından doğrulanmış tercihlerinden sağlar.
+- Yalnızca dosya yazma ve komut yürütme ilkesi kullanıcı tarafından yapılandırılabilir. İzolasyon, ağ oluşturma, bağlamalar (mounts), ayrıcalıklı yürütme, giriş (ingress), çıkış (egress) ve gizli anahtarlar (secrets) yönetici kontrolünde kalmaya devam eder.
+- Hem üst düzey `workerId` hem de `pairing.workerId` mevcutsa, bunların birbiriyle eşleşmesi gerekir. `allowPrincipalWorkers: true` değerine sahip ve her iki worker ID'si de yalnızca eşleştirme (pairing-only) olmayan bir girdi: yürütme seçicilerinden çıkarılır ve `default: true` olarak ayarlanamaz.
+
+Ekli yürütme, otomatik olarak güvenli bir onay temeli sağlar: dosya yazma ve komut veya kod yürütme işlemleri onay isterken, salt okunur ve arama işlemleri normal araç politikası kapsamında devam eder. Temel, ekli ortamı kullanan Agent ile sınırlandırılmıştır. Kullanıcı ayarı mevcut değilse, LibreChat `ask` kullanır; [`toolApproval.enabled: false`](#toolapproval), bu ekli ortam temelini devre dışı bırakan yönetici acil durum geçersiz kılma ayarıdır. Onay ve devam ettirme desteği olmayan çağrılar, bu açık geçersiz kılma ayarlanmadığı sürece başarısız olur.
+
+Ekli yürütme, eşleşen bir deneysel Code Interpreter remote-bridge yapısı gerektirir. Eşleştirme, giden worker bağlantısının kimliğini doğrular; sandbox veya VM izolasyonunun yerini almaz. Code Environment yönetimi iznine sahip kullanıcılar, **Ayarlar > Kod ortamları** altında eşleştirme yapabilir, izin verilen araç politikasını yapılandırabilir ve kişisel worker'ları iptal edebilir. Bkz. [Stateful Code Sessions](/docs/features/code_interpreter#stateful-code-sessions).
+
+## eventDriven
+
+Ajan olay iletimi tarafından kullanılan güvenilir dahili kaynağı yapılandırır. Çoğu dağıtım bu bloğu atlamalı ve mevcut sürecin bağlı dinleyicisini kullanmalıdır.
+
+<OptionTable
+  options={[
+    [
+      'selfUrl',
+      'URL',
+      'Güvenilir dahili tetikleyici kabulü için mevcut işleme bağlı dinleyiciyi geçersiz kılar. Yalnızca teslimatın başka bir güvenilir HTTP kaynağından geçmesi gerektiğinde kullanın.',
+      '',
+    ],
+  ]}
+/>
+
+```yaml filename="endpoints / agents / eventDriven"
+endpoints:
+  agents:
+    eventDriven:
+      selfUrl: https://librechat.internal
+```
+
+Bağlı alt devamlılıklar (bound child continuations) otomatiktir. `eventDriven` altındaki eski `childTurns`, `completionWakeups`, `coalescing`, `actorMailbox`, `checkpointForks` ve `durableReceipts` alanları artık yapılandırma anahtarları değildir ve kaldırılmalıdır. Çalışma zamanı (runtime) artık bu teslimat garantilerini doğrudan uygulamaktadır. Ayrı olan [`backgroundTasks.completionWakeups`](#backgroundtasks) alanı, tamamlanmış arka plan araçları ve ayrılmış Subagent'lar için konuşma teslimatını kontrol eder.
+
+Normal bağlı dinleyici yolu için `selfUrl` değerini boş bırakın. Bunu yalnızca güvenilir dahili tetikleyici kabulünün, bir TLS ön kapısı gibi başka bir HTTP(S) kaynağından geçmesi gerektiğinde ayarlayın. `AGENT_TRIGGERS_SELF_URL`, bu alanın belirtilmediği durumlarda bir uyumluluk yedeği olarak kalmaya devam eder. Bkz. [Agents API events](/docs/features/agents_api#agent-events) ve [Automatic Parent Continuation](/docs/features/subagents#automatic-parent-continuation).
+
+Event Actor detached Action tamamlanması, yerleşik üretim deposundan otomatik olarak seçilir. Bellek içi yürütme işlem yerelidir; Redis üretim akışları, dayanıklı yeniden başlatma kurtarma ve kopya devri ekler. Herhangi bir `librechat.yaml` anahtarı veya ortam özellik bayrağı gerekmez. Bkz. [Agent Event Runtime](/docs/configuration/dotenv#agent-event-runtime).
+
+## backgroundTasks
+
+Desteklenen tamamlanmış arka plan araçlarının ve ayrılmış Subagent'ların, kaydedilmiş üst Agent'larını otomatik olarak devam ettirip ettirmeyeceğini kontrol eder.
+
+<OptionTable
+  options={[
+    [
+      'completionWakeups',
+      'Boolean',
+      'Desteklenen arka plan görevi tamamlamalarını otomatik olarak bir devam niteliğinde iletir. Yalnızca yoklama (poll) davranışı için false olarak ayarlayın.',
+      'true',
+    ],
+  ]}
+/>
+
+```yaml filename="endpoints / agents / backgroundTasks"
+backgroundTasks:
+  completionWakeups: true
+```
+
+Bu blok atlandığında bile otomatik tamamlama teslimi etkindir. Ajanın her sonucu `check_background_task` aracılığıyla toplaması için `completionWakeups: false` olarak ayarlayın.
+
+Sıradan arka plan aracı yürütme işlemi, süreç yerelinde kalır ve çalışan sürecinin kaybından sağ çıkamaz. Yalnızca içerik içeren bir terminal sonucu kalıcı hale getirildiğinde, teslimatı dayanıklıdır ve başka bir replikada devam edebilir. Canlı yapay nesnelere sahip görevler, hala sahip olunan çalıştırma üzerinde yoklama (polling) gerektirir. Ayrılmış Alt Temsilciler (Detached Subagents), kendi ayrı dayanıklı transkriptlerini ve terminal sonucu yollarını korurlar. Durum, kontroller ve kurtarma için manuel yoklama her iki modda da kullanılabilir durumdadır. Bkz. [Arka Plan Aracı Çağrıları](/docs/features/agents#background-tool-calls) ve [Otomatik Üst Devamlılığı](/docs/features/subagents#automatic-parent-continuation).
+
+## toolApproval
+
+Ajan araç çağrıları için insan denetimini kontrol eder. Bu blok atlandığında, dağıtım genelindeki politika devre dışı bırakılır. Ekli bir Code ortamı kullanan bir Ajan bunun istisnasıdır: LibreChat, yönetici açıkça `enabled: false` olarak ayarlamadığı sürece kapsamlı varsayılan güvenlik politikasını etkinleştirir. Denetim uygulandığında, eşleşen çağrılar kullanıcı onaylama, reddetme veya argümanları düzenleme gibi izin verilen bir karar gönderene kadar duraklatılır.
+
+<OptionTable
+  options={[
+    [
+      'enabled',
+      'Boolean',
+      'Dağıtım genelinde araç onayını etkinleştirir. Açıkça false olarak ayarlanması, ekli Code ortamı güvenlik temelini de devre dışı bırakır.',
+      'Omitted',
+    ],
     [
       'mode',
       'String',
@@ -306,7 +475,7 @@ Ajan araç çağrıları için insan denetimini kontrol eder. Bu özellik varsay
   ]}
 />
 
-Desenler glob eşleştirmesi kullanır. MCP araçları `mcp:<server>:<tool>` ile kapsamlandırılabilir; örneğin, `mcp:github:*` ifadesi `github` sunucusundaki her araçla eşleşir. Değerlendirme, `bypass` modu da dahil olmak üzere `deny` seçeneğine en yüksek önceliği verir.
+Desenler glob eşleştirmesi kullanır. MCP araçları `mcp:<server>:<tool>` ile kapsamlandırılabilir; örneğin, `mcp:github:*` ifadesi `github` sunucusundaki her araçla eşleşir. LibreChat, statik kuralları ve kanca eşleştiricilerini (hook matchers), iç içe geçmiş Subagent'lar aracılığıyla ulaşılabilen araçlar da dahil olmak üzere, MCP çalışma zamanı adlarına ve model odaklı takma adlara uygular. Statik kurallar, seçilen mod geri dönüşü (fallback) sağlamadan önce `deny`, `ask` ve ardından `allow` sırasıyla değerlendirilir. Bu nedenle, `bypass` modu da dahil olmak üzere, bir engelleme (deny) kuralı her zaman önceliklidir.
 
 ```yaml filename="endpoints / agents / toolApproval"
 toolApproval:
@@ -554,7 +723,7 @@ Alaka düzeyine bakılmaksızın tüm kaynaklar dahil olmak üzere, kapsamlı ar
 - **deferred_tools**: Temsilcilerin, her aracı önceden bağlama yüklemek yerine çalışma zamanında ertelenmiş MCP araçlarını keşfetmesine olanak tanır.
 - **programmatic_tools**: Agent Builder'da Programmatic olarak işaretlenmiş MCP araçları için Programmatic Tool Calling özelliğini etkinleştirir. `execute_code` ve Tool Call Server bileşenine sahip bir Code Interpreter dağıtımı gerektirir. Bu yetenek isteğe bağlıdır (opt-in) ve varsayılan olarak etkin değildir.
 - **execute_code**: Ajanın kod çalıştırmasına izin verir.
-- **stateful_code_sessions**: Katılım sağlayan ajanların, konuşma başına bir Code Interpreter çalışma alanını yeniden kullanmasına olanak tanır. `execute_code`, uyumlu bir Code Interpreter dağıtımı ve ajan bazlı Gelişmiş ayarını gerektirir. Bu yetenek oldukça deneyseldir, varsayılan olarak etkin değildir ve deneme sürecinde önemli ölçüde değişebilir; mevcut davranışını veya yapılandırmasını kararlı bir üretim sözleşmesi olarak değerlendirmeyin.
+- **stateful_code_sessions**: Seçili temsilcilerin bir Code Interpreter çalışma alanını kullanıcı, temsilci-ve-kullanıcı veya konuşma kapsamında yeniden kullanmasına olanak tanır. `execute_code`, uyumlu bir Code Interpreter dağıtımı ve temsilci bazlı Gelişmiş ayar gerektirir. Yeni Temsilciler, oturum açmış kullanıcının tercih ettiği kapsamı kullanır. Bu yetenek oldukça deneyseldir, varsayılan olarak etkin değildir ve deneme sürecinde önemli ölçüde değişebilir; mevcut davranışını veya yapılandırmasını kararlı bir üretim sözleşmesi olarak değerlendirmeyin.
 - **file_search**: Ajanın dosyaları aramasını ve dosyalarla etkileşime girmesini sağlar. Etkinleştirildiğinde, alıntı davranışı `maxCitations`, `maxCitationsPerFile` ve `minRelevanceScore` ayarlarıyla kontrol edilir.
 - **web_search**: Temsilciler için web arama işlevini etkinleştirir, internetten bilgi aramalarına ve almalarına olanak tanır.
 - **artifacts**: Ajanın etkileşimli artifact'ler (React bileşenleri, HTML, Mermaid diyagramları) oluşturmasını sağlar.
@@ -567,7 +736,7 @@ Alaka düzeyine bakılmaksızın tüm kaynaklar dahil olmak üzere, kapsamlı ar
 - **tools**: Ajanın çeşitli araçlara erişimini sağlar.
 - **chain**: Ajan zincirleme (Mixture-of-Agents (MoA) iş akışları olarak da bilinir) için Beta özelliğini etkinleştirir.
 - **ocr**: Sohbet içinde "Metin Olarak Yükle" özelliğini ve aracılar için "Dosya Bağlamı"nı isteğe bağlı olarak geliştirir; dosyaların yüklenmesine ve OCR ile işlenmesine olanak tanır. **Bir OCR hizmetinin yapılandırılmasını gerektirir.**
-- **run_in_background**: Code Interpreter yürütme ve shell araçlarını varsayılan olarak arka planda çalışmaya uygun hale getirir ve MCP araçları için araç bazında arka plan katılımını etkinleştirir. Bir ajan, Code Interpreter'ı açıkça devre dışı bırakabilir. Bu ayar arka planda yürütmeye izin verir; model, her çağrıda bunu kullanıp kullanmayacağına karar verir. `execute_code` ve kod için yapılandırılmış bir Code Interpreter dağıtımı gerektirir. Bu yetenek varsayılan olarak etkin değildir.
+- **run_in_background**: Code Interpreter yürütmesini ve kabuk araçlarını varsayılan olarak arka planda çalışmaya uygun hale getirir ve uygun MCP, Plugin ve Action araçları için araç bazında arka plan katılımını etkinleştirir. Action düzeyindeki bir anahtar, uygun olan her işlemi dahil eder; OAuth Action'ları ve halihazırda bir `run_in_background` parametresi tanımlayan işlemler hariç tutulur. Bir ajan, Code Interpreter'ı açıkça devre dışı bırakabilir. Bu ayar arka planda yürütmeye izin verir; model, her çağrıda bunu kullanıp kullanmayacağına karar verir. `execute_code` ve kod için yapılandırılmış bir Code Interpreter dağıtımı gerektirir. Bu özellik varsayılan olarak etkin değildir.
 - **tool_intents**: Uygun araç çağrılarına canlı model yazımı niyet etiketleri ekler. Kod Yorumlayıcı araçları dahil olmak üzere yerel araçlar otomatik olarak dahil olur; MCP araçları, Agent Builder içinde tek tek veya toplu olarak etkinleştirilebilir. Model specs, `describeIntent` kullanır. Bu özellik varsayılan olarak etkin değildir.
 
 Yetenekleri belirterek, kullanıcıların temsilcilerle etkileşim kurarken erişebilecekleri özellikleri kontrol edebilirsiniz.
@@ -589,7 +758,7 @@ endpoints:
       # Optional: enables Programmatic Tool Calling for MCP tools marked Programmatic in the Agent Builder.
       # - 'programmatic_tools'
       - 'execute_code'
-      # Optional: makes Code Interpreter background-eligible and enables selected MCP tools.
+      # Optional: makes Code Interpreter background-eligible and enables selected MCP, Plugin, and Action tools.
       # - 'run_in_background'
       # Optional: enables live intent labels for native and selected MCP tools.
       # - 'tool_intents'
@@ -610,7 +779,7 @@ Bu örnekte:
 - Yalnızca %60 ve üzeri uygunluğa sahip kaynaklar dahil edilir
 - LibreChat Ajanları; kod yürütme, dosya arama (alıntılarla birlikte), Yetenekler (Skills), Alt ajanlar (Subagents), eylemler (actions), yapıtlar (artifacts), dosya bağlamı, yapılandırılmışsa OCR hizmetleri ve web arama yeteneklerine erişebilir.
 - `execute_code` ile birlikte `programmatic_tools` yeteneğini eklemediğiniz sürece Programmatic Tool Calling devre dışı kalmaya devam eder.
-- Arka plan araç çağrıları, `run_in_background` eklemediğiniz sürece devre dışı kalmaya devam eder; Code Interpreter araçları varsayılan olarak uygun hale gelirken, MCP araçları hala araç bazında seçim gerektirir.
+- Arka plan araç çağrıları, `run_in_background` eklemediğiniz sürece devre dışı kalmaya devam eder; Code Interpreter araçları varsayılan olarak uygun hale gelirken, uygun MCP, Plugin ve Action araçları hala seçim gerektirir.
 - `tool_intents` eklemediğiniz sürece araç amacı etiketleri devre dışı kalır; yerel araçlar otomatik olarak dahil olurken, MCP araçları hala araç bazında seçim gerektirir.
 
 ## remoteApi
@@ -748,6 +917,12 @@ endpoints:
       'Bu aracın oluşturabileceği belirli aracılar. Varsayılan değeri 10 olan `maxSubagents` ile sınırlandırılmıştır.',
       'agent_ids: ["agent_researcher"]',
     ],
+    [
+      'graphs',
+      'Array of Objects',
+      'Tek bir izole alt grafik olarak çalışabilen kayıtlı Agent ekipleri. Liste `maxSubagents` (varsayılan: 10) ile sınırlandırılmıştır; her ekip 32 üyeye kadar içerebilir.',
+      '',
+    ],
   ]}
 />
 
@@ -759,6 +934,8 @@ subagents:
     - 'agent_researcher'
     - 'agent_reviewer'
 ```
+
+Her bir `graphs` girdisi benzersiz bir `type`, `name`, `description`, `agent_ids`, doğrudan `edges`, `entry_agent_id` ve `result_agent_id` gerektirir. Ekip tanımları bağlantılı bir yönlü döngüsüz çizge (DAG) oluşturmalı, her üye kullanıcı tarafından görülebilir olmalı ve toplam yapılandırma 50 benzersiz Agent hedefi ve 100 genişletilmiş çalışma yapılandırması ile sınırlandırılmıştır. [saved-team örneğine ve çalışma zamanı davranışına](/docs/features/subagents#configure-an-agent) göz atın.
 
 Kullanıcıya yönelik davranışlar ve sınırlar için [Subagents](/docs/features/subagents) bölümüne bakın.
 

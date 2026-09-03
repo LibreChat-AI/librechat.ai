@@ -89,6 +89,27 @@ req.socket.remoteAddress 是第一跳，其余地址从右到左在 X-Forwarded-
   options={[['TRUST_PROXY', 'number', '指定跳数。', 'TRUST_PROXY=1']]}
 />
 
+### 受信任的租户标头 (Trusted Tenant Header) [#trusted-tenant-header]
+
+`TRUST_TENANT_HEADER` 控制 LibreChat 是否在 `/oauth`、`/api/auth` 和 `/api/share` 路由树上接受身份验证前的 `X-Tenant-Id`。默认情况下该选项处于禁用状态；在禁用时，这些路由将忽略该标头。
+
+<OptionTable
+  options={[
+    [
+      'TRUST_TENANT_HEADER',
+      'boolean',
+      '在预认证路由上信任 X-Tenant-Id。仅在替换了客户端提供值的受信任代理后启用。',
+      'TRUST_TENANT_HEADER=false',
+    ],
+  ]}
+/>
+
+<Callout type="warning" title="不要信任客户端提供的租户标头">
+  仅当受信任的反向代理剥离了所有传入的 `X-Tenant-Id` 值并自行设置权威的租户 ID 时，才启用此设置。否则，不受信任的客户端可能会在身份验证之前选择所使用的租户上下文。当启用此设置时，LibreChat 会记录一条安全警告。
+</Callout>
+
+当启用 `TENANT_ISOLATION_STRICT` 但禁用 `TRUST_TENANT_HEADER` 时，LibreChat 会在启动时发出警告，提示预认证租户标头将被忽略。
+
 ### 凭据配置 [#credentials-configuration]
 
 LibreChat 使用 `CREDS_KEY` 和 `CREDS_IV` 来加密存储在数据库中的受支持凭据。请为生产环境配置固定且唯一的值，并在每个副本中共享相同的值。
@@ -118,11 +139,21 @@ LibreChat 使用 `CREDS_KEY` 和 `CREDS_IV` 来加密存储在数据库中的受
 
 当 `CREDS_KEY`、`CREDS_IV`、`JWT_SECRET` 或 `JWT_REFRESH_SECRET` 中的任何一个为空时，LibreChat 会首先从临时凭据文件中复用有效值。如果不存在，它将生成一个加密随机值，并以仅限所有者拥有的权限写入该文件。显式的环境变量值始终具有最高优先级。LibreChat 拒绝使用 `.env` 或 `.env.example` 作为生成的文件路径，以防止意外替换任一配置文件。
 
+当 `JWT_SECRET` 或 `JWT_REFRESH_SECRET` 仍在使用已弃用的公开默认值时，LibreChat 也会拒绝启动，无论该值是来自环境变量还是临时凭据文件。请生成唯一的替代值，而不是将旧的示例密钥带入部署中。
+
 捆绑的 Docker Compose 文件将 `/app/data/.env.temp` 持久化在 `librechat-data` 卷中，因此单个 Compose 部署可以在不更改这些生成值的情况下重启。如果该文件无法持久化，这些值将仅存在于进程本地，重启后会话或加密记录可能会变得无法访问。
 
 <Callout type="warning" title="为生产环境设置永久值">
   临时生成是一种引导便利措施，而非凭据轮换系统。在生产环境使用前，请使用 [Credentials Generator](/toolkit/creds_generator) 生成永久值，将其存储在您的密钥管理器中，并为每个副本提供相同的值。更改已建立的密钥不会重新加密现有记录。LibreChat 会在数据库中记录凭据指纹，并在活动值发生偏移时发出警告；请勿通过覆盖该标记来代替受控迁移。
 </Callout>
+
+### 安全标头与内容安全策略 (Content Security Policy) [#security-headers-and-content-security-policy]
+
+LibreChat 默认会发送基准的 HSTS、framing、content-type、opener、resource 和 referrer 标头。`SECURITY_HEADERS=false` 将禁用所有这些标头，同时也是全局 CSP 的关闭开关。
+
+基于 Nonce 的 CSP 需要通过 `CSP_ENABLED=true` 单独启用，且默认处于仅报告模式。请先使用 `CSP_REPORT_ONLY=true`，检查违规情况，并在强制执行前仅添加您的部署所必需的源。当 CSP 处于活动状态时，SPA shell 始终会随 `Cache-Control: no-store` 一起发送，因此其每个响应的 nonce 无法从缓存中重复使用。
+
+请参阅 [HTTP Security Headers](/docs/configuration/security_headers) 以获取所有基准和 CSP 变量、可接受的值、默认值、源列表覆盖以及部署指南。
 
 ### 静态文件处理 [#static-file-handling]
 
@@ -368,6 +399,12 @@ LibreChat 具有内置的中央日志记录功能，更多信息请参阅 [Loggi
       'DEBUG_CONSOLE=false',
     ],
     [
+      'CONSOLE_LOG_LEVEL',
+      'string',
+      '将控制台详细程度设置为 error、warn、info、http、verbose、debug、activity、silly 或 silent。默认为 info，当 DEBUG_CONSOLE=true 时默认为 debug；显式设置的值具有最高优先级。',
+      '# CONSOLE_LOG_LEVEL=info',
+    ],
+    [
       'LOG_TO_FILE',
       'boolean',
       '设置为 false 可禁用基于文件的 Winston 传输，同时保留控制台日志记录功能。',
@@ -410,6 +447,7 @@ LibreChat 具有内置的中央日志记录功能，更多信息请参阅 [Loggi
 
 - `DEBUG_LOGGING` 可以与 `DEBUG_CONSOLE` 或 `CONSOLE_JSON` 中的任意一个配合使用，但不能同时使用两者。
 - `DEBUG_CONSOLE` 和 `CONSOLE_JSON` 是互斥的。
+- `CONSOLE_LOG_LEVEL=silent` 会禁用控制台输出，但不会禁用文件日志记录。无效的值将回退到正常的默认值并发出警告。
 - `CONSOLE_JSON`：在云部署（如 GCP 或 AWS）中处理控制台日志时，启用此项将以 JSON 格式输出带有 UTC 时间戳的日志。
   - 请参阅：[feat: Add CONSOLE_JSON](https://github.com/danny-avila/LibreChat/pull/2146)
 
@@ -469,6 +507,8 @@ LibreChat 具有内置的中央日志记录功能，更多信息请参阅 [Loggi
 />
 
 在没有完整 `LANGFUSE_PUBLIC_KEY` 和 `LANGFUSE_SECRET_KEY` 环境变量凭据的单租户部署中，授权管理员可以在 **Settings → Langfuse** 下配置一个加密连接。完整的环境变量凭据具有优先权，并会隐藏该设置。当启用扇出（fanout）和租户导出功能时，扇出部署将使用相同的设置进行租户连接。
+
+`LANGFUSE_BASE_URL` 是规范名称。`LANGFUSE_HOST` 和 `LANGFUSE_BASEURL` 仍作为兼容性别名保留，仅在缺少规范设置时按此顺序进行查询。
 
 ### OpenTelemetry Tracing [#opentelemetry-tracing]
 
@@ -834,6 +874,24 @@ LibreChat 可以在启动时从直接子目录中加载实验性的 Agent Plugin
       '# TAVILY_EXTRACT_URL=',
     ],
     [
+      'KEENABLE_API_KEY',
+      'string',
+      '用于搜索和页面抓取的可选 Keenable API 密钥。公共端点无需密钥即可工作；使用密钥可提高其速率限制。',
+      '# KEENABLE_API_KEY=',
+    ],
+    [
+      'KEENABLE_API_URL',
+      'string',
+      '可选的自定义 Keenable 搜索 API URL。',
+      '# KEENABLE_API_URL=',
+    ],
+    [
+      'KEENABLE_FETCH_URL',
+      'string',
+      '当 scraperProvider 为 keenable 时，可选的自定义 Keenable 页面抓取 API URL。',
+      '# KEENABLE_FETCH_URL=',
+    ],
+    [
       'FIRECRAWL_API_KEY',
       'string',
       'Firecrawl 爬虫服务的 API key。请从 https://docs.firecrawl.dev/introduction#api-key 获取您的 key。',
@@ -867,7 +925,7 @@ LibreChat 可以在启动时从直接子目录中加载实验性的 Agent Plugin
   ]}
 />
 
-**注意**：这些变量名称可以在您的 `librechat.yaml` 配置文件中进行自定义。例如，您可以通过在网页搜索设置中进行配置，使用 `CUSTOM_SERPER_KEY` 来代替 `SERPER_API_KEY`。有关自定义变量名称的详细信息，请参阅 [Web Search Configuration](/docs/configuration/librechat_yaml/object_structure/web_search) 文档。
+**注意**：大多数变量名称可以在您的 `librechat.yaml` 配置文件中进行自定义。例如，您可以通过在网页搜索设置中进行配置，使用 `CUSTOM_SERPER_KEY` 代替 `SERPER_API_KEY`。`KEENABLE_FETCH_URL` 仅限环境变量。详情请参阅 [Web Search Configuration](/docs/configuration/librechat_yaml/object_structure/web_search) 文档。
 
 ### Anthropic [#anthropic]
 
@@ -891,7 +949,7 @@ LibreChat 可以在启动时从直接子目录中加载实验性的 Agent Plugin
       'ANTHROPIC_MODELS',
       'string',
       '要使用的 Anthropic 模型列表，以逗号分隔。',
-      '# ANTHROPIC_MODELS=claude-fable-5,claude-opus-5,claude-opus-4-8,claude-opus-4-7,claude-sonnet-5,claude-sonnet-4-6,claude-opus-4-6,claude-opus-4-20250514,claude-3-7-sonnet-20250219,claude-3-5-sonnet-20241022,claude-3-5-haiku-20241022',
+      '# ANTHROPIC_MODELS=claude-fable-5-1,claude-fable-5,claude-opus-5,claude-opus-4-8,claude-opus-4-7,claude-sonnet-5,claude-sonnet-4-6,claude-opus-4-6,claude-opus-4-20250514,claude-3-7-sonnet-20250219,claude-3-5-sonnet-20241022,claude-3-5-haiku-20241022',
     ],
     [
       'ANTHROPIC_REVERSE_PROXY',
@@ -912,7 +970,7 @@ LibreChat 可以在启动时从直接子目录中加载实验性的 Agent Plugin
 
 > **注意：** 必须与 Anthropic endpoint 兼容。此外，Claude 2 和 Claude 3 模型在此任务中表现最佳，其中 `claude-3-haiku` 模型最为经济实惠。
 
-Claude Fable 5 已包含在默认的 Anthropic 模型列表中。Fable/Mythos 类模型在 LibreChat 中使用现代 Anthropic 行为：支持 1M 上下文、自适应思维（adaptive thinking）支持、提示词缓存（prompt caching）支持，以及针对摘要或省略推理输出的 `thinkingDisplay` 处理。
+Claude Fable 5.1 和 Fable 5 已包含在默认的 Anthropic 模型列表中。Fable/Mythos 类模型在 LibreChat 中使用现代 Anthropic 行为：支持 1M 上下文、自适应思维（adaptive thinking）支持、提示词缓存（prompt caching）支持，以及用于汇总或省略推理输出的 `thinkingDisplay` 处理。
 
 #### 通过 Vertex AI 使用 Anthropic [#anthropic-via-vertex-ai]
 
@@ -983,14 +1041,14 @@ Claude Fable 5 已包含在默认的 Anthropic 模型列表中。Fable/Mythos �
       'BEDROCK_AWS_MODELS',
       'string',
       '以逗号分隔的 Bedrock 模型 ID 列表。如果省略，则包含所有已知的受支持模型。',
-      '# BEDROCK_AWS_MODELS=global.anthropic.claude-fable-5,global.anthropic.claude-opus-5,global.anthropic.claude-opus-4-8,global.anthropic.claude-opus-4-7,global.anthropic.claude-sonnet-5,global.anthropic.claude-sonnet-4-6,meta.llama3-1-8b-instruct-v1:0',
+      '# BEDROCK_AWS_MODELS=global.anthropic.claude-fable-5-1,global.anthropic.claude-fable-5,global.anthropic.claude-opus-5,global.anthropic.claude-opus-4-8,global.anthropic.claude-opus-4-7,global.anthropic.claude-sonnet-5,global.anthropic.claude-sonnet-4-6,meta.llama3-1-8b-instruct-v1:0',
     ],
   ]}
 />
 
 > **注意：** 您可以省略访问密钥以使用默认的 AWS 凭证链（环境变量、SSO 凭证、共享凭证文件或 EC2/ECS 实例元数据服务）。有关更多详细信息，请参阅 [AWS Bedrock Setup](/docs/configuration/pre_configured_ai/bedrock)。
 
-Bedrock 上的 Claude Fable/Mythos 类模型仅支持推理配置文件（inference-profile）。请使用诸如 `us.anthropic.claude-fable-5` 的配置文件 ID，并在调用它们之前在 Bedrock 控制台或数据保留 API（Data Retention API）中启用所需的 Anthropic 数据共享设置。
+Bedrock 上的 Claude Fable/Mythos 类模型仅支持推理配置文件（inference-profile）。请使用类似 `global.anthropic.claude-fable-5-1` 的配置文件 ID，并在调用它们之前在 Bedrock 控制台或数据保留 API（Data Retention API）中启用所需的 Anthropic 数据共享设置。
 
 ### BingAI [#bingai]
 
@@ -1044,13 +1102,13 @@ Bing，也用于 Sydney、越狱以及 Bing Image Creator
       'GOOGLE_MODELS',
       'string',
       '可用的 Gemini API Google 模型，以逗号分隔。',
-      'GOOGLE_MODELS=gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.1-pro-preview,gemini-3.1-pro-preview-customtools,gemini-3.1-flash-lite-preview,gemini-2.5-pro,gemini-2.5-flash,gemini-2.5-flash-lite,gemini-2.0-flash,gemini-2.0-flash-lite',
+      'GOOGLE_MODELS=gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.1-pro-preview,gemini-3.1-pro-preview-customtools,gemini-3.1-flash-lite-preview,gemini-2.5-pro,gemini-2.5-flash,gemini-2.5-flash-lite,gemini-2.0-flash,gemini-2.0-flash-lite',
     ],
     [
       'GOOGLE_MODELS',
       'string',
       '可用的 Vertex AI Google 模型，以逗号分隔。',
-      'GOOGLE_MODELS=gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.1-pro-preview,gemini-3.1-pro-preview-customtools,gemini-3.1-flash-lite-preview,gemini-2.5-pro,gemini-2.5-flash,gemini-2.5-flash-lite,gemini-2.0-flash-001,gemini-2.0-flash-lite-001',
+      'GOOGLE_MODELS=gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.1-pro-preview,gemini-3.1-pro-preview-customtools,gemini-3.1-flash-lite-preview,gemini-2.5-pro,gemini-2.5-flash,gemini-2.5-flash-lite,gemini-2.0-flash-001,gemini-2.0-flash-lite-001',
     ],
     [
       'GOOGLE_TITLE_MODEL',
@@ -1333,13 +1391,19 @@ Code Interpreter API 提供了一个用于执行代码和管理文件的安全�
     [
       'LIBRECHAT_CODE_BASEURL',
       'string',
-      'Code Interpreter 服务的 Base URL。',
+      '用于常规无状态 Code Interpreter 服务的 Base URL。',
       '# LIBRECHAT_CODE_BASEURL=https://your-custom-domain.com',
+    ],
+    [
+      'LIBRECHAT_CODE_BASEURL_STATEFUL',
+      'string',
+      '当未选择指定的 statefulCodeSessions 环境时，用于高度实验性有状态 Agent 会话的默认 Code Interpreter 基础 URL。该服务必须声明 stateful 配置。',
+      '# LIBRECHAT_CODE_BASEURL_STATEFUL=https://your-stateful-code-domain.com',
     ],
     [
       'CODE_SANDBOX_PREWARM',
       'boolean',
-      '在模型生成的同时并行预热有状态的会话沙盒。设置为 false 以禁用。默认值：true。',
+      '在模型生成的同时并行预热选定的有状态沙盒。设置为 false 以禁用。默认值：true。',
       '# CODE_SANDBOX_PREWARM=true',
     ],
     [
@@ -1349,13 +1413,128 @@ Code Interpreter API 提供了一个用于执行代码和管理文件的安全�
       '# CODE_SANDBOX_COLD_AFTER_MS=2100000',
     ],
     [
+      'LIBRECHAT_CODE_SANDBOX_OUTPUT_MAX_SIZE',
+      'number',
+      "用于推导图像读取窗口大小的沙盒 stdout 预算（以字节为单位）。请匹配运行器的 SANDBOX_OUTPUT_MAX_SIZE 以最小化执行往返次数。默认值：65536。",
+      '# LIBRECHAT_CODE_SANDBOX_OUTPUT_MAX_SIZE=65536',
+    ],
+    [
       'LIBRECHAT_CODE_IMAGE_CHUNK_BYTES',
       'number',
-      '每个沙盒镜像块读取的字节数。当运行器的 stdout 限制较小时，请调低此值。默认值：32768。',
-      '# LIBRECHAT_CODE_IMAGE_CHUNK_BYTES=32768',
+      '每个沙盒镜像窗口读取的精确字节数。覆盖从 LIBRECHAT_CODE_SANDBOX_OUTPUT_MAX_SIZE 派生的大小；除非需要精确覆盖，否则请保持未设置状态。',
+      '# LIBRECHAT_CODE_IMAGE_CHUNK_BYTES=',
+    ],
+    [
+      'CODE_ENVIRONMENT_PAIRING_USER_MAX',
+      'number',
+      '每个用户在单个速率限制窗口内允许的最大自助式 code-worker 配对请求数。默认值：5。',
+      '# CODE_ENVIRONMENT_PAIRING_USER_MAX=5',
+    ],
+    [
+      'CODE_ENVIRONMENT_PAIRING_USER_WINDOW',
+      'number',
+      '自助式 code-worker 配对速率限制窗口（以分钟为单位）。默认值：60。',
+      '# CODE_ENVIRONMENT_PAIRING_USER_WINDOW=60',
     ],
   ]}
 />
+
+如果 worker 的 stdout 上限小于配置值，LibreChat 会在读取失败后缩小并记住该 Code Interpreter 基础 URL 的图像窗口。匹配这两个预算可以避免丢弃发现请求，并减轻 Code Interpreter 执行速率限制的压力。
+
+### Code Interpreter JWT 身份验证 [#code-interpreter-jwt-authentication]
+
+当前自托管的 [ClickHouse/code-interpreter](https://github.com/ClickHouse/code-interpreter) 服务会在本地模式之外验证短期的 LibreChat 持有者令牌 (bearer tokens)。设置 `CODEAPI_AUTH_PROVIDER=librechat-jwt` 以启用令牌生成，然后为 Code Interpreter 提供与 LibreChat 私钥签名者匹配的公钥。请参阅 [自托管 JWT 身份验证](/docs/features/code_interpreter#self-hosted-jwt-authentication) 以获取配对服务配置和密钥生成助手。
+
+<OptionTable
+  options={[
+    [
+      'CODEAPI_AUTH_PROVIDER',
+      'string',
+      '设置为 librechat-jwt 以生成每个用户的 Code Interpreter 持有者令牌。兼容性值两者也都启用生成功能，但 ClickHouse/code-interpreter 期望使用 librechat-jwt。',
+      '# CODEAPI_AUTH_PROVIDER=librechat-jwt',
+    ],
+    [
+      'CODEAPI_JWT_ENABLED',
+      'boolean',
+      '当 CODEAPI_AUTH_PROVIDER 不为 librechat-jwt 或两者皆非时，显式启用 Code Interpreter JWT 颁发。默认值：false。',
+      '# CODEAPI_JWT_ENABLED=true',
+    ],
+    [
+      'CODEAPI_JWT_PRIVATE_KEY',
+      'string',
+      'PEM 格式的 Ed25519 或 RSA 私钥签名密钥。转义的 \\n 序列会被转换为换行符。',
+      '# CODEAPI_JWT_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\\n..."',
+    ],
+    [
+      'CODEAPI_JWT_PRIVATE_KEY_BASE64',
+      'string',
+      'Base64 编码的 PEM 私钥。在未设置 CODEAPI_JWT_PRIVATE_KEY 时使用。',
+      '# CODEAPI_JWT_PRIVATE_KEY_BASE64=',
+    ],
+    [
+      'CODEAPI_JWT_PRIVATE_JWK_JSON',
+      'string',
+      '以 JWK JSON 格式提供的私钥签名。当两个 PEM 设置均未设置时使用。',
+      '# CODEAPI_JWT_PRIVATE_JWK_JSON={"kty":"OKP",...}',
+    ],
+    [
+      'CODEAPI_JWT_ALGORITHM',
+      'string',
+      '签名算法：EdDSA 或 RS256。默认值：EdDSA。',
+      '# CODEAPI_JWT_ALGORITHM=EdDSA',
+    ],
+    [
+      'CODEAPI_JWT_KID',
+      'string',
+      '包含在令牌标头中的签名密钥 ID。必须标识匹配的 Code Interpreter 验证器密钥。默认值：lc-codeapi-2026-05。',
+      '# CODEAPI_JWT_KID=lc-codeapi-2026-05',
+    ],
+    [
+      'CODEAPI_JWT_ISSUER',
+      'string',
+      '令牌颁发者；必须与 Code Interpreter 匹配。默认值：librechat。',
+      '# CODEAPI_JWT_ISSUER=librechat',
+    ],
+    [
+      'CODEAPI_JWT_AUDIENCE',
+      'string',
+      '令牌受众；必须与 Code Interpreter 匹配。默认值：codeapi。',
+      '# CODEAPI_JWT_AUDIENCE=codeapi',
+    ],
+    [
+      'CODEAPI_JWT_TTL_SECONDS',
+      'number',
+      'Bearer-token 的生命周期（以秒为单位）。无效或更大的值将解析为 300 秒的默认值和最大值。',
+      '# CODEAPI_JWT_TTL_SECONDS=300',
+    ],
+    [
+      'CODEAPI_JWT_MINT_CACHE_SECONDS',
+      'number',
+      'LibreChat 可为同一已认证上下文重用令牌的时长。默认值及最大值：30 秒。',
+      '# CODEAPI_JWT_MINT_CACHE_SECONDS=30',
+    ],
+    [
+      'CODEAPI_JWT_SINGLE_TENANT_ID',
+      'string',
+      '当禁用严格租户隔离且没有租户上下文可用时的回退租户 ID。必须与 Code Interpreter 匹配。默认值：legacy。',
+      '# CODEAPI_JWT_SINGLE_TENANT_ID=legacy',
+    ],
+  ]}
+/>
+
+当启用 JWT 铸造时，至少需要一个私钥源。如果设置了多个，LibreChat 会依次检查 `CODEAPI_JWT_PRIVATE_KEY`、`CODEAPI_JWT_PRIVATE_KEY_BASE64`，然后是 `CODEAPI_JWT_PRIVATE_JWK_JSON`。`CODEAPI_JWT_KEY_ID` 仍然作为 `CODEAPI_JWT_KID` 的兼容性别名存在。
+
+对于多租户部署，请在 LibreChat 中启用 `TENANT_ISOLATION_STRICT=true`，并在 Code Interpreter 中启用 `CODEAPI_TENANT_ISOLATION_STRICT=true`。这样，没有经过身份验证的租户上下文的请求将会失败，而不会使用 `CODEAPI_JWT_SINGLE_TENANT_ID`。
+
+### 有状态代码解释器 endpoint [#stateful-code-interpreter-endpoint]
+
+[`stateful_code_sessions`](/docs/configuration/librechat_yaml/object_structure/agents#capabilities) 处于高度实验性阶段，需要单独的 Code Interpreter 路由。请使用 `LIBRECHAT_CODE_BASEURL_STATEFUL` 配置默认路由，或在 [`endpoints.agents.statefulCodeSessions.environments`](/docs/configuration/librechat_yaml/object_structure/agents#statefulcodesessions) 下定义已命名的托管或附加后端。所选服务必须运行 `stateful` 配置文件；LibreChat 在发送有状态请求时会携带 `X-CodeAPI-Expected-Profile: stateful` 头部。
+
+有状态请求永远不会回退到 `LIBRECHAT_CODE_BASEURL`。如果所选的命名环境不可用，或者既未配置命名默认值也未配置 `LIBRECHAT_CODE_BASEURL_STATEFUL`，LibreChat 将会停止 Agent 运行并抛出配置错误。无状态 Agent 将继续使用 `LIBRECHAT_CODE_BASEURL`，且这两种执行配置文件不会共享同一个实时工作区。
+
+每个 Agent 都可以将其有状态工作区的作用域限定为已登录用户、用户与 Agent 共同作用域，或用户与对话共同作用域。有关设置和持久化限制，请参阅 [Stateful Code Sessions](/docs/features/code_interpreter#stateful-code-sessions)。
+
+命名附加环境也可以通过 `pairing.allowPrincipalWorkers: true` 公开自助配对控制平面。授权用户可以在 **Settings > Code environments** 下管理这些绑定到所有者的 worker；仅配对条目不会取代 `LIBRECHAT_CODE_BASEURL_STATEFUL`，也不能作为部署默认值。
 
 ## Artifacts [#artifacts]
 
@@ -1537,6 +1716,62 @@ Artifacts 利用 CodeSandbox 库来安全地渲染 HTML/JS 代码。默认情况
 
 `ALLOW_SHARED_LINKS` 是功能范围内的总开关。角色权限现在可以控制谁能够创建共享链接、与已认证用户共享链接，或将其设置为对所有人可见；请参阅 [`interface.sharedLinks`](/docs/configuration/librechat_yaml/object_structure/interface#sharedlinks)。`ALLOW_SHARED_LINKS_PUBLIC` 仅控制公开共享链接是否可以在无需认证的情况下被查看。`SHARED_LINKS_SNAPSHOT_FILES` 是共享链接文件快照的全局覆盖设置，当设置为 `false` 时，可以禁用所有链接的快照服务。
 
+## 定时聊天 [#scheduled-chats]
+
+<OptionTable
+  options={[
+    [
+      'SCHEDULES_SINGLE_PROCESS',
+      'boolean',
+      '仅在运行单个 LibreChat 进程时，允许在没有 Redis 的情况下使用定时聊天功能。切勿在多个进程或副本中启用此功能。',
+      'SCHEDULES_SINGLE_PROCESS=true',
+    ],
+    [
+      'SCHEDULES_DISABLED',
+      'boolean',
+      '针对自动 Scheduled Chat 任务和“立即运行”的紧急全局停止。定义将保持存储。默认值：false。',
+      'SCHEDULES_DISABLED=true',
+    ],
+  ]}
+/>
+
+Scheduled Chats（定时对话）属于实验性功能，在配置 [`interface.schedules`](/docs/configuration/librechat_yaml/object_structure/interface#schedules) 之前处于禁用状态。多副本部署需要设置 `USE_REDIS_STREAMS=true`；若部署环境没有共享的 Redis streams，则除非明确声明为真正的单进程拓扑（即设置 `SCHEDULES_SINGLE_PROCESS=true`），否则无法写入定时任务。如果定时 Agent 需要暂停以等待“询问用户”（Ask User）或工具审批，则始终需要 `USE_REDIS_STREAMS=true` 以及一个持久化的共享检查点（checkpointer）；内置默认使用 MongoDB。有关设置和运行时行为，请参阅 [Scheduled Chats](/docs/features/scheduled_chats)。
+
+## Agent Event Runtime [#agent-event-runtime]
+
+<OptionTable
+  options={[
+    [
+      'AGENT_TRIGGERS_SELF_URL',
+      'string',
+      'endpoints.agents.eventDriven.selfUrl 的兼容性回退。代理事件主机用于重新进入触发、继续和引导准入的基准 URL。',
+      '# AGENT_TRIGGERS_SELF_URL=http://127.0.0.1:3080',
+    ],
+    [
+      'AGENT_EVENT_USER_MAX',
+      'number',
+      'rateLimits.agentEvents.userMax 的兼容性回退。在配置的时间窗口内，每个 API 密钥主体的最大 Agent Event 请求数。默认值：40。',
+      'AGENT_EVENT_USER_MAX=40',
+    ],
+    [
+      'AGENT_EVENT_USER_WINDOW',
+      'number',
+      'rateLimits.agentEvents.userWindowInMinutes 的兼容性回退。Agent Event 速率限制窗口（以分钟为单位）。默认值：1。',
+      'AGENT_EVENT_USER_WINDOW=1',
+    ],
+  ]}
+/>
+
+优先使用 `librechat.yaml` 中的 [`endpoints.agents.eventDriven.selfUrl`](/docs/configuration/librechat_yaml/object_structure/agents#eventdriven) 和 [`rateLimits.agentEvents`](/docs/configuration/librechat_yaml/object_structure/config#ratelimits)。`AGENT_TRIGGERS_SELF_URL` 和速率限制变量仅作为兼容性回退方案；显式配置的 YAML 值具有优先权。
+
+绑定的子级延续（child continuations）、分离的 Subagent 父级延续以及事件参与者（Event Actor）分离的动作完成（Action completion）现在均为自动执行。已弃用的 `ENABLE_AGENT_EVENT_CHILD_TURNS`、`ENABLE_SUBAGENT_COMPLETION_WAKEUPS` 和 `AGENT_TRIGGERS_DETACHED_ACTIONS_PRODUCER_ENABLED` 变量将不再被读取。
+
+内存中生成存储支持在进程存活期间进行进程本地的 Event Actor 分离式完成。Redis 生成流增加了持久化重启恢复和副本切换功能。在进行混合版本部署之前，请参阅 [Generation Protocol Compatibility](/docs/configuration/redis#generation-protocol-compatibility)。
+
+对于正常的绑定监听器路径，请保持 `AGENT_TRIGGERS_SELF_URL` 未设置。仅当内部事件准入必须经过另一个 HTTP 源（例如 TLS 前端）时才进行设置。该值必须是不包含嵌入式凭据的 HTTP 或 HTTPS URL。
+
+LibreChat 公开了一个经过身份验证的 Agent Events API；它不会公开未经身份验证的 webhook。API-key 身份验证、Remote Agents 权限、目标访问控制、幂等性以及专用的 Agent Event 速率限制共同保护了入口安全。基于 MongoDB 的排序通道、参与者邮箱、回执、租约、重试机制和死信队列支持跨副本的 worker 运行。有关行为和示例，请参阅 [Agent Event Delivery](/docs/features/agents#agent-event-delivery) 和 [Agents API - Agent Events](/docs/features/agents_api#agent-events)。
+
 ## 用户系统 [#user-system]
 
 本节包含以下内容的配置：
@@ -1545,6 +1780,21 @@ Artifacts 利用 CodeSandbox 库来安全地渲染 HTML/JS 代码。默认情况
 - [余额/Token 使用量](#balance)
 - [注册与社交登录](#registration-and-login)
 - [电子邮件密码重置](#password-reset)
+
+### 管理员洞察 [#admin-insights]
+
+<OptionTable
+  options={[
+    [
+      'ENABLE_INSIGHTS',
+      'boolean',
+      '为具有所需权限的管理员启用基于 MongoDB 的 Insights 仪表板。默认值：false。',
+      'ENABLE_INSIGHTS=false',
+    ],
+  ]}
+/>
+
+启用后，Insights 仅限于拥有 `ADMIN` 角色以及 `access:admin` 和 `read:insights` 权限的账户使用。查询范围限定在租户内，并会公开持久化的活动指标和最近的对话元数据。有关指标定义和访问详情，请参阅 [Admin Insights](/docs/features/insights)。
 
 ### 智能体对话控制 [#agent-conversation-controls]
 
@@ -1648,6 +1898,8 @@ Artifacts 利用 CodeSandbox 库来安全地渲染 HTML/JS 代码。默认情况
     ],
   ]}
 />
+
+登录尝试次数限制由本地登录 API 和来自同一 IP 的顶级社交或联合 OAuth 导航共享。被拒绝的 API 登录将收到现有的 JSON `429` 响应。受到速率限制或被封禁的 `/oauth/*` 浏览器导航将返回至 `/login?redirect=false` 并附带本地化错误代码，而不是渲染 JSON 文档；`redirect=false` 可防止自动 OpenID 重定向立即再次触发限制器。
 
 #### 密码重置和电子邮件验证速率限制 [#password-reset-and-email-verification-rate-limiting]
 
@@ -1884,6 +2136,8 @@ LibreChat 对请求电子邮件和提交该邮件中的令牌（token）分别�
     ],
   ]}
 />
+
+已确认的幂等 Agent 生成重试会绕过常规的每用户消息准入机制，以便恢复流程可以继续进行，但当启用 `LIMIT_MESSAGE_IP` 时，它们仍会通过共享 IP 限制器。受信任的 Agent 触发交付仍然不受该面向浏览器的 IP 边界限制。
 
 ##### 排队附件 TTL 限制器： [#queued-attachment-ttl-limiter]
 
@@ -2531,7 +2785,7 @@ LibreChat 对请求电子邮件和提交该邮件中的令牌（token）分别�
     [
       'OPENID_ROLE_SYNC_FALLBACK_ROLE',
       'string',
-      '当没有匹配的优先级角色时分配的 LibreChat 角色。配置后，该回退角色具有权威性。',
+      '当没有匹配的优先级角色时分配的 LibreChat 角色。配置后，此回退角色具有权威性。远程代理 API 身份验证会将无法解析的 Entra 组溢出列表视为空，因此此回退也适用于该情况。',
       'OPENID_ROLE_SYNC_FALLBACK_ROLE=USER',
     ],
     [
@@ -2651,6 +2905,12 @@ LibreChat 支持重用由您的 OpenID Connect 提供商（如 Azure Entra ID �
       'OPENID_REUSE_MAX_SESSION_AGE_MS=900000',
     ],
     [
+      'OPENID_REFRESH_BRIDGE_GRACE_MS',
+      'number',
+      '当 LibreChat 发布已刷新的 OpenID 会话时，旋转后的刷新令牌（refresh token）的短恢复窗口。默认值：60000 毫秒 / 1 分钟。',
+      'OPENID_REFRESH_BRIDGE_GRACE_MS=60000',
+    ],
+    [
       'OPENID_JWKS_URL_CACHE_ENABLED',
       'boolean',
       '启用签名密钥验证结果的缓存。',
@@ -2689,7 +2949,7 @@ LibreChat 支持重用由您的 OpenID Connect 提供商（如 Azure Entra ID �
   ]}
 />
 
-`OPENID_REUSE_MAX_SESSION_AGE_MS` 接受类似于 `SESSION_EXPIRY` 的算术表达式。当您的提供商在刷新时撤销之前的访问令牌时，请将其增加至接近 IdP 访问令牌的生命周期，以便下游消费者（例如 MCP 服务器）能够完成对仍然有效的持有者令牌（bearer token）的使用。
+`OPENID_REUSE_MAX_SESSION_AGE_MS` 和 `OPENID_REFRESH_BRIDGE_GRACE_MS` 接受类似于 `SESSION_EXPIRY` 的算术表达式。当您的提供商在刷新时撤销之前的访问令牌时，请增加会话时长以接近 IdP 访问令牌的生命周期，以便 MCP 服务器等下游消费者能够完成对仍然有效的持有者令牌（bearer token）的使用。仅当缓慢的会话持久化或跨副本发布需要超过默认的一分钟来发布轮换后的令牌时，才增加桥接宽限期。
 
 <Callout type="note" title="注意">
   有关详细的配置步骤和先决条件，请参阅 [Re-use OpenID Tokens for Login Session](/docs/configuration/authentication/OAuth2-OIDC/token-reuse)。
@@ -2719,8 +2979,16 @@ LibreChat 支持重用由您的 OpenID Connect 提供商（如 Azure Entra ID �
       '进行人员/群组搜索所需的 Microsoft Graph API 范围。默认范围提供对用户资料和群组成员身份的访问权限。',
       'OPENID_GRAPH_SCOPES=User.Read,People.Read,GroupMember.Read.All,User.ReadBasic.All',
     ],
+    [
+      'GRAPH_API_SCOPES',
+      'string',
+      'Space-separated Microsoft Graph scopes requested by the OBO exchange for {{LIBRECHAT_GRAPH_ACCESS_TOKEN}} placeholders in YAML-defined MCP servers. Default: https://graph.microsoft.com/.default.',
+      '# GRAPH_API_SCOPES=https://graph.microsoft.com/.default',
+    ],
   ]}
 />
+
+`GRAPH_API_SCOPES` 与 `OPENID_GRAPH_SCOPES` 是分开的：前者控制解析到 MCP 配置中的 Graph 令牌，而后者控制 Entra ID 人员和组搜索。
 
 <Callout type="warning" title="重要先决条件">
   - 您必须将 Azure Entra ID 配置为您的 OpenID 提供商 - **必须启用 OpenID 令牌重用** (`OPENID_REUSE_TOKENS=true`) - 如果不启用此功能，该特性将无法工作 - 您的 Azure 应用注册必须具备相应的 Microsoft Graph API 权限 - 对于群组搜索功能，某些 Graph API 范围可能需要管理员同意
@@ -2820,6 +3088,18 @@ LibreChat 支持与 SharePoint Online 和 OneDrive for Business 的直接集成�
       'string',
       '用于 SAML 会话存储的密钥。',
       'SAML_SESSION_SECRET=',
+    ],
+    [
+      'SAML_NAME_ID_FORMAT',
+      'string',
+      '要求 IdP 提供稳定的 NameID 格式。建议使用持久化标识符；拒绝使用临时标识符。',
+      '# SAML_NAME_ID_FORMAT=urn:oasis:names:tc:SAML:2.0:nameid-format:persistent',
+    ],
+    [
+      'SAML_IDP_ISSUER',
+      'string',
+      '预期的 IdP 实体 ID。设置后，缺少或不匹配颁发者的断言将被拒绝。',
+      'SAML_IDP_ISSUER=',
     ],
     [
       'SAML_EMAIL_CLAIM',
@@ -3353,12 +3633,6 @@ Redis 为 LibreChat 提供了显著的性能提升，并实现了水平扩展能
       '# USE_REDIS_STREAMS=true',
     ],
     [
-      'GENERATION_PROTOCOL_VERSION',
-      'integer',
-      '生成流协议（1 或 2）。基于 Redis 的部署默认使用支持滚动升级的 v1，直到明确切换；内存流默认使用 v2。',
-      '# GENERATION_PROTOCOL_VERSION=2',
-    ],
-    [
       'STREAM_DELTA_COALESCE_MS',
       'integer',
       '在指定的毫秒数内批量处理 Redis 流增量发布。取消设置或设为 0 将禁用批量处理；建议设置为 25，最大值为 1000。',
@@ -3419,6 +3693,12 @@ Redis 为 LibreChat 提供了显著的性能提升，并实现了水平扩展能
       '# REDIS_MAX_LISTENERS=40',
     ],
     [
+      'REDIS_READONLY_RECOVERY_INTERVAL',
+      'number',
+      '在独立模式或 Sentinel 故障转移期间，针对 READONLY 回复进行强制 Keyv 重连尝试之间的最小毫秒数。默认值：5000。',
+      '# REDIS_READONLY_RECOVERY_INTERVAL=5000',
+    ],
+    [
       'REDIS_PING_INTERVAL',
       'number',
       '用于维持连接的 Ping 间隔（秒）。默认值：0（禁用）。仅在遇到超时问题时设置。',
@@ -3466,10 +3746,11 @@ Redis 为 LibreChat 提供了显著的性能提升，并实现了水平扩展能
 注意：
 
 - 当 `USE_REDIS=true` 时，你必须提供 `REDIS_URI`，否则应用程序将抛出错误。
-- 对于基于 Redis 的生成流，首先将支持 v2 的版本部署到每个副本，并将 `GENERATION_PROTOCOL_VERSION` 设置为未设置（或 `1`）。在旧的活跃生成任务处理完毕后，在第二次发布中将其设置为 `2`。当 v2 生成任务仍然活跃时，请勿回滚到 v2 之前的镜像。请参阅 [Generation Protocol Rollout](/docs/configuration/redis#generation-protocol-rollout)。
+- 当前的 LibreChat 客户端会自动协商生成协议 v2。已弃用的 `GENERATION_PROTOCOL_VERSION` 变量不再被读取。在混合使用不同发布版本或进行回滚之前，请参阅 [Generation Protocol Compatibility](/docs/configuration/redis#generation-protocol-compatibility)。
 - 仅在每个副本都支持批处理帧后，才启用 `STREAM_DELTA_COALESCE_MS`。旧版订阅者会丢弃合并后的帧。请参阅 [Stream Delta Coalescing](/docs/configuration/redis#stream-delta-coalescing)。
 - 对于 Redis Cluster 模式，请提供多个 URI：`redis://node1:7001,redis://node2:7002,redis://node3:7003`（集群模式会自动检测）。
 - For single-endpoint managed Redis services that shard keys internally, keep `USE_REDIS_CLUSTER=false` and set `REDIS_CLUSTER_SAFE_DELETE=true` if cache clears fail with `CROSSSLOT` errors.
+- `REDIS_READONLY_RECOVERY_INTERVAL` 会在故障转移导致打开的套接字连接到降级的只读副本后，对 Keyv 的重连尝试进行去抖动（debounce）处理。Redis Cluster 客户端则会使用其原生的拓扑处理机制。
 - 对于 TLS 连接，请使用 `rediss://` 协议；如果您的 CA 不受公共信任，请设置 `REDIS_CA`。
 - `REDIS_KEY_PREFIX_VAR` 和 `REDIS_KEY_PREFIX` 是互斥的。
 - **AWS Elasticache 与 TLS**：Elasticache 在使用 TLS 连接时可能需要使用替代的 dnsLookup。如果在使用带有 TLS 的 Elasticache，请设置 `REDIS_USE_ALTERNATIVE_DNS_LOOKUP=true`。更多详细信息，请参阅 [ioredis documentation](https://www.npmjs.com/package/ioredis)。

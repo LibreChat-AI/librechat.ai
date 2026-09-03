@@ -1,15 +1,120 @@
 ---
-title: Structuur van het Message Filter-object
+title: Structuur van het Content Filter-object
 icon: ShieldAlert
 ---
 
 ## Overzicht [#overview]
 
-Het `messageFilter` object configureert server-side berichtfilters. Het ondersteunde filtertype is `messageFilter.pii`.
+LibreChat biedt twee server-side filterconfiguraties:
 
-`messageFilter.pii` weigert ingediende berichttekst die overeenkomt met patronen van inloggegevens of door de operator gedefinieerde reguliere expressies voordat de tekst moderatie, een modelverzoek of berichtpersistentie bereikt.
+- `filters` past bronbewust beleid toe op geselecteerde velden in berichten, prompts, agents, bestanden, skills, geheugens, tools en andere herbruikbare inhoud.
+- `messageFilter` is het verouderde filter voor berichttekst. Bestaande implementaties kunnen dit blijven gebruiken terwijl ze migreren naar `filters.messages`.
 
-## Voorbeeld [#example]
+Beide zijn opt-in. Wanneer beide zijn geconfigureerd, zijn beide beleidsregels van toepassing.
+
+<Callout type="warning" title="Alleen basisconfiguratie">
+  `filters` wordt alleen geladen vanuit de basis `librechat.yaml`. Database-, rol-, groep- en gebruikers-overrides kunnen dit niet toevoegen, wijzigen of verwijderen. Bij een implementatie met meerdere replica's moet je elke replica tegelijkertijd uitrollen of herstarten en verifiëren dat elk exemplaar dezelfde basisconfiguratie heeft geladen voordat je het beleid als actief beschouwt.
+</Callout>
+
+## Bronbewuste filters [#source-aware-filters]
+
+Elke bron heeft een optioneel `pii` beleid. Laat `filters`, een bron of het bijbehorende `pii` blok weg om dat bereik uitgeschakeld te laten.
+
+```yaml filename="librechat.yaml"
+filters:
+  messages:
+    unattributedAssistantContent: model_output
+    pii:
+      action: audit
+      fields: [text, summary, attachment_reference]
+      starterPatterns: [sk_prefix, bearer_header, api_key_header]
+      customPatterns:
+        - id: organization_identifier
+          label: Organization identifier
+          regex: 'ORG-[A-Z0-9]{12}'
+  files:
+    pii:
+      fields: [name, content, extracted_text, transcript]
+      uninspectable: block
+  skills:
+    pii:
+      fields: [name, description, instructions, imported_text, file_text]
+```
+
+### Patroonconfiguratie [#pattern-configuration]
+
+Voor elke ingeschakelde bron:
+
+- Laat `action` weg of stel deze in op `block` om overeenkomsten te weigeren. Stel `action: audit` in voor een shadow rollout die bevindingen registreert zonder inhoud te weigeren, te wijzigen of te redigeren.
+- Laat `fields` weg om elk ondersteund veld voor die bron te inspecteren. Een expliciete lijst moet tussen 1 en 256 ondersteunde veldnamen bevatten.
+- Laat `starterPatterns` weg om de volledige startercatalogus in te schakelen. Stel het in op `[]` om starterpatronen uit te schakelen terwijl eventuele `customPatterns` behouden blijven.
+- Configureer `customPatterns` met een `id`, een `label` voor de gebruiker en een `regex`.
+
+Audit-modus evalueert alle geconfigureerde fragmenten en regels zodat operators bevindingen kunnen meten vóór handhaving. Elk audit-record op info-niveau identificeert de actie, detector, regel, label, bron, veld en herkomst, maar bevat nooit de overeenkomende tekst of broninhoud. Audit-modus biedt geen redactie; niet-ondersteunde actiewaarden worden geweigerd wanneer de configuratie wordt geladen.
+
+Acties worden onafhankelijk per bron geconfigureerd, dus de ene bron kan auditen terwijl de andere blokkeert. `filters.files.pii.uninspectable: block` blijft een onafhankelijke fail-closed regel voor ondoorzichtige of te grote geselecteerde bestandsinhoud, zelfs wanneer de patroonactie van die bron `audit` is.
+
+De ingebouwde starter pattern ID's zijn:
+
+- `sk_prefix`: `sk-`-stijl token-prefixen.
+- `bearer_header`: bearer tokens in tekst.
+- `api_key_header`: `api-key` header-vormige tekst.
+
+Aangepaste patronen gebruiken de begrensde, lineaire-tijd reguliere-expressie syntaxis van RE2JS. Backreferences en lookaround worden niet ondersteund, en sommige escapes verschillen van JavaScript reguliere expressies. LibreChat verwerpt ongeldige of niet-ondersteunde patronen tijdens het laden van de configuratie.
+
+### Ondersteunde bronnen en velden [#supported-sources-and-fields]
+
+| Bron | Ondersteunde velden |
+| --- | --- |
+| `messages` | `name`, `text`, `summary`, `quote`, `answer`, `decision_response`, `decision_reason`, `content_part`, `attachment_reference`, `assembled_context` |
+| `prompts` | `name`, `description`, `oneliner`, `category`, `command`, `text`, `preset_text`, `system`, `context`, `instructions`, `additional_instructions`, `greeting`, `example_input`, `example_output` |
+| `agentInstructions` | `name`, `category`, `description`, `instructions`, `additional_instructions`, `edge_description`, `edge_prompt`, `edge_prompt_key`, `artifacts`, `support_contact_name`, `support_contact_email` |
+| `conversationStarters` | `text` |
+| `conversationTitles` | `title` |
+| `feedback` | `text` |
+| `skills` | `name`, `display_title`, `description`, `category`, `frontmatter`, `instructions`, `imported_text`, `file_name`, `file_text` |
+| `memories` | `key`, `value`, `summary` |
+| `files` | `name`, `content`, `extracted_text`, `transcript`, `uri` |
+| `toolArguments` | `name`, `arguments`, `output` |
+| `modelParameters` | `stop`, `request_fields`, `response_format`, `metadata` |
+| `actionMetadata` | `raw_spec`, `domain`, `privacy_policy_url`, `authorization_type`, `custom_auth_header`, `authorization_content_type`, `authorization_url`, `client_url`, `scope`, `token_exchange_method`, `api_key`, `oauth_client_id`, `oauth_client_secret` |
+
+### Herkomst van berichten [#message-provenance]
+
+`filters.messages.unattributedAssistantContent` bepaalt hoe verouderde assistant-inhoud zonder herkomst wordt geclassificeerd:
+
+- `model_output` (standaard): behoudt het verouderde gedrag door niet-toegewezen assistent-inhoud te behandelen als modeluitvoer.
+- `inspect`: behandelt anderszins niet-toegewezen assistant-inhoud, inclusief geselecteerde bijlageprojecties, als ingediende inhoud. Assistant-inhoud die expliciet is gemarkeerd als modeluitvoer blijft vrijgesteld.
+
+Deze classificatie kan van invloed zijn op een ingeschakeld verouderd `messageFilter.pii` beleid, zelfs wanneer `filters.messages.pii` is weggelaten. Inventariseer of migreer oude records voordat u vertrouwt op retrospectieve inspectie.
+
+### Niet-inspecteerbare bestanden [#uninspectable-files]
+
+`filters.files.pii.uninspectable` beheert de inhoud van geselecteerde bestanden die LibreChat niet kan inspecteren, inclusief ondoorzichtige of te grote inhoud:
+
+- `allow` (standaard): behoudt compatibiliteit en staat de inhoud toe.
+- `block`: verwerpt het vóór bijwerkingen van de provider of opslag.
+
+Rol `block` weloverwogen uit. Het kan oudere bestanden onbeschikbaar maken voor hergebruik totdat er inspecteerbare tekst aanwezig is.
+
+### Opgeslagen en hergebruikte inhoud [#stored-and-reused-content]
+
+Het inschakelen of wijzigen van een beleid herschrijft of verwijdert geen opgeslagen records. LibreChat past het huidige beleid toe wanneer beschermde inhoud wordt ingediend, gekopieerd, gedeeld, hergebruikt of model-gebonden wordt.
+
+Veilige metadata-bewerkingen kunnen nog steeds slagen, zodat geblokkeerde records herstelbaar blijven. In beheerweergaven kunnen geblokkeerde prompt- of preset-velden leeg zijn met `contentFilterBlocked: true`; geblokkeerde promptgroepen retourneren een fout bij directe opvraging en worden weggelaten uit collectie- en hergebruikreacties. Een afgewezen achtergrondgeheugen-update kan worden overgeslagen terwijl de hoofdchatreactie doorgaat.
+
+Het blokkeren van bronbewuste tekstovereenkomsten retourneert HTTP `400` met `content_filter_block`. Afwijzingen van niet-inspecteerbare bestanden gebruiken `content_filter_uninspectable`.
+
+### Limieten [#limits]
+
+- Tot 256 velden, startpatronen of aangepaste patronen per bron.
+- Tot 256 aangepaste patronen in de volledige configuratie.
+- Patroon-ID's tot 256 tekens, labels tot 512 tekens en regexes tot 512 tekens.
+- Maximaal 8.192 regex-tekens in totaal en 8.192 gecompileerde filterinstructies.
+
+## Verouderde `messageFilter` [#legacy-messagefilter]
+
+`messageFilter.pii` weigert overeenkomende door de aanroeper verstrekte berichttekst vóór moderatie, modelverzoeken of persistentie met `message_filter_pii_block`. Het blijft uitsluitend voor blokkeren en accepteert geen `action`. Het inspecteert geen bestandsinhoud of de andere herbruikbare bronnen die onder `filters` vallen.
 
 ```yaml filename="librechat.yaml"
 messageFilter:
@@ -24,63 +129,4 @@ messageFilter:
         regex: 'sk-ant-[A-Za-z0-9_-]{20,}'
 ```
 
-## Velden [#fields]
-
-### messageFilter.pii
-
-<OptionTable
-  options={[
-    [
-      'pii.starterPatterns',
-      'Array of Strings',
-      'Optionele subset van ingebouwde starter pattern-id\'s om in te schakelen. Laat weg om alle starter patterns in te schakelen.',
-      'starterPatterns: [sk_prefix, bearer_header]',
-    ],
-    [
-      'pii.customPatterns',
-      'Array of Objects',
-      'Door de operator gedefinieerde patronen. Elk item vereist `id`, `label` en `regex`.',
-      '',
-    ],
-  ]}
-/>
-
-**Ingebouwde starter pattern-id's:**
-
-- `sk_prefix`: komt overeen met token-prefixen in `sk-` stijl.
-- `bearer_header`: komt overeen met bearer tokens in tekst.
-- `api_key_header`: komt overeen met `api-key` header-vormige tekst.
-
-### customPatterns
-
-<OptionTable
-  options={[
-    ['id', 'String', 'Stabiel patroon-id gebruikt voor logs en debugging.', 'id: anthropic_api_key'],
-    [
-      'label',
-      'String',
-      'Door mensen leesbaar label dat wordt getoond in het afwijzingsbericht.',
-      'label: Anthropic API key',
-    ],
-    [
-      'regex',
-      'String',
-      'RE2 reguliere expressie. LibreChat valideert deze bij het laden van de configuratie en past deze globaal toe.',
-      "regex: 'sk-ant-[A-Za-z0-9_-]{20,}'",
-    ],
-  ]}
-/>
-
-Aangepaste patronen gebruiken de lineaire-tijd RE2-engine. Backreferences en lookaround worden niet ondersteund en sommige escapes verschillen van JavaScript reguliere expressies. LibreChat weigert patronen die RE2 niet kan compileren bij het laden van de configuratie.
-
-## Gedrag [#behavior]
-
-Wanneer de ingediende berichttekst overeenkomt met een geconfigureerd PII-patroon, retourneert LibreChat een HTTP `400` met `message_filter_pii_block` en een bericht waarin de aanroeper wordt gevraagd het overeenkomende type inloggegevens te verwijderen.
-
-De filter controleert:
-
-- Chat-route voor gebruikerstekst ingediend via de LibreChat UI.
-- Tekstinhoud in alle door de aanroeper opgegeven berichtrollen in OpenAI-compatibele Chat Completions-verzoeken.
-- Tekstinhoud over alle door de aanroeper opgegeven berichtrollen in OpenAI-compatibele Responses-verzoeken.
-
-Het filter evalueert tekst die in de request body wordt aangeleverd. Het scant geen bestandsinhoud.
+De legacy filter controleert chat-route gebruikerstekst en door de aanroeper geleverde tekst voor alle rollen in OpenAI-compatibele Chat Completions en Responses verzoeken. Het gebruikt dezelfde ingebouwde ID's en lineaire-tijd custom-regex regels zoals hierboven beschreven.

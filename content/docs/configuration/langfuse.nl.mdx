@@ -90,6 +90,30 @@ LANGFUSE_BASE_URL=https://cloud.langfuse.com
 
 Wanneer beide omgevingssleutels aanwezig zijn, gebruikt LibreChat deze voor het centrale project en verbergt het **Settings → Langfuse**. `LANGFUSE_TRACING_ENABLED=false` of `LANGFUSE_SAMPLE_RATE=0` schakelt zowel traces als feedbackscores uit. Fractionele sampling maakt één deterministische beslissing per trace; uitgesamplede traces ontvangen later geen feedbackscores.
 
+`LANGFUSE_BASE_URL` is de canonieke basis-URL-instelling. De oudere namen `LANGFUSE_HOST` en `LANGFUSE_BASEURL` blijven bestaan als compatibiliteitsaliassen, waarbij `LANGFUSE_BASE_URL` voorrang krijgt wanneer er meer dan één is ingesteld.
+
+### Geverifieerde Proxies en Gateways [#authenticated-proxies-and-gateways]
+
+Voor een self-hosted Langfuse-instantie achter Cloudflare Access, oauth2-proxy of een andere authenticerende gateway, definieer je custom request headers op deployment-niveau in `librechat.yaml`:
+
+```yaml filename="librechat.yaml"
+langfuse:
+  headers:
+    CF-Access-Client-Id: '${CF_ACCESS_CLIENT_ID}'
+    CF-Access-Client-Secret: '${CF_ACCESS_CLIENT_SECRET}'
+```
+
+LibreChat past de opgeloste headers toe op elk direct Langfuse-oppervlak: trace- en media-export, het aanmaken en verwijderen van feedback-scores, opzoekingen van project-identiteit en verificatie van beheerdersreferenties. De eigen `Authorization`-referentie van Langfuse blijft leidend bij REST-verzoeken. Waarden ondersteunen `${ENV_VAR}`-interpolatie; niet-opgeloste variabelen, verwijzingen naar beveiligde infrastructuurgeheimen, lege waarden en ongeldige headernamen worden genegeerd met een waarschuwing. Headewaarden worden gemaskeerd in opstartlogs en bij het lezen van de beheerdersconfiguratie, maar omgevingsverwijzingen worden nog steeds aanbevolen boven letterlijke referenties.
+
+Deze headers zijn eigendom van de operator en alleen beschikbaar in YAML. Ze kunnen niet worden geschreven via het Admin Panel of de configuratie-API, worden opgeslagen in MongoDB, of worden ingevuld met `{{...}}` placeholders per gebruiker. LibreChat verstuurt ze alleen wanneer de configuratie precies één Langfuse-oorsprong (origin) bevat. Bij meerdere centrale, tenant- of collector-oorsprongen wordt er een waarschuwing gelogd en worden er geen aangepaste headers verstuurd, omdat de map niet veilig een ontvanger kan selecteren.
+
+<Callout type="warning" title="Fanout-beperking">
+  De fanout collector stuurt momenteel alleen `Authorization` door naar tenant Langfuse-bestemmingen.
+  Aangepaste `langfuse.headers` kunnen het directe verzoek van LibreChat aan een enkele collector of
+  Langfuse-oorsprong verifiëren, maar ze verifiëren niet het upstream-verzoek van de collector aan een tenant
+  bestemming achter een andere proxy.
+</Callout>
+
 ## Tenant Fanout (Optioneel) [#tenant-fanout-optional]
 
 Langfuse fanout stelt een multi-tenant LibreChat-implementatie in staat om elke in aanmerking komende trace en de bijbehorende media te exporteren naar zowel een centraal Langfuse-project als een tenant-specifiek project. De functie is opt-in en voegt een gateway plus een interne OpenTelemetry-collector toe; de normale single-project tracing zoals hierboven beschreven blijft ongewijzigd wanneer fanout niet is geïmplementeerd.
@@ -207,9 +231,23 @@ Tenant-export vindt alleen plaats wanneer fanout en de collector URL zijn ingesc
 
 Stel `LANGFUSE_FANOUT_CENTRAL_MEDIA_UPLOAD_DISABLED=true` in om te voorkomen dat de LibreChat SDK media-uploads aanmaakt voor centrale of fallback collector-traces; tenant-gerouteerde media-uploads blijven ongewijzigd. Deze schakelaar aan de app-zijde is verschillend van de `LANGFUSE_FANOUT_CENTRAL_MEDIA_EXPORT_DISABLED` aan de gateway-zijde, die het doorsturen van centrale media blokkeert nadat een upload de gateway heeft bereikt.
 
+Voor het doorsturen van media accepteert de fanout gateway alleen absolute HTTPS-uploaddoelen die worden geretourneerd door de geconfigureerde Langfuse-autoriteit en volgt deze geen redirects bij `PUT`-verzoeken voor uploads. Self-hosted objectopslag, inclusief private MinIO-hosts, blijft ondersteund wanneer de geretourneerde upload-URL HTTPS gebruikt. Gewone HTTP- of redirect-afhankelijke media-uploaddoelen worden nu geblokkeerd (fail closed), terwijl de export van traces onafhankelijk doorgaat.
+
 Trace- en mediaverkeer gaat via de fanout gateway. Feedbackscores worden rechtstreeks vanuit LibreChat verzonden: centrale scores gebruiken `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` en `LANGFUSE_BASE_URL`, terwijl tenant-scores de app-configuratie van de tenant gebruiken.
 
 Zie de [Langfuse fanout deployment reference](https://github.com/danny-avila/LibreChat/blob/dev/otel/langfuse-fanout/README.md) voor elke gateway-variabele, aangepaste bestemmingsconfiguratie, statistieken, schaling en Redis-gedrag.
+
+### Exportdiagnostiek [#export-diagnostics]
+
+Elk getraceerd verzoek registreert OpenTelemetry-attributen met een lage kardinaliteit die de beslissing voor tenant-export toelichten:
+
+- `librechat.tenant.id` identificeert de tenant-context
+- `librechat.langfuse.export_plan` is `central_only`, `tenant_fanout`, of `disabled`
+- `librechat.langfuse.export_reason` is `configured`, `collector_unconfigured`, `destination_unconfigured`, `emergency_disabled`, `fanout_disabled`, `missing_credentials`, of `tenant_disabled`
+
+De gateway stelt ook `langfuse_fanout_trace_exports_total{destination,result,tenant_id}` bloot. Een batch zonder tenant gebruikt `<unknown>`, een batch met meerdere tenants gebruikt `<multiple>`, en een ongeldige tenant-ID gebruikt `<invalid>`. De gateway behoudt maximaal 1.000 verschillende geldige tenant-labels per proces en combineert latere ID's onder `<overflow>`, wat de metriek-cardinaliteit begrenst; niet-herkende bestemmingen worden geregistreerd als `central` in plaats van een ander label aan te maken.
+
+Succesvolle in-app verbindingswijzigingen schrijven ook het gestructureerde event `librechat.langfuse.connection.changed`. Dit bevat de tenant, de geconfigureerde en ingeschakelde status, de bestemming, het verificatieresultaat, de primaire wijziging en de volledige lijst met gewijzigde velden, zonder een van de sleutels te loggen. Gebruik deze velden om een opzettelijk centraal-alleen of uitgeschakeld plan te onderscheiden van een ontbrekende configuratie van de collector, bestemming of inloggegevens.
 
 ## LibreChat herstarten [#restart-librechat]
 
@@ -224,11 +262,15 @@ docker compose up -d
 
 Zodra LibreChat opnieuw is opgestart met Langfuse geconfigureerd, zie je een nieuwe trace voor elk chatberichtantwoord in de Langfuse UI:
 
+LibreChat v0.8.8-rc2 werkt de vormgeving van Agent-traces bij om `StandardGraph`, `MultiAgentGraph` en `AgentModelCall` runtime-observatienamen te gebruiken, waarbij activiteits- en redeneringslabel-aanroepen zijn genest onder het werk dat ze beschrijven. Trace-niveau input en output worden ook weergegeven op root-observaties. Controleer opgeslagen Langfuse-filters, dashboards en evaluaties die afhankelijk zijn van de eerdere observatienamen of input/output-velden op trace-niveau.
+
 ![LibreChat voorbeeld trace](https://langfuse.com/images/cookbook/integration_librechat/librechat-example-trace.png)
 
 [Link naar trace in de Langfuse UI](https://cloud.langfuse.com/project/cloramnkj0002jz088vzn1ja4/traces/57b4aa20a258a2e9e2d1ce2e4eacb21c?observation=06f5341a68d723b1&timestamp=2026-02-04T13%3A02%3A54.248Z&traceId=57b4aa20a258a2e9e2d1ce2e4eacb21c)
 
-Beheerders met `access:admin` en `manage:configs:langfuse` kunnen ook het **Context Usage**-overzicht van het gesprek openen en **View session in Langfuse** selecteren. De link verschijnt pas nadat de generatie is voltooid en wanneer het gesprek ten minste één gesamplede trace bevat die is verzonden naar de actieve in-app Langfuse-verbinding. Deze link verwijst naar de geverifieerde bestemming en het project van die verbinding; de link wordt niet getoond voor door de omgeving beheerde inloggegevens, uitgeschakelde verbindingen, gesprekken die buiten de sampling vallen, of gebruikers zonder configuratietoegang voor Langfuse.
+Beheerders met `access:admin` en `manage:configs:langfuse` kunnen het overzicht van **Context Usage** van het gesprek openen en **View session in Langfuse** selecteren. Dezelfde actie kan verschijnen in een gedeeld gesprek voor een geauthenticeerde beheerder binnen dezelfde tenant met toegang tot de Langfuse-configuratie. Bezoekers via openbare en gewone gedeelde links zien dit nooit.
+
+De link verschijnt pas nadat de generatie is voltooid en wanneer het gesprek ten minste één gesamplede trace bevat die is verzonden naar de actieve in-app Langfuse-verbinding. Deze verwijst naar de geverifieerde bestemming en het project van die verbinding; de link wordt niet getoond voor door de omgeving beheerde inloggegevens, uitgeschakelde verbindingen, uitgesloten gesprekken (sampled-out), cross-tenant viewers, of gebruikers zonder de vereiste toegang.
 
 ## Feedbackscores voor berichten [#message-feedback-scores]
 

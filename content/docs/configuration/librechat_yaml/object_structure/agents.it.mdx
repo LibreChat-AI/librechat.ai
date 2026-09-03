@@ -12,6 +12,7 @@ endpoints:
   agents:
     recursionLimit: 50
     maxRecursionLimit: 100
+    maxSubagents: 20
     maxToolCallArgBytes: 65536
     maxDeltaEventsPerTurn: 100000
     maxToolCallArgBytesByTool:
@@ -29,9 +30,34 @@ endpoints:
     activityModel: gpt-4.1-nano
     activityPhaseLabel: true
     activityPhaseMaxPerRun: 5
-    maxSubagents: 10 # Maximum explicit subagents per agent (1-50)
     skills:
       maxCatalogSkills: 20
+    statefulCodeSessions:
+      allowedEnvironments: ['user', 'agent-user', 'conversation']
+      environments:
+        - id: managed-default
+          name: Managed Code API
+          type: managed
+          baseURL: https://code.example.com/v1
+          default: true
+        - id: engineering-vm
+          name: Engineering VM
+          type: attached
+          baseURL: https://code-bridge.example.com/v1
+          pairing:
+            workerId: engineering-vm
+            tokenEnv: CODE_BRIDGE_ADMIN_TOKEN
+        - id: personal-workers
+          name: Personal Code Workers
+          type: attached
+          baseURL: https://code-bridge.example.com/v1
+          pairing:
+            allowPrincipalWorkers: true
+            tokenEnv: CODE_BRIDGE_ADMIN_TOKEN
+    # eventDriven:
+    #   selfUrl: https://librechat.internal
+    backgroundTasks:
+      completionWakeups: true
     toolApproval:
       enabled: true
       mode: default
@@ -56,7 +82,7 @@ endpoints:
       'recursionLimit',
       'Number',
       'Imposta il numero predefinito di passaggi che un agente può eseguire in un\'esecuzione.',
-      'Controls recursion depth to prevent infinite loops. When limit is reached, raises GraphRecursionError. This value can be configured from the UI up to the maxRecursionLimit.',
+      'Controls recursion depth to prevent infinite loops. When the limit is reached, LibreChat preserves the partial turn and offers Keep going or Answer now. This value can be configured from the UI up to maxRecursionLimit.',
     ],
   ]}
 />
@@ -242,7 +268,9 @@ allowedProviders:
 
 **Predefinito:** `["deferred_tools", "execute_code", "file_search", "web_search", "artifacts", "subagents", "actions", "context", "skills", "memory", "ask_user_question", "tools", "chain", "ocr"]`
 
-`programmatic_tools`, `stateful_code_sessions`, `run_in_background` e `tool_intents` sono opzionali e devono essere aggiunti esplicitamente. I programmatic tools e le stateful sessions richiedono inoltre `execute_code` e un deployment di Code Interpreter compatibile. L'esecuzione del codice in background richiede `run_in_background`, `execute_code` e Code Interpreter.
+`programmatic_tools`, `stateful_code_sessions`, `run_in_background` e `tool_intents` sono opzionali e devono essere aggiunti esplicitamente. I Programmatic tools e le sessioni stateful richiedono inoltre `execute_code` e un deployment di Code Interpreter compatibile. L'Agent Builder disabilita le selezioni MCP programmatiche in assenza di Code Interpreter e il server rimuove le opzioni del chiamante programmatico non aggiornate quando l'esecuzione del codice non è disponibile. `run_in_background` rende gli strumenti di Code Interpreter idonei per impostazione predefinita e consente l'attivazione per singolo strumento per gli strumenti MCP, Plugin e Action idonei; l'esecuzione del codice in background richiede anch'essa `execute_code` e Code Interpreter.
+
+`stateful_code_sessions` è altamente sperimentale. Richiede una rotta separata per il Code Interpreter con profilo `stateful` configurata tramite [`LIBRECHAT_CODE_BASEURL_STATEFUL`](/docs/configuration/dotenv#stateful-code-interpreter-endpoint) o [`statefulCodeSessions.environments`](#statefulcodesessions). Le richieste stateful falliscono in modo chiuso (fail closed) invece di ripiegare sul normale servizio stateless. Nell'Agent Builder, ogni agente abilitato sceglie un ambito di workspace utente, agente-e-utente o conversazione e, quando sono configurati backend denominati, un ambiente di esecuzione. I nuovi agenti iniziano con l'ambito personale predefinito dell'utente e l'ambiente di esecuzione predefinito della distribuzione.
 
 **Esempio:**
 
@@ -265,9 +293,11 @@ capabilities:
   - 'tools'
   - 'chain'
   - 'ocr'
-  # Optional: reuse one Code Interpreter workspace per conversation.
+  # Optional and highly experimental: reuse a user-, agent-and-user-, or
+  # conversation-scoped workspace. Requires LIBRECHAT_CODE_BASEURL_STATEFUL
+  # or a named statefulCodeSessions environment.
   # - 'stateful_code_sessions'
-  # Optional: allow selected eligible MCP and Code Interpreter tools to run as background tasks.
+  # Optional: allow eligible Code Interpreter, MCP, Plugin, and Action tools to run as background tasks.
   # - 'run_in_background'
   # Optional: show live model-written intent labels for native and selected MCP tools.
   # - 'tool_intents'
@@ -275,13 +305,152 @@ capabilities:
 
 **Nota:** Questo campo è facoltativo. Se omesso, il comportamento predefinito consiste nell'includere tutte le funzionalità elencate nel default.
 
-## toolApproval
+## statefulCodeSessions
 
-Controlla la revisione umana per le chiamate agli strumenti dell'Agent. Questa funzionalità è disabilitata per impostazione predefinita. Quando è abilitata, le chiamate corrispondenti vengono messe in pausa finché l'utente non invia una decisione consentita, come l'approvazione, il rifiuto o la modifica degli argomenti.
+Configura gli ambiti di condivisione e i backend di esecuzione opzionali per workspace di Code Interpreter stateful altamente sperimentali.
+
+<Callout type="warning" title="Altamente sperimentale">
+  Stateful Code Sessions, named execution environments, attached workers e pairing sono in una fase di sperimentazione iniziale. Il loro comportamento, la configurazione, le caratteristiche di persistenza e il protocollo di integrazione potrebbero subire cambiamenti sostanziali.
+</Callout>
 
 <OptionTable
   options={[
-    ['enabled', 'Boolean', 'Abilita l\'approvazione degli strumenti per l\'endpoint Agents.', 'false'],
+    [
+      'allowedEnvironments',
+      'Array/List of Strings',
+      'Ambiti dello spazio di lavoro stateful consentiti: `user`, `agent-user` e/o `conversation`.',
+      '["user", "agent-user", "conversazione"]',
+    ],
+    [
+      'environments',
+      'Array of Objects',
+      'Ambienti Code API gestiti o collegati con nome opzionali mostrati nell\'Agent Builder.',
+      'Unset; LIBRECHAT_CODE_BASEURL_STATEFUL remains the stateful endpoint',
+    ],
+  ]}
+/>
+
+```yaml filename="endpoints / agents / statefulCodeSessions"
+statefulCodeSessions:
+  allowedEnvironments:
+    - 'user'
+    - 'agent-user'
+    - 'conversation'
+  environments:
+    - id: managed-default
+      name: Managed Code API
+      type: managed
+      baseURL: https://code.example.com/v1
+      default: true
+    - id: engineering-vm
+      name: Engineering VM
+      type: attached
+      baseURL: https://code-bridge.example.com/v1
+      owner: deployment
+      pairing:
+        workerId: engineering-vm
+        tokenEnv: CODE_BRIDGE_ADMIN_TOKEN
+    - id: personal-workers
+      name: Personal Code Workers
+      type: attached
+      baseURL: https://code-bridge.example.com/v1
+      owner: deployment
+      configSchema:
+        permissions:
+          fileWrite:
+            allowed: [allow, ask, deny]
+            default: ask
+          commandExecution:
+            allowed: [ask, deny]
+            default: ask
+      pairing:
+        allowPrincipalWorkers: true
+        tokenEnv: CODE_BRIDGE_ADMIN_TOKEN
+```
+
+`allowedEnvironments` è obbligatorio ogni volta che il blocco è presente e deve includere almeno uno scope di workspace. Ometti l'intero blocco per consentire tutti e tre gli scope e continuare a instradare il lavoro stateful tramite [`LIBRECHAT_CODE_BASEURL_STATEFUL`](/docs/configuration/dotenv#stateful-code-interpreter-endpoint). Il valore predefinito personale e l'Agent Builder consentono solo i valori permessi. Se un amministratore restringe la policy, un valore predefinito personale salvato rimane visibile ma disabilitato, e i nuovi Agent utilizzano il primo scope consentito. Gli Agent abilitati esistenti mantengono il loro scope salvato, ma uno scope ora non consentito fallisce in modo chiuso (fails closed) al runtime finché l'Agent non viene riconfigurato.
+
+Quando `environments` non è vuoto, ogni voce richiede un `id` univoco, un `name` visualizzato, un `type` di tipo `managed` o `attached` e un `baseURL` HTTP(S) senza stringa di query o frammento. Se l'elenco contiene ambienti eseguibili, esattamente una di queste voci deve impostare `default: true`. L'Agent Builder aggiunge quindi un selettore **Execution environment**; lasciandolo su **Deployment default** viene utilizzata quella voce predefinita. Un elenco contenente solo piani di controllo per il pairing self-service non necessita di un valore predefinito. Un agente che nomina un ambiente che viene successivamente rimosso o non è più accessibile fallisce in modo sicuro (fails closed) invece di ripiegare su un altro backend.
+
+- `managed` punta direttamente a una Code API stateful gestita dall'operatore.
+- `attached` punta a un backend `remote-bridge` dell'API Code compatibile che assegna il lavoro a un worker `@librechat/code` in uscita. Il worker non richiede una porta pubblica in entrata, ma il suo endpoint di esecuzione locale necessita comunque di un isolamento appropriato.
+- `workerId` instrada facoltativamente un ambiente collegato a un worker in uscita. È solo lato server e non viene esposto tramite la configurazione di avvio del client.
+- `owner` è impostato su `deployment` come valore predefinito. Gli ambienti di proprietà del principal vengono creati tramite l'API Code Environments autenticata di LibreChat, protetta da ACL, e uniti solo per le richieste autorizzate; non inserire URL forniti dal client nel file YAML di deployment.
+- `pairing` è facoltativo e valido solo per le voci `attached` di proprietà del deployment. `pairing.workerId` identifica un worker gestito dall'operatore da registrare, mentre `pairing.allowPrincipalWorkers: true` consente agli utenti autorizzati di registrare worker vincolati al proprietario su quel control plane. Almeno uno di questi campi è richiesto quando `pairing` è presente.
+- `pairing.tokenEnv` indica la variabile d'ambiente contenente il token dell'amministratore del bridge; non contiene mai il token stesso. Il pairing richiede HTTPS, eccetto per lo sviluppo in loopback.
+- `configSchema.permissions` consente facoltativamente ai proprietari autorizzati di scegliere la policy `fileWrite` e `commandExecution` per gli ambienti personali in **Settings > Code environments**. Ogni campo richiede una lista `allowed` non vuota contenente `allow`, `ask` e/o `deny`; il valore `default` è `ask` quando omesso e deve essere presente in `allowed`. LibreChat rifiuta i valori memorizzati al di fuori della lista dell'amministratore.
+- Non configurare `settings` nel file YAML di deployment. LibreChat fornisce quel campo, limitato alla richiesta, dalle preferenze dell'utente autenticato convalidate dal server.
+- Solo la policy di scrittura dei file e di esecuzione dei comandi è configurabile dall'utente. L'isolamento, il networking, i mount, l'esecuzione privilegiata, l'ingresso, l'uscita e i segreti rimangono sotto il controllo dell'amministratore.
+- Se sia `workerId` di primo livello che `pairing.workerId` sono presenti, devono corrispondere. Una voce con `allowPrincipalWorkers: true` e nessun ID worker è solo di accoppiamento (pairing-only): viene omessa dai selettori di esecuzione e non può impostare `default: true`.
+
+L'esecuzione collegata abilita automaticamente una baseline di approvazione sicura: la scrittura di file e l'esecuzione di comandi o codice richiedono conferma, mentre le operazioni di sola lettura e ricerca continuano secondo la normale policy degli strumenti. La baseline è limitata all'Agente che utilizza l'ambiente collegato. Se non è disponibile alcuna impostazione utente, LibreChat utilizza `ask`; [`toolApproval.enabled: false`](#toolapproval) è l'override di emergenza dell'amministratore che disabilita questa baseline dell'ambiente collegato. I chiamanti senza supporto per l'approvazione e la ripresa falliscono in modalità chiusa (fail closed) a meno che non sia impostato tale override esplicito.
+
+L'esecuzione allegata richiede una build sperimentale corrispondente di Code Interpreter remote-bridge. L'abbinamento autentica la connessione del worker in uscita; non sostituisce l'isolamento della sandbox o della VM. Gli utenti con autorizzazione di gestione dell'ambiente di codice effettuano l'abbinamento, configurano i criteri degli strumenti consentiti e revocano i worker personali in **Impostazioni > Ambienti di codice**. Vedi [Stateful Code Sessions](/docs/features/code_interpreter#stateful-code-sessions).
+
+## eventDriven
+
+Configura l'origine interna attendibile utilizzata per la consegna degli eventi di Agent. La maggior parte delle distribuzioni dovrebbe omettere questo blocco e utilizzare il listener associato al processo corrente.
+
+<OptionTable
+  options={[
+    [
+      'selfUrl',
+      'URL',
+      'Sovrascrive il listener associato al processo corrente per l\'ammissione di trigger interni attendibili. Da utilizzare solo quando la consegna deve attraversare un\'altra origine HTTP attendibile.',
+      '',
+    ],
+  ]}
+/>
+
+```yaml filename="endpoints / agents / eventDriven"
+endpoints:
+  agents:
+    eventDriven:
+      selfUrl: https://librechat.internal
+```
+
+Le continuazioni dei figli vincolate sono automatiche. I campi obsoleti `childTurns`, `completionWakeups`, `coalescing`, `actorMailbox`, `checkpointForks` e `durableReceipts` sotto `eventDriven` non sono più interruttori di configurazione e dovrebbero essere rimossi. Il runtime ora applica direttamente tali garanzie di consegna. Il campo separato [`backgroundTasks.completionWakeups`](#backgroundtasks) controlla la consegna conversazionale per gli strumenti in background completati e i Subagent scollegati.
+
+Lasciare `selfUrl` non impostato per il normale percorso del bound-listener. Impostarlo solo quando l'ammissione di trigger interni attendibili deve attraversare un'altra origine HTTP(S), come un front door TLS. `AGENT_TRIGGERS_SELF_URL` rimane un fallback di compatibilità quando questo campo viene omesso. Consultare [Eventi API degli Agent](/docs/features/agents_api#agent-events) e [Continuazione automatica del genitore](/docs/features/subagents#automatic-parent-continuation).
+
+Il completamento dell'azione Event Actor detached viene selezionato automaticamente dall'archivio di generazione integrato. L'esecuzione in-memory è locale al processo; i flussi di generazione Redis aggiungono un ripristino durevole al riavvio e il passaggio tra repliche. Non è richiesto alcuno switch in `librechat.yaml` o flag di funzionalità nelle variabili d'ambiente. Vedi [Agent Event Runtime](/docs/configuration/dotenv#agent-event-runtime).
+
+## backgroundTasks
+
+Controlla se gli strumenti in background completati supportati e i Subagent scollegati riprendono automaticamente il loro Agent genitore salvato.
+
+<OptionTable
+  options={[
+    [
+      'completionWakeups',
+      'Boolean',
+      'Fornisci automaticamente i completamenti delle attività in background supportate come continuazione. Imposta su false per un comportamento basato solo sul polling.',
+      'true',
+    ],
+  ]}
+/>
+
+```yaml filename="endpoints / agents / backgroundTasks"
+backgroundTasks:
+  completionWakeups: true
+```
+
+Il completamento automatico della consegna è abilitato anche quando questo blocco viene omesso. Imposta `completionWakeups: false` per richiedere all'Agente di raccogliere ogni risultato tramite `check_background_task`.
+
+L'esecuzione ordinaria di strumenti in background rimane locale al processo e non sopravvive alla perdita del suo processo worker. Una volta che un risultato del terminale basato solo sul contenuto viene salvato, la sua consegna è durevole e può continuare su un'altra replica. Le attività con artefatti attivi richiedono ancora il polling sull'esecuzione proprietaria. I Subagent scollegati mantengono il loro percorso separato e durevole per la trascrizione e il risultato del terminale. Il polling manuale rimane disponibile per lo stato, i controlli e il ripristino in entrambe le modalità. Vedi [Background Tool Calls](/docs/features/agents#background-tool-calls) e [Automatic Parent Continuation](/docs/features/subagents#automatic-parent-continuation).
+
+## toolApproval
+
+Controlla la revisione umana per le chiamate agli strumenti dell'Agente. La policy a livello di distribuzione è disabilitata quando questo blocco viene omesso. Un Agente che utilizza un ambiente Code collegato costituisce un'eccezione: LibreChat abilita la sua policy di sicurezza "ask-by-default" con ambito limitato, a meno che l'amministratore non imposti esplicitamente `enabled: false`. Quando la revisione è applicata, le chiamate corrispondenti rimangono in pausa finché l'utente non invia una decisione consentita, come l'approvazione, il rifiuto o la modifica degli argomenti.
+
+<OptionTable
+  options={[
+    [
+      'enabled',
+      'Boolean',
+      'Abilita l\'approvazione degli strumenti a livello di deployment. Un valore false esplicito disabilita anche la baseline di sicurezza dell\'ambiente Code allegato.',
+      'Omitted',
+    ],
     [
       'mode',
       'String',
@@ -306,7 +475,7 @@ Controlla la revisione umana per le chiamate agli strumenti dell'Agent. Questa f
   ]}
 />
 
-I pattern utilizzano la corrispondenza glob. Gli strumenti MCP possono essere limitati con `mcp:<server>:<tool>`; ad esempio, `mcp:github:*` corrisponde a ogni strumento del server `github`. La valutazione assegna a `deny` la priorità più alta, inclusa la modalità `bypass`.
+I pattern utilizzano il glob matching. Gli strumenti MCP possono essere limitati con `mcp:<server>:<tool>`; ad esempio, `mcp:github:*` corrisponde a ogni strumento del server `github`. LibreChat applica regole statiche e matcher di hook ai nomi di runtime MCP e agli alias rivolti al modello, inclusi gli strumenti raggiungibili tramite Subagent nidificati. Le regole statiche vengono valutate nell'ordine `deny`, `ask`, quindi `allow` prima che la modalità selezionata fornisca il fallback. Una regola di negazione (deny) ha quindi sempre la precedenza, inclusa la modalità `bypass`.
 
 ```yaml filename="endpoints / agents / toolApproval"
 toolApproval:
@@ -554,7 +723,7 @@ Il campo `capabilities` ti consente di abilitare o disabilitare funzionalità sp
 - **deferred_tools**: consente agli agenti di scoprire gli strumenti MCP differiti in fase di esecuzione invece di caricare ogni strumento nel contesto in anticipo.
 - **programmatic_tools**: Abilita la chiamata a strumenti programmatici (Programmatic Tool Calling) per gli strumenti MCP contrassegnati come Programmatic nel generatore di agenti (Agent Builder). Richiede `execute_code` e un deployment di Code Interpreter con il componente Tool Call Server. Questa funzionalità è facoltativa e non è abilitata per impostazione predefinita.
 - **execute_code**: Consente all'agente di eseguire codice.
-- **stateful_code_sessions**: consente agli agenti che hanno aderito di riutilizzare un workspace di Code Interpreter per conversazione. Richiede `execute_code`, una distribuzione di Code Interpreter compatibile e l'impostazione avanzata per singolo agente. Questa funzionalità è altamente sperimentale, non è abilitata per impostazione predefinita e potrebbe subire modifiche sostanziali durante la fase di sperimentazione; non considerare il suo comportamento o la sua configurazione attuale come un contratto di produzione stabile.
+- **stateful_code_sessions**: Consente agli agenti che hanno aderito di riutilizzare un workspace di Code Interpreter nell'ambito di un utente, di un agente e utente, o di una conversazione. Richiede `execute_code`, una distribuzione di Code Interpreter compatibile e l'impostazione avanzata specifica per l'agente. I nuovi agenti utilizzano l'ambito preferito dell'utente che ha effettuato l'accesso. Questa funzionalità è altamente sperimentale, non è abilitata per impostazione predefinita e potrebbe subire modifiche sostanziali durante la fase di sperimentazione; non considerare il suo comportamento o la sua configurazione attuale come un contratto di produzione stabile.
 - **file_search**: Abilita l'agente a cercare e interagire con i file. Quando abilitato, il comportamento delle citazioni è controllato dalle impostazioni `maxCitations`, `maxCitationsPerFile` e `minRelevanceScore`.
 - **web_search**: Abilita la funzionalità di ricerca web per gli agenti, consentendo loro di cercare e recuperare informazioni da internet.
 - **artifacts**: Abilita l'agente a generare artefatti interattivi (componenti React, HTML, diagrammi Mermaid).
@@ -567,7 +736,7 @@ Il campo `capabilities` ti consente di abilitare o disabilitare funzionalità sp
 - **tools**: Concede all'agente l'accesso a vari strumenti.
 - **chain**: Abilita la funzionalità Beta per il concatenamento degli agenti, nota anche come flussi di lavoro Mixture-of-Agents (MoA).
 - **ocr**: Migliora facoltativamente "Carica come testo" nella chat e il "Contesto file" per gli agenti, consentendo ai file di essere caricati ed elaborati tramite OCR. **Richiede la configurazione di un servizio OCR.**
-- **run_in_background**: Rende l'esecuzione del Code Interpreter e degli strumenti shell idonei all'esecuzione in background per impostazione predefinita e abilita l'opt-in in background per singolo strumento per gli strumenti MCP. Un agente può esplicitamente escludere il Code Interpreter. L'impostazione consente l'esecuzione in background; il modello decide per ogni chiamata se utilizzarla. Richiede `execute_code` e una distribuzione di Code Interpreter configurata per il codice. Questa funzionalità non è abilitata per impostazione predefinita.
+- **run_in_background**: Rende l'esecuzione di Code Interpreter e gli strumenti shell idonei per l'esecuzione in background per impostazione predefinita e abilita l'opt-in in background per singolo strumento per MCP, Plugin e Action idonei. Un interruttore a livello di Action abilita ogni operazione idonea; le Action OAuth e le operazioni che definiscono già un parametro `run_in_background` sono escluse. Un agente può esplicitamente escludere Code Interpreter. L'impostazione consente l'esecuzione in background; il modello decide per ogni chiamata se utilizzarla. Richiede `execute_code` e una distribuzione di Code Interpreter configurata per il codice. Questa funzionalità non è abilitata per impostazione predefinita.
 - **tool_intents**: Aggiunge etichette di intento scritte dal modello in tempo reale alle chiamate agli strumenti idonei. Gli strumenti nativi, inclusi gli strumenti Code Interpreter, si attivano automaticamente; gli strumenti MCP possono essere abilitati singolarmente o in blocco nell'Agent Builder. Le Model Specs utilizzano `describeIntent`. Questa funzionalità non è abilitata per impostazione predefinita.
 
 Specificando le funzionalità, puoi controllare le caratteristiche disponibili agli utenti quando interagiscono con gli agenti.
@@ -589,7 +758,7 @@ endpoints:
       # Optional: enables Programmatic Tool Calling for MCP tools marked Programmatic in the Agent Builder.
       # - 'programmatic_tools'
       - 'execute_code'
-      # Optional: makes Code Interpreter background-eligible and enables selected MCP tools.
+      # Optional: makes Code Interpreter background-eligible and enables selected MCP, Plugin, and Action tools.
       # - 'run_in_background'
       # Optional: enables live intent labels for native and selected MCP tools.
       # - 'tool_intents'
@@ -610,7 +779,7 @@ In questo esempio:
 - Vengono incluse solo le fonti con una rilevanza pari o superiore al 60%
 - Gli agenti LibreChat hanno accesso all'esecuzione di codice, alla ricerca di file (con citazioni), a Skills, Subagents, azioni, artefatti, contesto dei file, servizi OCR se configurati e funzionalità di ricerca web.
 - Il Programmatic Tool Calling rimane disabilitato a meno che non si aggiunga la capability `programmatic_tools` insieme a `execute_code`
-- Le chiamate agli strumenti in background rimangono disabilitate a meno che non si aggiunga `run_in_background`; gli strumenti di Code Interpreter diventano quindi idonei per impostazione predefinita, mentre gli strumenti MCP richiedono ancora una selezione per singolo strumento.
+- Le chiamate agli strumenti in background rimangono disabilitate a meno che non si aggiunga `run_in_background`; gli strumenti Code Interpreter diventano quindi idonei per impostazione predefinita, mentre gli strumenti MCP, Plugin e Action idonei richiedono ancora la selezione.
 - Le etichette di intent degli strumenti rimangono disabilitate a meno che non si aggiunga `tool_intents`; gli strumenti nativi vengono quindi abilitati automaticamente, mentre gli strumenti MCP richiedono ancora una selezione per singolo strumento.
 
 ## remoteApi
@@ -748,6 +917,12 @@ Il campo `subagents` controlla quali agenti secondari isolati un agente principa
       'Agenti specifici che questo agente può generare. Limitato da `maxSubagents`, che ha come valore predefinito 10.',
       'agent_ids: ["agent_researcher"]',
     ],
+    [
+      'graphs',
+      'Array of Objects',
+      'Team di Agent salvati che possono essere eseguiti come un grafo figlio isolato. L\'elenco è limitato da `maxSubagents` (predefinito: 10); ogni team può contenere fino a 32 membri.',
+      '',
+    ],
   ]}
 />
 
@@ -759,6 +934,8 @@ subagents:
     - 'agent_researcher'
     - 'agent_reviewer'
 ```
+
+Ogni voce `graphs` richiede un `type`, `name`, `description`, `agent_ids`, `edges` diretti, `entry_agent_id` e `result_agent_id` univoci. Le definizioni dei team devono formare un grafo aciclico diretto connesso, ogni membro deve essere visibile all'utente e la configurazione totale è limitata a 50 target Agent univoci e 100 configurazioni di esecuzione espanse. Vedi l'esempio [saved-team example and runtime behavior](/docs/features/subagents#configure-an-agent).
 
 Per il comportamento e i limiti rivolti all'utente, consulta [Subagents](/docs/features/subagents).
 

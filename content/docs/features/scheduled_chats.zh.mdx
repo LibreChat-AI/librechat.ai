@@ -1,0 +1,98 @@
+---
+title: 定时聊天
+icon: CalendarClock
+description: 使用预设或自定义的周期性计划运行已保存的 LibreChat Agents。
+---
+
+Scheduled Chats（定时对话）允许保存的 LibreChat Agent 使用您提供的提示词自动开启新的对话。您可以将其用于定期报告、提醒、研究以及其他无需手动启动即可运行的 Agent 工作流。
+
+<Callout type="warning" title="实验性功能，默认禁用">
+  Scheduled Chats 处于早期实验阶段。其行为、配置和部署要求可能会发生重大变化。定时运行可能会消耗模型、工具和 Code Interpreter 资源，因此除非管理员明确选择加入，否则 LibreChat 不会启用此功能。
+</Callout>
+
+## 启用定时聊天 [#enable-scheduled-chats]
+
+在 `librechat.yaml` 中添加 `interface.schedules`，然后重启 LibreChat：
+
+```yaml filename="librechat.yaml"
+interface:
+  schedules:
+    use: true
+    create: true
+    maxPerUser: 10
+    minIntervalMinutes: 60
+    autoDisableAfterFailures: 5
+    fireConcurrency: 5
+    requireProject: false
+    # projectId: '000000000000000000000000'
+```
+
+`use` 和 `create` 会在启动时为内置的 `USER` 角色植入 `SCHEDULES` 权限。管理员可以在 [Admin Panel](/docs/features/admin_panel) 中按角色管理这些权限。其余值均为运行时限制：
+
+<OptionTable
+  options={[
+    ['maxPerUser', 'Number', '每个用户可以拥有的最大计划数。设置为 0 以禁止创建。', '10'],
+    ['minIntervalMinutes', 'Number', '两次出现之间允许的最短间隔。', '60'],
+    ['autoDisableAfterFailures', 'Number', '在禁用计划任务前连续失败的运行次数。', '5'],
+    ['fireConcurrency', 'Number', '整个部署中允许并发运行的最大计划任务数。', '5'],
+    ['requireProject', 'Boolean', '要求每个计划在写入时及每次运行时都必须解析为一个 Chat Project。', 'false'],
+    ['projectId', 'String', '将已安排的对话固定到一个所有者范围内的 Chat Project，并隐含 `requireProject`。', ''],
+  ]}
+/>
+
+默认情况下，整个 `schedules` 字段是不存在的。`schedules: true` 会启用该功能并使用默认限制，而 `schedules: false` 或 `schedules: { use: false }` 则会在整个部署范围内禁用该功能。如果基础配置被禁用，则无法通过角色、组或用户配置覆盖来重新启用。`maxPerUser` 会计算每个用户拥有的所有计划，包括在引入槽位核算（slot accounting）之前创建的定义。有关完整的合并和权限行为，请参阅 [`interface.schedules`](/docs/configuration/librechat_yaml/object_structure/interface#schedules)。
+
+## 创建和管理计划 [#create-and-manage-a-schedule]
+
+从侧边导航栏打开 **Scheduled Chats**，然后选择 **New schedule**。一个计划任务需要：
+
+- 一个名称和提示词
+- 一个您可以查看和使用的已保存 Agent
+- 每小时、每天、工作日、每周或自定义的 cron 频率
+- 一个 IANA 时区
+- 一个可选的 Chat Project 目标，除非管理员要求或固定了某个目标
+
+新的计划任务将以当前浏览器的 IANA 时区开始。您可以选择其他受支持的 IANA 时区，浏览器时区和 UTC 会固定在顶部，且每个选项都会显示其当前的 GMT 偏移量。现有的计划任务将以其存储的时区重新打开。不支持 `Intl.supportedValuesOf` 的浏览器仍可使用当前时区、UTC 或该计划任务存储的时区。仅更改时区属于时间调整：LibreChat 会重新计算下一次执行时间，并根据部署的最小间隔重新验证执行频率。
+
+结构化的节奏选项包括：
+
+- **每小时**: 选择 `00` 到 `59` 之间的任意分钟。
+- **Daily**: 选择一个本地时间。
+- **工作日**：从周一到周五中选择一个本地时间。
+- **每周 (Weekly)**：选择一个或多个工作日及一个本地时间。至少需要选择一天。
+
+时间控件遵循浏览器的 [时钟格式偏好设置](/docs/features/settings#general)，而每周日期控件和摘要则遵循其 **一周起始日** 偏好设置。这些偏好设置仅改变显示方式；存储的 IANA 时区和选定的工作日决定了执行情况。
+
+选择 **Custom** 以按照 `minute hour day-of-month month day-of-week` 的顺序输入包含五个字段的循环 cron 表达式。秒和年份字段会被拒绝，超过 256 个字符或没有未来执行时间的表达式也会被拒绝。该对话框会使用与服务器相同的解析器，在选定的时区内验证并预览即将发生的执行时间。示例包括：`0 9,17 * * 1-5` 表示工作日的 09:00 和 17:00，`0 9 1 * *` 表示每月 1 日的 09:00。每个节奏仍必须满足 `minIntervalMinutes`；例如，`*/15 * * * *` 需要管理员允许短于默认 60 分钟的间隔。
+
+夏令时转换保持时区感知：不存在的本地时间会移动到第一个有效时刻，而重复的本地时间仅运行一次。间隔验证会同时衡量有效节奏和时区，包括春季前拨转换期间缩短的实时间隔，因此更改时区可能会导致原本有效的表达式低于配置的下限。计划提示词为字面文本；此形式不支持消息组合器变量插入。
+
+每次触发都会与选定的 Agent 开启一个新的对话。计划卡片会显示下一次触发时间和最新状态，并在存在对话时提供指向最新对话的链接。拥有 `SCHEDULES: CREATE` 权限的用户可以编辑、启用或禁用、立即运行以及删除他们的计划。**立即运行 (Run now)** 可以在不重新启用未来触发的情况下运行一次已禁用的计划，但它仍会遵循权限、部署容量以及全局停止设置。
+
+如果运行因“询问用户”或工具批准而暂停，其状态将变为 **Needs approval**，此时可以打开对话以完成决策。LibreChat 会防止同一计划的重叠发生，并可能在另一个运行处于活动状态或账户余额不足时跳过某次运行。
+
+当调度任务出现重复失败，或者其关联的 Agent 被删除、配置无效、访问权限被撤销、账户余额不足、缺少必要的项目，亦或是有效项目被删除或不属于调度所有者时，调度任务可能会自动禁用。系统会在每次运行时重新检查项目策略，因此收紧 `requireProject` 或更改固定项（pin）也会应用于现有的调度任务。请在重新启用调度任务之前修复潜在问题。
+
+操作员级别的 `projectId` 会覆盖每个计划中存储的项目，并隐含 `requireProject`。由于 Chat Projects 是用户拥有的，全局固定通常仅对该项目的所有者有效；当不同的所有者需要不同的固定目标时，请使用角色或用户配置覆盖。
+
+## 权限 [#permissions]
+
+`SCHEDULES: USE` 控制用户是否可以列出和查看其日程安排。`SCHEDULES: CREATE` 则额外控制创建、编辑、启用、运行和删除日程安排的权限。定时执行时还会重新检查用户的 Agent 功能权限以及对所选 Agent 的查看权限；如果失去其中任何一项访问权限，受影响的日程安排将被禁用。
+
+请参阅 [Access Control](/docs/features/access_control) 以了解角色权限和资源 ACL。
+
+## 部署安全性 [#deployment-safety]
+
+Scheduled Chats 使用 MongoDB 租约、幂等触发器交付和重叠预防机制，以便符合条件的副本能够协调持久性事件。多副本部署还必须通过 `USE_REDIS_STREAMS=true` 启用基于 Redis 的可恢复流。如果没有共享流，计划写入将失败并关闭，而不是接纳其他副本可能无法恢复或停止的任务。
+
+一个需要为“询问用户 (Ask User)”或工具批准而暂停的定时 Agent，需要设置 `USE_REDIS_STREAMS=true` 以实现共享操作状态，并需要一个持久化的共享检查点（checkpointer）以支持图的延续，即使是在单进程部署中也是如此。内置的默认 MongoDB 检查点满足此要求；而 `type: memory` 则不满足。当任一共享存储不可用时，LibreChat 会在模型工作开始前拒绝运行。
+
+一个真正只运行一个 LibreChat 进程且不使用 Redis 的部署方式，可以通过以下配置选择加入：
+
+```bash filename=".env"
+SCHEDULES_SINGLE_PROCESS=true
+```
+
+不要在多进程或多副本部署中设置此项。旧版的实验性集群服务器入口点不会启用调度引擎；请使用带有 Redis 支持流的 LibreChat 标准服务器入口点来实现水平扩展。
+
+若要立即停止整个部署的计划任务，请设置 `SCHEDULES_DISABLED=true`。这将阻止自动执行和**立即运行**，且不会删除计划定义。请参阅 [Scheduled Chats environment variables](/docs/configuration/dotenv#scheduled-chats)。

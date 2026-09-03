@@ -11,7 +11,7 @@ icon: Settings
 
 <OptionTable
   options={[
-    ['version', 'String', 'Spécifie la version du fichier de configuration.', 'version: 1.3.14'],
+    ['version', 'String', 'Spécifie la version du fichier de configuration.', 'version: 1.3.15'],
   ]}
 />
 
@@ -35,7 +35,7 @@ icon: Settings
     [
       'langfuse',
       'Object',
-      'Stocke la connexion Langfuse chiffrée gérée via les API de configuration de LibreChat.',
+      'Configure la connexion chiffrée à Langfuse et les en-têtes de requête appartenant au déploiement.',
       '',
     ],
   ]}
@@ -56,14 +56,31 @@ icon: Settings
       'Sélectionne une clé de destination Langfuse approuvée pour le déploiement.',
       '',
     ],
+    [
+      'headers',
+      'Object/Map of Strings',
+      'En-têtes appartenant au déploiement envoyés vers une origine Langfuse configurée pour l\'authentification par proxy ou passerelle. Prend en charge les références `${ENV_VAR}`.',
+      '',
+    ],
   ]}
 />
 
-Gérez cet objet via **Settings → Langfuse** ou un client de configuration administrateur autorisé. Le flux Settings vérifie la connexion et dérive le `projectId` ; l'administrateur autorisé écrit et chiffre la `secretKey`, génère la `secretKeyPreview` et masque le secret lors des lectures. Les valeurs de `secretKey` en texte brut placées directement dans `librechat.yaml` ne sont pas acceptées par le chemin de connexion au moment de l'exécution. Les anciens champs `displaySecretKey` et `fanout.enabled` ne font plus partie du schéma.
+Gérez les champs de connexion via **Settings → Langfuse** ou un client de configuration administrateur autorisé. Le flux Settings vérifie la connexion et dérive le `projectId` ; l'administrateur autorisé écrit le `secretKey` chiffré, génère le `secretKeyPreview` et masque le secret lors des lectures. Les valeurs `secretKey` en texte brut placées directement dans `librechat.yaml` ne sont pas acceptées par le chemin de connexion au moment de l'exécution. Les anciens champs `displaySecretKey` et `fanout.enabled` ne font plus partie du schéma.
+
+`headers` est différent : il s'agit d'une infrastructure de déploiement qui ne peut être définie que dans `librechat.yaml`. La configuration administrateur rejette à la fois l'ensemble de la carte et les chemins d'en-tête individuels, de sorte que les identifiants de passerelle ne sont ni stockés ni renvoyés via la configuration basée sur Mongo. Les valeurs prennent en charge l'interpolation `${ENV_VAR}` ; utilisez des références d'environnement plutôt que des littéraux. LibreChat ignore les variables non résolues, les références de secrets d'infrastructure protégés, les valeurs vides et les noms d'en-tête HTTP invalides en émettant un avertissement.
+
+Les en-têtes personnalisés sont envoyés lors du suivi (trace) et de l'exportation de médias, des requêtes de score de feedback, de la recherche de projet et de la vérification des identifiants administrateur uniquement lorsque le déploiement résout exactement une origine Langfuse. Si la configuration centrale, du locataire (tenant) ou du collecteur produit plusieurs origines, LibreChat n'envoie aucun en-tête personnalisé et enregistre un avertissement car la carte ne peut pas identifier le destinataire en toute sécurité. Ils ne peuvent pas utiliser d'espaces réservés `{{...}}` par utilisateur, et le collecteur de fanout ne transmet que l'en-tête `Authorization` en amont.
+
+```yaml filename="langfuse / headers"
+langfuse:
+  headers:
+    CF-Access-Client-Id: '${CF_ACCESS_CLIENT_ID}'
+    CF-Access-Client-Secret: '${CF_ACCESS_CLIENT_SECRET}'
+```
 
 `langfuse` est une section réservée à la configuration de base uniquement. Les remplacements de configuration par rôle, groupe ou utilisateur ne peuvent ni la remplacer ni l'invalider.
 
-Consultez [Langfuse Configuration](/docs/configuration/langfuse) pour les règles de disponibilité, les identifiants gérés par l'environnement et le déploiement optionnel en fanout.
+Consultez [Langfuse Configuration](/docs/configuration/langfuse) pour les règles de disponibilité, la configuration du proxy authentifié, les identifiants gérés par l'environnement et le déploiement optionnel en fanout.
 
 ## skillSync
 
@@ -80,6 +97,23 @@ Consultez [Langfuse Configuration](/docs/configuration/langfuse) pour les règle
 
 voir : [Structure de l'objet Skill Sync](/docs/configuration/librechat_yaml/object_structure/skill_sync)
 
+## filters
+
+<OptionTable
+  options={[
+    [
+      'filters',
+      'Object',
+      'Configure la protection du contenu sensible à la source pour les messages, les invites, les instructions d\'Agent, les amorces et titres de conversation, les commentaires, les Skills, les mémoires, les fichiers, les arguments d\'outils, les paramètres de modèle et les métadonnées d\'Action.',
+      '',
+    ],
+  ]}
+/>
+
+`filters` est une politique réservée à la configuration de base. Les remplacements au niveau des rôles, groupes, utilisateurs et bases de données ne peuvent pas l'ajouter, la remplacer ou la supprimer. Dans un déploiement multi-répliques, coordonnez le déploiement ou le redémarrage de la configuration afin que chaque réplique charge la même politique.
+
+Voir : [Structure de l'objet de filtrage de contenu](/docs/configuration/librechat_yaml/object_structure/message_filter#source-aware-filters)
+
 ## messageFilter
 
 <OptionTable
@@ -87,13 +121,13 @@ voir : [Structure de l'objet Skill Sync](/docs/configuration/librechat_yaml/obje
     [
       'messageFilter',
       'Object',
-      'Configure les filtres de message côté serveur. Dans la v1.3.13, `messageFilter.pii` peut rejeter le texte soumis ayant la forme d\'identifiants avant les appels au modèle et la persistance.',
+      'Configure la politique PII héritée basée uniquement sur les messages. Les déploiements existants peuvent conserver ce bloc lors de la migration vers `filters.messages` ; lorsque les deux sont configurés, les deux politiques s\'appliquent.',
       '',
     ],
   ]}
 />
 
-voir : [Structure de l'objet de filtrage des messages](/docs/configuration/librechat_yaml/object_structure/message_filter)
+Voir : [Legacy messageFilter](/docs/configuration/librechat_yaml/object_structure/message_filter#legacy-messagefilter)
 
 ## fileStrategy
 
@@ -317,11 +351,15 @@ voir : [Structure d'objet CloudFront](/docs/configuration/librechat_yaml/object_
     [
       'secureImageLinks',
       'Boolean',
-      'Indique s\'il faut sécuriser l\'accès aux liens d\'images hébergés localement par l\'application. Par défaut : false.',
+      'Nécessite une autorisation pour les liens d\'images hébergés localement par l\'application. Par défaut : true.',
       'secureImageLinks: true',
     ],
   ]}
 />
+
+Les images locales sont protégées lorsque ce champ est omis. Les images de conversations privées nécessitent une session active et un accès propriétaire. Les avatars des utilisateurs stockés nécessitent un utilisateur authentifié dans le même tenant. Les avatars des Agents suivent la liste de contrôle d'accès (ACL) de l'Agent, y compris la visibilité publique, tandis que les avatars des Assistants nécessitent le même tenant ainsi que la politique de partage d'endpoint ou de gestion d'Assistant effective. Les échecs d'autorisation et de recherche de configuration entraînent un refus par défaut.
+
+Définissez `secureImageLinks: false` uniquement comme une option de compatibilité pour les déploiements qui exposent intentionnellement des URL d'images locales sans authentification. Les remplacements de configuration des rôles et des utilisateurs sont résolus à partir de la configuration effective du propriétaire de l'image.
 
 ## imageOutputType
 
@@ -571,67 +609,63 @@ voir : [Structure de l'objet de recherche Web](/docs/configuration/librechat_yam
     [
       'enabled',
       'Boolean',
-      'Active ou désactive la fonctionnalité de redimensionnement d\'image côté client. Par défaut : false.',
+      'Lorsqu\'elle est explicitement définie, cette option force l\'activation ou la désactivation du redimensionnement côté client pour chaque utilisateur et verrouille le bouton de bascule dans les Paramètres. Omettez-la pour laisser chaque utilisateur choisir dans Paramètres > Chat ; la préférence utilisateur est désactivée par défaut.',
       'enabled: true',
     ],
     [
       'maxWidth',
       'Number',
-      'Largeur maximale en pixels pour les images redimensionnées. Les images plus larges que cette valeur seront redimensionnées. Par défaut : 1920.',
-      'maxWidth: 1024',
+      'Largeur maximale en pixels pour les images redimensionnées. Doit être d\'au moins 1. Par défaut : 1900.',
+      'maxWidth: 1900',
     ],
     [
       'maxHeight',
       'Number',
-      'Hauteur maximale en pixels pour les images redimensionnées. Les images plus hautes que cette valeur seront redimensionnées. Par défaut : 1080.',
-      'maxHeight: 768',
+      'Hauteur maximale en pixels pour les images redimensionnées. Doit être d\'au moins 1. Par défaut : 1900.',
+      'maxHeight: 1900',
     ],
     [
       'quality',
       'Number',
-      'Qualité de compression JPEG (0.1 à 1.0). Des valeurs plus élevées signifient une meilleure qualité mais des fichiers plus volumineux. Par défaut : 0.8.',
-      'quality: 0.9',
-    ],
-    [
-      'compressFormat',
-      'String',
-      'Format de sortie pour les images compressées. Options : "jpeg", "webp". Par défaut : "jpeg".',
-      'compressFormat: "webp"',
+      'Qualité de l\'encodeur du navigateur de 0 à 1. Des valeurs plus élevées préservent généralement plus de détails et produisent des fichiers plus volumineux. Par défaut : 0.92.',
+      'quality: 0.92',
     ],
   ]}
 />
 
 **Description :**
 
-La configuration `clientImageResize` permet le redimensionnement automatique des images côté client avant le téléchargement. Cette fonctionnalité aide à :
+La configuration `clientImageResize` contrôle la réduction d'échelle côté client avant le téléchargement. Cette fonctionnalité permet de :
 
 - **Évitez les échecs de téléchargement** dus à des fichiers image volumineux dépassant les limites du serveur
 - **Réduisez l'utilisation de la bande passante** en compressant les images avant leur transmission
 - **Améliorez les performances de téléchargement** avec des tailles de fichiers plus petites
 - **Maintenir la qualité de l'image** tout en optimisant la taille du fichier
 
-Lorsqu'elle est activée, les images qui dépassent les dimensions `maxWidth` ou `maxHeight` spécifiées sont automatiquement redimensionnées côté client avant d'être téléchargées sur le serveur. Le redimensionnement conserve le rapport hauteur/largeur d'origine tout en garantissant que l'image respecte les limites spécifiées.
+Lorsque le redimensionnement est activé, les images prises en charge qui dépassent `maxWidth` ou `maxHeight` sont réduites dans le navigateur avant le téléchargement. LibreChat préserve le rapport hauteur/largeur, n'agrandit jamais les images plus petites et conserve le fichier original lorsque le résultat encodé ne serait pas plus petit.
+
+Si `enabled` est omis, les utilisateurs peuvent activer ou désactiver **Redimensionner les images avant le téléchargement** sous **Paramètres > Chat**. La préférence est stockée dans ce navigateur et est désactivée par défaut. Définir `enabled: true` ou `enabled: false` dans `librechat.yaml` remplace la préférence de chaque utilisateur et désactive le bouton bascule.
 
 **Exemple :**
 
 ```yaml filename="clientImageResize"
 fileConfig:
   clientImageResize:
-    enabled: true
-    maxWidth: 1920
-    maxHeight: 1080
-    quality: 0.8
-    compressFormat: 'jpeg'
+    # Omit enabled so each user can choose under Settings > Chat.
+    maxWidth: 1900
+    maxHeight: 1900
+    quality: 0.92
 ```
+
+Pour imposer un comportement spécifique au déploiement, ajoutez soit `enabled: true`, soit `enabled: false` au même bloc.
 
 **Notes :**
 
-- S'applique uniquement aux fichiers image (JPEG, PNG, WebP, etc.)
-- Le redimensionnement s'effectue automatiquement lorsque les images dépassent les dimensions spécifiées
-- Le rapport d'aspect d'origine est préservé lors du redimensionnement
-- Cette fonctionnalité fonctionne avec tous les endpoints de téléchargement d'images pris en charge.
-- Le paramètre de qualité s'applique uniquement aux formats JPEG et WebP
-- Régler la qualité trop bas (< 0,5) peut entraîner une dégradation notable de l'image.
+- Le pipeline de redimensionnement prend en charge les formats JPEG, PNG et WebP dans les navigateurs disposant des API Canvas requises.
+- Les fichiers PNG et WebP animés sont envoyés sans modification afin que le redimensionnement ne supprime pas l'animation.
+- La sortie conserve le format source. Il n'y a pas de paramètre `compressFormat`.
+- Les encodeurs de navigateur peuvent ignorer `quality` pour les formats sans perte tels que PNG.
+- En cas d'échec du redimensionnement, le système revient au fichier d'origine ; les limites de téléchargement habituelles du serveur s'appliquent toujours.
 
 voir : [Structure de l'objet de configuration de fichier](/docs/configuration/librechat_yaml/object_structure/file_config)
 
@@ -664,6 +698,12 @@ voir : [Structure de l'objet de configuration de fichier](/docs/configuration/li
       'conversationsImport',
       'Object',
       'Configure les limites de débit spécifiquement pour les opérations d\'importation de conversations.',
+      '',
+    ],
+    [
+      'agentEvents',
+      'Object',
+      'Configure la limite d\'admission API-key-principal pour les requêtes d\'événements Agent authentifiées.',
       '',
     ],
     ['stt', 'Object', 'Configure les limites de débit spécifiquement pour les requêtes de synthèse vocale (stt)', ''],
@@ -703,6 +743,27 @@ voir : [Structure de l'objet de configuration de fichier](/docs/configuration/li
   ]}
 />
 
+**Sous-clés agentEvents :**
+
+<OptionTable
+  options={[
+    [
+      'userMax',
+      'Number',
+      'Nombre maximal d\'admissions d\'événements d\'Agent authentifiés par principal de clé API Remote Agents dans une fenêtre.',
+      '40',
+    ],
+    [
+      'userWindowInMinutes',
+      'Number',
+      'Durée de la fenêtre d\'admission des événements de l\'Agent authentifié en minutes.',
+      '1',
+    ],
+  ]}
+/>
+
+Ce bucket d'admission est distinct des limites normales d'exécution des messages. Le worker durable consomme le bucket normal message-utilisateur lorsqu'il effectue une livraison, évitant ainsi une double facturation au moment de l'admission. Les valeurs héritées `AGENT_EVENT_USER_MAX` et `AGENT_EVENT_USER_WINDOW` restent des solutions de secours lorsque les champs YAML sont omis ; les valeurs YAML explicites ont la priorité.
+
 **Sous-clés tts :**
 
 <OptionTable
@@ -738,6 +799,9 @@ voir : [Structure de l'objet de configuration de fichier](/docs/configuration/li
     - **Exemple** :
     ```yaml filename="rateLimits"
     rateLimits:
+      agentEvents:
+        userMax: 40
+        userWindowInMinutes: 1
       fileUploads:
         ipMax: 100
         ipWindowInMinutes: 60

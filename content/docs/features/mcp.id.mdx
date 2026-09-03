@@ -49,15 +49,17 @@ LibreChat menampilkan server MCP yang dikonfigurasi langsung di area obrolan saa
 - Saat dipilih, semua alat dari server tersebut akan tersedia untuk model Anda saat ini
 - Akses cepat ke alat MCP tanpa perlu membuat agen, memungkinkan penggunaan beberapa server sekaligus
 
-Untuk menonaktifkan server MCP agar tidak muncul di menu tarik-turun obrolan (menjaganya agar hanya untuk agen), atur [`chatMenu: false`](/docs/configuration/librechat_yaml/object_structure/mcp_servers#chatmenu) dalam konfigurasi Anda:
+Untuk menjaga agar server MCP tidak muncul dalam pilihan obrolan reguler, atur [`chatMenu: false`](/docs/configuration/librechat_yaml/object_structure/mcp_servers#chatmenu) di dalam konfigurasi Anda:
 
 ```yaml
 mcpServers:
   internal-tools:
     command: npx
     args: ['-y', 'internal-mcp-server']
-    chatMenu: false # Only available in agent builder
+    chatMenu: false # Not selectable in regular chat
 ```
+
+Pengaturan ini diberlakukan pada permintaan obrolan serta di dalam pemilih, sehingga pilihan tersimpan yang kedaluwarsa tidak dapat terus menggunakan server yang tersembunyi. Pengaturan ini tidak menghapus server dari Agen yang tersimpan atau dari model spec yang secara eksplisit menetapkannya. LibreChat juga menghilangkan server yang hanya dapat dijangkau pengguna melalui Agen resmi dari pemilih obrolan reguler dan jalur permintaan.
 
 ### Dengan Agen [#with-agents]
 
@@ -264,7 +266,7 @@ Kegagalan inisialisasi kini membedakan antara server yang tidak dapat dijangkau,
 
 Jika sebuah Agent secara eksplisit mengharapkan alat MCP tetapi tidak ada yang dapat diselesaikan saat awal dijalankan, LibreChat akan menggagalkan proses tersebut dengan panduan koneksi dan akses alih-alih menjalankannya secara diam-diam tanpa alat tersebut.
 
-Server MCP yang mengirimkan `notifications/tools/list_changed` dapat memperbarui katalog alat mereka tanpa perlu memulai ulang LibreChat. LibreChat mengambil daftar terkini dari koneksi langsung, memublikasikan alat yang ditambahkan, dan berhenti mengiklankan alat yang telah dihapus oleh server. Proses penyambungan kembali (reconnect) juga menyinkronkan katalog sebelum koneksi dianggap siap.
+Server MCP yang mengirimkan `notifications/tools/list_changed` dapat memperbarui katalog alat mereka tanpa perlu memulai ulang LibreChat. LibreChat mengambil daftar terkini dari koneksi langsung, memublikasikan alat yang ditambahkan, dan berhenti mengiklankan alat yang dihapus oleh server. Koneksi ulang juga menyinkronkan katalog sebelum koneksi dianggap siap. Penyegaran snapshot terkelola dan penemuan server-dingin berbagi satu gerbang tiga-operasi di seluruh proses. Setelah diizinkan, setiap operasi tetap dibatasi oleh tenggat waktu daftar-alat atau penemuan per-server, termasuk `initTimeout` yang lebih singkat, sehingga pekerjaan katalog yang lambat tidak dapat menahan slot tanpa batas waktu.
 
 Untuk server HTTP yang dapat di-stream, penyambungan kembali (reconnect) dapat secara singkat mengembalikan HTTP `409` ketika server masih menahan stream SSE mandiri yang sudah usang untuk sesi lama. LibreChat menganggap ini sebagai masalah sementara, memutuskan sesi yang usang, dan membangun kembali koneksi secara otomatis; tidak diperlukan tindakan operator saat pemulihan berhasil. Jika koneksi yang dibangun kembali juga gagal, LibreChat akan terus menampilkan kesalahan koneksi yang mendasarinya.
 
@@ -320,6 +322,10 @@ Placeholder yang tersedia meliputi:
 
 Server MCP yang didefinisikan dalam YAML juga dapat menggunakan placeholder `{{LIBRECHAT_OPENID_*}}`, `{{LIBRECHAT_GRAPH_*}}`, dan `{{LIBRECHAT_BODY_*}}`. Nilai `{{LIBRECHAT_BODY_*}}` memiliki cakupan permintaan (request-scoped), sehingga LibreChat membuat koneksi untuk proses yang sedang berjalan, menggunakannya kembali di seluruh pemanggilan alat (tool calls) dalam proses tersebut, dan membersihkannya saat permintaan berakhir. Server dengan cakupan permintaan dikecualikan dari cache alat persisten agar header dan URL spesifik permintaan tidak digunakan kembali di luar proses yang sedang berjalan. Karena daftar alatnya tidak dapat diselesaikan sebelum permintaan obrolan ada, Agent Builder mengekspos satu pilihan runtime-tools untuk keseluruhan server dan menyelesaikan alat-alatnya pada saat runtime. Penyelesaian OAuth menyimpan otorisasi tetapi menunda koneksi hingga proses pertama menyediakan konteks permintaan. Placeholder User, OpenID, dan Graph memiliki cakupan pengguna (user-scoped); transport HTTP menyegarkan header yang telah diselesaikan sebelum setiap pemanggilan alat tanpa memerlukan penyambungan ulang secara mandiri.
 
+`{{LIBRECHAT_GRAPH_ACCESS_TOKEN}}` menukarkan token akses OpenID yang dapat digunakan kembali milik pengguna melalui alur on-behalf-of Microsoft. [`GRAPH_API_SCOPES`](/docs/configuration/dotenv#microsoft-graph-api--entra-id-integration) menetapkan cakupan (scopes) yang dipisahkan oleh spasi yang diminta dan secara default bernilai `https://graph.microsoft.com/.default`. Hal ini terpisah dari `OPENID_GRAPH_SCOPES`, yang mengonfigurasi pencarian orang dan grup.
+
+Placeholder `{{LIBRECHAT_BODY_PARENTMESSAGEID}}` diisi untuk obrolan Agent asli, panggilan API Agent yang kompatibel dengan OpenAI, dan eksekusi Assistants versi lama. Open Responses tidak memiliki identitas pesan induk yang setara dan akan gagal (fails closed) jika server MCP memerlukan nilai tersebut. Lihat [referensi placeholder server MCP](/docs/configuration/librechat_yaml/object_structure/mcp_servers#headers).
+
 ### Instruksi Server [#server-instructions]
 
 `serverInstructions` adalah fitur LibreChat yang secara dinamis menambahkan instruksi yang dikonfigurasi saat alat apa pun dari server MCP tersebut dipilih:
@@ -358,6 +364,8 @@ mcpServers:
 ```
 
 **Catatan**: Jika operasi masih terputus, periksa konfigurasi proksi Anda (misalnya, nginx, traefik, dll.) yang mungkin memutus koneksi sebelum waktunya karena batas waktu (timeout) bawaan.
+
+Saat pengguna menekan **Stop** selama pemanggilan alat Agent di latar depan, LibreChat meneruskan sinyal pembatalan eksekusi ke MCP. Untuk server HTTP yang dapat melakukan streaming (Streamable), SDK MCP mengirimkan `notifications/cancelled`; server harus mematuhi notifikasi tersebut untuk menghentikan pekerjaannya sendiri. Panggilan latar belakang yang terlepas (detached) secara sengaja mempertahankan siklus hidup yang terpisah dan tidak dibatalkan bersamaan dengan giliran latar depan.
 
 ### Kredensial yang Disediakan Pengguna [#user-provided-credentials]
 
@@ -497,6 +505,8 @@ LibreChat menangani token OAuth secara cerdas:
 - **Penyegaran Otomatis**: Saat token penyegaran tersedia, LibreChat secara otomatis memperbarui token akses yang kedaluwarsa
 - **Pemulihan 401 Senyap**: Jika koneksi MCP OAuth menerima penolakan autentikasi di tengah sesi, LibreChat mengoordinasikan satu upaya penyegaran dan penyambungan kembali yang dibatasi per pengguna dan server. Pemanggil konkuren akan berbagi hasil pemulihan tersebut sebelum LibreChat menampilkan permintaan autentikasi baru.
 - **Manajemen Sesi**: Setiap pengguna mengelola sesi OAuth mereka sendiri untuk lingkungan multi-pengguna
+
+Jika stream Agent yang tersimpan dimuat ulang atau dilanjutkan saat prompt otorisasi MCP masih tertunda, LibreChat akan merekonstruksi prompt tersebut dari status generasi yang persisten. Prompt yang telah selesai, dibatalkan, gagal, atau kedaluwarsa tidak akan dipulihkan.
 
 Klien dan token OAuth yang tersimpan terikat pada URL server MCP serta pengaturan klien/endpoint OAuth. Mengubah pengaturan tersebut mengharuskan pengguna untuk melakukan autentikasi kembali. Saat menyunting server yang dibuat melalui UI yang menyimpan `client_secret`, masukkan kembali secret tersebut ketika mengubah kolom pengikatan seperti URL server, ID klien, URL otorisasi, URL token, atau metode autentikasi token.
 

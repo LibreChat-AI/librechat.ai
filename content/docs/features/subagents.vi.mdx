@@ -13,6 +13,7 @@ Sử dụng subagents cho:
 - Các tác vụ phụ nghiên cứu có thể tạo ra đầu ra trung gian dài
 - Xem xét các lượt truyền với một agent chuyên biệt
 - Các tác vụ nặng về công cụ cần được giữ bên ngoài ngữ cảnh cha
+- Các quy trình làm việc theo nhóm đa tác nhân (multi-agent) cần được thực thi đằng sau một tác vụ được ủy quyền
 - Phân tách theo kiểu song song, trong đó thành phần cha điều phối và tổng hợp
 
 ## Subagents khác với Agent Chain như thế nào [#how-subagents-differ-from-agent-chain]
@@ -56,6 +57,27 @@ Các cài đặt khả dụng:
 - **Allow self-spawn**: cho phép tác nhân tạo ra một bản sao mới của chính nó trong một ngữ cảnh biệt lập. Tính năng này được bật theo mặc định khi các subagent được kích hoạt.
 - **Additional subagents**: chọn các agent cụ thể mà agent cha có thể khởi tạo.
 
+Các Agent team đã lưu được nhúng dưới dạng `subagents.graphs` trong các payload tạo hoặc cập nhật Agent. Agent Builder hiện tại bảo toàn các định nghĩa này trong khi bạn chỉnh sửa các cài đặt tự sinh (self-spawn) và cài đặt của từng Agent riêng lẻ, nhưng nó không tạo ra các định nghĩa đồ thị. Mỗi team đặt tên cho một đồ thị có hướng không chu trình (DAG) bị giới hạn, Agent đầu vào của nó và Agent có kết quả được trả về cho parent:
+
+```yaml filename="agent saved-team subagent"
+subagents:
+  enabled: true
+  allowSelf: false
+  graphs:
+    - type: 'research_team'
+      name: 'Research team'
+      description: 'Researches a topic and reviews the findings'
+      agent_ids:
+        - 'agent_researcher'
+        - 'agent_reviewer'
+      entry_agent_id: 'agent_researcher'
+      result_agent_id: 'agent_reviewer'
+      edges:
+        - from: 'agent_researcher'
+          to: 'agent_reviewer'
+          edgeType: 'direct'
+```
+
 Hình dạng tác nhân tương đương:
 
 ```yaml filename="agent subagents"
@@ -85,7 +107,7 @@ modelSpecs:
         model: 'gpt-4o'
 ```
 
-Chỉ `enabled` và `allowSelf` được gửi đến máy khách trong cấu hình khởi động. Danh sách cho phép `agent_ids` vẫn nằm ở phía máy chủ và được xác thực dựa trên giới hạn subagent hiệu dụng, mặc định là 10 và có thể cấu hình bằng [`endpoints.agents.maxSubagents`](/docs/configuration/librechat_yaml/object_structure/agents#maxsubagents). Payload yêu cầu từ máy khách không thể cung cấp hoặc ghi đè cấu hình Subagent của Model Specs.
+Chỉ `enabled` và `allowSelf` được gửi đến máy khách trong cấu hình khởi động. Danh sách cho phép `agent_ids` vẫn nằm ở phía máy chủ và được xác thực dựa trên giới hạn Subagent hiệu dụng, mặc định là 10 và được cấu hình bằng [`endpoints.agents.maxSubagents`](/docs/configuration/librechat_yaml/object_structure/agents#maxsubagents). Các payload yêu cầu từ máy khách không thể cung cấp hoặc ghi đè cấu hình Subagent của Model Specs.
 
 ## Hành vi thời gian chạy [#runtime-behavior]
 
@@ -93,10 +115,54 @@ Khi subagents được bật, agent cha sẽ nhận được một công cụ `s
 
 - `self`, khi `allowSelf` không phải là false
 - Bất kỳ child agent nào được cấu hình trong `agent_ids`
+- Bất kỳ Agent team nào đã lưu hoàn chỉnh trong `graphs`
 
-Các tác nhân con (child agents) chạy với ngữ cảnh biệt lập. Trạng thái tìm kiếm công cụ của tác nhân cha và ngữ cảnh tích lũy không được sao chép vào quá trình chạy của tác nhân con. Mức sử dụng mô hình của quá trình chạy con được tính vào giao dịch của tác nhân cha và được bao gồm trong tổng mức sử dụng của tác nhân cha. Giao diện người dùng hiển thị quá trình chạy con dưới dạng một phần hoạt động của tác nhân có thể mở rộng, bao gồm trạng thái, cập nhật theo thời gian thực và kết quả cuối cùng hoàn chỉnh, bao gồm cả văn bản kết quả được phân phối tăng dần trong khi tác nhân con đang truyền dữ liệu (stream).
+Các child agent chạy với ngữ cảnh biệt lập. Trạng thái tìm kiếm công cụ của parent và ngữ cảnh tích lũy không được sao chép vào quá trình chạy của child. Việc sử dụng model của child ở foreground được bao gồm trong giao dịch và tổng mức sử dụng của parent; các lệnh gọi child tách biệt (detached) kết thúc sau khi yêu cầu của parent đóng sẽ ghi lại mức sử dụng một cách độc lập. Thẻ child thu gọn mở ra một bảng điều khiển hoạt động thống nhất cho các quá trình chạy ở foreground, graph, legacy và detached, hiển thị chi tiết về vòng đời giới hạn, suy luận, công cụ, phê duyệt và kết quả phù hợp với phương thức truyền tải đó.
 
 Các tác nhân con (child agents) tường minh được quảng bá tới tác nhân cha dưới dạng các bộ mô tả nhẹ và chỉ khởi tạo hoàn toàn khi được chọn. Các tác nhân con không được sử dụng sẽ không tải mô hình, công cụ, máy chủ MCP, tệp hoặc Kỹ năng của chúng. Khi được gọi, LibreChat sẽ kiểm tra lại quyền xem và danh tính cấu hình theo phiên bản của tác nhân con; nếu quyền truy cập bị thu hồi hoặc cấu hình đã lưu bị thay đổi trong quá trình chạy, tác nhân con sẽ thất bại ở trạng thái đóng thay vì thực thi các cài đặt cũ.
+
+Khi các nhánh song song tham chiếu đến cùng một Agent con, LibreChat đánh giá các giới hạn về chu kỳ và độ sâu một cách độc lập cho từng đường dẫn duyệt. Do đó, một chu kỳ trên một nhánh sẽ không loại bỏ các liên kết Agent lồng nhau hợp lệ trên một nhánh khác.
+
+Các nhóm đã lưu tuân theo cùng cơ chế phân giải lười (lazy resolution) và kiểm tra quyền truy cập như các thành phần con riêng lẻ. Khi được chọn, mỗi thành viên vẫn giữ nguyên mô hình, hướng dẫn, công cụ, thông tin xác thực MCP, Kỹ năng, tệp, bộ nhớ, hồ sơ Code Interpreter và danh tính thanh toán của riêng mình. LibreChat thực thi nhóm dưới dạng một biểu đồ con biệt lập, truyền phát tiến trình nhận biết thành viên và trả về kết quả đầu ra của Agent đã được cấu hình. Nếu bất kỳ thành viên nào đã lưu bị thiếu, không thể truy cập hoặc không hợp lệ, LibreChat sẽ bỏ qua toàn bộ nhóm thay vì chạy một phần biểu đồ.
+
+Trong các lượt hội thoại sau đó, LibreChat lưu giữ các lệnh gọi trước đó từ các công cụ con và công cụ nhóm có thể truy cập được dưới dạng lệnh gọi công cụ có cấu trúc, bao gồm cả danh tính máy chủ MCP đã được giải quyết khi cần. Các công cụ không còn truy cập được sẽ không được thêm vào quá trình chạy hiện tại chỉ vì chúng xuất hiện trong lịch sử.
+
+## Các luồng Subagent tách biệt [#detached-subagent-threads]
+
+Khi `run_in_background` được bật cho endpoint Agents, một Agent cha có thể tách công việc của subagent và tiếp tục mà không cần chờ đợi. LibreChat lưu trữ từng tiến trình con đã tách biệt với dòng thực thi riêng và bản ghi chuẩn. Các luồng con nằm ngoài điều hướng và tìm kiếm hội thoại thông thường và không thể đọc trực tiếp; chế độ xem của cha được ủy quyền chỉ hiển thị hoạt động của con trong phạm vi giới hạn.
+
+Các luồng con (child threads) là các bản ghi thực thi chỉ đọc. Người dùng không thể chỉnh sửa hoặc xóa luồng con chính tại chỗ. Đối với một luồng con Agent trực tiếp bền vững đã hoàn tất, **Continue in a new chat** sẽ phân nhánh chính xác nhánh đã hoàn tất đó thành một cuộc hội thoại Agent bình thường, có thể ghi riêng biệt, trong khi vẫn giữ luồng con gốc ở trạng thái ẩn và chỉ đọc. Bảng điều khiển hoạt động giữ một trình soạn thảo được gắn trong suốt quá trình chạy và xuyên suốt các tác vụ gửi đến, duy trì tiêu điểm và nội dung hướng dẫn đang nhập dở trong khi chế độ xem tác vụ mới tải. Việc gửi vẫn không khả dụng cho đến khi tác vụ có thể chấp nhận các điều khiển. Văn bản được nhập sau khi hoàn tất sẽ được chuyển vào nhánh mới, và nếu việc phân nhánh thất bại, bản nháp sẽ được khôi phục trong bảng điều khiển. Hành động này không khả dụng đối với các chế độ xem đang chạy, đồ thị, Agent ẩn danh và được chia sẻ. Việc xóa luồng cha sẽ kéo theo việc xóa toàn bộ dòng dõi luồng con của nó. Agent cha có thể thăm dò, điều hướng, xếp hàng, ngắt, hủy, thu thập và sau đó tiếp tục luồng con chính thông qua các công cụ tác vụ của nó; các hợp đồng thuê dựa trên Mongo sẽ tuần tự hóa các phần tiếp tục đó trên các bản sao API.
+
+Bảng điều khiển hoạt động hiển thị các lượt của nhánh con đã chọn dưới dạng một lịch sử nhận biết nhánh. Sử dụng **Load earlier activity** để lùi lại các trang trước và **Show full activity** trên một lượt để hiển thị chi tiết đầy đủ về quá trình chạy được giới hạn của nó. Các lệnh gọi công cụ, phê duyệt, kết quả, điều khiển và suy luận hiển thị với người dùng đều có thể xuất hiện. Văn bản suy luận được giới hạn giống như phần còn lại của dự báo và được đánh dấu khi bị cắt bớt; hoạt động được lưu trữ bởi các máy chủ cũ hơn có thể chỉ hiển thị một dấu hiệu suy luận. Hoạt động được lưu trữ thông thường sử dụng các giới hạn trên mỗi mục giống như hoạt động con riêng tư và khớp một hậu tố mới nhất liên tục vào ngân sách hoạt động được tuần tự hóa 64 KB, vì vậy thông báo rút gọn chỉ xuất hiện khi nội dung có ý nghĩa bị bỏ qua. Khi lịch sử bị cắt bớt hoặc không khả dụng, bảng điều khiển sẽ thông báo thay vì trình bày một chế độ xem một phần như thể đã hoàn tất. Các lượt sự kiện mới sẽ nằm ở cuối lịch sử, các lượt đang chạy hiển thị thời gian đã trôi qua và các hàng tác nhân sử dụng các dấu chấm trạng thái ở vị trí cố định để các thay đổi trạng thái không làm thay đổi bố cục. Một tiêu đề nổi nhỏ gọn cho phép lịch sử cuộn bên dưới nó, trong khi trình soạn thảo tuân theo kích thước của cuộc trò chuyện chính. Công việc đang chạy được truyền tải bằng hoạt động phát trực tuyến của nó thay vì một chip trạng thái chạy riêng biệt; các trạng thái kết thúc bất thường vẫn được gắn nhãn.
+
+Khi Redis được bật, LibreChat ghi lại chủ sở hữu thực thi đang hoạt động và định tuyến các yêu cầu poll, list, steer, queue, interrupt, cancel và collect từ bất kỳ bản sao API nào đến quy trình đó thông qua các thông báo yêu cầu/phản hồi có giới hạn và hết hạn. Bảng điều khiển hoạt động mở cũng nhận được các bản cập nhật trực tiếp theo phạm vi tác vụ; một truy vấn bền vững kéo dài hai giây vẫn là phương án dự phòng cho các sự kiện bị bỏ lỡ, kết nối lại hoặc sự cố Redis. Các triển khai đơn quy trình và không sử dụng Redis sẽ sử dụng đường dẫn nhanh trong bộ nhớ (in-memory fast path). Một trình thực thi trực tiếp sẽ không được di chuyển sau khi quy trình chủ của nó khởi động lại hoặc biến mất, nhưng bản ghi con được hỗ trợ bởi MongoDB, trạng thái terminal, mức sử dụng, lịch sử và sự tiếp tục do Agent điều khiển sau đó vẫn tồn tại độc lập. Điều này không biến các tác vụ tách rời thành một API công việc nền công khai.
+
+### Kiểm soát một Child đang chạy [#control-a-running-child]
+
+Trong một cuộc trò chuyện gốc đã xác thực, hãy mở bảng hoạt động Subagent và chọn một tác vụ con bền vững (durable child task). Trong khi tác vụ đó đang chạy, hãy nhập hướng dẫn và gửi đi để điều hướng theo mặc định. Trên máy tính để bàn có hỗ trợ di chuột, menu hành động của nút gửi cung cấp các tùy chọn **Steer**, **Queue** và **Interrupt**, đồng thời chỉ hiển thị các phím tắt đang hoạt động theo cài đặt bàn phím hiện tại của người dùng. Trên các thiết bị cảm ứng và trong bảng điều khiển dạng modal, các tùy chọn queue và interrupt vẫn khả dụng dưới dạng các nút điều khiển biểu tượng. Khi không có hướng dẫn nào được nhập, nút gửi sẽ trở thành **Cancel task**.
+
+- **Steer** thêm hướng dẫn tại ranh giới an toàn tiếp theo của phần tử con.
+- **Queue** lưu giữ hướng dẫn cho lượt tiếp theo trong tác vụ con.
+- **Interrupt** dừng công việc hiện tại của con ở một ranh giới an toàn và áp dụng hướng dẫn mới.
+- **Cancel task** yêu cầu hủy mà không gửi hướng dẫn.
+
+Các kiểm soát được chấp nhận sẽ xuất hiện trong lịch sử cụ thể của tác vụ dưới dạng đang gửi, đang chờ, đã áp dụng, chưa áp dụng hoặc thất bại, kèm theo lý do nếu có. Chọn **Withdraw** để xóa hướng dẫn đang chờ xử lý trước khi tác vụ con áp dụng nó. Hướng dẫn bị giới hạn ở mức 4 KB. Mỗi tác vụ lưu trữ tối đa 64 biên nhận có thẩm quyền, trong khi bảng điều khiển hoạt động hiển thị tối đa 32; lịch sử hoàn thành cũ hơn sẽ bị lược bỏ trước các kiểm soát được chấp nhận đang hoạt động, và giao diện người dùng sẽ gắn nhãn lịch sử bị lược bỏ hoặc hướng dẫn đã được rút ngắn để hiển thị.
+
+Các điều khiển đang chạy sẽ đóng lại khi tiến trình con ổn định, và cùng một trình soạn thảo đó sẽ chuyển sang tiếp tục một tiến trình con đủ điều kiện trong một cuộc trò chuyện mới. LibreChat xác minh quyền truy cập của người dùng đã đăng nhập vào tiến trình cha và tiến trình con, mối quan hệ cha-con của chúng và quyền sở hữu đối tượng thuê (tenant) trên mỗi yêu cầu, đồng thời áp dụng các bộ lọc nội dung và kiểm tra kiểm duyệt đã được cấu hình cho hướng dẫn. Việc gửi lặp lại cùng một điều khiển đã được chấp nhận sẽ trả về biên nhận có thẩm quyền thay vì áp dụng chỉ dẫn đó hai lần. Các cuộc trò chuyện được chia sẻ vẫn ở chế độ chỉ đọc và không hiển thị các điều khiển này.
+
+Các cuộc trò chuyện được chia sẻ chỉ có thể hiển thị hoạt động giới hạn đã được bao gồm trong payload chia sẻ. Chế độ xem của chúng là chỉ đọc, bỏ qua các điều khiển phê duyệt và bộ chọn con bền vững, đồng thời không bao giờ mở đường dẫn truy vấn luồng con đã xác thực.
+
+### Hoạt động con dựa trên sự kiện (Event-Driven Child Activity) [#event-driven-child-activity]
+
+Các Child Agents tiếp tục thông qua [liên kết sự kiện Agents API](/docs/features/agents_api#event-driven-child-agents) không bắt nguồn từ thẻ công cụ `subagent`. Trong cuộc trò chuyện gốc đã xác thực, LibreChat thay vào đó thêm một hàng tác nhân thu gọn bên dưới tin nhắn sở hữu liên kết đó. Việc mở hàng này sẽ sử dụng lại bảng hoạt động Subagent, với các bộ chọn cho tác nhân và các lượt của nó cùng với hoạt động chạy từng bước, công cụ, tin nhắn và đánh dấu suy luận theo thời gian thực. Các trình kích hoạt sự kiện bên ngoài hiển thị dưới dạng các hàng do người dùng kích hoạt thông thường với các chi tiết có thể mở rộng về loại sự kiện, nguồn, thời gian xảy ra và hành động dự kiến. Khi một lượt gửi mới chọn một tác vụ khác trong cùng luồng con, các lượt hiện có vẫn hiển thị trong khi tác vụ mới tải và chỉ có trình giữ chỗ phát trực tuyến của nó được thêm vào; trạng thái và các điều khiển cụ thể của tác vụ không bao giờ được mượn từ chế độ xem đã lưu giữ. Các trang trước đó và hoạt động đầy đủ theo từng lượt sử dụng cùng một lịch sử con bị giới hạn, chỉ đọc.
+
+Phép chiếu cha được giới hạn một cách có chủ đích: nó trả về tối đa 64 luồng con, giữ lại tối đa 20 tác vụ gần nhất cho mỗi luồng con từ một cửa sổ nguồn giới hạn được chia sẻ và giới hạn phản hồi ở mức 96 KB. Giao diện người dùng sẽ báo cáo lịch sử bị cắt bớt thay vì ngụ ý rằng chế độ xem vượt quá giới hạn là hoàn chỉnh. Việc bắt đầu một lượt khác sẽ đưa một tác nhân cũ hơn vào cửa sổ con gần đây. Các luồng con này vẫn bị ẩn khỏi điều hướng thông thường và không thể được khám phá từ một cha hoặc đối tượng thuê (tenant) khác.
+
+### Tự động tiếp tục nội dung cha [#automatic-parent-continuation]
+
+Sau khi một child agent tách biệt (detached) hoàn tất, LibreChat sẽ lưu trữ kết quả terminal hoặc lỗi của nó và theo mặc định, sẽ gửi một continuation (phần tiếp nối) idempotent đến Agent cha đã lưu trên chính nhánh đã khởi chạy nó. Việc gửi dữ liệu sẽ chờ trong khi nhánh cha đó đang chạy, tạm dừng hoặc đang hoàn tất. Nhánh cha sau khi được tiếp tục sẽ nhận được một manifest giới hạn của các tác vụ anh em (sibling tasks) liên quan thay vì phải liên tục thăm dò (busy-polling), và đoạn chat sẽ hiển thị thông báo đánh thức trong một thẻ tác vụ có thể thu gọn.
+
+Việc phân phối hoàn tất tự động được kích hoạt khi [`endpoints.agents.backgroundTasks.completionWakeups`](/docs/configuration/librechat_yaml/object_structure/agents#backgroundtasks) bị lược bỏ hoặc được đặt là `true`. Hãy đặt giá trị này là `false` để giữ cho các tiến trình con tách biệt chỉ ở chế độ thăm dò (poll-only). Các tiến trình con bị hủy sẽ bị bỏ qua và các Agent cha tạm thời (ephemeral) không được hỗ trợ vì không có cấu hình đã lưu nào để khôi phục. Việc thực thi của tiến trình con tách biệt sở hữu ngữ cảnh chạy riêng của nó, vì vậy việc giải quyết hoặc hủy bỏ yêu cầu gốc của tiến trình cha sẽ không hủy bỏ công việc được sở hữu độc lập. Tiến trình cha vẫn có thể thu thập kết quả của tiến trình con bền vững thông qua các công cụ tác vụ của nó.
 
 ## Giới hạn [#limits]
 
@@ -105,10 +171,16 @@ LibreChat thực thi các giới hạn này để giữ cho các biểu đồ su
 <OptionTable
   options={[
     [
-      'MAX_SUBAGENTS',
+      'endpoints.agents.maxSubagents',
       'Number',
-      'Số lượng subagent tường minh tối đa cho mỗi agent cha. Có thể cấu hình thông qua `endpoints.agents.maxSubagents`, tối đa là 50.',
+      'Số lượng mục tối đa trong mỗi danh sách `agent_ids` hoặc `graphs` của Agent cha. Có thể cấu hình từ 1 đến 50.',
       '10',
+    ],
+    [
+      'MAX_GRAPH_SUBAGENT_MEMBERS',
+      'Number',
+      'Số lượng thành viên tối đa trong một nhóm Agent đã lưu.',
+      '32',
     ],
     ['MAX_SUBAGENT_DEPTH', 'Number', 'Số bước nhảy subagent tường minh tối đa từ một agent gốc.', '5'],
     [
@@ -134,15 +206,16 @@ endpoints:
     maxSubagents: 20
 ```
 
-Giá trị được cấu hình áp dụng cho các yêu cầu tạo, cập nhật và sao chép agent, cho danh sách cho phép `subagents.agent_ids` trong Model Specs, và cho trình chọn subagent trong Agent Builder. Xem [maxSubagents](/docs/configuration/librechat_yaml/object_structure/agents#maxsubagents) để biết tài liệu tham khảo đầy đủ. Các giới hạn về độ sâu, nút đồ thị và cấu hình chạy ở trên là cố định.
+Giá trị được cấu hình áp dụng cho các yêu cầu tạo, cập nhật và sao chép Agent cho cả `subagents.agent_ids` và `subagents.graphs`, cho danh sách cho phép `subagents.agent_ids` của Model Specs, và cho trình chọn subagent trong Agent Builder. Xem [maxSubagents](/docs/configuration/librechat_yaml/object_structure/agents#maxsubagents) để biết tài liệu tham khảo đầy đủ. Các giới hạn về cấu hình cho mỗi thành viên trong nhóm, độ sâu, nút đồ thị và lượt chạy ở trên là cố định.
 
 ## Kiểm soát truy cập [#access-control]
 
-Các child agent đã cấu hình phải hiển thị cho người dùng. Nếu người dùng không có quyền xem đối với một agent được tham chiếu, LibreChat sẽ bỏ qua subagent đó. Đối với các yêu cầu tạo và cập nhật, các mục `subagents.agent_ids` không hợp lệ hoặc không được ủy quyền sẽ bị từ chối.
+Các child agent đã cấu hình và mọi thành viên trong team đã lưu phải hiển thị với người dùng. Nếu người dùng không có quyền xem một Agent cụ thể được tham chiếu, LibreChat sẽ bỏ qua subagent đó. Một team đã lưu hoạt động theo cơ chế tất cả hoặc không có gì và sẽ bị bỏ qua nếu bất kỳ thành viên nào không khả dụng. Các yêu cầu tạo và cập nhật sẽ từ chối các tham chiếu bị thiếu hoặc không được ủy quyền, các loại spawn trùng lặp, các đồ thị team có vòng lặp hoặc bị ngắt kết nối, các thành viên nhập hoặc kết quả không hợp lệ, và các cấu hình vượt quá các giới hạn nêu trên.
 
 ## Mẹo thiết kế [#design-tips]
 
 - Kích hoạt tính năng tự tạo (self-spawn) khi tác nhân cha đã được xác định phạm vi rõ ràng và chỉ cần một ngữ cảnh mới cho một tác vụ phụ.
 - Thêm các child agents cụ thể khi tác vụ cần một mô hình, tập hợp hướng dẫn, tập hợp công cụ hoặc danh sách cho phép kỹ năng khác.
+- Sử dụng một team đã lưu khi nhiều Agent cần chạy như một quy trình làm việc được ủy quyền với kết quả duy nhất được trả về cho parent.
 - Giữ cho các mô tả con được rõ ràng. Parent sử dụng tên và mô tả của từng child để chọn mục tiêu ủy quyền phù hợp.
 - Sử dụng subagents cho các công việc trung gian cần trả về kết quả cô đọng, không dùng cho việc chuyển giao vĩnh viễn sang một luồng hội thoại khác.

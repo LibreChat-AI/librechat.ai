@@ -88,6 +88,28 @@ LANGFUSE_BASE_URL=https://cloud.langfuse.com
 
 두 환경 키가 모두 존재할 때, LibreChat은 이를 중앙 프로젝트에 사용하며 **Settings → Langfuse**를 숨깁니다. `LANGFUSE_TRACING_ENABLED=false` 또는 `LANGFUSE_SAMPLE_RATE=0`으로 설정하면 추적(trace)과 피드백 점수 모두가 비활성화됩니다. 부분 샘플링은 추적당 하나의 결정론적 결정을 내리며, 샘플링에서 제외된 추적은 이후 피드백 점수를 받지 않습니다.
 
+`LANGFUSE_BASE_URL`은 표준 기본 URL 설정입니다. 이전의 `LANGFUSE_HOST` 및 `LANGFUSE_BASEURL` 이름은 호환성을 위해 유지되며, 여러 설정이 지정된 경우 `LANGFUSE_BASE_URL`이 우선순위를 갖습니다.
+
+### 인증된 프록시 및 게이트웨이 [#authenticated-proxies-and-gateways]
+
+Cloudflare Access, oauth2-proxy 또는 기타 인증 게이트웨이 뒤에서 호스팅되는 자체 호스팅 Langfuse 인스턴스의 경우, `librechat.yaml`에서 배포 수준의 사용자 지정 요청 헤더를 정의하십시오:
+
+```yaml filename="librechat.yaml"
+langfuse:
+  headers:
+    CF-Access-Client-Id: '${CF_ACCESS_CLIENT_ID}'
+    CF-Access-Client-Secret: '${CF_ACCESS_CLIENT_SECRET}'
+```
+
+LibreChat은 확인된 헤더를 모든 직접적인 Langfuse 인터페이스(추적 및 미디어 내보내기, 피드백 점수 생성 및 삭제, 프로젝트 ID 조회, 관리자 자격 증명 확인)에 적용합니다. Langfuse 자체의 `Authorization` 자격 증명은 REST 요청에서 권한을 유지합니다. 값은 `${ENV_VAR}` 보간을 지원하며, 확인되지 않은 변수, 보호된 인프라 비밀 참조, 빈 값 및 유효하지 않은 헤더 이름은 경고와 함께 삭제됩니다. 헤더 값은 시작 로그 및 관리자 구성 읽기 시 마스킹 처리되지만, 리터럴 자격 증명보다는 환경 변수 참조를 사용하는 것이 권장됩니다.
+
+이 헤더들은 운영자 소유이며 YAML 전용입니다. 관리자 패널이나 구성 API를 통해 작성하거나, MongoDB에 저장하거나, 사용자별 `{{...}}` 플레이스홀더로 채울 수 없습니다. LibreChat은 구성이 정확히 하나의 Langfuse 출처로 확인될 때만 이 헤더들을 전송합니다. 여러 개의 중앙, 테넌트 또는 수집기 출처가 있는 경우, 맵이 수신자를 안전하게 선택할 수 없으므로 경고를 기록하고 사용자 지정 헤더를 전송하지 않습니다.
+
+<Callout type="warning" title="Fanout 제한">
+  fanout collector는 현재 `Authorization` 헤더만 테넌트 Langfuse 목적지로 전달합니다.
+  사용자 지정 `langfuse.headers`는 단일 collector 또는 Langfuse 오리진에 대한 LibreChat의 직접적인 요청을 인증할 수 있지만, 다른 프록시 뒤에 있는 테넌트 목적지로 향하는 collector의 업스트림 요청은 인증하지 않습니다.
+</Callout>
+
 ## 테넌트 팬아웃 (선택 사항) [#tenant-fanout-optional]
 
 Langfuse fanout을 사용하면 다중 테넌트 LibreChat 배포에서 각 적격 추적(trace)과 해당 미디어를 중앙 Langfuse 프로젝트와 테넌트별 프로젝트 모두로 내보낼 수 있습니다. 이 기능은 선택 사항이며 게이트웨이와 내부 OpenTelemetry 수집기가 추가됩니다. fanout이 배포되지 않은 경우, 위에서 설명한 일반적인 단일 프로젝트 추적은 변경되지 않습니다.
@@ -205,9 +227,23 @@ Redis는 단기 일회성 미디어 업로드 계획을 저장하여 생성 및 
 
 `LANGFUSE_FANOUT_CENTRAL_MEDIA_UPLOAD_DISABLED=true`를 설정하여 LibreChat SDK가 중앙 또는 폴백 수집기 추적을 위한 미디어 업로드를 생성하지 않도록 방지하세요. 테넌트 라우팅 미디어 업로드는 변경되지 않습니다. 이 앱 측 스위치는 게이트웨이 측 `LANGFUSE_FANOUT_CENTRAL_MEDIA_EXPORT_DISABLED`와는 별개이며, 후자는 업로드가 게이트웨이에 도달한 후 중앙 미디어 전달을 차단합니다.
 
+미디어 전달의 경우, fanout 게이트웨이는 구성된 Langfuse 권한이 반환한 절대 HTTPS 업로드 대상만 허용하며 업로드 `PUT` 요청 시 리다이렉트를 따르지 않습니다. 프라이빗 MinIO 호스트를 포함한 자체 호스팅 객체 스토리지는 반환된 업로드 URL이 HTTPS를 사용하는 경우 계속 지원됩니다. 일반 HTTP 또는 리다이렉트에 의존하는 미디어 업로드 대상은 이제 실패 처리되지만, 추적(trace) 내보내기는 독립적으로 계속 수행됩니다.
+
 추적 및 미디어 트래픽은 fanout gateway를 통과합니다. 피드백 점수는 LibreChat에서 직접 전송됩니다. 중앙 점수는 `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` 및 `LANGFUSE_BASE_URL`을 사용하며, 테넌트 점수는 테넌트 앱 구성을 사용합니다.
 
 모든 게이트웨이 변수, 사용자 지정 대상 설정, 메트릭, 확장 및 Redis 동작에 대해서는 [Langfuse fanout deployment reference](https://github.com/danny-avila/LibreChat/blob/dev/otel/langfuse-fanout/README.md)를 참조하세요.
+
+### 진단 정보 내보내기 [#export-diagnostics]
+
+추적된 각 요청은 테넌트 내보내기 결정을 설명하는 저카디널리티(low-cardinality) OpenTelemetry 속성을 기록합니다:
+
+- `librechat.tenant.id`는 테넌트 컨텍스트를 식별합니다.
+- `librechat.langfuse.export_plan`은 `central_only`, `tenant_fanout` 또는 `disabled`입니다.
+- `librechat.langfuse.export_reason`는 `configured`, `collector_unconfigured`, `destination_unconfigured`, `emergency_disabled`, `fanout_disabled`, `missing_credentials` 또는 `tenant_disabled`입니다.
+
+게이트웨이는 `langfuse_fanout_trace_exports_total{destination,result,tenant_id}`도 노출합니다. 테넌트가 없는 배치는 `<unknown>`을 사용하고, 혼합 테넌트 배치는 `<multiple>`을 사용하며, 잘못된 형식의 테넌트 ID는 `<invalid>`를 사용합니다. 게이트웨이는 프로세스당 최대 1,000개의 고유한 유효 테넌트 레이블을 유지하며, 이후의 ID는 `<overflow>`로 통합하여 메트릭 카디널리티를 제한합니다. 인식되지 않는 대상은 별도의 레이블을 생성하는 대신 `central`로 기록됩니다.
+
+성공적인 인앱 연결 변경 사항은 구조화된 이벤트 `librechat.langfuse.connection.changed`도 기록합니다. 여기에는 테넌트, 구성 및 활성화 상태, 대상, 검증 결과, 주요 변경 사항, 그리고 키를 기록하지 않는 전체 변경 필드 목록이 포함됩니다. 이러한 필드를 사용하여 의도적인 중앙 전용 또는 비활성화된 플랜과 수집기, 대상 또는 자격 증명 구성 누락을 구분하십시오.
 
 ## LibreChat 재시작 [#restart-librechat]
 
@@ -222,11 +258,15 @@ docker compose up -d
 
 Langfuse가 구성된 상태로 LibreChat을 다시 시작하면, Langfuse UI에서 모든 채팅 메시지 응답에 대한 새로운 추적(trace)을 확인할 수 있습니다:
 
+LibreChat v0.8.8-rc2는 에이전트 추적(Agent trace) 구성을 업데이트하여 `StandardGraph`, `MultiAgentGraph` 및 `AgentModelCall` 런타임 관찰 이름을 사용하며, 활동 및 추론 레이블 호출은 해당 작업 내에 중첩됩니다. 추적 수준의 입력 및 출력도 루트 관찰에 표시됩니다. 이전 관찰 이름이나 추적 수준의 입력/출력 필드에 의존하는 저장된 Langfuse 필터, 대시보드 및 평가를 검토하십시오.
+
 ![LibreChat 예시 추적](https://langfuse.com/images/cookbook/integration_librechat/librechat-example-trace.png)
 
 [Langfuse UI에서 추적 링크 보기](https://cloud.langfuse.com/project/cloramnkj0002jz088vzn1ja4/traces/57b4aa20a258a2e9e2d1ce2e4eacb21c?observation=06f5341a68d723b1&timestamp=2026-02-04T13%3A02%3A54.248Z&traceId=57b4aa20a258a2e9e2d1ce2e4eacb21c)
 
-`access:admin` 및 `manage:configs:langfuse` 권한을 가진 관리자는 대화의 **Context Usage** 분석을 열고 **View session in Langfuse**를 선택할 수도 있습니다. 이 링크는 생성이 완료되고 대화에 활성화된 인앱 Langfuse 연결로 전송된 샘플링된 추적(trace)이 하나 이상 포함된 경우에만 나타납니다. 이 링크는 해당 연결의 검증된 대상 및 프로젝트를 가리킵니다. 환경 관리형 자격 증명, 비활성화된 연결, 샘플링에서 제외된 대화, 또는 Langfuse 구성 접근 권한이 없는 사용자에게는 표시되지 않습니다.
+`access:admin` 및 `manage:configs:langfuse` 권한을 가진 관리자는 대화의 **Context Usage** 분석을 열고 **View session in Langfuse**를 선택할 수 있습니다. 동일한 작업은 Langfuse 구성 권한을 가진 인증된 동일 테넌트 관리자를 위한 공유 대화에서도 나타날 수 있습니다. 공개 및 일반 공유 링크 뷰어에게는 이 기능이 표시되지 않습니다.
+
+이 링크는 생성이 완료되고 대화에 활성 인앱 Langfuse 연결로 전송된 샘플링된 추적(trace)이 하나 이상 포함된 경우에만 나타납니다. 이 링크는 해당 연결의 검증된 대상 및 프로젝트를 가리킵니다. 환경 관리 자격 증명, 비활성화된 연결, 샘플링에서 제외된 대화, 테넌트 간 뷰어 또는 필요한 권한이 없는 사용자에게는 표시되지 않습니다.
 
 ## 메시지 피드백 점수 [#message-feedback-scores]
 

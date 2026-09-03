@@ -12,6 +12,7 @@ endpoints:
   agents:
     recursionLimit: 50
     maxRecursionLimit: 100
+    maxSubagents: 20
     maxToolCallArgBytes: 65536
     maxDeltaEventsPerTurn: 100000
     maxToolCallArgBytesByTool:
@@ -29,9 +30,34 @@ endpoints:
     activityModel: gpt-4.1-nano
     activityPhaseLabel: true
     activityPhaseMaxPerRun: 5
-    maxSubagents: 10 # Maximum explicit subagents per agent (1-50)
     skills:
       maxCatalogSkills: 20
+    statefulCodeSessions:
+      allowedEnvironments: ['user', 'agent-user', 'conversation']
+      environments:
+        - id: managed-default
+          name: Managed Code API
+          type: managed
+          baseURL: https://code.example.com/v1
+          default: true
+        - id: engineering-vm
+          name: Engineering VM
+          type: attached
+          baseURL: https://code-bridge.example.com/v1
+          pairing:
+            workerId: engineering-vm
+            tokenEnv: CODE_BRIDGE_ADMIN_TOKEN
+        - id: personal-workers
+          name: Personal Code Workers
+          type: attached
+          baseURL: https://code-bridge.example.com/v1
+          pairing:
+            allowPrincipalWorkers: true
+            tokenEnv: CODE_BRIDGE_ADMIN_TOKEN
+    # eventDriven:
+    #   selfUrl: https://librechat.internal
+    backgroundTasks:
+      completionWakeups: true
     toolApproval:
       enabled: true
       mode: default
@@ -56,7 +82,7 @@ endpoints:
       'recursionLimit',
       'Number',
       'Mengatur jumlah langkah default yang dapat diambil agen dalam satu proses eksekusi.',
-      'Controls recursion depth to prevent infinite loops. When limit is reached, raises GraphRecursionError. This value can be configured from the UI up to the maxRecursionLimit.',
+      'Controls recursion depth to prevent infinite loops. When the limit is reached, LibreChat preserves the partial turn and offers Keep going or Answer now. This value can be configured from the UI up to maxRecursionLimit.',
     ],
   ]}
 />
@@ -242,7 +268,9 @@ allowedProviders:
 
 **Default:** `["deferred_tools", "execute_code", "file_search", "web_search", "artifacts", "subagents", "actions", "context", "skills", "memory", "ask_user_question", "tools", "chain", "ocr"]`
 
-`programmatic_tools`, `stateful_code_sessions`, `run_in_background`, dan `tool_intents` bersifat opt-in dan harus ditambahkan secara eksplisit. Programmatic tools dan stateful sessions juga memerlukan `execute_code` dan deployment Code Interpreter yang kompatibel. Eksekusi kode di latar belakang memerlukan `run_in_background`, `execute_code`, dan Code Interpreter.
+`programmatic_tools`, `stateful_code_sessions`, `run_in_background`, dan `tool_intents` bersifat opsional dan harus ditambahkan secara eksplisit. Programmatic tools dan stateful sessions juga memerlukan `execute_code` dan deployment Code Interpreter yang kompatibel. Agent Builder menonaktifkan pilihan Programmatic MCP tanpa Code Interpreter, dan server akan menghapus opsi pemanggil programatik yang kedaluwarsa jika eksekusi kode tidak tersedia. `run_in_background` membuat alat Code Interpreter memenuhi syarat secara default dan memungkinkan pemilihan opsional per-alat untuk alat MCP, Plugin, dan Action yang memenuhi syarat; eksekusi kode di latar belakang juga memerlukan `execute_code` dan Code Interpreter.
+
+`stateful_code_sessions` masih sangat eksperimental. Fitur ini memerlukan rute Code Interpreter dengan profil `stateful` terpisah yang dikonfigurasi dengan [`LIBRECHAT_CODE_BASEURL_STATEFUL`](/docs/configuration/dotenv#stateful-code-interpreter-endpoint) atau [`statefulCodeSessions.environments`](#statefulcodesessions). Permintaan stateful akan gagal secara tertutup (fail closed) alih-alih beralih ke layanan stateless normal. Di dalam Agent Builder, setiap Agen yang diaktifkan memilih cakupan ruang kerja pengguna (user), agen-dan-pengguna (agent-and-user), atau percakapan (conversation) dan, jika backend bernama dikonfigurasi, lingkungan eksekusi. Agen baru dimulai dengan cakupan default pribadi pengguna dan lingkungan eksekusi default penyebaran.
 
 **Contoh:**
 
@@ -265,9 +293,11 @@ capabilities:
   - 'tools'
   - 'chain'
   - 'ocr'
-  # Optional: reuse one Code Interpreter workspace per conversation.
+  # Optional and highly experimental: reuse a user-, agent-and-user-, or
+  # conversation-scoped workspace. Requires LIBRECHAT_CODE_BASEURL_STATEFUL
+  # or a named statefulCodeSessions environment.
   # - 'stateful_code_sessions'
-  # Optional: allow selected eligible MCP and Code Interpreter tools to run as background tasks.
+  # Optional: allow eligible Code Interpreter, MCP, Plugin, and Action tools to run as background tasks.
   # - 'run_in_background'
   # Optional: show live model-written intent labels for native and selected MCP tools.
   # - 'tool_intents'
@@ -275,13 +305,152 @@ capabilities:
 
 **Catatan:** Bidang ini bersifat opsional. Jika diabaikan, perilaku defaultnya adalah menyertakan semua kapabilitas yang tercantum dalam default.
 
-## toolApproval
+## statefulCodeSessions
 
-Mengontrol peninjauan manusia untuk pemanggilan alat Agent. Fitur ini dinonaktifkan secara default. Saat diaktifkan, pemanggilan yang cocok akan dijeda hingga pengguna mengirimkan keputusan yang diizinkan, seperti menyetujui, menolak, atau mengedit argumen.
+Mengonfigurasi cakupan berbagi dan backend eksekusi opsional untuk ruang kerja Code Interpreter stateful yang sangat eksperimental.
+
+<Callout type="warning" title="Sangat eksperimental">
+  Stateful Code Sessions, named execution environments, attached workers, dan pairing saat ini berada dalam tahap eksperimen awal. Perilaku, konfigurasi, karakteristik persistensi, dan protokol integrasinya dapat berubah secara substansial.
+</Callout>
 
 <OptionTable
   options={[
-    ['enabled', 'Boolean', 'Mengaktifkan persetujuan alat untuk endpoint Agents.', 'false'],
+    [
+      'allowedEnvironments',
+      'Array/List of Strings',
+      'Cakupan ruang kerja stateful yang diizinkan: `user`, `agent-user`, dan/atau `conversation`.',
+      '["user", "agent-user", "percakapan"]',
+    ],
+    [
+      'environments',
+      'Array of Objects',
+      'Lingkungan Code API terkelola atau terlampir bernama opsional yang ditampilkan di Agent Builder.',
+      'Unset; LIBRECHAT_CODE_BASEURL_STATEFUL remains the stateful endpoint',
+    ],
+  ]}
+/>
+
+```yaml filename="endpoints / agents / statefulCodeSessions"
+statefulCodeSessions:
+  allowedEnvironments:
+    - 'user'
+    - 'agent-user'
+    - 'conversation'
+  environments:
+    - id: managed-default
+      name: Managed Code API
+      type: managed
+      baseURL: https://code.example.com/v1
+      default: true
+    - id: engineering-vm
+      name: Engineering VM
+      type: attached
+      baseURL: https://code-bridge.example.com/v1
+      owner: deployment
+      pairing:
+        workerId: engineering-vm
+        tokenEnv: CODE_BRIDGE_ADMIN_TOKEN
+    - id: personal-workers
+      name: Personal Code Workers
+      type: attached
+      baseURL: https://code-bridge.example.com/v1
+      owner: deployment
+      configSchema:
+        permissions:
+          fileWrite:
+            allowed: [allow, ask, deny]
+            default: ask
+          commandExecution:
+            allowed: [ask, deny]
+            default: ask
+      pairing:
+        allowPrincipalWorkers: true
+        tokenEnv: CODE_BRIDGE_ADMIN_TOKEN
+```
+
+`allowedEnvironments` wajib ada kapan pun blok tersebut disertakan dan harus mencakup setidaknya satu cakupan ruang kerja (workspace scope). Hilangkan seluruh blok untuk mengizinkan ketiga cakupan tersebut dan terus merutekan pekerjaan stateful melalui [`LIBRECHAT_CODE_BASEURL_STATEFUL`](/docs/configuration/dotenv#stateful-code-interpreter-endpoint). Default pribadi dan Agent Builder hanya mengizinkan nilai yang diperbolehkan. Jika administrator memperketat kebijakan, default pribadi yang tersimpan akan tetap terlihat namun dinonaktifkan, dan Agen baru akan menggunakan cakupan pertama yang diperbolehkan. Agen yang sudah diaktifkan akan tetap mempertahankan cakupan yang tersimpan, namun cakupan yang kini tidak diperbolehkan akan gagal secara tertutup (fails closed) saat runtime hingga Agen dikonfigurasi ulang.
+
+Ketika `environments` tidak kosong, setiap entri memerlukan `id` yang unik, `name` tampilan, `type` berupa `managed` atau `attached`, serta `baseURL` HTTP(S) tanpa string kueri atau fragmen. Jika daftar tersebut berisi lingkungan yang dapat dieksekusi, tepat satu dari entri tersebut harus menetapkan `default: true`. Agent Builder kemudian akan menambahkan pemilih **Execution environment**; membiarkannya pada **Deployment default** akan menggunakan entri default tersebut. Daftar yang hanya berisi control plane pemasangan swalayan tidak memerlukan default. Agen yang menamai lingkungan yang kemudian dihapus atau tidak lagi dapat diakses akan gagal secara tertutup (fails closed) alih-alih beralih ke backend lain.
+
+- `managed` mengarah langsung ke Code API stateful yang dikelola operator.
+- `attached` mengarah ke backend `remote-bridge` Code API yang kompatibel yang menyewakan pekerjaan ke worker `@librechat/code` outbound. Worker tersebut tidak memerlukan port publik inbound, tetapi endpoint eksekusi lokalnya tetap memerlukan isolasi yang sesuai.
+- `workerId` secara opsional merutekan lingkungan yang terlampir ke satu worker keluar. Ini hanya untuk sisi server dan tidak diekspos melalui konfigurasi startup klien.
+- `owner` secara default adalah `deployment`. Lingkungan yang dimiliki oleh principal dibuat melalui API Code Environments LibreChat yang terautentikasi, dilindungi oleh ACL, dan digabungkan hanya untuk permintaan yang diotorisasi; jangan letakkan URL yang disediakan klien di dalam YAML deployment.
+- `pairing` bersifat opsional dan hanya valid untuk entri `attached` yang dimiliki oleh deployment. `pairing.workerId` mengidentifikasi worker yang dikelola operator untuk didaftarkan, sementara `pairing.allowPrincipalWorkers: true` memungkinkan pengguna yang berwenang untuk mendaftarkan worker yang terikat dengan pemilik ke control plane tersebut. Setidaknya salah satu dari kolom tersebut wajib diisi jika `pairing` disertakan.
+- `pairing.tokenEnv` menamai variabel lingkungan yang berisi token administrator bridge; variabel ini tidak pernah berisi token itu sendiri. Pairing memerlukan HTTPS kecuali untuk pengembangan loopback.
+- `configSchema.permissions` secara opsional memungkinkan pemilik yang berwenang untuk memilih kebijakan `fileWrite` dan `commandExecution` untuk lingkungan pribadi di bawah **Settings > Code environments**. Setiap kolom memerlukan daftar `allowed` yang tidak kosong yang berisi `allow`, `ask`, dan/atau `deny`; `default` adalah `ask` jika dihilangkan dan harus muncul di dalam `allowed`. LibreChat akan menolak nilai tersimpan yang berada di luar daftar administrator.
+- Jangan konfigurasikan `settings` di dalam deployment YAML. LibreChat menyediakan field dengan cakupan permintaan (request-scoped) tersebut dari preferensi pemilik yang terautentikasi dan tervalidasi oleh server.
+- Hanya kebijakan penulisan file dan eksekusi perintah yang dapat dikonfigurasi oleh pengguna. Isolasi, jaringan, pemasangan (mounts), eksekusi istimewa (privileged execution), ingress, egress, dan rahasia (secrets) tetap dikendalikan oleh administrator.
+- Jika `workerId` tingkat atas dan `pairing.workerId` keduanya ada, keduanya harus cocok. Entri dengan `allowPrincipalWorkers: true` dan tidak ada ID pekerja yang bersifat khusus-pasangan (pairing-only): entri tersebut dihilangkan dari pemilih eksekusi dan tidak dapat menetapkan `default: true`.
+
+Eksekusi terlampir secara otomatis mengaktifkan garis dasar persetujuan yang aman: penulisan file serta eksekusi perintah atau kode akan meminta konfirmasi, sementara operasi baca-saja dan pencarian tetap berjalan di bawah kebijakan alat reguler. Garis dasar ini dicakupkan ke Agen yang menggunakan lingkungan terlampir. Jika tidak ada pengaturan pengguna yang tersedia, LibreChat menggunakan `ask`; [`toolApproval.enabled: false`](#toolapproval) adalah penggantian darurat administrator yang menonaktifkan garis dasar lingkungan terlampir ini. Pemanggil tanpa dukungan persetujuan dan resume akan gagal secara tertutup (fail closed) kecuali penggantian eksplisit tersebut diatur.
+
+Eksekusi terlampir memerlukan build remote-bridge Code Interpreter eksperimental yang cocok. Penyandingan mengautentikasi koneksi worker keluar; ini tidak menggantikan isolasi sandbox atau VM. Pengguna dengan izin manajemen Code Environment melakukan penyandingan, mengonfigurasi kebijakan alat yang diizinkan, dan mencabut worker pribadi di bawah **Settings > Code environments**. Lihat [Stateful Code Sessions](/docs/features/code_interpreter#stateful-code-sessions).
+
+## eventDriven
+
+Mengonfigurasi origin internal tepercaya yang digunakan oleh pengiriman event Agent. Sebagian besar deployment harus mengabaikan blok ini dan menggunakan listener yang terikat pada proses saat ini.
+
+<OptionTable
+  options={[
+    [
+      'selfUrl',
+      'URL',
+      'Mengganti listener terikat proses saat ini untuk penerimaan pemicu internal tepercaya. Gunakan hanya jika pengiriman harus melewati origin HTTP tepercaya lainnya.',
+      '',
+    ],
+  ]}
+/>
+
+```yaml filename="endpoints / agents / eventDriven"
+endpoints:
+  agents:
+    eventDriven:
+      selfUrl: https://librechat.internal
+```
+
+Kelanjutan turunan terikat bersifat otomatis. Bidang `childTurns`, `completionWakeups`, `coalescing`, `actorMailbox`, `checkpointForks`, dan `durableReceipts` yang lebih lama di bawah `eventDriven` bukan lagi merupakan sakelar konfigurasi dan harus dihapus. Runtime sekarang menerapkan jaminan pengiriman tersebut secara langsung. Bidang terpisah [`backgroundTasks.completionWakeups`](#backgroundtasks) mengontrol pengiriman percakapan untuk alat latar belakang yang telah selesai dan Subagent yang terlepas.
+
+Biarkan `selfUrl` tidak disetel untuk jalur pendengar terikat (bound-listener) normal. Setel hanya jika penerimaan pemicu internal tepercaya harus melintasi origin HTTP(S) lain, seperti pintu depan TLS. `AGENT_TRIGGERS_SELF_URL` tetap menjadi cadangan kompatibilitas saat kolom ini dihilangkan. Lihat [Peristiwa API Agen](/docs/features/agents_api#agent-events) dan [Kelanjutan Induk Otomatis](/docs/features/subagents#automatic-parent-continuation).
+
+Penyelesaian Action yang terlepas (detached) dari Event Actor dipilih secara otomatis dari penyimpanan generasi bawaan. Eksekusi dalam memori bersifat lokal terhadap proses; stream generasi Redis menambahkan pemulihan restart yang tahan lama dan serah terima replika. Tidak diperlukan switch `librechat.yaml` atau flag fitur environment. Lihat [Agent Event Runtime](/docs/configuration/dotenv#agent-event-runtime).
+
+## backgroundTasks
+
+Mengontrol apakah alat latar belakang yang telah selesai dan Subagent yang terlepas yang didukung secara otomatis melanjutkan Agen induk mereka yang tersimpan.
+
+<OptionTable
+  options={[
+    [
+      'completionWakeups',
+      'Boolean',
+      'Secara otomatis mengirimkan penyelesaian tugas latar belakang yang didukung sebagai kelanjutan. Atur ke false untuk perilaku poll-only.',
+      'true',
+    ],
+  ]}
+/>
+
+```yaml filename="endpoints / agents / backgroundTasks"
+backgroundTasks:
+  completionWakeups: true
+```
+
+Pengiriman penyelesaian otomatis diaktifkan bahkan ketika blok ini dihilangkan. Tetapkan `completionWakeups: false` untuk mengharuskan Agen mengumpulkan setiap hasil melalui `check_background_task`.
+
+Eksekusi alat latar belakang biasa tetap bersifat lokal terhadap proses dan tidak bertahan jika proses pekerja tersebut hilang. Setelah hasil terminal yang hanya berisi konten disimpan, pengirimannya bersifat permanen dan dapat berlanjut di replika lain. Tugas dengan artefak langsung masih memerlukan polling pada proses yang memilikinya. Subagent yang terlepas (Detached Subagents) tetap mempertahankan transkrip permanen dan jalur hasil terminal mereka sendiri. Polling manual tetap tersedia untuk status, kontrol, dan pemulihan dalam mode mana pun. Lihat [Background Tool Calls](/docs/features/agents#background-tool-calls) dan [Automatic Parent Continuation](/docs/features/subagents#automatic-parent-continuation).
+
+## toolApproval
+
+Mengontrol tinjauan manusia untuk pemanggilan alat Agen. Kebijakan di seluruh penyebaran dinonaktifkan jika blok ini dihilangkan. Agen yang menggunakan lingkungan Kode terlampir adalah pengecualian: LibreChat mengaktifkan kebijakan keamanan *ask-by-default* yang dicakup kecuali administrator secara eksplisit menetapkan `enabled: false`. Ketika tinjauan berlaku, pemanggilan yang cocok akan dijeda hingga pengguna mengirimkan keputusan yang diizinkan, seperti menyetujui, menolak, atau mengedit argumen.
+
+<OptionTable
+  options={[
+    [
+      'enabled',
+      'Boolean',
+      'Mengaktifkan persetujuan alat di seluruh deployment. Nilai false secara eksplisit juga menonaktifkan baseline keamanan lingkungan Code yang terlampir.',
+      'Omitted',
+    ],
     [
       'mode',
       'String',
@@ -306,7 +475,7 @@ Mengontrol peninjauan manusia untuk pemanggilan alat Agent. Fitur ini dinonaktif
   ]}
 />
 
-Pola menggunakan pencocokan glob. Alat MCP dapat dicakup dengan `mcp:<server>:<tool>`; sebagai contoh, `mcp:github:*` mencocokkan setiap alat dari server `github`. Evaluasi memberikan prioritas tertinggi pada `deny`, termasuk dalam mode `bypass`.
+Pola menggunakan pencocokan glob. Alat MCP dapat dicakup dengan `mcp:<server>:<tool>`; sebagai contoh, `mcp:github:*` mencocokkan setiap alat dari server `github`. LibreChat menerapkan aturan statis dan pencocok hook ke nama runtime MCP dan alias yang menghadap model, termasuk alat yang dapat dijangkau melalui Subagent bersarang. Aturan statis dievaluasi dalam urutan `deny`, `ask`, kemudian `allow` sebelum mode yang dipilih menyediakan fallback. Oleh karena itu, aturan deny selalu menang, termasuk dalam mode `bypass`.
 
 ```yaml filename="endpoints / agents / toolApproval"
 toolApproval:
@@ -554,7 +723,7 @@ Kolom `capabilities` memungkinkan Anda untuk mengaktifkan atau menonaktifkan fun
 - **deferred_tools**: Memungkinkan agen untuk menemukan MCP tools yang ditangguhkan (deferred) saat runtime alih-alih memuat setiap tool ke dalam konteks di awal.
 - **programmatic_tools**: Mengaktifkan Pemanggilan Alat Programatis (Programmatic Tool Calling) untuk alat MCP yang ditandai sebagai Programmatic di Agent Builder. Memerlukan `execute_code` dan deployment Code Interpreter dengan komponen Tool Call Server. Kemampuan ini bersifat opt-in dan tidak diaktifkan secara default.
 - **execute_code**: Mengizinkan agen untuk mengeksekusi kode.
-- **stateful_code_sessions**: Memungkinkan agen yang memilih untuk ikut serta menggunakan kembali satu ruang kerja Code Interpreter per percakapan. Memerlukan `execute_code`, deployment Code Interpreter yang kompatibel, dan pengaturan Advanced per-agen. Kemampuan ini sangat eksperimental, tidak diaktifkan secara default, dan dapat berubah secara substansial selama eksperimen; jangan anggap perilaku atau konfigurasinya saat ini sebagai kontrak produksi yang stabil.
+- **stateful_code_sessions**: Memungkinkan agen yang memilih untuk ikut serta menggunakan kembali satu ruang kerja Code Interpreter pada cakupan pengguna, agen-dan-pengguna, atau percakapan. Memerlukan `execute_code`, deployment Code Interpreter yang kompatibel, dan pengaturan Lanjutan per-agen. Agen baru menggunakan cakupan pilihan pengguna yang telah masuk. Kemampuan ini sangat eksperimental, tidak diaktifkan secara default, dan dapat berubah secara substansial selama eksperimen; jangan anggap perilaku atau konfigurasinya saat ini sebagai kontrak produksi yang stabil.
 - **file_search**: Memungkinkan agen untuk mencari dan berinteraksi dengan file. Saat diaktifkan, perilaku sitasi dikendalikan oleh pengaturan `maxCitations`, `maxCitationsPerFile`, dan `minRelevanceScore`.
 - **web_search**: Mengaktifkan fungsionalitas pencarian web untuk agen, memungkinkan mereka untuk mencari dan mengambil informasi dari internet.
 - **artifacts**: Memungkinkan agen untuk menghasilkan artefak interaktif (komponen React, HTML, diagram Mermaid).
@@ -567,7 +736,7 @@ Kolom `capabilities` memungkinkan Anda untuk mengaktifkan atau menonaktifkan fun
 - **tools**: Memberikan agen akses ke berbagai tools.
 - **chain**: Mengaktifkan fitur Beta untuk perantaian agen (agent chaining), yang juga dikenal sebagai alur kerja Mixture-of-Agents (MoA).
 - **ocr**: Secara opsional meningkatkan fitur "Upload as Text" dalam obrolan, dan "File Context" untuk agen, yang memungkinkan file diunggah dan diproses dengan OCR. **Memerlukan layanan OCR untuk dikonfigurasi.**
-- **run_in_background**: Membuat eksekusi Code Interpreter dan alat shell memenuhi syarat untuk berjalan di latar belakang secara default dan mengaktifkan keikutsertaan latar belakang per-alat untuk alat MCP. Agen dapat secara eksplisit menolak Code Interpreter. Pengaturan ini mengizinkan eksekusi latar belakang; model memutuskan per panggilan apakah akan menggunakannya atau tidak. Memerlukan `execute_code` dan deployment Code Interpreter yang dikonfigurasi untuk kode. Kemampuan ini tidak diaktifkan secara default.
+- **run_in_background**: Membuat eksekusi Code Interpreter dan alat shell memenuhi syarat untuk berjalan di latar belakang secara default dan mengaktifkan keikutsertaan latar belakang per-alat untuk alat MCP, Plugin, dan Action yang memenuhi syarat. Tombol tingkat Action akan mengikutsertakan setiap operasi yang memenuhi syarat; Action OAuth dan operasi yang telah menentukan parameter `run_in_background` dikecualikan. Agen dapat secara eksplisit mengeluarkan Code Interpreter dari fitur ini. Pengaturan ini mengizinkan eksekusi latar belakang; model memutuskan per panggilan apakah akan menggunakannya atau tidak. Memerlukan `execute_code` dan deployment Code Interpreter yang telah dikonfigurasi untuk kode. Kemampuan ini tidak diaktifkan secara default.
 - **tool_intents**: Menambahkan label intent yang ditulis oleh model secara langsung ke panggilan tool yang memenuhi syarat. Tool bawaan, termasuk tool Code Interpreter, ikut serta secara otomatis; tool MCP dapat diaktifkan satu per satu atau secara massal di Agent Builder. Model specs menggunakan `describeIntent`. Kemampuan ini tidak diaktifkan secara default.
 
 Dengan menentukan kapabilitas, Anda dapat mengontrol fitur yang tersedia bagi pengguna saat berinteraksi dengan agen.
@@ -589,7 +758,7 @@ endpoints:
       # Optional: enables Programmatic Tool Calling for MCP tools marked Programmatic in the Agent Builder.
       # - 'programmatic_tools'
       - 'execute_code'
-      # Optional: makes Code Interpreter background-eligible and enables selected MCP tools.
+      # Optional: makes Code Interpreter background-eligible and enables selected MCP, Plugin, and Action tools.
       # - 'run_in_background'
       # Optional: enables live intent labels for native and selected MCP tools.
       # - 'tool_intents'
@@ -610,7 +779,7 @@ Dalam contoh ini:
 - Hanya sumber dengan relevansi 60%+ yang disertakan
 - Agen LibreChat memiliki akses ke eksekusi kode, pencarian file (dengan sitasi), Skills, Subagents, actions, artifacts, konteks file, layanan ocr jika dikonfigurasi, dan kemampuan pencarian web.
 - Programmatic Tool Calling tetap dinonaktifkan kecuali Anda menambahkan kapabilitas `programmatic_tools` bersama dengan `execute_code`
-- Pemanggilan alat latar belakang tetap dinonaktifkan kecuali Anda menambahkan `run_in_background`; alat Code Interpreter kemudian akan memenuhi syarat secara default, sementara alat MCP masih memerlukan pemilihan per-alat.
+- Panggilan alat latar belakang tetap dinonaktifkan kecuali Anda menambahkan `run_in_background`; alat Code Interpreter kemudian akan memenuhi syarat secara default, sementara alat MCP, Plugin, dan Action yang memenuhi syarat masih memerlukan pemilihan.
 - Label intent alat tetap dinonaktifkan kecuali Anda menambahkan `tool_intents`; alat bawaan kemudian akan ikut serta secara otomatis, sementara alat MCP masih memerlukan pemilihan per alat.
 
 ## remoteApi
@@ -748,6 +917,12 @@ Kolom `subagents` mengontrol agen anak terisolasi mana yang dapat dibuat oleh ag
       'Agen spesifik yang dapat dibuat oleh agen ini. Dibatasi oleh `maxSubagents`, yang secara default bernilai 10.',
       'agent_ids: ["agent_researcher"]',
     ],
+    [
+      'graphs',
+      'Array of Objects',
+      'Tim Agen tersimpan yang dapat berjalan sebagai satu grafik anak yang terisolasi. Daftar ini dibatasi oleh `maxSubagents` (default: 10); setiap tim dapat berisi hingga 32 anggota.',
+      '',
+    ],
   ]}
 />
 
@@ -759,6 +934,8 @@ subagents:
     - 'agent_researcher'
     - 'agent_reviewer'
 ```
+
+Setiap entri `graphs` memerlukan `type`, `name`, `description`, `agent_ids`, `edges` langsung, `entry_agent_id`, dan `result_agent_id` yang unik. Definisi tim harus membentuk graf asiklik berarah yang terhubung, setiap anggota harus terlihat oleh pengguna, dan total konfigurasi dibatasi hingga 50 target Agent unik dan 100 konfigurasi eksekusi yang diperluas. Lihat [contoh saved-team dan perilaku runtime](/docs/features/subagents#configure-an-agent).
 
 Untuk perilaku dan batasan yang dihadapi pengguna, lihat [Subagents](/docs/features/subagents).
 

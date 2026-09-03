@@ -49,15 +49,17 @@ LibreChat affiche les serveurs MCP configurés directement dans la zone de chat 
 - Une fois sélectionné, tous les outils de ce serveur deviennent disponibles pour votre modèle actuel.
 - Accès rapide aux outils MCP sans créer d'agent, permettant l'utilisation simultanée de plusieurs serveurs
 
-Pour empêcher les serveurs MCP d'apparaître dans le menu déroulant de discussion (en les réservant uniquement aux agents), définissez [`chatMenu: false`](/docs/configuration/librechat_yaml/object_structure/mcp_servers#chatmenu) dans votre configuration :
+Pour exclure un serveur MCP de la sélection de chat habituelle, définissez [`chatMenu: false`](/docs/configuration/librechat_yaml/object_structure/mcp_servers#chatmenu) dans votre configuration :
 
 ```yaml
 mcpServers:
   internal-tools:
     command: npx
     args: ['-y', 'internal-mcp-server']
-    chatMenu: false # Only available in agent builder
+    chatMenu: false # Not selectable in regular chat
 ```
+
+Ce paramètre est appliqué aux requêtes de chat ainsi que dans le sélecteur, afin qu'une sélection enregistrée obsolète ne puisse pas continuer à utiliser un serveur masqué. Il ne supprime pas le serveur des Agents enregistrés ni d'un Model Specs qui l'assigne explicitement. LibreChat omet également du sélecteur de chat habituel et du chemin de requête les serveurs auxquels un utilisateur ne peut accéder que par le biais d'un Agent autorisé.
 
 ### Avec des Agents [#with-agents]
 
@@ -264,7 +266,7 @@ Les échecs d'initialisation distinguent désormais un serveur inaccessible, des
 
 Si un Agent attend explicitement des outils MCP mais qu'aucun ne peut être résolu au démarrage de l'exécution, LibreChat échoue l'exécution avec des conseils de connexion et d'accès au lieu de s'exécuter silencieusement sans ces outils.
 
-Les serveurs MCP qui émettent des `notifications/tools/list_changed` peuvent mettre à jour leur catalogue d'outils sans redémarrage de LibreChat. LibreChat récupère la liste actuelle depuis la connexion active, publie les outils ajoutés et cesse de proposer les outils que le serveur a supprimés. Les reconnexions synchronisent également le catalogue avant que la connexion ne soit considérée comme prête.
+Les serveurs MCP qui émettent `notifications/tools/list_changed` peuvent mettre à jour leur catalogue d'outils sans redémarrage de LibreChat. LibreChat récupère la liste actuelle depuis la connexion active, publie les outils ajoutés et cesse de proposer les outils que le serveur a supprimés. Les reconnexions synchronisent également le catalogue avant que la connexion ne soit considérée comme prête. Les actualisations de snapshots gérées et la découverte de serveurs à froid partagent un verrou de trois opérations à l'échelle du processus. Une fois admis, chaque opération reste limitée par son délai d'expiration de liste d'outils ou de découverte par serveur, y compris tout `initTimeout` plus court, afin qu'un travail de catalogue lent ne puisse pas bloquer un emplacement indéfiniment.
 
 Pour les serveurs HTTP diffusables (Streamable), une reconnexion peut brièvement renvoyer un code HTTP `409` lorsque le serveur conserve encore un flux SSE autonome obsolète pour l'ancienne session. LibreChat traite cela comme un état transitoire, supprime la session obsolète et rétablit la connexion automatiquement ; aucune intervention de l'opérateur n'est nécessaire lorsque la récupération réussit. Si la connexion rétablie échoue également, LibreChat continue d'afficher l'erreur de connexion sous-jacente.
 
@@ -320,6 +322,10 @@ Les espaces réservés disponibles incluent :
 
 Les serveurs MCP définis en YAML peuvent également utiliser les espaces réservés `{{LIBRECHAT_OPENID_*}}`, `{{LIBRECHAT_GRAPH_*}}` et `{{LIBRECHAT_BODY_*}}`. Les valeurs `{{LIBRECHAT_BODY_*}}` sont limitées à la portée de la requête ; ainsi, LibreChat crée des connexions pour l'exécution active, les réutilise lors des appels d'outils au cours de cette exécution et les nettoie à la fin de la requête. Les serveurs limités à la portée de la requête sont exclus du cache d'outils persistant afin que les en-têtes et les URL spécifiques à la requête ne soient pas réutilisés en dehors de l'exécution active. Étant donné que leur liste d'outils ne peut pas être résolue avant l'existence d'une requête de chat, l'Agent Builder expose une sélection d'outils d'exécution pour le serveur complet et résout ses outils au moment de l'exécution. La finalisation de l'OAuth stocke l'autorisation mais diffère la connexion jusqu'à ce que la première exécution fournisse le contexte de la requête. Les espaces réservés User, OpenID et Graph sont limités à la portée de l'utilisateur ; les transports HTTP actualisent leurs en-têtes résolus avant chaque appel d'outil sans nécessiter de reconnexion par eux-mêmes.
 
+`{{LIBRECHAT_GRAPH_ACCESS_TOKEN}}` échange le jeton d'accès OpenID réutilisable de l'utilisateur via le flux on-behalf-of de Microsoft. [`GRAPH_API_SCOPES`](/docs/configuration/dotenv#microsoft-graph-api--entra-id-integration) définit les étendues demandées séparées par des espaces et utilise `https://graph.microsoft.com/.default` par défaut. Ceci est indépendant de `OPENID_GRAPH_SCOPES`, qui configure la recherche de personnes et de groupes.
+
+Le paramètre fictif `{{LIBRECHAT_BODY_PARENTMESSAGEID}}` est renseigné pour les conversations d'agents natifs, les appels d'API d'agents compatibles avec OpenAI et les exécutions d'Assistants hérités. Open Responses n'a pas d'équivalent d'identité de message parent et échoue par défaut lorsqu'un serveur MCP requiert cette valeur. Voir la [référence des paramètres fictifs des serveurs MCP](/docs/configuration/librechat_yaml/object_structure/mcp_servers#headers).
+
 ### Instructions du serveur [#server-instructions]
 
 `serverInstructions` est une fonctionnalité de LibreChat qui ajoute dynamiquement des instructions configurées lorsqu'un outil provenant de ce serveur MCP est sélectionné :
@@ -358,6 +364,8 @@ mcpServers:
 ```
 
 **Note** : Si les opérations sont toujours interrompues prématurément, vérifiez la configuration de votre proxy (par exemple, nginx, traefik, etc.), qui pourrait couper les connexions trop tôt en raison des délais d'attente par défaut.
+
+Lorsqu'un utilisateur appuie sur **Stop** pendant un appel d'outil Agent au premier plan, LibreChat transmet le signal d'annulation de l'exécution à MCP. Pour les serveurs HTTP diffusables (Streamable), le SDK MCP envoie `notifications/cancelled` ; le serveur doit honorer cette notification pour arrêter son propre travail. Les appels en arrière-plan détachés conservent intentionnellement un cycle de vie distinct et ne sont pas annulés avec le tour au premier plan.
 
 ### Identifiants fournis par l'utilisateur [#user-provided-credentials]
 
@@ -497,6 +505,8 @@ LibreChat gère les jetons OAuth de manière intelligente :
 - **Actualisation automatique** : Lorsque des jetons d'actualisation sont disponibles, LibreChat renouvelle automatiquement les jetons d'accès expirés
 - **Récupération silencieuse 401** : Si une connexion MCP OAuth reçoit un rejet d'authentification en cours de session, LibreChat coordonne une tentative de rafraîchissement et de reconnexion limitée par utilisateur et par serveur. Les appelants simultanés partagent ce résultat de récupération avant que LibreChat n'affiche une nouvelle invite d'authentification.
 - **Gestion de session** : Chaque utilisateur conserve ses propres sessions OAuth pour les environnements multi-utilisateurs
+
+Si un flux d'Agent enregistré est rechargé ou repris alors qu'une demande d'autorisation MCP est toujours en attente, LibreChat reconstruit cette demande à partir de l'état de génération durable. Les demandes terminées, annulées, ayant échoué ou expirées ne sont pas restaurées.
 
 Les clients et jetons OAuth stockés sont liés à l'URL du serveur MCP et aux paramètres du client/endpoint OAuth. La modification de ces paramètres oblige les utilisateurs à s'authentifier à nouveau. Lors de la modification d'un serveur créé via l'interface utilisateur qui conserve un `client_secret` stocké, saisissez à nouveau le secret lors du changement d'un champ de liaison tel que l'URL du serveur, l'ID client, l'URL d'autorisation, l'URL du jeton ou la méthode d'authentification du jeton.
 

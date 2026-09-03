@@ -1,15 +1,120 @@
 ---
-title: Cấu trúc đối tượng bộ lọc tin nhắn
+title: Cấu trúc đối tượng bộ lọc nội dung
 icon: ShieldAlert
 ---
 
 ## Tổng quan [#overview]
 
-Đối tượng `messageFilter` cấu hình các bộ lọc tin nhắn phía máy chủ. Loại bộ lọc được hỗ trợ là `messageFilter.pii`.
+LibreChat cung cấp hai cấu hình bộ lọc phía máy chủ:
 
-`messageFilter.pii` từ chối văn bản tin nhắn được gửi khớp với các mẫu thông tin xác thực hoặc các biểu thức chính quy do người vận hành định nghĩa trước khi văn bản đó được gửi đến bộ lọc kiểm duyệt, yêu cầu mô hình hoặc lưu trữ tin nhắn.
+- `filters` áp dụng chính sách nhận biết nguồn cho các trường đã chọn trên các tin nhắn, lời nhắc, tác nhân, tệp, kỹ năng, bộ nhớ, công cụ và các nội dung có thể tái sử dụng khác.
+- `messageFilter` là bộ lọc văn bản tin nhắn cũ. Các bản triển khai hiện tại có thể tiếp tục sử dụng nó trong khi chuyển đổi sang `filters.messages`.
 
-## Ví dụ [#example]
+Cả hai đều là tùy chọn (opt-in). Khi cả hai được cấu hình, cả hai chính sách đều được áp dụng.
+
+<Callout type="warning" title="Chỉ cấu hình cơ bản">
+  `filters` chỉ được tải từ tệp `librechat.yaml` cơ sở. Các ghi đè (override) ở cấp cơ sở dữ liệu, vai trò, nhóm và người dùng không thể thêm, thay đổi hoặc xóa bỏ nó. Trong triển khai đa bản sao (multi-replica), hãy triển khai hoặc khởi động lại tất cả các bản sao cùng lúc và xác minh rằng mỗi bản sao đã tải cùng một cấu hình cơ sở trước khi coi chính sách là đã kích hoạt.
+</Callout>
+
+## Bộ lọc nhận biết nguồn (Source-Aware Filters) [#source-aware-filters]
+
+Mỗi nguồn có một chính sách `pii` tùy chọn. Hãy bỏ qua `filters`, một nguồn hoặc khối `pii` của nó để giữ cho phạm vi đó bị vô hiệu hóa.
+
+```yaml filename="librechat.yaml"
+filters:
+  messages:
+    unattributedAssistantContent: model_output
+    pii:
+      action: audit
+      fields: [text, summary, attachment_reference]
+      starterPatterns: [sk_prefix, bearer_header, api_key_header]
+      customPatterns:
+        - id: organization_identifier
+          label: Organization identifier
+          regex: 'ORG-[A-Z0-9]{12}'
+  files:
+    pii:
+      fields: [name, content, extracted_text, transcript]
+      uninspectable: block
+  skills:
+    pii:
+      fields: [name, description, instructions, imported_text, file_text]
+```
+
+### Cấu hình mẫu [#pattern-configuration]
+
+Đối với mỗi nguồn được bật:
+
+- Bỏ qua `action` hoặc đặt nó thành `block` để từ chối các kết quả khớp. Đặt `action: audit` cho quá trình triển khai thử nghiệm (shadow rollout) nhằm ghi lại các phát hiện mà không từ chối, thay đổi hoặc biên tập nội dung.
+- Bỏ qua `fields` để kiểm tra mọi trường được hỗ trợ cho nguồn đó. Một danh sách tường minh phải chứa từ 1 đến 256 tên trường được hỗ trợ.
+- Bỏ qua `starterPatterns` để kích hoạt danh mục khởi đầu đầy đủ. Đặt nó thành `[]` để vô hiệu hóa các mẫu khởi đầu trong khi vẫn giữ lại bất kỳ `customPatterns` nào.
+- Cấu hình `customPatterns` với một `id`, `label` hiển thị cho người dùng và `regex`.
+
+Chế độ kiểm toán (Audit mode) đánh giá tất cả các phân đoạn và quy tắc đã được cấu hình để người vận hành có thể đo lường các kết quả trước khi thực thi. Mỗi bản ghi kiểm toán cấp thông tin (info-level) xác định hành động, trình phát hiện, quy tắc, nhãn, nguồn, trường và nguồn gốc, nhưng không bao giờ bao gồm văn bản khớp hoặc nội dung nguồn. Chế độ kiểm toán không cung cấp tính năng biên tập (redaction); các giá trị hành động không được hỗ trợ sẽ bị từ chối khi cấu hình được tải.
+
+Các Actions được cấu hình độc lập cho từng nguồn, vì vậy một nguồn có thể thực hiện kiểm tra (audit) trong khi nguồn khác thực hiện chặn (block). `filters.files.pii.uninspectable: block` vẫn là một quy tắc fail-closed độc lập đối với nội dung tệp được chọn không thể kiểm tra hoặc có kích thước quá lớn, ngay cả khi action theo mẫu của nguồn đó là `audit`.
+
+Các ID mẫu khởi đầu tích hợp sẵn là:
+
+- `sk_prefix`: Các tiền tố token theo kiểu `sk-`.
+- `bearer_header`: bearer tokens trong văn bản.
+- `api_key_header`: văn bản có dạng header `api-key`.
+
+Các mẫu tùy chỉnh sử dụng cú pháp biểu thức chính quy tuyến tính, có giới hạn của RE2JS. Các tham chiếu ngược (backreferences) và lookaround không được hỗ trợ, và một số ký tự thoát (escapes) khác với biểu thức chính quy của JavaScript. LibreChat sẽ từ chối các mẫu không hợp lệ hoặc không được hỗ trợ trong khi tải cấu hình.
+
+### Các Nguồn và Trường được Hỗ trợ [#supported-sources-and-fields]
+
+| Nguồn | Các trường được hỗ trợ |
+| --- | --- |
+| `messages` | `name`, `text`, `summary`, `quote`, `answer`, `decision_response`, `decision_reason`, `content_part`, `attachment_reference`, `assembled_context` |
+| `prompts` | `name`, `description`, `oneliner`, `category`, `command`, `text`, `preset_text`, `system`, `context`, `instructions`, `additional_instructions`, `greeting`, `example_input`, `example_output` |
+| `agentInstructions` | `name`, `category`, `description`, `instructions`, `additional_instructions`, `edge_description`, `edge_prompt`, `edge_prompt_key`, `artifacts`, `support_contact_name`, `support_contact_email` |
+| `conversationStarters` | `text` |
+| `conversationTitles` | `title` |
+| `feedback` | `text` |
+| `skills` | `name`, `display_title`, `description`, `category`, `frontmatter`, `instructions`, `imported_text`, `file_name`, `file_text` |
+| `memories` | `key`, `value`, `summary` |
+| `files` | `name`, `content`, `extracted_text`, `transcript`, `uri` |
+| `toolArguments` | `name`, `arguments`, `output` |
+| `modelParameters` | `stop`, `request_fields`, `response_format`, `metadata` |
+| `actionMetadata` | `raw_spec`, `domain`, `privacy_policy_url`, `authorization_type`, `custom_auth_header`, `authorization_content_type`, `authorization_url`, `client_url`, `scope`, `token_exchange_method`, `api_key`, `oauth_client_id`, `oauth_client_secret` |
+
+### Nguồn gốc tin nhắn [#message-provenance]
+
+`filters.messages.unattributedAssistantContent` kiểm soát cách phân loại nội dung trợ lý cũ không có nguồn gốc:
+
+- `model_output` (mặc định): duy trì hành vi cũ bằng cách coi nội dung trợ lý không được gán thuộc tính là đầu ra của mô hình.
+- `inspect`: xử lý nội dung của trợ lý không được gán thuộc tính, bao gồm cả các phần dự kiến đính kèm đã chọn, như là nội dung đã gửi. Nội dung của trợ lý được đánh dấu rõ ràng là đầu ra của mô hình vẫn được miễn trừ.
+
+Phân loại này có thể ảnh hưởng đến chính sách `messageFilter.pii` kế thừa đã được bật ngay cả khi `filters.messages.pii` bị bỏ qua. Hãy kiểm kê hoặc di chuyển các bản ghi cũ trước khi dựa vào việc kiểm tra hồi tố.
+
+### Các tệp không thể kiểm tra [#uninspectable-files]
+
+`filters.files.pii.uninspectable` kiểm soát nội dung tệp đã chọn mà LibreChat không thể kiểm tra, bao gồm nội dung không rõ ràng hoặc quá khổ:
+
+- `allow` (mặc định): duy trì tính tương thích và cho phép nội dung.
+- `block`: từ chối nó trước khi có bất kỳ tác động nào từ phía nhà cung cấp hoặc lưu trữ.
+
+Triển khai `block` một cách thận trọng. Nó có thể khiến các tệp cũ không thể sử dụng lại cho đến khi có văn bản có thể kiểm tra được.
+
+### Nội dung được lưu trữ và tái sử dụng [#stored-and-reused-content]
+
+Việc bật hoặc thay đổi chính sách sẽ không ghi đè hoặc xóa các bản ghi đã lưu trữ. LibreChat áp dụng chính sách hiện tại khi nội dung được bảo vệ được gửi, sao chép, chia sẻ, tái sử dụng hoặc trở thành nội dung gắn liền với mô hình (model-bound).
+
+Các chỉnh sửa siêu dữ liệu an toàn vẫn có thể thành công để các bản ghi bị chặn vẫn có thể sửa chữa được. Trong các chế độ xem quản lý, các trường prompt hoặc preset bị chặn có thể để trống với `contentFilterBlocked: true`; các nhóm prompt bị chặn sẽ trả về lỗi khi truy xuất trực tiếp và bị loại bỏ khỏi các phản hồi thu thập và tái sử dụng. Một bản cập nhật bộ nhớ nền bị từ chối có thể được bỏ qua trong khi phản hồi trò chuyện chính vẫn tiếp tục.
+
+Các kết quả khớp văn bản có nhận biết nguồn bị chặn sẽ trả về HTTP `400` với `content_filter_block`. Các tệp bị từ chối không thể kiểm tra sẽ sử dụng `content_filter_uninspectable`.
+
+### Giới hạn [#limits]
+
+- Tối đa 256 trường, mẫu bắt đầu hoặc mẫu tùy chỉnh cho mỗi nguồn.
+- Tối đa 256 mẫu tùy chỉnh trên toàn bộ cấu hình.
+- ID mẫu tối đa 256 ký tự, nhãn tối đa 512 ký tự và regex tối đa 512 ký tự.
+- Tối đa 8.192 ký tự regex và 8.192 chỉ dẫn bộ lọc đã biên dịch.
+
+## `messageFilter` cũ [#legacy-messagefilter]
+
+`messageFilter.pii` từ chối văn bản tin nhắn do người gọi cung cấp nếu khớp trước khi thực hiện kiểm duyệt, yêu cầu mô hình hoặc lưu trữ với `message_filter_pii_block`. Nó vẫn chỉ ở chế độ chặn và không chấp nhận `action`. Nó không kiểm tra nội dung tệp hoặc các nguồn có thể tái sử dụng khác được bao gồm trong `filters`.
 
 ```yaml filename="librechat.yaml"
 messageFilter:
@@ -24,63 +129,4 @@ messageFilter:
         regex: 'sk-ant-[A-Za-z0-9_-]{20,}'
 ```
 
-## Các trường [#fields]
-
-### messageFilter.pii
-
-<OptionTable
-  options={[
-    [
-      'pii.starterPatterns',
-      'Array of Strings',
-      'Tập hợp con tùy chọn của các id mẫu khởi đầu tích hợp sẵn để kích hoạt. Bỏ qua để kích hoạt tất cả các mẫu khởi đầu.',
-      'starterPatterns: [sk_prefix, bearer_header]',
-    ],
-    [
-      'pii.customPatterns',
-      'Array of Objects',
-      'Các mẫu do người vận hành xác định. Mỗi mục yêu cầu `id`, `label`, và `regex`.',
-      '',
-    ],
-  ]}
-/>
-
-**Các id mẫu khởi đầu tích hợp sẵn:**
-
-- `sk_prefix`: khớp với các tiền tố token kiểu `sk-`.
-- `bearer_header`: khớp với các bearer token trong văn bản.
-- `api_key_header`: khớp với văn bản có dạng tiêu đề `api-key`.
-
-### customPatterns
-
-<OptionTable
-  options={[
-    ['id', 'String', 'ID mẫu ổn định được sử dụng cho nhật ký và gỡ lỗi.', 'id: anthropic_api_key'],
-    [
-      'label',
-      'String',
-      'Nhãn dễ đọc hiển thị trong thông báo từ chối.',
-      'label: Anthropic API key',
-    ],
-    [
-      'regex',
-      'String',
-      'Biểu thức chính quy RE2. LibreChat xác thực nó tại thời điểm tải cấu hình và áp dụng trên phạm vi toàn cục.',
-      "regex: 'sk-ant-[A-Za-z0-9_-]{20,}'",
-    ],
-  ]}
-/>
-
-Các mẫu tùy chỉnh sử dụng công cụ RE2 thời gian tuyến tính. Backreferences và lookaround không được hỗ trợ, và một số ký tự thoát khác với các biểu thức chính quy của JavaScript. LibreChat sẽ từ chối các mẫu mà RE2 không thể biên dịch khi tải cấu hình.
-
-## Hành vi [#behavior]
-
-Khi văn bản tin nhắn được gửi khớp với một mẫu PII đã định cấu hình, LibreChat sẽ trả về HTTP `400` cùng với `message_filter_pii_block` và một thông báo yêu cầu người gọi xóa loại thông tin xác thực đã khớp.
-
-Bộ lọc kiểm tra:
-
-- Tuyến đường chat (chat route) xử lý văn bản người dùng được gửi thông qua giao diện người dùng LibreChat.
-- Nội dung văn bản trên tất cả các vai trò tin nhắn do người gọi cung cấp trong các yêu cầu Chat Completions tương thích với OpenAI.
-- Nội dung văn bản trên tất cả các vai trò tin nhắn do người gọi cung cấp trong các yêu cầu Phản hồi tương thích với OpenAI.
-
-Bộ lọc đánh giá văn bản được cung cấp trong phần nội dung yêu cầu. Nó không quét nội dung tệp.
+Bộ lọc kế thừa kiểm tra văn bản người dùng trên chat-route và văn bản do người gọi cung cấp trên tất cả các vai trò trong các yêu cầu Chat Completions và Responses tương thích với OpenAI. Nó sử dụng cùng các ID tích hợp sẵn và các quy tắc regex tùy chỉnh theo thời gian tuyến tính được mô tả ở trên.
