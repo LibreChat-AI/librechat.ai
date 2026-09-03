@@ -1,0 +1,101 @@
+---
+title: Scheduled Chats
+icon: CalendarClock
+description: Run saved LibreChat Agents with preset or custom recurring schedules.
+---
+
+Scheduled Chats let a saved LibreChat Agent start a new conversation automatically with a prompt you provide. Use them for recurring reports, reminders, research, and other Agent workflows that should run without starting each chat manually.
+
+<Callout type="warning" title="Experimental and disabled by default">
+  Scheduled Chats are in an early experimentation phase. Their behavior, configuration, and
+  deployment requirements may change substantially. Scheduled runs can consume model, tool, and
+  Code Interpreter resources, so LibreChat does not enable the feature unless an administrator
+  explicitly opts in.
+</Callout>
+
+## Enable Scheduled Chats
+
+Add `interface.schedules` to `librechat.yaml`, then restart LibreChat:
+
+```yaml filename="librechat.yaml"
+interface:
+  schedules:
+    use: true
+    create: true
+    maxPerUser: 10
+    minIntervalMinutes: 60
+    autoDisableAfterFailures: 5
+    fireConcurrency: 5
+    requireProject: false
+    # projectId: '000000000000000000000000'
+```
+
+`use` and `create` seed the `SCHEDULES` permissions for the built-in `USER` role at startup. Administrators can manage those permissions per role in the [Admin Panel](/docs/features/admin_panel). The remaining values are runtime limits:
+
+<OptionTable
+  options={[
+    ['maxPerUser', 'Number', 'Maximum schedules each user can own. Set to 0 to prevent creation.', '10'],
+    ['minIntervalMinutes', 'Number', 'Shortest allowed interval between occurrences.', '60'],
+    ['autoDisableAfterFailures', 'Number', 'Consecutive failed runs before a schedule is disabled.', '5'],
+    ['fireConcurrency', 'Number', 'Maximum scheduled runs admitted concurrently across the deployment.', '5'],
+    ['requireProject', 'Boolean', 'Requires every schedule to resolve to a Chat Project at write time and at each run.', 'false'],
+    ['projectId', 'String', 'Pins scheduled conversations to one owner-scoped Chat Project and implies `requireProject`.', ''],
+  ]}
+/>
+
+The entire `schedules` field is absent by default. `schedules: true` enables the feature with default limits, while `schedules: false` or `schedules: { use: false }` is a deployment-wide stop. A disabled base configuration cannot be re-enabled by a role, group, or user configuration override. `maxPerUser` counts every owned schedule, including definitions created before slot accounting was introduced. See [`interface.schedules`](/docs/configuration/librechat_yaml/object_structure/interface#schedules) for complete merge and permission behavior.
+
+## Create and Manage a Schedule
+
+Open **Scheduled Chats** from the side navigation, then select **New schedule**. A schedule requires:
+
+- A name and prompt
+- A saved Agent you can view and use
+- An hourly, daily, weekday, weekly, or custom cron cadence
+- An IANA time zone
+- An optional Chat Project destination, unless the administrator requires or pins one
+
+New schedules start with the current browser's IANA time zone. You can choose another supported IANA zone, with the browser zone and UTC pinned at the top and each option showing its current GMT offset. Existing schedules reopen with their stored zone. Browsers without `Intl.supportedValuesOf` can still use the current zone, UTC, or the schedule's stored zone. Changing only the zone is a timing change: LibreChat recomputes the next occurrence and revalidates the cadence against the deployment's minimum interval.
+
+The structured cadence options are:
+
+- **Hourly**: choose any minute from `00` through `59`.
+- **Daily**: choose one local time.
+- **Weekdays**: choose one local time from Monday through Friday.
+- **Weekly**: choose one or more weekdays and one local time. At least one day is required.
+
+Time controls follow the browser's [Clock Format preference](/docs/features/settings#general), and weekly day controls and summaries follow its **Week Starts On** preference. These preferences change presentation only; the stored IANA zone and selected weekdays determine execution.
+
+Choose **Custom** to enter a recurring five-field cron expression in `minute hour day-of-month month day-of-week` order. Seconds and year fields are rejected, as are expressions longer than 256 characters or expressions with no future occurrence. The dialog validates and previews upcoming occurrences in the selected time zone using the same parser as the server. Examples include `0 9,17 * * 1-5` for 09:00 and 17:00 on weekdays and `0 9 1 * *` for 09:00 on the first day of each month. Every cadence must still satisfy `minIntervalMinutes`; for example, `*/15 * * * *` requires an administrator to allow intervals shorter than the default 60 minutes.
+
+Daylight-saving transitions remain timezone-aware: nonexistent local times move to the first valid instant, and repeated local times run only once. Interval validation measures the effective cadence and zone together, including shortened real-time gaps across spring-forward transitions, so changing a zone can make an otherwise valid expression fall below the configured floor. Schedule prompts are literal text; message-composer variable insertion is not available in this form.
+
+Each occurrence starts a new conversation with the selected Agent. Schedule cards show the next occurrence and latest status, and link to the latest conversation when one exists. Users with `SCHEDULES: CREATE` can edit, enable or disable, run immediately, and delete their schedules. **Run now** can start a disabled schedule once without re-enabling future occurrences, but it still respects permissions, deployment capacity, and the global stop.
+
+If a run pauses for Ask User or tool approval, its status becomes **Needs approval** and the conversation can be opened to complete the decision. LibreChat prevents overlapping occurrences of the same schedule and may skip an occurrence when another run is active or the account has insufficient balance.
+
+Schedules can disable themselves after repeated failures, or when their Agent is deleted, its configuration is invalid, access is revoked, the account lacks sufficient balance, a required project is missing, or the effective project was deleted or is not owned by the schedule owner. Project policy is rechecked at every run so tightening `requireProject` or changing a pin also applies to existing schedules. Fix the underlying issue before enabling the schedule again.
+
+An operator-level `projectId` overrides the project stored on each schedule and implies `requireProject`. Because Chat Projects are user-owned, a global pin normally works for only that project's owner; use role or user configuration overrides when different owners need different pinned destinations.
+
+## Permissions
+
+`SCHEDULES: USE` controls whether a user can list and view their schedules. `SCHEDULES: CREATE` additionally gates creating, editing, enabling, running, and deleting them. Scheduled execution also rechecks the user's Agent feature permission and view access to the selected Agent at run time; losing either access disables the affected schedule.
+
+See [Access Control](/docs/features/access_control) for role permissions and resource ACLs.
+
+## Deployment Safety
+
+Scheduled Chats use MongoDB leases, idempotent trigger delivery, and overlap prevention so eligible replicas can coordinate durable occurrences. Multi-replica deployments must also enable Redis-backed resumable streams with `USE_REDIS_STREAMS=true`. Without shared streams, schedule writes fail closed instead of admitting work that another replica may be unable to resume or stop.
+
+A scheduled Agent that can pause for Ask User or tool approval requires `USE_REDIS_STREAMS=true` for shared action state and a durable shared checkpointer for graph continuation, even in an otherwise single-process deployment. The built-in default MongoDB checkpointer satisfies this requirement; `type: memory` does not. LibreChat rejects the run before model work begins when either shared store is unavailable.
+
+A deployment that truly runs one LibreChat process without Redis can opt in with:
+
+```bash filename=".env"
+SCHEDULES_SINGLE_PROCESS=true
+```
+
+Do not set this in a multi-process or multi-replica deployment. The legacy experimental clustered server entrypoint does not arm the schedule engine; use LibreChat's standard server entrypoint with Redis-backed streams for horizontal scaling.
+
+For an immediate deployment-wide stop, set `SCHEDULES_DISABLED=true`. This blocks automatic occurrences and **Run now** without deleting schedule definitions. See [Scheduled Chats environment variables](/docs/configuration/dotenv#scheduled-chats).

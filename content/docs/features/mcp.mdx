@@ -46,15 +46,17 @@ LibreChat displays configured MCP servers directly in the chat area when using t
 - When selected, all tools from that server become available to your current model
 - Quick access to MCP tools without creating an agent, allowing multiple servers to be used at once
 
-To disable MCP servers from appearing in the chat dropdown (keeping them agent-only), set [`chatMenu: false`](/docs/configuration/librechat_yaml/object_structure/mcp_servers#chatmenu) in your configuration:
+To keep an MCP server out of regular chat selection, set [`chatMenu: false`](/docs/configuration/librechat_yaml/object_structure/mcp_servers#chatmenu) in your configuration:
 
 ```yaml
 mcpServers:
   internal-tools:
     command: npx
     args: ['-y', 'internal-mcp-server']
-    chatMenu: false # Only available in agent builder
+    chatMenu: false # Not selectable in regular chat
 ```
+
+This setting is enforced on chat requests as well as in the picker, so a stale saved selection cannot continue using a hidden server. It does not remove the server from saved Agents or from a model spec that explicitly assigns it. LibreChat also omits servers that a user can reach only through an authorized Agent from the regular chat picker and request path.
 
 ### With Agents
 
@@ -261,7 +263,7 @@ Initialization failures now distinguish an unreachable server, missing `customUs
 
 If an Agent explicitly expects MCP tools but none can be resolved at run start, LibreChat fails the run with connection and access guidance instead of silently running without those tools.
 
-MCP servers that emit `notifications/tools/list_changed` can update their tool catalog without a LibreChat restart. LibreChat fetches the current list from the live connection, publishes added tools, and stops advertising tools the server removed. Reconnects also synchronize the catalog before the connection is treated as ready.
+MCP servers that emit `notifications/tools/list_changed` can update their tool catalog without a LibreChat restart. LibreChat fetches the current list from the live connection, publishes added tools, and stops advertising tools the server removed. Reconnects also synchronize the catalog before the connection is treated as ready. Managed snapshot refreshes and cold-server discovery share one process-wide three-operation gate. Once admitted, each operation remains bounded by its tool-list or per-server discovery deadline, including any shorter `initTimeout`, so slow catalog work cannot hold a slot indefinitely.
 
 For Streamable HTTP servers, a reconnect can briefly return HTTP `409` when the server still holds a stale standalone SSE stream for the old session. LibreChat treats this as transient, tears down the stale session, and rebuilds the connection automatically; no operator action is needed when recovery succeeds. If the rebuilt connection also fails, LibreChat continues to surface the underlying connection error.
 
@@ -317,6 +319,10 @@ Available placeholders include:
 
 YAML-defined MCP servers can also use `{{LIBRECHAT_OPENID_*}}`, `{{LIBRECHAT_GRAPH_*}}`, and `{{LIBRECHAT_BODY_*}}` placeholders. `{{LIBRECHAT_BODY_*}}` values are request-scoped, so LibreChat creates connections for the active run, reuses them across tool calls in that run, and cleans them up when the request ends. Request-scoped servers are excluded from the persistent tool cache so request-specific headers and URLs are not reused outside the active run. Because their tool list cannot be resolved before a chat request exists, the Agent Builder exposes one runtime-tools selection for the complete server and resolves its tools at run time. Completing OAuth stores authorization but defers the connection until the first run supplies request context. User, OpenID, and Graph placeholders are user-scoped; HTTP transports refresh their resolved headers before each tool call without requiring a reconnect by themselves.
 
+`{{LIBRECHAT_GRAPH_ACCESS_TOKEN}}` exchanges the user's reusable OpenID access token through the Microsoft on-behalf-of flow. [`GRAPH_API_SCOPES`](/docs/configuration/dotenv#microsoft-graph-api--entra-id-integration) sets the requested space-separated scopes and defaults to `https://graph.microsoft.com/.default`. This is independent of `OPENID_GRAPH_SCOPES`, which configures people and group search.
+
+The `{{LIBRECHAT_BODY_PARENTMESSAGEID}}` placeholder is populated for native Agent chats, OpenAI-compatible Agents API calls, and legacy Assistants runs. Open Responses has no equivalent parent-message identity and fails closed when an MCP server requires that value. See the [MCP server placeholder reference](/docs/configuration/librechat_yaml/object_structure/mcp_servers#headers).
+
 ### Server Instructions
 
 `serverInstructions` is a LibreChat feature that dynamically adds configured instructions when any tool from that MCP server is selected:
@@ -355,6 +361,8 @@ mcpServers:
 ```
 
 **Note**: If operations are still being cut short, check your proxy configuration (e.g., nginx, traefik, etc.) which may be severing connections prematurely due to default timeouts.
+
+When a user presses **Stop** during a foreground Agent tool call, LibreChat forwards the run cancellation signal to MCP. For Streamable HTTP servers, the MCP SDK sends `notifications/cancelled`; the server must honor that notification to stop its own work. Detached background calls intentionally keep a separate lifecycle and are not cancelled with the foreground turn.
 
 ### User Provided Credentials
 
@@ -494,6 +502,8 @@ LibreChat handles OAuth tokens intelligently:
 - **Automatic Refresh**: When refresh tokens are available, LibreChat automatically renews expired access tokens
 - **Silent 401 Recovery**: If an OAuth MCP connection receives a mid-session authentication rejection, LibreChat coordinates one bounded refresh and reconnect attempt per user and server. Concurrent callers share that recovery result before LibreChat surfaces a new authentication prompt.
 - **Session Management**: Each user maintains their own OAuth sessions for multi-user environments
+
+If a saved Agent stream is reloaded or resumed while an MCP authorization prompt is still pending, LibreChat reconstructs that prompt from the durable generation state. Completed, cancelled, failed, or expired prompts are not restored.
 
 Stored OAuth clients and tokens are bound to the MCP server URL and OAuth client/endpoint settings. Changing those settings requires users to authenticate again. When editing a UI-created server that retains a stored `client_secret`, re-enter the secret when changing a binding field such as the server URL, client ID, authorization URL, token URL, or token authentication method.
 

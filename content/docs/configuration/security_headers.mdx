@@ -1,0 +1,104 @@
+---
+title: HTTP Security Headers
+icon: Shield
+description: Configure LibreChat's baseline HTTP security headers and nonce-based Content Security Policy
+---
+
+LibreChat sends a baseline set of HTTP security headers on every response, including health endpoints. A nonce-based Content Security Policy (CSP) is available separately and is disabled by default so existing integrations can be audited before enforcement.
+
+## Baseline Headers
+
+Baseline headers are enabled unless `SECURITY_HEADERS=false`. That variable is the global kill switch: it disables both the baseline headers and CSP.
+
+| Variable | Default | Behavior |
+| --- | --- | --- |
+| `SECURITY_HEADERS` | `true` | Enables all baseline headers. `false` also disables CSP. |
+| `HSTS_ENABLED` | `true` | Sends `Strict-Transport-Security`. Browsers honor it only over HTTPS. |
+| `HSTS_MAX_AGE` | `31536000` | HSTS lifetime in seconds. Must be a non-negative integer. |
+| `HSTS_INCLUDE_SUBDOMAINS` | `false` | Applies HSTS to every subdomain. Enable only when all subdomains use HTTPS. |
+| `HSTS_PRELOAD` | `false` | Adds the HSTS `preload` token. |
+| `X_FRAME_OPTIONS` | `SAMEORIGIN` | Accepts `SAMEORIGIN`, `DENY`, or `off`. |
+| `REFERRER_POLICY` | `no-referrer` | Sets `Referrer-Policy`; use `off` to omit it. |
+| `CROSS_ORIGIN_OPENER_POLICY` | `same-origin` | Sets `Cross-Origin-Opener-Policy`; use `off` to omit it. |
+| `CROSS_ORIGIN_RESOURCE_POLICY` | `same-origin` | Sets `Cross-Origin-Resource-Policy`; use `off` to omit it. |
+
+Helmet also sends `X-Content-Type-Options: nosniff`. Invalid values are logged and fall back to the documented defaults.
+
+Accepted opener policies are `same-origin`, `same-origin-allow-popups`, `noopener-allow-popups`, and `unsafe-none`. Accepted resource policies are `same-origin`, `same-site`, and `cross-origin`. Accepted referrer policies are `no-referrer`, `no-referrer-when-downgrade`, `same-origin`, `origin`, `strict-origin`, `origin-when-cross-origin`, `strict-origin-when-cross-origin`, and `unsafe-url`.
+
+```bash filename=".env"
+SECURITY_HEADERS=true
+HSTS_ENABLED=true
+HSTS_MAX_AGE=31536000
+HSTS_INCLUDE_SUBDOMAINS=false
+HSTS_PRELOAD=false
+X_FRAME_OPTIONS=SAMEORIGIN
+REFERRER_POLICY=no-referrer
+CROSS_ORIGIN_OPENER_POLICY=same-origin
+CROSS_ORIGIN_RESOURCE_POLICY=same-origin
+```
+
+If an upstream proxy also writes these headers, keep one authoritative policy and verify the final response seen by the browser.
+
+## Content Security Policy
+
+CSP is opt-in. LibreChat creates a fresh nonce for every SPA response and applies it to executable scripts and module-preload links in the shell.
+
+<Callout type="warning" title="Start in report-only mode">
+  Enable CSP with `CSP_REPORT_ONLY=true`, collect violations from your real deployment, add only the required sources, and enforce only after the app, authentication, storage, telemetry, and embedded-content flows are clean.
+</Callout>
+
+```bash filename=".env"
+CSP_ENABLED=true
+CSP_REPORT_ONLY=true
+CSP_REPORT_URI=https://reports.example.com/csp
+
+# Examples for deployment-specific services
+CSP_CONNECT_SRC_EXTRA="https://telemetry.example.com wss://stream.example.com"
+CSP_FRAME_SRC_EXTRA=https://tenant.sharepoint.com
+CSP_IMG_SRC_EXTRA=https://cdn.example.com
+```
+
+`CSP_REPORT_ONLY` defaults to `true`. Only a recognized false value switches to enforcement; an unrecognized value is logged and remains report-only. While CSP is enabled, LibreChat forces the SPA shell to `Cache-Control: no-store` and ignores `INDEX_CACHE_CONTROL`, `INDEX_PRAGMA`, and `INDEX_EXPIRES` for that response so a nonce cannot be reused from cache.
+
+### CSP Variables
+
+| Variable | Default | Behavior |
+| --- | --- | --- |
+| `CSP_ENABLED` | `false` | Enables nonce-based CSP for the SPA shell. |
+| `CSP_REPORT_ONLY` | `true` | Sends `Content-Security-Policy-Report-Only`; set `false` to enforce. |
+| `CSP_REPORT_URI` | empty | Adds the legacy `report-uri` directive. |
+| `CSP_ALLOW_WASM` | `true` | Allows WebAssembly compilation used by HEIC conversion. |
+| `CSP_ALLOW_DATA_WORKERS` | `true` | Allows `data:` workers used by Monaco's loader. |
+| `CSP_FRAME_ANCESTORS` | `'self'` | Replaces the complete `frame-ancestors` source list. |
+| `CSP_ADDITIONAL_DIRECTIVES` | empty | Adds semicolon-separated raw directives. |
+
+These variables append sources to the matching built-in directive:
+
+- `CSP_DEFAULT_SRC_EXTRA`
+- `CSP_SCRIPT_SRC_EXTRA`
+- `CSP_STYLE_SRC_EXTRA`
+- `CSP_IMG_SRC_EXTRA`
+- `CSP_FONT_SRC_EXTRA`
+- `CSP_CONNECT_SRC_EXTRA`
+- `CSP_MEDIA_SRC_EXTRA`
+- `CSP_FRAME_SRC_EXTRA`
+- `CSP_WORKER_SRC_EXTRA`
+- `CSP_FORM_ACTION_EXTRA`
+
+Source lists can be comma- or space-separated. They append rather than replace LibreChat's defaults. `CSP_FRAME_ANCESTORS` is the exception because it intentionally replaces the default `'self'` value.
+
+The default script policy uses `'strict-dynamic'`. Setting `CSP_SCRIPT_SRC_EXTRA` removes `'strict-dynamic'` so the listed script hosts can take effect. List only origins you trust to execute code in LibreChat.
+
+If another origin must frame LibreChat, enforce `frame-ancestors` before removing `X-Frame-Options`:
+
+```bash filename=".env"
+CSP_ENABLED=true
+CSP_REPORT_ONLY=false
+X_FRAME_OPTIONS=off
+CSP_FRAME_ANCESTORS="'self' https://portal.example.com"
+```
+
+Do not set `X_FRAME_OPTIONS=off` while CSP is disabled or report-only. A report-only policy records violations but does not restrict framing, so removing `X-Frame-Options` first would allow any origin to frame the deployment. Browsers without `frame-ancestors` support will not enforce a framing restriction in this cross-origin setup.
+
+See the [environment variable reference](/docs/configuration/dotenv#security-headers-and-content-security-policy) for where these settings live in `.env`.
