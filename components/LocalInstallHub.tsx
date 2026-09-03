@@ -102,14 +102,15 @@ const methods: {
     time: '~20 min',
     difficulty: 'Intermediate',
     prereqs: [
-      { label: 'Node.js v20.19+', href: 'https://nodejs.org/en/download' },
+      { label: 'Node.js v24.16.0', href: 'https://nodejs.org/en/download' },
       { label: 'Git', href: 'https://git-scm.com/downloads' },
       { label: 'MongoDB', href: '/docs/configuration/mongodb/mongodb_atlas' },
     ],
     commands: [
       'git clone https://github.com/danny-avila/LibreChat.git',
-      'cd LibreChat && npm ci',
+      'cd LibreChat',
       'cp .env.example .env  # edit MONGO_URI',
+      'npm run reinstall',
       'npm run backend',
     ],
     included: [],
