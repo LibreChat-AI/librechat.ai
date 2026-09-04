@@ -52,7 +52,7 @@ Ollama 会忽略 API key，但仍要求该字段必须存在，因此请将其�
         default: [
           "llama3"
         ]
-        fetch: false # fetching list of models is not supported
+        fetch: false # pinned to the list above; set true to discover models from the server
       titleConvo: true
       titleModel: "current_model"
       summarize: false
@@ -78,14 +78,47 @@ Ollama 会忽略 API key，但仍要求该字段必须存在，因此请将其�
           "llama3:latest",
           "mistral"
           ]
-        fetch: false # fetching list of models is not supported
+        fetch: false # pinned to the list above; set true to discover models from the server
       titleConvo: true
       titleModel: "current_model"
       modelDisplayLabel: "Ollama"
 ```
 
-在对话参数中设置停止序列（并将其保存为预设）：
+在对话参数中设置停止序列（并将其保存为预设）。在 Ollama endpoint 上打开一个对话，打开右侧的参数面板，并在 **Stop Sequences** 下添加每个序列：
 
-![image](https://github.com/danny-avila/LibreChat/assets/110412045/57460b8c-308a-4d21-9dfe-f48a2ac85099)
+![LibreChat 对话参数面板，在“停止序列”字段中输入了四个 llama3 停止序列](https://github.com/danny-avila/LibreChat/assets/110412045/57460b8c-308a-4d21-9dfe-f48a2ac85099)
 
 </Callout>
+
+## 故障排除 [#troubleshooting]
+
+### Ollama 未显示，或模型列表为空 [#ollama-does-not-appear-or-the-model-list-is-empty]
+
+请按顺序完成以下步骤：
+
+1. **请检查该 endpoint 是否可以从 LibreChat 访问，而不是从你的 shell 访问。** 如果 LibreChat 运行在 Docker 中，`localhost` 指的是 API 容器本身，而不是你的宿主机。在 Docker Desktop 上请使用 `http://host.docker.internal:11434/v1/`，或者在 `host.docker.internal` 不可用的 Linux 环境下使用宿主机的局域网地址。只有在 Docker 之外运行 LibreChat 时，`http://localhost:11434/v1/` 才是正确的。
+2. **确认 Ollama 正在监听回环地址之外的请求。** 默认情况下，Ollama 会绑定到 `127.0.0.1`，容器无法访问该地址。请在 Ollama 自身的运行环境中设置 `OLLAMA_HOST=0.0.0.0` 并重启服务。
+
+   <Callout type="warning" title="绑定到 0.0.0.0 会在所有接口上暴露 Ollama">
+   Ollama 的 API 是未经身份验证的。将其绑定到局域网或公共接口机器上的 `0.0.0.0` 会使任何能够访问 11434 端口的人都能获得模型访问权限，以及拉取和删除模型的权限。建议优先将其仅绑定到 LibreChat 容器实际可访问的地址，即其 compose 网络的网关（通过 `docker network inspect <network>` 查看），并对 11434 端口设置防火墙，以防止其他来源访问。
+   </Callout>
+3. **了解端点名称的变化。** 仅当端点 `name` 以 `ollama` 开头（不区分大小写）时，LibreChat 才会调用 Ollama 原生的 `/api/tags`。任何其他名称，或该原生调用失败的情况，都会回退到通用的兼容 OpenAI 的 `/v1/models` 请求。当前的 Ollama 版本也会在上述 `/v1/` 基础 URL 处响应此请求，因此重命名后的端点通常仍然会返回模型列表。当您明确需要原生标签路由时，前缀非常重要；如果托管代理仅提供 `/v1/models` 而不提供 `/api/tags`，则最好不要使用该前缀。
+4. **将 `apiKey` 设置为任何非空占位符。** Ollama 会忽略该值，但如果自定义 endpoint 没有 `apiKey`，则会在配置加载时被丢弃。
+5. **查看 API 日志。** `docker compose logs api` 会报告连接错误以及它实际尝试访问的 URL。
+
+### 使用远程或托管的 Ollama 服务器 [#using-a-remote-or-hosted-ollama-server]
+
+除了 URL 之外，没有任何内容是本地特定的：将 `baseURL` 指向远程服务器的 OpenAI 兼容路径，并将凭据放入 `apiKey` 中，而不是占位符中。你可以随意命名它：模型获取将回退到 OpenAI 兼容的 `/v1/models` 路由，这通常是托管代理所暴露的路径。
+
+`apiKey` is only ever sent as `Authorization: Bearer <key>`, and only when your `headers` block has not already set an `Authorization` header. If your hosted proxy expects a different scheme, such as `X-API-Key` or Basic auth, put the real credential in `headers`: an `Authorization` entry there replaces the Bearer fallback, and any other header is sent alongside it. `apiKey` still has to be non-empty either way, because an endpoint without one is dropped at config load.
+
+```yaml filename="excerpt of librechat.yaml"
+- name: "Ollama"
+  apiKey: "unused"
+  baseURL: "https://ollama.example.com/v1/"
+  headers:
+    X-API-Key: "${OLLAMA_PROXY_KEY}"
+  models:
+    default: ["llama3:latest"]
+    fetch: true
+```

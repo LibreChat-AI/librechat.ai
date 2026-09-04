@@ -52,7 +52,7 @@ Wenn `llama3` ohne Unterbrechung weiter generiert, fügen Sie einen `addParams` 
         default: [
           "llama3"
         ]
-        fetch: false # fetching list of models is not supported
+        fetch: false # pinned to the list above; set true to discover models from the server
       titleConvo: true
       titleModel: "current_model"
       summarize: false
@@ -78,14 +78,47 @@ Wenn Sie nur `llama3` mit Ollama ausführen, ist es in Ordnung, `stop` auf Konfi
           "llama3:latest",
           "mistral"
           ]
-        fetch: false # fetching list of models is not supported
+        fetch: false # pinned to the list above; set true to discover models from the server
       titleConvo: true
       titleModel: "current_model"
       modelDisplayLabel: "Ollama"
 ```
 
-Legen Sie die Stoppsequenzen in den Konversationsparametern fest (und speichern Sie diese als Preset):
+Legen Sie die Stop-Sequenzen in den Konversationsparametern fest (und speichern Sie diese als Preset). Öffnen Sie eine Konversation auf dem Ollama endpoint, öffnen Sie das Parameter-Panel auf der rechten Seite und fügen Sie jede Sequenz unter **Stop Sequences** hinzu:
 
-![image](https://github.com/danny-avila/LibreChat/assets/110412045/57460b8c-308a-4d21-9dfe-f48a2ac85099)
+![LibreChat Konversationsparameter-Panel mit vier eingegebenen llama3 Stop-Sequenzen im Feld Stop Sequences](https://github.com/danny-avila/LibreChat/assets/110412045/57460b8c-308a-4d21-9dfe-f48a2ac85099)
 
 </Callout>
+
+## Fehlerbehebung [#troubleshooting]
+
+### Ollama erscheint nicht oder die Modellliste ist leer [#ollama-does-not-appear-or-the-model-list-is-empty]
+
+Arbeiten Sie diese in der angegebenen Reihenfolge ab:
+
+1. **Überprüfen Sie, ob der endpoint von LibreChat aus erreichbar ist, nicht von Ihrer Shell aus.** Wenn LibreChat in Docker ausgeführt wird, ist `localhost` der API-Container selbst, nicht Ihr Host. Verwenden Sie `http://host.docker.internal:11434/v1/` unter Docker Desktop oder die LAN-Adresse des Hosts unter Linux, wo `host.docker.internal` möglicherweise nicht verfügbar ist. Die Ausführung von LibreChat außerhalb von Docker ist der einzige Fall, in dem `http://localhost:11434/v1/` korrekt ist.
+2. **Stellen Sie sicher, dass Ollama über den Loopback hinaus lauscht.** Standardmäßig bindet Ollama an `127.0.0.1`, was ein Container nicht erreichen kann. Setzen Sie `OLLAMA_HOST=0.0.0.0` in der eigenen Umgebung von Ollama und starten Sie es neu.
+
+   <Callout type="warning" title="Die Bindung an 0.0.0.0 macht Ollama auf jeder Schnittstelle verfügbar">
+   Die API von Ollama ist nicht authentifiziert. Wenn sie auf einer Maschine mit einem LAN- oder öffentlichen Interface an `0.0.0.0` gebunden wird, erhält jeder, der Port 11434 erreichen kann, Zugriff auf die Modelle sowie die Berechtigung, Modelle herunterzuladen oder zu löschen. Binden Sie den Dienst vorzugsweise nur an die Adresse, die der LibreChat-Container tatsächlich erreicht – dies ist das Gateway seines compose-Netzwerks (wird durch `docker network inspect <network>` angezeigt) – und sichern Sie Port 11434 per Firewall ab, damit er von keinem anderen Gerät erreicht werden kann.
+   </Callout>
+3. **Wissen Sie, was die Änderung des endpoint-Namens bewirkt.** LibreChat greift nur dann auf Ollamas natives `/api/tags` zu, wenn der `name` des endpoint mit `ollama` beginnt (Groß-/Kleinschreibung wird ignoriert). Jeder andere Name oder ein Fehlschlag dieses nativen Aufrufs führt zu einer generischen, OpenAI-kompatiblen `/v1/models`-Anfrage. Aktuelle Ollama-Versionen beantworten diese ebenfalls unter der oben genannten `/v1/`-Basis-URL, sodass ein umbenannter endpoint in der Regel immer noch eine Modellliste zurückgibt. Das Präfix ist wichtig, wenn Sie speziell die native Tags-Route benötigen; ein gehosteter Proxy, der `/v1/models`, aber nicht `/api/tags` bereitstellt, funktioniert ohne dieses Präfix besser.
+4. **Setzen Sie `apiKey` auf einen beliebigen, nicht leeren Platzhalter.** Ollama ignoriert den Wert, aber ein benutzerdefinierter endpoint ohne `apiKey` wird beim Laden der Konfiguration verworfen.
+5. **Lesen Sie die API-Logs.** `docker compose logs api` meldet den Verbindungsfehler und die URL, die tatsächlich versucht wurde.
+
+### Verwendung eines Remote- oder gehosteten Ollama-Servers [#using-a-remote-or-hosted-ollama-server]
+
+Nichts ist lokal spezifisch, außer der URL: Richten Sie `baseURL` auf den OpenAI-kompatiblen Pfad des Remote-Servers aus und fügen Sie die Anmeldeinformationen anstelle des Platzhalters in `apiKey` ein. Nennen Sie es, wie Sie möchten: Das Abrufen von Modellen greift auf die OpenAI-kompatible Route `/v1/models` zurück, was normalerweise dem entspricht, was ein gehosteter Proxy bereitstellt.
+
+`apiKey` wird nur als `Authorization: Bearer <key>` gesendet, und nur dann, wenn Ihr `headers`-Block nicht bereits einen `Authorization`-Header gesetzt hat. Wenn Ihr gehosteter Proxy ein anderes Schema erwartet, wie z. B. `X-API-Key` oder Basic Auth, fügen Sie die tatsächlichen Anmeldedaten in `headers` ein: Ein dortiger `Authorization`-Eintrag ersetzt das Bearer-Fallback, und jeder andere Header wird zusammen mit diesem gesendet. `apiKey` muss in jedem Fall einen Wert enthalten, da ein endpoint ohne diesen beim Laden der Konfiguration verworfen wird.
+
+```yaml filename="excerpt of librechat.yaml"
+- name: "Ollama"
+  apiKey: "unused"
+  baseURL: "https://ollama.example.com/v1/"
+  headers:
+    X-API-Key: "${OLLAMA_PROXY_KEY}"
+  models:
+    default: ["llama3:latest"]
+    fetch: true
+```

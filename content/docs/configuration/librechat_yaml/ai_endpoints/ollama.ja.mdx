@@ -52,7 +52,7 @@ OllamaはAPIキーを無視しますが、フィールドが存在すること�
         default: [
           "llama3"
         ]
-        fetch: false # fetching list of models is not supported
+        fetch: false # pinned to the list above; set true to discover models from the server
       titleConvo: true
       titleModel: "current_model"
       summarize: false
@@ -78,14 +78,47 @@ Ollamaで `llama3` のみを実行する場合は、`addParams` を介して設�
           "llama3:latest",
           "mistral"
           ]
-        fetch: false # fetching list of models is not supported
+        fetch: false # pinned to the list above; set true to discover models from the server
       titleConvo: true
       titleModel: "current_model"
       modelDisplayLabel: "Ollama"
 ```
 
-会話パラメータで停止シーケンスを設定し（プリセットとして保存し）ます：
+会話パラメータで停止シーケンスを設定します（プリセットとして保存することも可能です）。Ollama endpointで会話を開き、右側のパラメータパネルを開いて、**Stop Sequences**の下に各シーケンスを追加してください。
 
-![image](https://github.com/danny-avila/LibreChat/assets/110412045/57460b8c-308a-4d21-9dfe-f48a2ac85099)
+![Stop Sequencesフィールドに4つのllama3停止シーケンスが入力されたLibreChatの会話パラメータパネル](https://github.com/danny-avila/LibreChat/assets/110412045/57460b8c-308a-4d21-9dfe-f48a2ac85099)
 
 </Callout>
+
+## トラブルシューティング [#troubleshooting]
+
+### Ollamaが表示されない、またはモデルリストが空の場合 [#ollama-does-not-appear-or-the-model-list-is-empty]
+
+以下の順序で進めてください：
+
+1. **LibreChatから到達可能であることを確認してください。シェルからではありません。** LibreChatがDockerで実行されている場合、`localhost`はホストではなくAPIコンテナ自身を指します。Docker Desktopでは `http://host.docker.internal:11434/v1/` を使用するか、`host.docker.internal` が利用できないLinux環境ではホストのLANアドレスを使用してください。LibreChatをDocker外で実行している場合にのみ、`http://localhost:11434/v1/` が正しい設定となります。
+2. **Ollamaがループバック以外でもリッスンしていることを確認してください。** デフォルトでは、Ollamaは `127.0.0.1` にバインドされますが、これではコンテナからアクセスできません。Ollama自身の環境変数に `OLLAMA_HOST=0.0.0.0` を設定し、再起動してください。
+
+   <Callout type="warning" title="0.0.0.0へのバインドは、すべてのインターフェースでOllamaを公開します">
+   OllamaのAPIは認証されません。LANまたはパブリックインターフェースを持つマシンで `0.0.0.0` にバインドすると、ポート11434に到達できるすべてのユーザーに対して、モデルへのアクセス権、およびモデルのプルや削除を行う権限が与えられてしまいます。LibreChatコンテナが実際に到達するアドレス（`docker network inspect <network>` で確認できるcomposeネットワークのゲートウェイ）のみにバインドし、他の場所からアクセスできないようにポート11434をファイアウォールで保護することを推奨します。
+   </Callout>
+3. **エンドポイント名の変更について知っておくべきこと。** LibreChatは、エンドポイントの `name` が大文字小文字を区別せずに `ollama` で始まる場合にのみ、Ollamaのネイティブな `/api/tags` にアクセスします。それ以外の名前である場合、またはそのネイティブ呼び出しが失敗した場合は、汎用的なOpenAI互換の `/v1/models` リクエストにフォールバックします。現在のOllamaのバージョンは上記の `/v1/` ベースURLでもそのリクエストに応答するため、名前を変更したエンドポイントでも通常はモデルリストが返されます。このプレフィックスは、ネイティブのタグルートを明示的に必要とする場合に重要となります。`/v1/models` には対応しているが `/api/tags` には対応していないホスト型プロキシを使用する場合は、プレフィックスを付けない方が適切です。
+4. `apiKey` を空ではない任意のプレースホルダーに設定してください。Ollama はこの値を無視しますが、`apiKey` が設定されていないカスタム endpoint は設定読み込み時に破棄されます。
+5. **APIログを確認してください。** `docker compose logs api` は、接続エラーと実際に試行されたURLを報告します。
+
+### リモートまたはホストされたOllamaサーバーの使用 [#using-a-remote-or-hosted-ollama-server]
+
+URL以外にローカル固有の設定はありません。`baseURL`をリモートサーバーのOpenAI互換パスに向け、プレースホルダーの代わりに`apiKey`へ認証情報を入力してください。名前は任意で構いません。モデルの取得はOpenAI互換の`/v1/models`ルートにフォールバックされますが、これは通常、ホストされたプロキシが公開しているものです。
+
+`apiKey` is only ever sent as `Authorization: Bearer <key>`, and only when your `headers` block has not already set an `Authorization` header. If your hosted proxy expects a different scheme, such as `X-API-Key` or Basic auth, put the real credential in `headers`: an `Authorization` entry there replaces the Bearer fallback, and any other header is sent alongside it. `apiKey` still has to be non-empty either way, because an endpoint without one is dropped at config load.
+
+```yaml filename="excerpt of librechat.yaml"
+- name: "Ollama"
+  apiKey: "unused"
+  baseURL: "https://ollama.example.com/v1/"
+  headers:
+    X-API-Key: "${OLLAMA_PROXY_KEY}"
+  models:
+    default: ["llama3:latest"]
+    fetch: true
+```
