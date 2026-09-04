@@ -4,25 +4,31 @@ export function isExternalHref(href: string): boolean {
   return href.startsWith('http') || href.startsWith('mailto:')
 }
 
-const LEGACY_TOOLKIT_HREFS: Record<string, string> = {
+const LEGACY_DOCS_HREFS: Record<string, string> = {
   '/toolkit': '/docs/toolkit',
   '/toolkit/creds-generator': '/docs/toolkit/credentials-generator',
   '/toolkit/creds_generator': '/docs/toolkit/credentials-generator',
   '/toolkit/yaml-checker': '/docs/toolkit/yaml-validator',
   '/toolkit/yaml_checker': '/docs/toolkit/yaml-validator',
+  // Nav-only folder with no page of its own; the section's reference is Config
+  // Structure. Canonicalized here as well as in next.config.mjs because the
+  // redirect only covers the unprefixed URL, while translated pages still carry
+  // the folder target and get a locale prefix applied below.
+  '/docs/configuration/librechat_yaml/object_structure':
+    '/docs/configuration/librechat_yaml/object_structure/config',
 }
 
 function canonicalizeDocsHref(href: string): string {
   const match = href.match(/^([^?#]*)([?#].*)?$/)
   const path = match?.[1] ?? href
   const suffix = match?.[2] ?? ''
-  const canonicalPath = LEGACY_TOOLKIT_HREFS[path]
+  const canonicalPath = LEGACY_DOCS_HREFS[path]
   return canonicalPath ? `${canonicalPath}${suffix}` : href
 }
 
 /**
- * Prefix an internal `/docs` page link, including legacy `/toolkit` aliases,
- * with the active non-default locale (derived from the current pathname's first
+ * Prefix an internal `/docs` page link, including legacy `/toolkit` aliases and
+ * the nav-only object_structure folder, with the active non-default locale (derived from the current pathname's first
  * segment) so a reader on `/<locale>/docs/...` stays in that locale when
  * following related-guide links and cards.
  *

@@ -22,6 +22,15 @@ describe('localizeDocsHref', () => {
     )
   })
 
+  it('canonicalizes the nav-only object_structure folder in every locale', () => {
+    expect(localizeDocsHref('/docs/configuration/librechat_yaml/object_structure', '/docs/x')).toBe(
+      '/docs/configuration/librechat_yaml/object_structure/config',
+    )
+    expect(
+      localizeDocsHref('/docs/configuration/librechat_yaml/object_structure', '/fr/docs/x'),
+    ).toBe('/fr/docs/configuration/librechat_yaml/object_structure/config')
+  })
+
   it('does not touch external links, anchors, non-docs paths, or raw markdown', () => {
     expect(localizeDocsHref('https://example.com/docs/x', '/de/docs/x')).toBe(
       'https://example.com/docs/x',

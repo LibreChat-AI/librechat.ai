@@ -52,7 +52,7 @@ If `llama3` keeps generating without stopping, add an `addParams` block with the
         default: [
           "llama3"
         ]
-        fetch: false # fetching list of models is not supported
+        fetch: false # pinned to the list above; set true to discover models from the server
       titleConvo: true
       titleModel: "current_model"
       summarize: false
@@ -78,14 +78,47 @@ If you only run `llama3` with Ollama, setting `stop` at the config level via `ad
           "llama3:latest",
           "mistral"
           ]
-        fetch: false # fetching list of models is not supported
+        fetch: false # pinned to the list above; set true to discover models from the server
       titleConvo: true
       titleModel: "current_model"
       modelDisplayLabel: "Ollama"
 ```
 
-Set the stop sequences in conversation parameters (and save them as a preset):
+Set the stop sequences in conversation parameters (and save them as a preset). Open a conversation on the Ollama endpoint, open the right-hand parameters panel, and add each sequence under **Stop Sequences**:
 
-![image](https://github.com/danny-avila/LibreChat/assets/110412045/57460b8c-308a-4d21-9dfe-f48a2ac85099)
+![LibreChat conversation parameters panel with four llama3 stop sequences entered in the Stop Sequences field](https://github.com/danny-avila/LibreChat/assets/110412045/57460b8c-308a-4d21-9dfe-f48a2ac85099)
 
 </Callout>
+
+## Troubleshooting
+
+### Ollama does not appear, or the model list is empty
+
+Work through these in order:
+
+1. **Check the endpoint is reachable from LibreChat, not from your shell.** If LibreChat runs in Docker, `localhost` is the API container itself, not your host. Use `http://host.docker.internal:11434/v1/` on Docker Desktop, or the host's LAN address on Linux where `host.docker.internal` may be unavailable. Running LibreChat outside Docker is the only case where `http://localhost:11434/v1/` is correct.
+2. **Confirm Ollama is listening beyond loopback.** By default Ollama binds to `127.0.0.1`, which a container cannot reach. Set `OLLAMA_HOST=0.0.0.0` in Ollama's own environment and restart it.
+
+   <Callout type="warning" title="Binding to 0.0.0.0 exposes Ollama on every interface">
+   Ollama's API is unauthenticated. Binding it to `0.0.0.0` on a machine with a LAN or public interface hands model access, and the ability to pull and delete models, to anyone who can reach port 11434. Prefer binding to just the address the LibreChat container actually reaches, which is the gateway of its compose network (`docker network inspect <network>` reports it), and firewall port 11434 so nothing else can reach it.
+   </Callout>
+3. **Know what the endpoint name changes.** LibreChat reaches for Ollama's native `/api/tags` only when the endpoint `name` starts with `ollama`, case-insensitively. Any other name, or a failure of that native call, falls through to the generic OpenAI-compatible `/v1/models` request. Current Ollama versions answer that one too at the `/v1/` base URL above, so a renamed endpoint usually still returns a model list. The prefix matters when you specifically need the native tags route, and a hosted proxy that serves `/v1/models` but not `/api/tags` is better off without it.
+4. **Set `apiKey` to any non-empty placeholder.** Ollama ignores the value, but a custom endpoint with no `apiKey` is dropped at config load.
+5. **Read the API logs.** `docker compose logs api` reports the connection error and the URL it actually tried.
+
+### Using a remote or hosted Ollama server
+
+Nothing is local-specific except the URL: point `baseURL` at the remote server's OpenAI-compatible path and put the credential in `apiKey` instead of the placeholder. Name it whatever you like: model fetching falls back to the OpenAI-compatible `/v1/models` route, which is usually what a hosted proxy exposes.
+
+`apiKey` is only ever sent as `Authorization: Bearer <key>`, and only when your `headers` block has not already set an `Authorization` header. If your hosted proxy expects a different scheme, such as `X-API-Key` or Basic auth, put the real credential in `headers`: an `Authorization` entry there replaces the Bearer fallback, and any other header is sent alongside it. `apiKey` still has to be non-empty either way, because an endpoint without one is dropped at config load.
+
+```yaml filename="excerpt of librechat.yaml"
+- name: "Ollama"
+  apiKey: "unused"
+  baseURL: "https://ollama.example.com/v1/"
+  headers:
+    X-API-Key: "${OLLAMA_PROXY_KEY}"
+  models:
+    default: ["llama3:latest"]
+    fetch: true
+```
