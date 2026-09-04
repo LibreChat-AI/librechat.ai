@@ -1,4 +1,5 @@
-import { readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -76,6 +77,56 @@ describe('readLocales', () => {
       rmSync(base, { force: true })
     }
   })
+
+  it('unions base and trusted fallback locales when the deployed config predates i18n', () => {
+    const deployedRoot = mkdtempSync(join(tmpdir(), 'cache-purge-old-deploy-'))
+    const base = join(tmpdir(), `purge-base-old-i18n-${process.pid}.ts`)
+    const fallback = join(tmpdir(), `purge-fallback-i18n-${process.pid}.ts`)
+    mkdirSync(join(deployedRoot, 'lib'))
+    writeFileSync(
+      base,
+      `export const i18n = { defaultLanguage: 'en', languages: ['en', 'zh', 'sv'] }`,
+    )
+    writeFileSync(
+      fallback,
+      `export const i18n = { defaultLanguage: 'en', languages: ['en', 'zh', 'fr'] }`,
+    )
+
+    try {
+      expect(readLocales(deployedRoot, base, fallback)).toEqual(['zh', 'sv', 'fr'])
+    } finally {
+      rmSync(deployedRoot, { recursive: true, force: true })
+      rmSync(base, { force: true })
+      rmSync(fallback, { force: true })
+    }
+  })
+})
+
+it('reads deployed inputs from the CLI working directory', () => {
+  const deployedRoot = mkdtempSync(join(tmpdir(), 'cache-purge-deployed-'))
+  mkdirSync(join(deployedRoot, 'lib'))
+  mkdirSync(join(deployedRoot, 'public'))
+  writeFileSync(
+    join(deployedRoot, 'lib/i18n.ts'),
+    `export const i18n = { defaultLanguage: 'en', languages: ['en', 'sv'] }`,
+  )
+  writeFileSync(join(deployedRoot, 'public/rollback.txt'), 'deployed asset')
+
+  try {
+    const script = fileURLToPath(new URL('./cache-purge-prefixes.mjs', import.meta.url))
+    const result = spawnSync(process.execPath, [script, '--broad', '--assets', '--json'], {
+      cwd: deployedRoot,
+      encoding: 'utf8',
+    })
+    expect(result.stderr).toBe('')
+    expect(result.status).toBe(0)
+
+    const purge = JSON.parse(result.stdout)
+    expect(purge.prefixes).toContain('www.librechat.ai/sv')
+    expect(purge.files).toContain('https://www.librechat.ai/rollback.txt')
+  } finally {
+    rmSync(deployedRoot, { recursive: true, force: true })
+  }
 })
 
 describe('parseArgs', () => {
@@ -173,43 +224,100 @@ describe('the workflow feeds the mapper what it needs', () => {
   })
 
   /**
-   * Vercel attributes a deployment to the human who initiated it, then posts
-   * the ready status as vercel[bot]. Checking deployment.creator made every
-   * automatic purge run skip before it reached a step.
+   * Vercel's enriched promotion event is the alias-ready signal and carries the
+   * exact project, branch, Git SHA, and Vercel deployment id. No GitHub
+   * Deployment creator/status inference is needed.
    */
-  it('identifies Vercel by the deployment-status creator', () => {
-    expect(workflow).toContain("github.event.deployment_status.creator.login == 'vercel[bot]'")
-    expect(workflow).not.toContain("github.event.deployment.creator.login == 'vercel[bot]'")
+  it('accepts this project production promotions from any branch', () => {
+    expect(workflow).toContain("types: ['vercel.deployment.promoted']")
+    expect(workflow).toContain("github.event.client_payload.environment == 'production'")
+    expect(workflow).toContain(
+      "github.event.client_payload.project.id == 'prj_BM0YCOihInl5lqPJidAzwixJPdtj'",
+    )
+    expect(workflow).not.toContain("github.event.client_payload.git.ref == 'main'")
+    expect(workflow).toContain('node scripts/cache-purge-event.mjs')
+    expect(workflow).not.toContain('deployment_status:')
+  })
+
+  /**
+   * Automatic invalidation is independent of the promoted tree. Git metadata
+   * may be absent for CLI or deleted-branch deployments, so only manual
+   * recovery checks out a source tree for diff mapping.
+   */
+  it('validates automatic promotions before any optional source checkout', () => {
+    expect(workflow).toContain('- name: Prepare automatic purge workspace')
+    expect(workflow).toContain('- name: Check out manual source')
+    expect(workflow).toContain("if: github.event_name == 'workflow_dispatch'")
+    expect(workflow).toContain('ref: ${{ github.sha }}')
+    expect(workflow).not.toContain('ref: ${{ github.event.client_payload.git.sha || github.sha }}')
+
+    const eventValidation = workflow.indexOf('- name: Validate promoted deployment')
+    const manualCheckout = workflow.indexOf('- name: Check out manual source')
+    expect(eventValidation).toBeGreaterThan(0)
+    expect(eventValidation).toBeLessThan(manualCheckout)
+  })
+
+  /**
+   * A rollback checks out an older deployed tree. Keep the workflow revision in
+   * a sibling checkout so its validator and mapping scripts cannot disappear.
+   */
+  it('runs workflow-owned scripts outside the promoted source checkout', () => {
+    expect(workflow).toContain('path: workflow-source')
+    expect(workflow).toContain('path: deployed-source')
+    expect(workflow).toContain('working-directory: deployed-source')
+    expect(workflow).toContain('working-directory: workflow-source')
+
+    const cacheScriptInvocations = workflow.match(/node \S*scripts\/cache-[\w-]+\.mjs/g) ?? []
+    expect(cacheScriptInvocations).toContain('node scripts/cache-purge-event.mjs')
+    expect(
+      cacheScriptInvocations
+        .filter((command) => command !== 'node scripts/cache-purge-event.mjs')
+        .every((command) => command.startsWith('node ../workflow-source/')),
+    ).toBe(true)
+
+    expect(workflow).toContain('FALLBACK_I18N_FILE: ../workflow-source/lib/i18n.ts')
   })
 
   /**
    * Vercel can redeploy the same SHA. Grouping by SHA would let GitHub discard
    * one of those pending purge runs, even though each deployment needs its own
-   * baseline and marker.
+   * marker.
    */
-  it('keys concurrency by deployment id so same-sha redeployments are distinct', () => {
+  it('keys concurrency by Vercel deployment id so same-sha redeployments are distinct', () => {
     expect(workflow).toContain(
-      'group: cache-purge-${{ github.event.deployment.id || github.run_id }}',
+      'group: cache-purge-${{ github.event.client_payload.id || github.run_id }}',
     )
     expect(workflow).not.toContain(
-      'group: cache-purge-${{ github.event.deployment.sha || github.run_id }}',
+      'group: cache-purge-${{ github.event.client_payload.git.sha || github.run_id }}',
     )
   })
 
-  it('adds current build assets before deciding there is nothing to purge', () => {
-    expect(workflow).toContain('node scripts/cache-build-assets.mjs > build-assets.txt')
+  it('purges the full zone for every automatic production promotion', () => {
+    expect(workflow).toContain('if [ "$EVENT" = "repository_dispatch" ]; then')
+    expect(workflow).toContain('Automatic production promotion; purging the full zone.')
+    expect(workflow).toContain('emit mode full')
+  })
+
+  /**
+   * The static-asset rule now makes every 4xx response BYPASS Cloudflare, so
+   * immutable assets cannot be poisoned. Automatic deployment purges should not
+   * issue 21 cache-busted Vercel page requests just to enumerate those assets.
+   */
+  it('discovers current build assets only for manual recovery', () => {
+    expect(workflow).toContain('if [ "$EVENT" = "workflow_dispatch" ]; then')
+    expect(workflow).toContain(
+      'node ../workflow-source/scripts/cache-build-assets.mjs > build-assets.txt',
+    )
     expect(workflow).toContain("if: steps.assets.outputs.count == '0'")
     expect(workflow).not.toContain('if: steps.compute.outputs.count')
   })
 
   /**
-   * Discovery retries an in-flight alias swap on its own, so a failure that
-   * survives those retries means the live site is unhealthy, not mid-flip.
-   * Every run, automatic or manual, must still send the broad page/public
-   * targets computed earlier in the job to Cloudflare, and a run that could not
-   * enumerate the current build assets must leave no purge marker behind.
+   * A manual dispatch is the recovery path for an already unhealthy site. Its
+   * broad prefixes and public asset targets remain valid even when live asset
+   * discovery fails.
    */
-  it('degrades instead of aborting when build-asset discovery fails', () => {
+  it('degrades manual recovery instead of aborting when discovery fails', () => {
     expect(workflow).toContain(': > build-assets.txt')
     expect(workflow).toContain('degraded=true')
     expect(workflow).toContain('echo "degraded=$degraded" >> "$GITHUB_OUTPUT"')
@@ -217,18 +325,32 @@ describe('the workflow feeds the mapper what it needs', () => {
       'Build-asset discovery failed; purging the recovery targets without the current build assets.',
     )
     expect(workflow).toContain(
-      'node scripts/cache-purge-prefixes.mjs --broad --assets --json > recovery.json',
+      'node ../workflow-source/scripts/cache-purge-prefixes.mjs --broad --assets --json > recovery.json',
     )
     expect(workflow).toContain("jq -r '.prefixes[]' recovery.json >> prefixes.txt")
     expect(workflow).toContain("jq -r '.files[]?' recovery.json >> files.txt")
     expect(workflow).not.toContain('if [ "$EVENT" != "workflow_dispatch" ]; then')
-    expect(workflow).toContain("steps.assets.outputs.degraded != 'true'")
   })
 
-  it('accepts a baseline only when its deployment-specific purge marker exists', () => {
-    expect(workflow).toContain('PURGE_STATUS_CONTEXT/$id')
-    expect(workflow).toContain('select(.context == $context and .state == "success")')
-    expect(workflow).not.toContain('select(.creator.login == $creator)')
+  /**
+   * Vercel does not provide an authoritative promotion sequence in this event,
+   * and delivery order can differ from alias order. Automatic safety therefore
+   * cannot depend on a cross-run ledger or a Git diff.
+   */
+  it('keeps automatic purges stateless', () => {
+    expect(workflow).not.toContain('run-name:')
+    expect(workflow).not.toContain('actions: read')
+    expect(workflow).not.toContain('statuses: write')
+    expect(workflow).not.toContain('PURGE_STATUS_CONTEXT')
+    expect(workflow).not.toContain('gh api')
+    expect(workflow).not.toContain('cache-purge-event.mjs baseline')
+    expect(workflow).not.toContain('- name: Record the purge')
+  })
+
+  it('uses Cloudflare full-zone invalidation for automatic recovery', () => {
+    expect(workflow).toContain('if [ "$MODE" = "full" ]; then')
+    expect(workflow).toContain('payload=\'{"purge_everything":true}\'')
+    expect(workflow).toContain('purge_call purge_everything /dev/null')
   })
 
   /**

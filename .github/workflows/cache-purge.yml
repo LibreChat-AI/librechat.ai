@@ -1,11 +1,12 @@
 name: Cloudflare Cache Purge
 
-# Purges the Cloudflare edge cache for the pages a production deploy actually
-# changed, so a docs edit is visible immediately instead of waiting out the 24h
-# edge TTL (`SHARED_CDN_CACHE` in next.config.mjs). It also clears any cached
-# error responses for current Next.js build assets. Nothing here changes a TTL.
+# Invalidates Cloudflare after each production promotion so docs changes are
+# visible immediately instead of waiting out the 24h edge TTL
+# (`SHARED_CDN_CACHE` in next.config.mjs). Automatic promotions purge the full
+# zone; manual recovery can target prefixes and assets. Nothing here changes a
+# TTL.
 #
-# WHY PREFIXES, NOT URLS
+# WHY MANUAL RECOVERY USES PREFIXES, NOT URLS
 # The App Router serves the HTML document and the RSC flight payload at the same
 # path; the flight request carries a `?_rsc=<hash>` query that Next generates
 # client-side from router headers. Cloudflare keeps the query string in the
@@ -17,11 +18,11 @@ name: Cloudflare Cache Purge
 # Prefix is therefore the only usable unit. Note the format: `hostname/path`,
 # no scheme, no query string.
 #
-# WHY NOT `purge_everything`
-# It also evicts /_next/static/**, which would put every asset on the site into
-# a MISS wave on every deploy. This workflow instead purges the exact build
-# assets referenced by current page shells and their runtime (roughly 100 URLs),
-# leaving historical and unrelated static assets warm.
+# WHY AUTOMATIC PROMOTIONS PURGE THE FULL ZONE
+# Vercel can promote deployments without repository Git metadata, and dispatch
+# delivery order is not guaranteed to match production alias order. No Git diff
+# or workflow ledger can then prove which URLs were previously live. Automatic
+# promotions use full-zone invalidation; manual recovery remains prefix-based.
 #
 # KNOWN, ACCEPTED BEHAVIOURS
 # 1. Prefix matching is a plain string match, so `/docs/features/agents` also
@@ -34,30 +35,19 @@ name: Cloudflare Cache Purge
 on:
   # The purge MUST happen after Vercel has finished deploying. Running it when
   # the commit lands (`on: push`) is worse than not purging at all: Cloudflare
-  # would immediately refill every purged entry from the *old* origin build and
+  # would immediately refill every purged entry from the old origin build and
   # re-pin it for another 24h.
   #
-  # Vercel's GitHub integration publishes a GitHub Deployment for every
-  # production build and marks it `success` when the build is ready and the
-  # production alias points at it. That is a real completion signal, it needs no
-  # new credentials, and it arrives when the work is done rather than after a
-  # guessed wait. Verified present on this repo: `Production` deployments whose
-  # successful deployment status is posted by `vercel[bot]`. The deployment
-  # itself is attributed to the human who initiated it, so that creator is not
-  # a reliable integration identifier.
+  # Vercel's enriched `deployment.promoted` event fires after a deployment
+  # starts serving production traffic and carries the exact project and Vercel
+  # deployment id. Git metadata is present for normal connected deployments but
+  # is not required for CLI, fork, or deleted-branch promotions.
   #
-  # Limitations, written down rather than papered over:
-  #   - It depends on Vercel's GitHub integration staying enabled. If a deploy
-  #     ever reaches production without producing a GitHub Deployment, no purge
-  #     runs and those pages fall back to the 24h TTL. Use the manual
-  #     `workflow_dispatch` broad purge to recover.
-  #   - `success` is posted when Vercel considers the deployment ready. The
-  #     alias swap is effectively simultaneous, but a purge issued in the same
-  #     second could still race an edge that has not seen the new origin.
-  #     SETTLE_SECONDS below covers that window.
-  #   - `deployment_status` workflows only run from the file on the default
-  #     branch, so this cannot be exercised until it is merged to main.
-  deployment_status:
+  # Repository-dispatch workflows only run from the file on the default branch,
+  # so this trigger cannot be exercised until it is merged to main. The manual
+  # dry run below is the pre-merge verification path.
+  repository_dispatch:
+    types: ['vercel.deployment.promoted']
 
   # Manual escape hatch: purge the four top-level prefixes (and the rest of the
   # broad set) without needing a deploy. Use it after a Cloudflare rule change,
@@ -79,34 +69,22 @@ on:
 
 permissions:
   contents: read
-  # Reading the previous successful production deployment, to know where the
-  # diff starts.
-  deployments: read
-  # Writing the "this commit was purged" marker that the next run baselines
-  # from, so a failed purge is retried rather than skipped past.
-  statuses: write
 
-# Keyed per deployment, NOT a single shared group. GitHub keeps at most one
-# pending run per concurrency group: "any existing pending job or workflow in the
-# same concurrency group will be canceled and the new queued job or workflow will
-# take its place" — and that happens even with `cancel-in-progress: false`.
+# Keyed per Vercel deployment, NOT a single shared group. GitHub keeps at most
+# one pending run per concurrency group: "any existing pending job or workflow
+# in the same concurrency group will be canceled and the new queued job or
+# workflow will take its place", even with `cancel-in-progress: false`.
 # https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency
 #
 # With one shared group and three deploys in quick succession (B running, C
-# pending, D arriving), C is dropped. D's baseline is then deployment C, which
-# did go live, so everything changed between B and C is never purged by anyone
-# and stays stale for the full TTL. Purges are idempotent and each call handles
+# pending, D arriving), C is dropped. Purges are idempotent and each call handles
 # its own rate limiting, so letting runs overlap is strictly safer than
 # serialising them and losing one.
 concurrency:
-  group: cache-purge-${{ github.event.deployment.id || github.run_id }}
+  group: cache-purge-${{ github.event.client_payload.id || github.run_id }}
   cancel-in-progress: false
 
 env:
-  # Grace period between "Vercel says ready" and the first purge call. Cheap
-  # insurance against purging an edge a moment before it can see the new origin;
-  # raise it if a purged page is ever observed refilling with old content.
-  SETTLE_SECONDS: 15
   # Cloudflare documents "Maximum 30 prefixes per API call" for purge by prefix.
   # The general limits table allows 100 operations per request (500 on
   # Enterprise), so 30 is the tighter of the two documented numbers and is what
@@ -119,17 +97,6 @@ env:
   # second between calls keeps us under every per-second bucket, and 429s are
   # retried with backoff below, which is what makes the floor safe too.
   SLEEP_BETWEEN_CALLS: 1
-  # Commit-status context marking "the cache was successfully purged". The real
-  # context carries the deployment id — `cache-purge/12345` — because a SHA is
-  # not a unique key: a rollback redeploys one that was already purged. Ordering
-  # by timestamp is not enough either, since an earlier deployment's overlapping
-  # purge can post its marker after a later deployment was created. The id is
-  # the only thing that identifies which deployment a marker belongs to.
-  PURGE_STATUS_CONTEXT: cache-purge
-  # How far back to look for the last purged Vercel release. One page is 100
-  # deployments, which on this repo is ~3.3 days because translate_docs.yml
-  # creates a Production record every 30 minutes; 5 pages is a fortnight.
-  MAX_DEPLOYMENT_PAGES: 5
   # How far back a blind recovery reaches when it has no baseline to work from.
   # Only ever an approximation of where to start, so it is paired with the broad
   # page set; its job is to surface deletions, which a range-less run cannot see.
@@ -144,62 +111,79 @@ env:
 
 jobs:
   purge:
-    name: Purge changed prefixes
-    # Only successful *production* deployments from Vercel. `deployment_status`
-    # also fires for pending/failure states and for every preview deployment.
-    #
-    # Check the status creator, not the deployment creator. Vercel attributes
-    # the deployment to the human who initiated it and posts the ready status as
-    # `vercel[bot]`. A job-level `environment: Production` also creates records,
-    # but their statuses are posted by the Actions actor and must stay excluded.
+    name: Purge production cache
+    # Vercel emits this event for previews too. Reject non-production events
+    # before a runner is allocated, then validate all routing fields before
+    # Cloudflare secrets become reachable.
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      (github.event.deployment_status.state == 'success' &&
-       github.event.deployment.environment == 'Production' &&
-       github.event.deployment_status.creator.login == 'vercel[bot]')
+      (github.event.client_payload.environment == 'production' &&
+       github.event.client_payload.project.id == 'prj_BM0YCOihInl5lqPJidAzwixJPdtj')
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: deployed-source
     steps:
-      # Full history: the diff base is the previous deployed commit, which can be
-      # many commits back when deploys are batched or a build was superseded.
-      - uses: actions/checkout@v4
+      # Trusted workflow code always comes from the default-branch revision.
+      # Automatic purges need no deployed checkout; the full-zone operation is
+      # deliberately independent of Git metadata and repository reachability.
+      - name: Check out workflow source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          path: workflow-source
+          ref: ${{ github.sha }}
+
+      - name: Validate promoted deployment
+        if: github.event_name == 'repository_dispatch'
+        id: event
+        env:
+          CLIENT_PAYLOAD: ${{ toJSON(github.event.client_payload) }}
+        working-directory: workflow-source
+        run: node scripts/cache-purge-event.mjs
+
+      - name: Prepare automatic purge workspace
+        if: github.event_name == 'repository_dispatch'
+        working-directory: .
+        run: mkdir -p deployed-source
+
+      # Manual recovery still uses diffs, current public assets, and trusted
+      # workflow scripts. It needs the full default-branch history.
+      - name: Check out manual source
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          path: deployed-source
+          ref: ${{ github.sha }}
 
-      # Resolve what to map. Three cases:
-      #   dispatch + broad          -> broad set, no diff
-      #   dispatch + explicit range -> that range
-      #   deployment_status         -> previous successful production deploy .. this one
-      #
-      # Using the previous *deployed* commit rather than `push.before` matters:
-      # when several commits land quickly Vercel may supersede a build, so some
-      # commits never deploy on their own. Diffing deploy-to-deploy covers every
-      # commit that actually shipped between two live builds; diffing push-to-push
-      # would silently skip the superseded ones.
+      # Automatic promotions are stateless full-zone invalidations. Manual
+      # dispatch keeps the precise broad/range mapper for operator recovery.
       - name: Resolve diff range
         id: range
         env:
-          GH_TOKEN: ${{ github.token }}
           EVENT: ${{ github.event_name }}
           INPUT_BROAD: ${{ inputs.broad_pages }}
           INPUT_RANGE: ${{ inputs.range }}
-          HEAD_SHA: ${{ github.event.deployment.sha }}
-          DEPLOYMENT_ID: ${{ github.event.deployment.id }}
-          REPO: ${{ github.repository }}
-          PURGE_STATUS_CONTEXT: ${{ env.PURGE_STATUS_CONTEXT }}
         run: |
           set -euo pipefail
 
           emit() { echo "$1=$2" >> "$GITHUB_OUTPUT"; }
 
-          # Last resort before giving up on a range entirely.
+          if [ "$EVENT" = "repository_dispatch" ]; then
+            echo "::notice::Automatic production promotion; purging the full zone."
+            emit mode full
+            exit 0
+          fi
+
+          # Last resort before giving up on a manual range entirely.
           #
           # A range-less purge is blind to deletions: every target is enumerated
-          # from the deployed checkout, so a file removed in the meantime has no
-          # entry anywhere and its old URL survives at the edge. A time-boxed
-          # range is approximate about *where* to start, but it is a real diff,
-          # so removals inside it come through as `D` and get purged like any
-          # other change. Strictly better than nothing; still paired with the
-          # broad page set, because the window may not reach far enough back.
+          # from the checkout, so a file removed in the meantime has no entry
+          # anywhere and its old URL survives at the edge. A time-boxed range is
+          # approximate about where to start, but it is a real diff, so removals
+          # inside it come through as `D` and get purged like any other change.
           fallback_range() {
             local since ref
             ref="${1:-}"
@@ -215,118 +199,32 @@ jobs:
             return 1
           }
 
-          if [ "$EVENT" = "workflow_dispatch" ]; then
-            if [ "$INPUT_BROAD" = "true" ] && [ -z "${INPUT_RANGE:-}" ]; then
-              # Pages only. Cannot reach changed asset URLs or a locale that was
-              # removed, because both are discovered from a diff — supply a range
-              # as well to recover those.
-              echo "Manual dispatch: broad page purge, no range given."
-              fallback_range && exit 0
-              echo "::warning::No range and no fallback window; deletions in the meantime cannot be discovered."
-              emit mode broad
-              exit 0
-            fi
-            if [ -z "${INPUT_RANGE:-}" ]; then
-              echo "::error::broad_pages=false requires a 'range' input (e.g. abc1234..def5678)."
-              exit 1
-            fi
-            # Constrain the shape before it reaches git, so a value like
-            # `--upload-pack=...` can't be read as an option.
-            if ! printf '%s' "$INPUT_RANGE" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._/-]*\.\.[A-Za-z0-9][A-Za-z0-9._/-]*$'; then
-              echo "::error::Invalid range '$INPUT_RANGE'. Expected <base>..<head>."
-              exit 1
-            fi
-            base="${INPUT_RANGE%%..*}"
-            head="${INPUT_RANGE##*..}"
-          else
-            head="$HEAD_SHA"
-            if ! printf '%s' "${DEPLOYMENT_ID:-}" | grep -Eq '^[0-9]+$'; then
-              echo "::error::deployment_status payload carried no numeric deployment id."
-              exit 1
-            fi
-            # Walk production deployments newest-first and take the first
-            # deployment-specific successful purge marker on a *different*
-            # commit. Skipping same-sha entries means a redeploy of the current
-            # commit re-purges that commit's prefixes instead of computing an
-            # empty diff.
-            #
-            # The purge marker proves both that the candidate was a Vercel
-            # success event and that its entire purge completed. This avoids
-            # trusting `deployment.creator`: Vercel records carry the initiating
-            # human there, just like unrelated Actions Production deployments.
-            #
-            # `id < this deployment` is still required. Deployment ids increase
-            # monotonically, so
-            #   this is an "older than the event we are processing" test. Without
-            #   it, a deploy that finishes while this runner is queued is newer
-            #   yet still differs from head, so it would be accepted as the
-            #   "previous" build and the real B..C delta would go unpurged.
-            base=""
-            # Pagination is not optional here. `environment=Production` is
-            # dominated by the half-hourly translate_docs.yml jobs, which declare
-            # that environment and so create a deployment record each run.
-            # Measured on this repo: one page of 100 covers about 3.3 days and
-            # holds 5 Vercel releases against 95 Actions records. Any release gap
-            # longer than that would push the real baseline off page one, and the
-            # run would silently degrade to a broad purge every time.
-            page=1
-            while [ "$page" -le "$MAX_DEPLOYMENT_PAGES" ] && [ -z "$base" ]; do
-              deployments=$(gh api \
-                "repos/$REPO/deployments?environment=Production&per_page=100&page=$page")
-              [ "$(jq 'length' <<< "$deployments")" -gt 0 ] || break
-              ids=$(jq -r --argjson current "$DEPLOYMENT_ID" '
-                      [ .[]
-                        | select(.id < $current)
-                      ][]
-                      | "\(.id) \(.sha)"' <<< "$deployments")
-            # The baseline is the last commit we actually PURGED, not merely the
-            # last one deployed. If B's purge fails or is cancelled and C then
-            # deploys, taking B as the baseline would compute B..C and leave
-            # everything unique to A..B stale forever, with no run left that
-            # would ever revisit it. Walking back to the newest deployment
-            # carrying the `PURGE_STATUS_CONTEXT` commit status makes the next
-            # run absorb the failed one's range: the diff widens to A..C.
-              while read -r id sha; do
-                [ -n "$id" ] || continue
-                [ -z "$base" ] || break
-                [ "$sha" = "$head" ] && continue
-                # Cache commit statuses by SHA. Production deployment history is
-                # dominated by scheduled Actions records, often dozens on one
-                # commit; querying once per deployment would burn the API budget
-                # without learning anything new.
-                status_file="commit-statuses/$sha.json"
-                if [ ! -f "$status_file" ]; then
-                  mkdir -p commit-statuses
-                  gh api --paginate --slurp \
-                    "repos/$REPO/commits/$sha/statuses?per_page=100" > "$status_file"
-                fi
-                # Keyed to this deployment, not merely this commit. Only this
-                # workflow writes the marker, after every Cloudflare call wins.
-                purged=$(jq --arg context "$PURGE_STATUS_CONTEXT/$id" \
-                  '[.[][] | select(.context == $context and .state == "success")] | length' \
-                  "$status_file")
-                if [ "${purged:-0}" -gt 0 ]; then
-                  base="$sha"
-                  echo "Baseline: $sha (deployment $id) — last commit with a successful purge."
-                  break
-                fi
-                echo "Skipping $sha (deployment $id): deployed, but never purged successfully."
-              done <<< "$ids"
-              page=$((page + 1))
-            done
-
-            if [ -z "$base" ]; then
-              # Also the first-ever run, when no commit carries the marker yet.
-              echo "No earlier successfully purged deployment found."
-              fallback_range "$head" && exit 0
-              echo "::warning::No baseline and no fallback window; purging broadly."
-              emit mode broad
-              exit 0
-            fi
+          if [ "$INPUT_BROAD" = "true" ] && [ -z "${INPUT_RANGE:-}" ]; then
+            # Pages only. Cannot reach changed asset URLs or a locale that was
+            # removed, because both are discovered from a diff. Supply a range
+            # as well to recover those.
+            echo "Manual dispatch: broad page purge, no range given."
+            fallback_range && exit 0
+            echo "::warning::No range and no fallback window; deletions in the meantime cannot be discovered."
+            emit mode broad
+            exit 0
           fi
+          if [ -z "${INPUT_RANGE:-}" ]; then
+            echo "::error::broad_pages=false requires a 'range' input (e.g. abc1234..def5678)."
+            exit 1
+          fi
+          # Constrain the shape before it reaches git, so a value like
+          # `--upload-pack=...` cannot be read as an option.
+          if ! printf '%s' "$INPUT_RANGE" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._/-]*\.\.[A-Za-z0-9][A-Za-z0-9._/-]*$'; then
+            echo "::error::Invalid range '$INPUT_RANGE'. Expected <base>..<head>."
+            exit 1
+          fi
+          base="${INPUT_RANGE%%..*}"
+          head="${INPUT_RANGE##*..}"
 
-          # A force-push or a dropped branch can orphan the base commit. Mapping
-          # nothing would leave the cache stale, so fall back to the broad set.
+          if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            git fetch --no-tags origin main || true
+          fi
           if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
             echo "Base commit $base is not reachable in this checkout."
             fallback_range "$head" && exit 0
@@ -335,13 +233,12 @@ jobs:
             exit 0
           fi
           if ! git cat-file -e "${head}^{commit}" 2>/dev/null; then
-            echo "::warning::Head commit $head is not reachable in this checkout; purging broadly."
+            echo "::warning::Head commit $head is not reachable; purging broadly."
             emit mode broad
             exit 0
           fi
 
-          if [ "$EVENT" = "workflow_dispatch" ] && [ "$INPUT_BROAD" = "true" ]; then
-            # Broad page coverage, topped up from the range.
+          if [ "$INPUT_BROAD" = "true" ]; then
             emit mode broad
           else
             emit mode diff
@@ -358,24 +255,29 @@ jobs:
           MODE: ${{ steps.range.outputs.mode }}
           BASE: ${{ steps.range.outputs.base }}
           HEAD: ${{ steps.range.outputs.head }}
+          FALLBACK_I18N_FILE: ../workflow-source/lib/i18n.ts
         run: |
           set -euo pipefail
 
-          # No range to work from: a manual run without one, an unreachable base,
-          # or no previously purged deployment. --assets covers public/ wholesale
-          # because nothing here can tell which asset changed, and these are the
-          # runs that exist precisely because something already went wrong.
-          if [ "$MODE" = "broad" ] && [ -z "${BASE:-}" ]; then
-            node scripts/cache-purge-prefixes.mjs --broad --assets --json > purge.json
+          # Automatic promotions use Cloudflare's explicit full-zone operation
+          # and never need a deployed tree. Manual runs continue through the
+          # prefix mapper below.
+          if [ "$MODE" = "full" ]; then
+            jq -n '{prefixes: [], files: [], broad: true, collapsed: false}' > purge.json
+          # No range to work from: a manual run without one or an unreachable
+          # input. --assets covers public/ wholesale because a range-less mapper
+          # cannot tell which asset changed.
+          elif [ "$MODE" = "broad" ] && [ -z "${BASE:-}" ]; then
+            node ../workflow-source/scripts/cache-purge-prefixes.mjs --broad --assets --json > purge.json
           else
             # Broad *with* a range still walks the diff, so the broad page set
             # is topped up with changed asset URLs and locales removed in the
             # range. --assets rides along for the same reason it applies to a
             # range-less run: broad means the diff is not trusted to be
-            # complete, and the window may not reach back far enough. A run that
-            # escalates to broad from a *trusted* diff does not get it — there we
-            # know exactly which assets changed, and evicting every image on any
-            # shared-file change is what avoiding purge_everything is for.
+            # complete, and the window may not reach back far enough. A manual
+            # run escalated from a trusted diff does not get it. There we know
+            # exactly which assets changed, and evicting every image on any
+            # shared-file change would defeat precise manual recovery.
             broad_flag=""
             [ "$MODE" = "broad" ] && broad_flag="--broad --assets"
             # --no-renames is load-bearing. Git's rename detection is on by
@@ -389,9 +291,9 @@ jobs:
             # renders, so the mapper widens the purge for them.
             # -z, not the default text format. Git prints pathnames verbatim
             # under it, so there is no C-quoting to decode and no whitespace to
-            # tell apart from a delimiter — the two things that silently
-            # mismapped `café.png` and `logo.png ` before. NUL cannot occur in a
-            # filename, so the framing is unambiguous by construction.
+            # tell apart from a delimiter. Those two issues silently mismapped
+            # `café.png` and `logo.png ` before. NUL cannot occur in a filename,
+            # so the framing is unambiguous by construction.
             #
             # --no-renames keeps a move reported as delete + add: git's rename
             # detection would otherwise name only the destination and the old URL
@@ -422,7 +324,7 @@ jobs:
 
             # shellcheck disable=SC2086 # broad_flag is intentionally unquoted: empty means no flag.
             TREE_EDITS_FILE=tree-edits.z \
-              node scripts/cache-purge-prefixes.mjs - --json --explain $broad_flag < changed.z > purge.json
+              node ../workflow-source/scripts/cache-purge-prefixes.mjs - --json --explain $broad_flag < changed.z > purge.json
           fi
 
           jq -r '.prefixes[]' purge.json > prefixes.txt
@@ -430,48 +332,49 @@ jobs:
           broad=$(jq -r '.broad' purge.json)
           collapsed=$(jq -r '.collapsed' purge.json)
 
-          echo "mode=$([ "$broad" = "true" ] && echo broad || echo selective)" >> "$GITHUB_OUTPUT"
+          if [ "$MODE" = "full" ]; then
+            echo "mode=full" >> "$GITHUB_OUTPUT"
+            echo "full=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=$([ "$broad" = "true" ] && echo broad || echo selective)" >> "$GITHUB_OUTPUT"
+            echo "full=false" >> "$GITHUB_OUTPUT"
+          fi
           echo "collapsed=$collapsed" >> "$GITHUB_OUTPUT"
 
-      # Vercel posts success as its production alias changes. Let that alias
-      # propagate before reading fresh page shells or purging anything.
-      - name: Wait for the deploy to settle
-        if: ${{ github.event_name == 'deployment_status' }}
-        run: sleep "$SETTLE_SECONDS"
-
-      # A new immutable asset can be requested during the alias transition and
-      # receive a short-lived origin 404. The zone's Cache Rule may retain that
-      # response much longer, independently in each Cloudflare location. Read a
-      # bounded set of fresh page shells plus their runtime's complete lazy-chunk
-      # map, then globally purge those exact current build-asset URLs; a health
-      # check from one runner cannot see poisoned keys in another edge location.
-      - name: Collect current build assets
+      # Automatic promotions already have a complete full-zone plan and make no
+      # cache-busted Vercel page requests. Manual recovery keeps live discovery:
+      # an operator may be clearing poisoned entries created before the no-store
+      # rule existed.
+      - name: Finalize purge plan
         id: assets
         env:
           CACHE_PROBE_TOKEN: ${{ github.run_id }}-${{ github.run_attempt }}
+          EVENT: ${{ github.event_name }}
+          FULL: ${{ steps.compute.outputs.full }}
         run: |
           set -euo pipefail
 
-          probe_log=$(mktemp)
           degraded=false
-          if node scripts/cache-build-assets.mjs > build-assets.txt 2> "$probe_log"; then
-            cat "$probe_log" >&2
-          else
-            # Discovery retries through an alias transition on its own, so a
-            # failure here means the live site is unhealthy rather than mid-flip.
-            # Escalate the selective plan to every page prefix and current public
-            # asset while retaining deleted URLs found by the original diff.
-            sed 's/^::error::/::warning::/' "$probe_log" >&2
-            echo "::warning::Build-asset discovery failed; purging the recovery targets without the current build assets."
-            node scripts/cache-purge-prefixes.mjs --broad --assets --json > recovery.json
-            jq -r '.prefixes[]' recovery.json >> prefixes.txt
-            jq -r '.files[]?' recovery.json >> files.txt
-            sort -u prefixes.txt -o prefixes.txt
-            sort -u files.txt -o files.txt
-            : > build-assets.txt
-            degraded=true
+          : > build-assets.txt
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            probe_log=$(mktemp)
+            if node ../workflow-source/scripts/cache-build-assets.mjs > build-assets.txt 2> "$probe_log"; then
+              cat "$probe_log" >&2
+            else
+              # Escalate the selective plan to every page prefix and current public
+              # asset while retaining deleted URLs found by the original diff.
+              sed 's/^::error::/::warning::/' "$probe_log" >&2
+              echo "::warning::Build-asset discovery failed; purging the recovery targets without the current build assets."
+              node ../workflow-source/scripts/cache-purge-prefixes.mjs --broad --assets --json > recovery.json
+              jq -r '.prefixes[]' recovery.json >> prefixes.txt
+              jq -r '.files[]?' recovery.json >> files.txt
+              sort -u prefixes.txt -o prefixes.txt
+              sort -u files.txt -o files.txt
+              : > build-assets.txt
+              degraded=true
+            fi
+            rm -f "$probe_log"
           fi
-          rm -f "$probe_log"
           echo "degraded=$degraded" >> "$GITHUB_OUTPUT"
 
           cat build-assets.txt >> files.txt
@@ -480,6 +383,7 @@ jobs:
           prefix_count=$(wc -l < prefixes.txt)
           file_count=$(wc -l < files.txt)
           total=$((prefix_count + file_count))
+          [ "$FULL" = "true" ] && total=1
           echo "count=$total" >> "$GITHUB_OUTPUT"
 
           {
@@ -491,7 +395,7 @@ jobs:
             fi
             echo "- prefixes: $prefix_count"
             echo "- exact URLs: $file_count"
-            echo "- current build assets: $(wc -l < build-assets.txt)"
+            echo "- recovery build assets: $(wc -l < build-assets.txt)"
             if [ "$degraded" = "true" ]; then
               echo "- **degraded**: live discovery failed, no purge marker recorded"
             fi
@@ -501,9 +405,8 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # Defensive only: build-assets.txt normally makes every production deploy
-      # non-empty. Keep a clear no-op result for an explicitly narrowed future
-      # configuration.
+      # A promoted commit that changes no cache-relevant path is a real no-op.
+      # Keep it explicit rather than touching Vercel or Cloudflare.
       - name: Nothing to purge
         if: steps.assets.outputs.count == '0'
         run: echo "::notice::No cached route or build asset needs purging."
@@ -512,11 +415,15 @@ jobs:
         if: inputs.dry_run && steps.assets.outputs.count != '0'
         run: |
           set -euo pipefail
-          echo "DRY RUN — the Cloudflare API is not called. Prefixes:"
-          cat prefixes.txt
-          if [ -s files.txt ]; then
-            echo "Exact URLs:"
-            cat files.txt
+          if [ "${{ steps.compute.outputs.full }}" = "true" ]; then
+            echo "DRY RUN: the Cloudflare API would purge the full zone."
+          else
+            echo "DRY RUN: the Cloudflare API is not called. Prefixes:"
+            cat prefixes.txt
+            if [ -s files.txt ]; then
+              echo "Exact URLs:"
+              cat files.txt
+            fi
           fi
 
       # Fail loudly on missing configuration. A purge that quietly skips is the
@@ -542,24 +449,28 @@ jobs:
         env:
           CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CF_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          PURGE_MODE: ${{ steps.compute.outputs.mode }}
         run: |
           set -euo pipefail
 
           endpoint="https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/purge_cache"
 
-          # One purge call. Fails the job on a non-200 *or* on `success: false`
-          # in the body — Cloudflare returns 200 with success:false for things
-          # like an unauthorised prefix, and treating that as a win is how a
-          # cache silently stays stale. Never `|| true`.
+          # One purge call. Fails the job on a non-200 or on `success: false`
+          # in the body. Cloudflare returns 200 with success:false for failures
+          # such as an unauthorised prefix, and treating that as a win silently
+          # leaves stale cache entries. Never `|| true`.
           purge_call() {
             local field="$1" payload_file="$2" attempt=1 max_attempts=5 delay=5
             local body http
 
-            # `files` and `prefixes` are mutually exclusive in the API, so each
-            # kind goes in its own call.
+            # `files`, `prefixes`, and `purge_everything` are mutually exclusive.
             local payload
-            payload=$(jq -Rs --arg field "$field" \
-              'split("\n") | map(select(length > 0)) | {($field): .}' < "$payload_file")
+            if [ "$field" = "purge_everything" ]; then
+              payload='{"purge_everything":true}'
+            else
+              payload=$(jq -Rs --arg field "$field" \
+                'split("\n") | map(select(length > 0)) | {($field): .}' < "$payload_file")
+            fi
 
             local headers
             while :; do
@@ -572,7 +483,11 @@ jobs:
                 --data "$payload") || http=000
 
               if [ "$http" = "200" ] && [ "$(jq -r '.success' "$body")" = "true" ]; then
-                echo "  purged $(jq -r --arg f "$field" '.[$f] | length' <<< "$payload") $field (id $(jq -r '.result.id // "n/a"' "$body"))"
+                if [ "$field" = "purge_everything" ]; then
+                  echo "  purged the full zone (id $(jq -r '.result.id // "n/a"' "$body"))"
+                else
+                  echo "  purged $(jq -r --arg f "$field" '.[$f] | length' <<< "$payload") $field (id $(jq -r '.result.id // "n/a"' "$body"))"
+                fi
                 rm -f "$body" "$headers"
                 return 0
               fi
@@ -637,36 +552,13 @@ jobs:
             rm -rf "$chunkdir"
           }
 
-          purge_all prefixes prefixes.txt
-          # The homepage has no usable prefix — `www.librechat.ai/` prefixes the
-          # whole zone, static assets included — so it is purged by exact URL.
-          purge_all files files.txt
+          if [ "$PURGE_MODE" = "full" ]; then
+            purge_call purge_everything /dev/null
+          else
+            purge_all prefixes prefixes.txt
+            # The homepage has no usable prefix. `www.librechat.ai/` prefixes the
+            # whole zone, static assets included, so purge it by exact URL.
+            purge_all files files.txt
+          fi
 
           echo "::notice::Cloudflare purge complete."
-
-      # Only reached when every call above succeeded, because `set -e` plus
-      # purge_call's non-zero return aborts the step otherwise. That is the
-      # point: the marker means "the cache is known-good at this SHA", and the
-      # next run picks its baseline from the newest deployment carrying one. A
-      # run that fails leaves no marker, so the following run's diff widens to
-      # include this one's range instead of stepping over it.
-      # A degraded run is the same case from the other direction: it purged the
-      # recovery targets but could not enumerate the current build assets, so it
-      # must not claim this SHA is known-good.
-      - name: Record the purge against this commit
-        if: ${{ !inputs.dry_run && steps.assets.outputs.count != '0' && steps.assets.outputs.degraded != 'true' && github.event_name == 'deployment_status' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          SHA: ${{ github.event.deployment.sha }}
-          DEPLOYMENT_ID: ${{ github.event.deployment.id }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          gh api -X POST "repos/$REPO/statuses/$SHA" \
-            -f state=success \
-            -f context="$PURGE_STATUS_CONTEXT/$DEPLOYMENT_ID" \
-            -f target_url="$RUN_URL" \
-            -f description="Purged $(wc -l < prefixes.txt) prefixes, $(wc -l < files.txt) URLs" \
-            > /dev/null
-          echo "Marked $SHA as purged."
