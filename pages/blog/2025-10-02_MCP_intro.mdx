@@ -1,0 +1,150 @@
+---
+
+title: MCP integration with per-user credentials
+date: 2025/10/02
+description: "A comprehensive example of an MCP server integration in Librechat that allows per-user credentials."
+tags:
+  - MCP
+  - guide
+  - customization
+authorid: balikasg
+ogImage: /images/blog/2025-10-02_MCP_intro.png
+
+---
+
+import { BlogHeader } from '@/components/blog/BlogHeader'
+
+<BlogHeader />
+
+# Introduction
+MCP servers started as 1:1 stdio processes. Claude App spawns a server, uses it, kills it.
+This doesn't scale well when the UI is served in a centralized way and several users need to use the MCP with different levels of information access.
+We need N:1 servers where multiple users connect to the same instance.
+The problem that arises is that each user needs their own credentials.
+Here's how to build an MCP server that handles per-user auth, using Salesforce + LibreChat as an example.
+This can be a starting point for everyone looking to set-up their MCP with custom user variables.
+
+
+# A Salesforce MCP server
+
+The key insight on the MCP server implementation side: grab user credentials from HTTP headers.
+If you follow along you need:
+```bash
+"httpx>=0.28.1",
+"mcp[cli]>=1.5.0",
+"pandas>=2.2.3",
+"simple-salesforce>=1.12.6",
+"tabulate>=0.9.0",
+```
+
+Here is the implementation:
+```python
+import pandas as pd
+from simple_salesforce import Salesforce
+from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.server import Context
+
+
+# Initialize FastMCP server
+mcp = FastMCP("salesforce",
+              port=8050,
+              auth_required=False,
+              host="0.0.0.0")
+
+
+def initialize_client(username: str, password: str, token: str) -> Salesforce:
+    """Initialize and return a Salesforce client."""
+    sf = Salesforce(
+        username=username,
+        password=password,
+        security_token=token,
+        domain='login')
+    return sf
+
+
+@mcp.tool()
+def query_salesforce(soql_query: str, ctx: Context) -> str:
+    """Issues a REST query to salesforce using simple_salesforce in the background.
+    Select only the minimum set of columns needed and apply appropriate filters if needed.
+
+    Parameters
+    ----------
+    soql_query : str
+        SOQL query to execute against Salesforce
+
+    Returns
+    -------
+    str
+        Markdown formatted table of results
+
+    Examples
+    --------
+    Get the id, subject and status from my open salesforce cases:
+    query_salesforce("Select id, subject, status from Case WHERE Status!= 'Closed'")
+    """
+    headers_info = {}
+    if ctx.request_context.request:
+        headers_info = dict(ctx.request_context.request.headers)
+    salesforce_client = initialize_client(username=headers_info['x-auth-username'],
+                                          password=headers_info['x-auth-password'],
+                                          token=headers_info['x-auth-token'])
+
+    results = salesforce_client.query(soql_query)
+    return pd.DataFrame(results['records']).to_markdown()
+
+
+if __name__ == "__main__":
+    mcp.run(transport='sse')
+```
+When LibreChat calls `query_salesforce`, the server pulls `x-auth-username`, `x-auth-password`, and `x-auth-token` from the request headers, creates a fresh Salesforce client, and executes the SOQL query. Each user's credentials stay isolated.
+This is a bare-bones example to show the mechanism whose gist is capturing the headers.
+Production code would need error handling, input sanitization, and broader Salesforce API coverage.
+
+
+
+# LibreChat Support
+
+LibreChat passes user variables as HTTP headers.
+Configure it in `librechat.yaml` [per the documentation](https://www.librechat.ai/docs/configuration/librechat_yaml/object_structure/mcp_servers):
+
+```bash
+mcpServers:
+  per-user-credentials-example:
+    type: streamable-http
+    url: "https://example.com/api/"
+    headers:
+      X-Auth-Token: "{{MY_SERVICE_API_KEY}}"
+    customUserVars:
+      MY_SERVICE_API_KEY:
+        title: "My Service API Key"
+        description: "Enter your personal API key for the service. You can generate one at <a href='https://myservice.example.com/developer/keys' target='_blank'>Service Developer Portal</a>."
+```
+
+Users enter their credentials once in the UI. LibreChat automatically includes them as headers in every MCP request.
+
+For our Salesforce server:
+
+```bash
+mcpServers:
+  salesforce:
+    type: sse
+    url: "https://example.com/api/"
+    headers:
+      X-Auth-Username: "{{SF_USERNAME}}"
+      X-Auth-Password: "{{SF_PASSWORD}}"
+      X-Auth-Token: "{{SF_TOKEN}}"
+    customUserVars:
+      SF_USERNAME:
+        title: "SF USERNAME" # This is the label shown above the input field
+        description: "Use your Salesforce username" # This description appears below the input
+      SF_PASSWORD:
+        title: "SF PASSWORD"
+        description: "Use your Salesforce password"
+      SF_TOKEN:
+        title: "SF TOKEN"
+        description: "Get your API key <a href='https://example.com/api-keys' target='_blank'>here</a>." #
+```
+The header names (`X-Auth-Username`, etc.) match what our Python server expects.
+The `customUserVars` section creates input fields in LibreChat's UI.
+
+
