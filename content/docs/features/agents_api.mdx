@@ -1,30 +1,140 @@
 ---
 title: Agents API (Beta)
 icon: Plug
-description: Run LibreChat agents and deliver authenticated events through programmatic APIs
+description: Run agents, manage conversation history, and deliver authenticated events through programmatic APIs
 ---
 
 <Callout type="warning" title="Beta Feature">
 The Agents API is currently in beta. Endpoints, request/response formats, and behavior may change as we iterate toward a stable release.
 </Callout>
 
-LibreChat exposes agents to external applications, scripts, and services through inference and event-delivery APIs.
+LibreChat exposes agents to external applications, scripts, and services through inference, conversation-management, and event-delivery APIs.
 
 ## Overview
 
-The Agents API provides two inference interfaces and authenticated event delivery:
+The Agents API provides inference, conversation management, and authenticated event delivery:
 
 - **OpenAI-compatible Chat Completions** — `POST /api/agents/v1/chat/completions`
 - **Open Responses API** — `POST /api/agents/v1/responses`
 - **Agent Events** — `POST /api/agents/v1/events`
+- **Conversation Management** — `/api/agents/v1/conversations`
 
 The inference interfaces support API-key authentication, optional OIDC authentication, and streaming responses. Agent Events use Remote Agents API-key authentication so LibreChat can bind each delivery to a stable source identity.
 
 LibreChat is adopting [Open Responses](https://www.openresponses.org/) as its primary API framework for serving agents. While the Chat Completions endpoint provides backward compatibility with existing OpenAI-compatible tooling, the Open Responses endpoint represents the future direction.
 
+## Conversation Management
+
+The Conversation Management API lets an authenticated integration browse and
+maintain the user's persisted conversations. Enable it explicitly under
+`endpoints.agents.conversationApi.auth`, choosing `remote` for the existing
+Remote Agents API-key/OIDC policy or `management` for machine OIDC client
+bindings. If this setting is omitted, the conversation API is disabled. The
+selected mode never falls back to the other authentication mode. See the
+[conversationApi configuration reference](/docs/configuration/librechat_yaml/object_structure/agents#conversationapi)
+for configuration examples.
+
+All requests use the authenticated user's owner and tenant scope. This
+includes ordinary user conversations that do not have a saved Agent
+association. Internal subagent threads and records hidden by retention policy are excluded. The
+API returns public conversation/message projections and does not expose
+stored authentication configuration, checkpoints, or execution internals.
+User-authored message text and tool content remain part of the history.
+
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/agents/v1/conversations` | List conversations, optionally filtered by persisted current `agent_id`, any matching `tags`, or `isArchived`. |
+| `GET` | `/api/agents/v1/conversations/:id` | Retrieve one conversation projection. |
+| `GET` | `/api/agents/v1/conversations/:id/messages` | Retrieve messages oldest-first while preserving message and parent IDs. |
+| `PATCH` | `/api/agents/v1/conversations/:id` | Update persisted `title`, `tags`, and/or `isArchived`; unknown or empty bodies are rejected. |
+| `DELETE` | `/api/agents/v1/conversations/:id` | Delete the conversation with coordinated message, execution, and linked-resource cleanup. |
+| `POST` | `/api/agents/v1/conversations/import` | Import one strict LibreChat JSON export as multipart `file`. |
+
+List endpoints accept `limit` (default 20, maximum 100) and an opaque
+`cursor`. A value above 100 returns `400`. Conversation pages are newest
+first by update time; message pages are oldest first by creation time. The
+response uses `object: "list"`, `data`, `first_id`, `last_id`, `has_more`, and
+`after`; pass `after` as the next request's `cursor`.
+
+```json
+{
+  "object": "list",
+  "data": [{
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "title": "Support follow-up",
+    "createdAt": "2026-09-06T12:00:00.000Z",
+    "updatedAt": "2026-09-06T12:05:00.000Z",
+    "agent_id": "agent_abc123",
+    "tags": ["support"],
+    "isArchived": false
+  }],
+  "first_id": "550e8400-e29b-41d4-a716-446655440000",
+  "last_id": "550e8400-e29b-41d4-a716-446655440000",
+  "has_more": true,
+  "after": "OPAQUE_CURSOR"
+}
+```
+
+Conversation projections contain `id`, `title`, `createdAt`, `updatedAt`,
+optional `agent_id`, `tags`, and `isArchived`. Message projections contain `id`,
+`conversationId`, `parentMessageId`, `text`, `content`, `sender`,
+`isCreatedByUser`, `createdAt`, `updatedAt`, `unfinished`, `error`, and
+`finish_reason`. Missing or inaccessible conversations return 404. Invalid
+queries, cursors, or update bodies return 400.
+
+```bash
+curl "https://your-librechat-instance/api/agents/v1/conversations?agent_id=agent_abc123&tags=support&tags=priority&limit=20" \
+  -H "Authorization: Bearer YOUR_API_KEY"
+
+curl "https://your-librechat-instance/api/agents/v1/conversations/$CONVERSATION_ID/messages" \
+  -H "Authorization: Bearer YOUR_API_KEY"
+
+curl -X PATCH "https://your-librechat-instance/api/agents/v1/conversations/$CONVERSATION_ID" \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"title":"Support follow-up","tags":["support"],"isArchived":false}'
+
+curl -X POST "https://your-librechat-instance/api/agents/v1/conversations/import" \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -F file=@conversation.json
+```
+
+`agent_id` identifies the persisted current Agent reference; it does not
+search historical message participants. `tags` uses any-match semantics when
+repeated. Omit `isArchived` to include active and archived conversations, or
+set it explicitly to `true` or `false`. Tags organize conversations; they do
+not grant access. Updating tags or importing non-empty tags requires the user's
+bookmark permission; otherwise the request returns 403. A successful delete returns HTTP 200 with
+`{"id":"...","deleted":true}`. Updating a title stores it; there is no
+title-generation endpoint in Conversation Management.
+
+| Capability | Conversation Management behavior |
+| --- | --- |
+| Saved Agent conversations | Persisted current Agent reference is returned and filterable. |
+| Ordinary conversations | Included when user-owned and visible under retention policy, even without a saved Agent. |
+| Imported conversations | Source provenance is discarded; destination ownership is the authenticated user and tenant. |
+| Tags and titles | Both are persisted metadata and can be updated through `PATCH`. |
+| Connection close | Cancellation on connection close follows the execution interface; these history endpoints do not change it. |
+| Reconnect/replay | History cursors do not reconnect or replay an in-flight execution. |
+| Assistant targeting | Default Assistant and ephemeral targeting are outside this management surface. |
+| Event formats | Stream event formats are separate from these JSON management responses. |
+
+Imported source provenance (`_id`, `__v`, `user`, and `tenantId`) is accepted
+at recognized export record positions and discarded. Destination ownership is
+always the authenticated user and tenant; multipart ownership overrides and
+unsupported ownership fields are rejected. Strict import validation requires
+a non-empty `conversationId` and exactly one of `messages` or `messagesTree`.
+The default upload limit is 250 MiB. Individual records are also checked against
+the storage size limit before any writes. Temporary files are cleaned up after
+processing; cleanup failures are logged.
+
 ## Enabling the Agents API
 
-The Agents API is gated behind the `remoteAgents` interface configuration. All permissions default to `false`.
+Inference and event endpoints are gated behind the `remoteAgents` interface
+configuration. Conversation Management selects its authentication separately
+through `conversationApi.auth`; enabling `remoteAgents` alone does not imply
+that the conversation endpoints are enabled. All permissions default to
+`false`.
 
 ```yaml filename="librechat.yaml"
 interface:
@@ -159,9 +269,46 @@ curl -X POST https://your-librechat-instance/api/agents/v1/responses \
   -H "Content-Type: application/json" \
   -d '{
     "model": "agent_abc123",
-    "input": "What is the weather today?"
+    "input": "What is the weather today?",
+    "store": true
   }'
 ```
+
+### Retrieve and continue stored Responses
+
+When a response is stored, retrieve it with:
+
+```bash
+curl "https://your-librechat-instance/api/agents/v1/responses/$RESPONSE_ID" \
+  -H "Authorization: Bearer YOUR_API_KEY"
+```
+
+`GET /api/agents/v1/responses/:id` resolves the response ID in the
+authenticated user's conversation scope and returns an Open Responses object.
+If the response-specific message is available, its output is returned. A
+missing or inaccessible response returns 404. The legacy fallback that returns
+the whole visible conversation history applies only when the supplied ID is a
+conversation UUID without a response-specific message; it is not the normal
+response-ID path.
+
+Continue a stored conversation by passing the prior response ID to
+`POST /api/agents/v1/responses`:
+
+```json
+{
+  "model": "agent_abc123",
+  "input": "Continue with the next step.",
+  "previous_response_id": "$RESPONSE_ID",
+  "store": true
+}
+```
+
+Storage fidelity follows the conversation persistence path: response output
+and message history are reconstructed from stored LibreChat records, so
+provider-only fields that were not persisted are not recoverable. Use the
+conversation endpoints above when you need stable message IDs and branch
+relationships. The Responses retrieval and continuation surface does not add
+native run-management endpoints.
 
 ## Agent Events
 
