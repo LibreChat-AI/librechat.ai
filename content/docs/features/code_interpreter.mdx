@@ -43,6 +43,8 @@ Execute code in multiple programming languages:
 
 LibreChat restores referenced conversation files into the current Code Interpreter environment before an Agent run. If every required Code Interpreter file fails recovery, the run stops before model invocation and asks the user to reattach the files rather than continuing with stale references.
 
+Code API uploads recover from `429` rate limits by honoring `Retry-After`, reopening the source stream for each attempt, and sharing a bounded wait budget. Administrators can tune per-user, per-route recovery with [`codeApiUploadConcurrency` and `codeApiMaxRetryWaitMs`](/docs/configuration/librechat_yaml/object_structure/agents#code-api-upload-recovery).
+
 When conversation inputs would mount at the same sandbox destination, LibreChat resolves the collision before execution. Shared conversation files are assigned before Agent-private files; within each scope, the newest content write keeps the original destination. Conflicting paths are flattened when needed or receive an identity-derived suffix, and the resolved `/mnt/data/...` paths are included in the Agent's file context. This also covers an upload and a generated output that share a filename, so one collision does not reject every later Code Interpreter run in the conversation. Duplicate seed references that still resolve to an already-claimed destination are skipped instead of failing the complete request.
 
 Sandbox images are transferred in bounded windows. Set [`LIBRECHAT_CODE_SANDBOX_OUTPUT_MAX_SIZE`](/docs/configuration/dotenv#code-interpreter) to match the worker's `SANDBOX_OUTPUT_MAX_SIZE`; LibreChat derives the largest safe image window from that budget and can learn a smaller per-service limit after one failed read. Use `LIBRECHAT_CODE_IMAGE_CHUNK_BYTES` only when an exact window override is required. Previously downloaded generated artifacts are reused within the request when possible, avoiding another sandbox read.
@@ -73,6 +75,8 @@ Background execution lets an Agent dispatch long-running code or shell work and 
 This feature is opt-in at the deployment level. Add `run_in_background` alongside `execute_code` in the [Agents endpoint capabilities](/docs/configuration/librechat_yaml/object_structure/agents#capabilities), then enable Code Interpreter on the agent. Code execution and shell calls become background-eligible automatically; turn off **Background execution** in the Code Interpreter tool settings when an agent should opt out. The model still decides per call whether to dispatch eligible work in the background.
 
 Ordinary background execution remains process-local and does not survive the loss of its app worker. Once a content-only terminal result is persisted, its automatic delivery is durable and may continue on another replica; tasks with a live artifact still require polling on the owning run. Set [`endpoints.agents.backgroundTasks.completionWakeups: false`](/docs/configuration/librechat_yaml/object_structure/agents#backgroundtasks) to require polling for every result. Background dispatch does not extend the Code Interpreter service's execution limit; the deployment's normal server-side timeout still applies.
+
+With [`ordinaryToolCancellation: true`](/docs/configuration/librechat_yaml/object_structure/agents#backgroundtasks), owners can request cooperative cancellation of ordinary background Code tools, including attached Bash. The task remains active and consumes capacity until the invocation settles; a tool that ignores cancellation may still complete.
 
 ### Stateful Code Sessions
 
@@ -113,11 +117,27 @@ For self-service workers, configure a deployment-owned attached control plane wi
 
 Users with Code Environment management permission can then open **Settings > Code environments**, name an environment, choose an approved control plane, and select **Connect VM**. LibreChat shows a short-lived, one-time `librechat-code pair ...` command. Run it on the user's VM, then start `@librechat/code` with `LIBRECHAT_CODE_SANDBOX_ENDPOINT` pointing to that machine's sandbox service. The UI lists the user's environments and can revoke and remove them later; sandbox files remain on the VM.
 
+Administrators can bound enrollment with [`statefulCodeSessions.principalWorkers`](/docs/configuration/librechat_yaml/object_structure/agents#statefulcodesessions). Enrollment defaults to enabled with at most five registered environments per user when this block is omitted. The count includes offline workers across every control plane. Deployment configuration is the ceiling: principal-specific configuration may lower or disable it, but cannot raise it. Tightening the policy does not revoke machines that are already registered.
+
 Personal environments are bound to the authenticated user and tenant, protected by Code Environment ACLs, and assigned only server-validated IDs and approved base URLs. LibreChat does not expose the bridge administrator token or arbitrary operator URLs to the client. Removing an environment revokes its worker credential before deleting the registry entry, and user deletion schedules the same revocation and cleanup with background reconciliation for interrupted attempts. The selected worker route applies consistently to Code Interpreter, shell, generated-file access, and Programmatic Tool Calling.
+
+Agents using an attached workspace can list its directory tree, read files, search file contents, create or edit files, and run Bash on the selected worker. File citations use workspace-relative paths, authored files appear in the response's **Workspace changes** row, and tool failures preserve the worker's bounded HTTP diagnostics. An Agent can also store a per-Agent Git name and email for commits created in that workspace; these values configure authorship only and do not provide repository credentials.
+
+An attached worker advertises the workspace roots it makes available. The composer lets the user select one workspace for each attached environment reachable through the Agent or its Subagents; a single unambiguous workspace is selected automatically for a new conversation. LibreChat stores these selections on the conversation, revalidates them against the live worker before execution, and keeps them fixed through approval pauses and resumed runs. Sending is blocked when a required selection is missing or unavailable, and LibreChat never silently substitutes another workspace. Native file and Bash workspace tools can use an advertised root even when the worker does not support reusable runtime sessions. Attached Programmatic Bash is currently unavailable because that tool cannot carry the selected workspace identity; workspace-aware Bash remains available directly. **Stop** cancels a signal-aware in-flight BYOM command without invalidating the workspace for later commands; detached work retains its separate cancellation lifecycle.
+
+Attached Bash uses a 30-second timeout by default. An environment can expose a larger model-requestable budget with [`configSchema.limits.maxCommandTimeoutMs`](/docs/configuration/librechat_yaml/object_structure/agents#statefulcodesessions), up to the five-minute protocol ceiling. The requested timeout never exceeds the deployment limit.
 
 #### Attached-environment tool permissions
 
 Attached and personal environments use an ask-by-default approval policy for file writes and command or code execution. Read-only and search operations continue under the deployment's regular tool policy. If the administrator exposes either category through [`configSchema.permissions`](/docs/configuration/librechat_yaml/object_structure/agents#statefulcodesessions), users with Code Environment management permission can choose among the allowed **Allow**, **Ask**, or **Deny** values under **Settings > Code environments**. Missing, stale, or disallowed settings fall back safely to **Ask**.
+
+The composer shows a conversation-level **Code approval mode** whenever the selected attached environment supports it:
+
+- **Ask before changes** asks before file edits or commands.
+- **Accept edits** allows file edits but continues asking before commands.
+- **Full access** allows both categories without routine prompts.
+
+The selected mode travels with that conversation and is intersected with the deployment's allowed values and the environment policy. **Full access** appears only when both `fileWrite` and `commandExecution` permit `allow`; it does not bypass sandbox isolation, role grants, explicit endpoint `ask` or `deny` rules, Skill-file confirmation, or approval hooks.
 
 These controls cover file-authoring tools, shell and code execution, compile checks, and Programmatic Tool Calling. Writes to persistent Skill files still require confirmation when Skill authoring is available, even when ordinary file writes are allowed. The settings do not change VM isolation, networking, mounts, privileged execution, ingress, egress, or secret access.
 
