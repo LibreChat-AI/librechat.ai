@@ -294,13 +294,13 @@ If you are using an online database, the URI format is `mongodb+srv://<username>
     [
       'MONGO_AUTO_INDEX',
       'boolean',
-      'Set to false to disable automatic index creation for all models associated with this connection. When omitted, uses Mongoose default behavior.',
+      'Set to false to disable automatic index creation for all models associated with this connection. When omitted, empty, or whitespace-only, uses Mongoose default behavior.',
       '# MONGO_AUTO_INDEX=',
     ],
     [
       'MONGO_AUTO_CREATE',
       'boolean',
-      'Set to false to disable Mongoose automatically calling createCollection() on every model created on this connection. When omitted, uses Mongoose default behavior.',
+      'Set to false to disable Mongoose automatically calling createCollection() on every model created on this connection. When omitted, empty, or whitespace-only, uses Mongoose default behavior.',
       '# MONGO_AUTO_CREATE=',
     ],
   ]}
@@ -512,9 +512,9 @@ In a single-tenant deployment without complete `LANGFUSE_PUBLIC_KEY` and `LANGFU
 
 `LANGFUSE_BASE_URL` is canonical. `LANGFUSE_HOST` and `LANGFUSE_BASEURL` remain compatibility aliases and are consulted in that order only when the canonical setting is absent.
 
-### OpenTelemetry Tracing
+### OpenTelemetry Traces and Logs
 
-LibreChat can emit backend OpenTelemetry traces for general API, HTTP, MongoDB, Mongoose, Redis, and outbound request visibility. Redis command-level spans are opt-in so default traces stay high-level. Use Langfuse for GenAI-specific prompt/model observability.
+LibreChat can emit backend OpenTelemetry traces for general API, HTTP, MongoDB, Mongoose, Redis, and outbound request visibility, and can export its Winston application logs as correlated OpenTelemetry log records. Traces and logs are independently opt-in; enabling logs alone does not install tracing instrumentation. Use Langfuse for GenAI-specific prompt/model observability.
 
 <OptionTable
   options={[
@@ -523,6 +523,18 @@ LibreChat can emit backend OpenTelemetry traces for general API, HTTP, MongoDB, 
       'boolean',
       'Enable backend OpenTelemetry tracing. Tracing remains disabled when OTEL_SDK_DISABLED=true.',
       '# OTEL_TRACING_ENABLED=false',
+    ],
+    [
+      'OTEL_LOGS_ENABLED',
+      'boolean',
+      'Export application logs through OpenTelemetry. Logs can be enabled with or without tracing and remain disabled when OTEL_SDK_DISABLED=true.',
+      '# OTEL_LOGS_ENABLED=false',
+    ],
+    [
+      'OTEL_LOGS_LEVEL',
+      'string',
+      'Minimum Winston level exported as OpenTelemetry logs. Defaults to info; unknown levels warn and fall back to info.',
+      '# OTEL_LOGS_LEVEL=info',
     ],
     [
       'OTEL_SERVICE_NAME',
@@ -543,10 +555,22 @@ LibreChat can emit backend OpenTelemetry traces for general API, HTTP, MongoDB, 
       '# OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318',
     ],
     [
+      'OTEL_EXPORTER_OTLP_PROTOCOL',
+      'string',
+      'Default protocol for every OTLP signal: http/protobuf or grpc. Per-signal protocol variables override it.',
+      '# OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf',
+    ],
+    [
       'OTEL_EXPORTER_OTLP_TRACES_ENDPOINT',
       'string',
       'Trace-specific OTLP endpoint. Overrides the base endpoint for traces when set.',
       '# OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=',
+    ],
+    [
+      'OTEL_EXPORTER_OTLP_LOGS_ENDPOINT',
+      'string',
+      'Log-specific OTLP endpoint. Overrides the base endpoint for logs when set.',
+      '# OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=',
     ],
     [
       'OTEL_EXPORTER_OTLP_HEADERS',
@@ -555,6 +579,7 @@ LibreChat can emit backend OpenTelemetry traces for general API, HTTP, MongoDB, 
       '# OTEL_EXPORTER_OTLP_HEADERS=',
     ],
     ['OTEL_TRACES_EXPORTER', 'string', 'Trace exporter selection.', '# OTEL_TRACES_EXPORTER=otlp'],
+    ['OTEL_LOGS_EXPORTER', 'string', 'Log exporter selection.', '# OTEL_LOGS_EXPORTER=otlp'],
     [
       'OTEL_TRACES_SAMPLER',
       'string',
@@ -1720,10 +1745,17 @@ Configure shared conversation links functionality.
       'Snapshot files referenced by a shared chat so viewers can preview or download them through the shared link. Overrides interface.sharedLinks.snapshotFiles when set.',
       'SHARED_LINKS_SNAPSHOT_FILES=true',
     ],
+    ['SHARE_IP_MAX', 'number', 'Maximum shared-link retrievals per IP during the IP window. Default: 100.', '# SHARE_IP_MAX=100'],
+    ['SHARE_IP_WINDOW', 'number', 'Shared-link IP rate-limit window in minutes. Default: 1.', '# SHARE_IP_WINDOW=1'],
+    ['SHARE_USER_MAX', 'number', 'Maximum shared-link retrievals per authenticated user during the user window. Default: 60.', '# SHARE_USER_MAX=60'],
+    ['SHARE_USER_WINDOW', 'number', 'Shared-link user rate-limit window in minutes. Default: 1.', '# SHARE_USER_WINDOW=1'],
+    ['SHARE_VIOLATION_SCORE', 'number', 'Violation score added when a shared-link retrieval limit is exceeded. Default: 0.', '# SHARE_VIOLATION_SCORE=0'],
   ]}
 />
 
 `ALLOW_SHARED_LINKS` is the feature-wide switch. Role permissions now control who can create shared links, share them with authenticated users, or make them visible to everyone; see [`interface.sharedLinks`](/docs/configuration/librechat_yaml/object_structure/interface#sharedlinks). `ALLOW_SHARED_LINKS_PUBLIC` only controls whether publicly shared links can be viewed without authentication. `SHARED_LINKS_SNAPSHOT_FILES` is a global override for shared-link file snapshots and can disable snapshot serving for every link when set to `false`.
+
+Every shared-link read uses the IP bucket because public links are reachable without authentication. Signed-in viewers also use the user bucket. Exceeding either limit returns HTTP 429; a nonzero `SHARE_VIOLATION_SCORE` records the event in the existing violation system.
 
 ## Scheduled Chats
 
@@ -3725,6 +3757,24 @@ For detailed configuration and examples, see: **[Redis Configuration Guide](/doc
       '# REDIS_PING_INTERVAL=300',
     ],
     [
+      'REDIS_PING_TIMEOUT',
+      'number',
+      'Milliseconds an enabled heartbeat PING may remain unanswered before LibreChat reconnects the socket. Default: 5000.',
+      '# REDIS_PING_TIMEOUT=5000',
+    ],
+    [
+      'REDIS_SUBSCRIBER_PING_INTERVAL',
+      'number',
+      'Heartbeat interval in seconds for dedicated pub/sub subscriber connections. Default: 15; set to 0 to disable.',
+      '# REDIS_SUBSCRIBER_PING_INTERVAL=15',
+    ],
+    [
+      'REDIS_KEEP_ALIVE',
+      'number',
+      'TCP keepalive idle delay in milliseconds for ioredis sockets. Default: 10000; set to 0 for the kernel default.',
+      '# REDIS_KEEP_ALIVE=10000',
+    ],
+    [
       'FORCED_IN_MEMORY_CACHE_NAMESPACES',
       'string',
       'Comma-separated cache keys to force in-memory storage even when Redis is enabled.',
@@ -3771,6 +3821,7 @@ Notes:
 - For Redis Cluster mode, provide multiple URIs: `redis://node1:7001,redis://node2:7002,redis://node3:7003` (cluster mode is auto-detected).
 - For single-endpoint managed Redis services that shard keys internally, keep `USE_REDIS_CLUSTER=false` and set `REDIS_CLUSTER_SAFE_DELETE=true` if cache clears fail with `CROSSSLOT` errors.
 - `REDIS_READONLY_RECOVERY_INTERVAL` debounces Keyv reconnect attempts after a failover leaves an open socket attached to a demoted read-only replica. Redis Cluster clients use their native topology handling instead.
+- `REDIS_PING_INTERVAL` controls the optional heartbeat on the main ioredis client; dedicated pub/sub subscribers use `REDIS_SUBSCRIBER_PING_INTERVAL` so an otherwise idle dead socket is detected. Both use `REDIS_PING_TIMEOUT` as the response deadline and reconnect when it expires.
 - Use `rediss://` protocol for TLS connections and set `REDIS_CA` if your CA is not publicly trusted.
 - `REDIS_KEY_PREFIX_VAR` and `REDIS_KEY_PREFIX` are mutually exclusive.
 - **AWS Elasticache with TLS**: Elasticache may need to use an alternate dnsLookup for TLS connections. Set `REDIS_USE_ALTERNATIVE_DNS_LOOKUP=true` if using Elasticache with TLS. See [ioredis documentation](https://www.npmjs.com/package/ioredis) for more details.
