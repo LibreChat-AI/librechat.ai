@@ -173,21 +173,28 @@ Only pages listed in the `pages` array appear in the sidebar, in the order given
 
 ## Available Scripts
 
-| Command                    | Description                                   |
-| -------------------------- | --------------------------------------------- |
-| `pnpm dev`                 | Start the dev server on port 3333             |
-| `pnpm build`               | Production build                              |
-| `pnpm start`               | Start the production server on port 3333      |
-| `pnpm lint`                | Run ESLint (zero warnings allowed)            |
-| `pnpm lint:prettier`       | Check formatting with Prettier                |
-| `pnpm prettier`            | Format the codebase with Prettier             |
-| `pnpm typecheck`           | Generate MDX types and run `tsc --noEmit`     |
-| `pnpm test`                | Run the Vitest suite                          |
-| `pnpm test:watch`          | Run Vitest in watch mode                      |
-| `pnpm analyze`             | Build and analyze the production bundle size  |
-| `pnpm optimize:images`     | Optimize images in `public/`                  |
-| `pnpm web-bot-auth:keygen` | Generate an Ed25519 Web Bot Auth private JWK  |
-| `pnpm translate`           | Generate translations from the English source |
+| Command                     | Description                                                  |
+| --------------------------- | ------------------------------------------------------------ |
+| `pnpm dev`                  | Start the dev server on port 3333                            |
+| `pnpm build`                | Production build                                             |
+| `pnpm start`                | Start the production server on port 3333                     |
+| `pnpm lint`                 | Run ESLint (zero warnings allowed)                           |
+| `pnpm lint:prettier`        | Check formatting with Prettier                               |
+| `pnpm prettier`             | Format the codebase with Prettier                            |
+| `pnpm typecheck`            | Generate MDX types and run `tsc --noEmit`                    |
+| `pnpm test`                 | Run the Vitest suite                                         |
+| `pnpm test:watch`           | Run Vitest in watch mode                                     |
+| `pnpm check:config-version` | Fail if any `librechat.yaml` snippet has a stale `version:`  |
+| `pnpm sync:config-version`  | Rewrite stale `librechat.yaml` `version:` snippets to latest |
+| `pnpm analyze`              | Build and analyze the production bundle size                 |
+| `pnpm optimize:images`      | Optimize images in `public/`                                 |
+| `pnpm web-bot-auth:keygen`  | Generate an Ed25519 Web Bot Auth private JWK                 |
+| `pnpm translate`            | Generate translations from the English source                |
+
+The config version is sourced from the newest `content/changelog/config_v*.mdx` entry, whose
+`version:` frontmatter must match its filename. Never hand-edit the `version:` line in a docs
+snippet — run `pnpm sync:config-version`, which updates every `librechat.yaml` code fence under
+`content/docs` (all locales included) and leaves unrelated YAML alone.
 
 ## Contributing
 
