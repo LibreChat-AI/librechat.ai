@@ -171,6 +171,27 @@ Only pages listed in the `pages` array appear in the sidebar, in the order given
 
 **Localization:** English (`.mdx`) is the source of truth. Translated pages use a locale suffix (for example `index.es.mdx`), and each locale's search index only includes pages that have a real translated file. Keep new content in English and let the translation workflow handle the rest.
 
+## Docs Versions
+
+`content/docs/` is the live version, served at `/docs` and labelled by `CURRENT_VERSION` in
+`lib/versions.ts`. Older versions are frozen snapshots under `content/docs-archive/<version>/`,
+served at `/<version>/docs` (for example `/v0.7.x/docs/quick_start`).
+
+Publish one with:
+
+```bash
+pnpm docs:archive v0.7.x --ref=v0.7.8
+```
+
+That copies the English docs out of git at `--ref` (default `HEAD`), drops every localized file,
+and rewrites absolute `/docs/...` links to `/<version>/docs/...` so an archived page never links
+back into the live docs. The sidebar version switcher is built from the directories that exist, so
+no code change is needed to publish or retire a version.
+
+Archived snapshots are deliberately inert: English-only, `noindex`, absent from the sitemap,
+search index, `llms.txt`, the translation workflow and `pnpm sync:config-version` (they keep the
+`librechat.yaml` version they shipped with).
+
 ## Available Scripts
 
 | Command                     | Description                                                  |
@@ -190,6 +211,7 @@ Only pages listed in the `pages` array appear in the sidebar, in the order given
 | `pnpm optimize:images`      | Optimize images in `public/`                                 |
 | `pnpm web-bot-auth:keygen`  | Generate an Ed25519 Web Bot Auth private JWK                 |
 | `pnpm translate`            | Generate translations from the English source                |
+| `pnpm docs:archive`         | Snapshot the English docs into `content/docs-archive`        |
 
 The config version is sourced from the newest `content/changelog/config_v*.mdx` entry, whose
 `version:` frontmatter must match its filename. Never hand-edit the `version:` line in a docs

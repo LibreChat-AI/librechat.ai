@@ -1,17 +1,33 @@
-import { generateDocsMetadata, generateLocalizedDocsParams, renderDocsPage } from '@/lib/docs-page'
+import {
+  generateArchivedDocsMetadata,
+  generateArchivedDocsParams,
+  generateDocsMetadata,
+  generateLocalizedDocsParams,
+  renderArchivedDocsPage,
+  renderDocsPage,
+} from '@/lib/docs-page'
+import { isArchivedVersion } from '@/lib/docs-archive'
 
 interface PageProps {
   params: Promise<{ lang: string; slug?: string[] }>
 }
 
 export default async function Page({ params }: PageProps) {
-  return renderDocsPage(await params)
+  const { lang, slug } = await params
+
+  if (isArchivedVersion(lang)) return renderArchivedDocsPage({ version: lang, slug })
+
+  return renderDocsPage({ lang, slug })
 }
 
 export function generateStaticParams() {
-  return generateLocalizedDocsParams()
+  return [...generateLocalizedDocsParams(), ...generateArchivedDocsParams()]
 }
 
 export async function generateMetadata({ params }: PageProps) {
-  return generateDocsMetadata(await params)
+  const { lang, slug } = await params
+
+  if (isArchivedVersion(lang)) return generateArchivedDocsMetadata({ version: lang, slug })
+
+  return generateDocsMetadata({ lang, slug })
 }

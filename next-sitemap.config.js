@@ -1,4 +1,6 @@
 /** @type {import('next-sitemap').IConfig} */
+const ARCHIVED_DOCS_PATH_RE = /^\/v\d+\.\d+(?:\.\d+|\.x)(?:\/|$)/
+
 module.exports = {
   siteUrl: 'https://www.librechat.ai',
   generateRobotsTxt: true,
@@ -11,10 +13,12 @@ module.exports = {
   },
   changefreq: 'weekly',
   priority: 0.7,
-  exclude: ['*/_meta'],
+  exclude: ['*/_meta', '/v*.*.x/docs*', '/v*.*.*/docs*'],
   // Per-route freshness + priority so search engines crawl the home page and
   // docs more aggressively than legal/utility pages.
   transform: async (config, path) => {
+    if (ARCHIVED_DOCS_PATH_RE.test(path)) return null
+
     let { changefreq } = config
     let { priority } = config
 
