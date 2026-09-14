@@ -1,0 +1,203 @@
+---
+title: Meilisearch
+icon: Meilisearch
+description: Set up Meilisearch to enable conversation search in LibreChat
+---
+
+Meilisearch is an open-source search engine that powers LibreChat's conversation search, adding full-text search, typo tolerance, and instant results across past conversations. For a feature overview, see [Search in LibreChat](/v0.8.8-rc1/docs/features/search).
+
+<Callout type="info" title="How it connects">
+LibreChat talks to Meilisearch over HTTP using a few environment variables. The Docker setup ships Meilisearch as a service for you. A source install points LibreChat at a Meilisearch process you run yourself.
+</Callout>
+
+## Configure Meilisearch
+
+<Tabs items={['Docker', 'npm']}>
+<Tabs.Tab value="Docker">
+
+The default `docker-compose.yml` already includes a `meilisearch` service, so you only need to enable search and set a master key in your `.env` file.
+
+<Steps>
+<Step>
+
+**Generate a master key.** Use any sufficiently long, random string (16 bytes or more). For example:
+
+```bash filename="terminal"
+openssl rand -base64 32
+```
+
+</Step>
+<Step>
+
+**Add the search variables to `.env`.** The Compose file sets `MEILI_HOST` to the internal service address for the `api` container, so you don't set the host here. Keep the master key identical to the one the `meilisearch` service uses.
+
+```bash filename=".env"
+SEARCH=true
+MEILI_NO_ANALYTICS=true
+MEILI_MASTER_KEY=<your_master_key>
+```
+
+</Step>
+<Step>
+
+**Pass the master key to the Meilisearch service.** The bundled `meilisearch` service does not read `.env`, so add it through `docker-compose.override.yml`. This keeps both LibreChat and Meilisearch using the same key.
+
+```yaml filename="docker-compose.override.yml"
+services:
+  meilisearch:
+    environment:
+      - MEILI_MASTER_KEY=${MEILI_MASTER_KEY}
+```
+
+See [Docker Override](/v0.8.8-rc1/docs/configuration/docker_override) for how override files are merged.
+
+</Step>
+<Step>
+
+**Start the stack.** Compose merges the override automatically and starts Meilisearch alongside LibreChat.
+
+```bash filename="terminal"
+docker compose up -d
+```
+
+</Step>
+</Steps>
+
+<Callout type="warning" title="Keep the port internal">
+Containers reach Meilisearch over the internal Docker network, so there is no need to publish port `7700` to the host. Exposing it publicly can leave your search data vulnerable.
+</Callout>
+
+</Tabs.Tab>
+<Tabs.Tab value="npm">
+
+When you run LibreChat from source, run the Meilisearch binary as a separate process and point LibreChat at it.
+
+<Steps>
+<Step>
+
+**Download Meilisearch.** Get the latest release for your operating system from the [Meilisearch releases page](https://github.com/meilisearch/meilisearch/releases), for example `meilisearch-linux-amd64.tar.gz` (Linux), `meilisearch-macos-amd64` (macOS), or `meilisearch-windows-amd64.zip` (Windows). Extract it to a directory of your choice. For package-manager installs, see the [Meilisearch installation guide](https://www.meilisearch.com/docs/learn/getting_started/installation).
+
+</Step>
+<Step>
+
+**Make the binary executable (Linux/macOS).** From the directory where you extracted it:
+
+```bash filename="terminal"
+chmod +x meilisearch
+```
+
+</Step>
+<Step>
+
+**Generate a master key.** Meilisearch can generate one for you:
+
+```bash filename="terminal"
+./meilisearch --generate-master-key
+```
+
+Copy the generated key; you reuse it in the next steps.
+
+</Step>
+<Step>
+
+**Start Meilisearch.** Run it with your master key. It listens on port `7700` by default.
+
+```bash filename="terminal"
+./meilisearch --master-key=<your_master_key>
+```
+
+</Step>
+<Step>
+
+**Add the search variables to `.env`.** Point `MEILI_HOST` at the Meilisearch process and use the same master key you set above.
+
+```bash filename=".env"
+SEARCH=true
+MEILI_NO_ANALYTICS=true
+MEILI_HOST=http://localhost:7700
+MEILI_MASTER_KEY=<your_master_key>
+```
+
+</Step>
+<Step>
+
+**Start LibreChat.** Start or restart the app so it picks up the new configuration.
+
+```bash filename="terminal"
+npm run backend
+```
+
+</Step>
+</Steps>
+
+<Callout type="info" title="Keep Meilisearch running">
+Conversation search only works while Meilisearch is running. Run it as a managed service or container so it stays up across restarts.
+</Callout>
+
+</Tabs.Tab>
+</Tabs>
+
+Once configured, LibreChat indexes conversations and messages into Meilisearch, and the search bar returns full-text results with typo tolerance.
+
+## Environment Variables
+
+| Variable | Description |
+| --- | --- |
+| `SEARCH` | Enables the conversation search feature. Set to `true`. |
+| `MEILI_HOST` | URL where LibreChat reaches Meilisearch. In Docker this is `http://meilisearch:7700` (set by Compose); from source it is typically `http://localhost:7700`. |
+| `MEILI_MASTER_KEY` | Shared secret used to authenticate with Meilisearch. Must match the key Meilisearch starts with. |
+| `MEILI_NO_ANALYTICS` | Disables Meilisearch's anonymous telemetry. Set to `true`. |
+| `MEILI_NO_SYNC` | See [multi-node setups](#disable-sync-in-a-multi-node-setup). |
+
+## Disable Sync in a Multi-node Setup
+
+If you run LibreChat as a node cluster or multi-node deployment, set `MEILI_NO_SYNC` to `true` so only one instance handles indexing. This prevents redundant syncing of database documents across instances and the unnecessary resource use that comes with it.
+
+```bash filename=".env"
+MEILI_NO_SYNC=true
+```
+
+## Reset Synchronization
+
+If Meilisearch data is deleted or corrupted, or LibreChat treats everything as synced when it isn't (for example after upgrading Meilisearch or deleting its data files), use the reset script to force a full re-sync. It resets the synchronization flags in MongoDB, which triggers LibreChat to re-index all conversations and messages on the next startup or sync check.
+
+<Steps>
+<Step>
+
+**Run the reset script.** Use the command that matches your setup.
+
+```bash filename="terminal"
+# Local development
+npm run reset-meili-sync
+
+# Docker (default setup)
+docker compose exec api npm run reset-meili-sync
+
+# Docker (deployment setup)
+docker exec -it LibreChat-API /bin/sh -c "cd .. && npm run reset-meili-sync"
+```
+
+</Step>
+<Step>
+
+**Restart LibreChat.** Re-synchronization begins once the app restarts.
+
+</Step>
+</Steps>
+
+The script resets the `_meiliIndex` flag to `false` for all messages and conversations in MongoDB, then reports how many documents were reset and how many remain to be synced.
+
+**When to use it:**
+
+- After deleting Meilisearch data files
+- When upgrading Meilisearch to a version that requires reindexing
+- When LibreChat shows conversations as fully synced but Meilisearch is missing data
+- After restoring a MongoDB backup without matching Meilisearch data
+
+**Advanced sync options.** After resetting, control the sync behavior with these environment variables:
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `MEILI_SYNC_BATCH_SIZE` | `100` | Number of documents synced per batch. |
+| `MEILI_SYNC_DELAY_MS` | `100` | Delay between sync batches, in milliseconds. |
+| `MEILI_SYNC_THRESHOLD` | `1000` | Minimum number of unsynced documents before a sync is triggered. |

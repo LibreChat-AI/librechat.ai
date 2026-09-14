@@ -3,6 +3,7 @@ import 'server-only'
 import { docsArchive } from '@/.source/server'
 import { loader, type StaticSource } from 'fumadocs-core/source'
 import { resolveIcon } from '@/lib/icons'
+import { DOCS_VERSION_ID_PATTERN, compareDocsVersionsDescending } from '@/lib/docs-version-order'
 import { CURRENT_VERSION_OPTION, type DocsVersionOption } from '@/lib/versions'
 import type { Root } from 'fumadocs-core/page-tree'
 import type { TableOfContents } from 'fumadocs-core/toc'
@@ -22,13 +23,12 @@ import type { ComponentType } from 'react'
  * search index, llms text, translation workflow and `pnpm sync:config-version`
  * never see it.
  */
-const VERSION_ID_PATTERN = /^v\d+\.\d+(?:\.\d+|\.x)$/
 
 /**
- * `.source/server` is only typed during a real build (fumadocs-mdx injects the
- * collection runtime through the bundler), so name the slice of the loader API
- * the archived routes depend on instead of inferring it — same approach as the
- * blog/changelog re-exports in lib/source.ts.
+ * The generated source is only typed during a real build (fumadocs-mdx injects
+ * the collection runtime through the bundler), so name the slice of the loader
+ * API the archived routes depend on instead of inferring it — same approach as
+ * the blog/changelog re-exports in lib/source.ts.
  */
 export interface ArchivedPage {
   url: string
@@ -51,14 +51,6 @@ type ArchiveFile = StaticSource['files'][number]
 
 const archiveFiles: ArchiveFile[] = docsArchive.toFumadocsSource().files
 
-/** `x` is the open-ended patch, so v0.7.x ranks above v0.7.9. */
-function versionSortKey(id: string): number[] {
-  return id
-    .slice(1)
-    .split('.')
-    .map((part) => (part === 'x' ? Number.POSITIVE_INFINITY : Number.parseInt(part, 10)))
-}
-
 /**
  * Newest first. Files sitting directly in `content/docs-archive` (its README)
  * belong to no version and are ignored; a *directory* that isn't a valid
@@ -72,26 +64,16 @@ export const archivedVersions: string[] = (() => {
     if (separator < 0) continue
 
     const id = file.path.slice(0, separator)
-    if (!VERSION_ID_PATTERN.test(id)) {
+    if (!DOCS_VERSION_ID_PATTERN.test(id)) {
       throw new Error(
-        `Invalid archived docs version directory: content/docs-archive/${id} (expected e.g. v0.7.x)`,
+        `Invalid archived docs version directory: content/docs-archive/${id} (expected e.g. v0.8.7 or v0.8.8-rc2)`,
       )
     }
 
     ids.add(id)
   }
 
-  return [...ids].sort((left, right) => {
-    const leftKey = versionSortKey(left)
-    const rightKey = versionSortKey(right)
-
-    for (let index = 0; index < Math.max(leftKey.length, rightKey.length); index += 1) {
-      const difference = (rightKey[index] ?? 0) - (leftKey[index] ?? 0)
-      if (difference !== 0) return difference
-    }
-
-    return 0
-  })
+  return [...ids].sort(compareDocsVersionsDescending)
 })()
 
 export function isArchivedVersion(id: string | undefined): boolean {

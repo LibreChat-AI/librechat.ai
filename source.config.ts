@@ -19,6 +19,12 @@ export const docsArchive = defineDocs({
   // page glob keeps the directory's own README.md (and any stray .md) out of
   // the collection — fumadocs collects .md as a page and would reject it for
   // missing frontmatter.
+  //
+  // Deliberately NOT `dynamic: true`: archived pages inherit real MDX imports
+  // (`next/image`, `@/components/...`) from the docs they snapshot, and
+  // on-demand compilation cannot resolve those specifiers at runtime. Bundling
+  // keeps every snapshot renderable, at the cost of build memory — see the
+  // NODE_OPTIONS in the `build` script.
   docs: { files: ['**/*.mdx'] },
 })
 

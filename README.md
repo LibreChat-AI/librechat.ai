@@ -174,13 +174,15 @@ Only pages listed in the `pages` array appear in the sidebar, in the order given
 ## Docs Versions
 
 `content/docs/` is the live version, served at `/docs` and labelled by `CURRENT_VERSION` in
-`lib/versions.ts`. Older versions are frozen snapshots under `content/docs-archive/<version>/`,
-served at `/<version>/docs` (for example `/v0.7.x/docs/quick_start`).
+`lib/versions.ts`. Every published release and release candidate is a frozen snapshot under
+`content/docs-archive/<version>/`, served at `/<version>/docs` — for example
+`/v0.8.5/docs/quick_start`. Version ids match `v<major>.<minor>[.<patch>|.x][-rc<n>]`; the
+switcher orders them newest-first, with a release ranked above its own candidates.
 
 Publish one with:
 
 ```bash
-pnpm docs:archive v0.7.x --ref=v0.7.8
+pnpm docs:archive v0.8.5 --ref=<commit-or-tag>
 ```
 
 That copies the English docs out of git at `--ref` (default `HEAD`), drops every localized file,
@@ -191,6 +193,18 @@ no code change is needed to publish or retire a version.
 Archived snapshots are deliberately inert: English-only, `noindex`, absent from the sitemap,
 search index, `llms.txt`, the translation workflow and `pnpm sync:config-version` (they keep the
 `librechat.yaml` version they shipped with).
+
+Two limits are worth knowing:
+
+- **The archive starts at v0.8.2.** This repository only gained `content/docs` in the Fumadocs
+  migration, and every release up to v0.8.2 had its changelog backfilled in that single commit, so
+  there is exactly one docs tree for all of them — published once as `v0.8.2`. Docs for v0.5.x–v0.8.1
+  exist only as the pre-migration Nextra `pages/` tree and would need converting before they could
+  be archived.
+- **Snapshots are bundled, so they cost build memory.** Archived pages inherit real MDX imports
+  (`next/image`, `@/components/...`) from the docs they snapshot, which on-demand compilation
+  cannot resolve, so the collection is bundled like the live docs. `pnpm build` therefore runs with
+  `--max-old-space-size=8192`; with 14 archived versions it prerenders ~5.1k pages.
 
 ## Available Scripts
 

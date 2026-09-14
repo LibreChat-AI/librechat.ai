@@ -3,15 +3,15 @@ import { access, mkdir, readdir, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
+import { DOCS_VERSION_ID_PATTERN } from '../lib/docs-version-order'
 import { i18n } from '../lib/i18n'
 
 const execFile = promisify(execFileCallback)
-const VERSION_PATTERN = /^v\d+\.\d+(?:\.\d+|\.x)$/
 const MAX_BUFFER = 100 * 1024 * 1024
 const PREFIX = '[docs-archive]'
 
 export function isValidVersionId(version: string): boolean {
-  return VERSION_PATTERN.test(version)
+  return DOCS_VERSION_ID_PATTERN.test(version)
 }
 
 export function isLocalizedFile(
@@ -124,7 +124,7 @@ export async function archiveDocsVersion({
 }: ArchiveOptions): Promise<ArchiveResult> {
   if (!isValidVersionId(version)) {
     throw new Error(
-      `${PREFIX} invalid version "${version}"; expected v<major>.<minor>.<patch> or v<major>.<minor>.x`,
+      `${PREFIX} invalid version "${version}"; expected e.g. v0.8.7, v0.8.8-rc2 or v0.8.x`,
     )
   }
 

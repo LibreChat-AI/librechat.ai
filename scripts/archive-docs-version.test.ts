@@ -55,10 +55,12 @@ describe('archive docs version helpers', () => {
   it('validates archive version ids', () => {
     expect(isValidVersionId('v0.7.x')).toBe(true)
     expect(isValidVersionId('v1.2.3')).toBe(true)
+    expect(isValidVersionId('v0.8.8-rc2')).toBe(true)
     expect(isValidVersionId('0.7')).toBe(false)
     expect(isValidVersionId('v0')).toBe(false)
     expect(isValidVersionId('latest')).toBe(false)
     expect(isValidVersionId('v0.7.x.1')).toBe(false)
+    expect(isValidVersionId('v0.8.8-beta1')).toBe(false)
   })
 
   it('detects localized files using the configured locales', () => {

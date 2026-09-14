@@ -1,0 +1,109 @@
+---
+title: Metrics
+icon: BarChart3
+description: Monitor LibreChat with its built-in Prometheus metrics and the optional database metrics exporter.
+---
+
+## General
+
+![Active users in LibreChat](/images/metrics/librechat-metrics-active-users.png)
+
+LibreChat provides two Prometheus-compatible metrics surfaces. The API's built-in `/metrics` endpoint reports operational behavior such as Redis activity and browser telemetry proxy outcomes. The optional database exporter reports usage data stored in MongoDB, including token totals and active-user counts.
+
+## Built-in API Metrics
+
+LibreChat exposes Prometheus metrics from the API server at `/metrics`. Set `METRICS_SECRET` and scrape the endpoint with `Authorization: Bearer <METRICS_SECRET>`. The endpoint returns `401` when the secret is unset, the header is missing, or the token does not match.
+
+```yaml filename="prometheus.yml"
+scrape_configs:
+  - job_name: librechat-api
+    scheme: https
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials: your-metrics-secret
+    static_configs:
+      - targets: ['librechat.example.com']
+```
+
+### Agent Startup Metrics
+
+Initial Agent chat requests emit two startup metrics:
+
+- `agent_startup_milestone_duration_seconds{milestone}` measures cumulative latency from request ingress to each startup milestone.
+- `agent_startups_total{result}` counts startup attempts by terminal result.
+
+Milestones cover request admission, job creation and acknowledgement, conversation and history loading, client and run initialization, stream startup, and the first queued response or content event. Results distinguish content queued, completion without a content delta, deduplication, rejection, pause, replacement, abort, and error.
+
+When [backend OpenTelemetry tracing](/v0.8.8-rc1/docs/configuration/dotenv#opentelemetry-tracing) is enabled, the `librechat.agent.startup` span reports the same milestones as events. It includes total startup duration, milestone count, terminal result, and the generation stream ID when one is assigned.
+
+### Redis Metrics
+
+Redis-backed caches and services emit two logical-operation metrics:
+
+- `redis_operations_total{client,use_case,operation,status}` counts operations.
+- `redis_operation_duration_seconds{client,use_case,operation,status}` measures latency.
+
+`client` is `keyv` or `ioredis`, and `status` is `success` or `error`. Bounded `use_case` labels identify work such as caches, sessions, rate limits, concurrency, ACL principals, resumable stream jobs and pub/sub, MCP registry scans, and leader election. These metrics count LibreChat's logical operations rather than every internal Redis round trip. Connection lifecycle pings and global maintenance are excluded, and clearing a namespace is counted as one logical operation.
+
+When [backend OpenTelemetry tracing](/v0.8.8-rc1/docs/configuration/dotenv#opentelemetry-tracing) is enabled, each HTTP span also summarizes its Redis work with:
+
+- `librechat.redis.calls`
+- `librechat.redis.duration_ms`
+- `librechat.redis.errors`
+- `librechat.redis.max_call_ms`
+- `librechat.redis.operations`
+- `librechat.redis.use_cases`
+
+The ten use cases with the highest total duration also receive `calls`, `duration_ms`, `errors`, and `max_call_ms` attributes under `librechat.redis.<use_case>.*`. This request-level summary does not require command-level Redis spans; enable `OTEL_IOREDIS_TRACING_ENABLED` only when individual command spans are needed.
+
+### Browser RUM Proxy Metrics
+
+Browser RUM proxy outcomes are reported as `rum_proxy_requests_total{endpoint,result}`. `endpoint` is `traces`, `logs`, or `unknown`; `result` can be `success`, `auth_drop`, `auth_error`, `bad_request`, `not_configured`, `collector_4xx`, `collector_5xx`, `collector_error`, or `collector_timeout`.
+
+## Database Metrics Exporter
+
+The metrics exporter is available at [virtUOS/librechat_exporter](https://github.com/virtUOS/librechat_exporter).
+It is a separate tool you deploy alongside LibreChat.
+
+### Setup
+
+To deploy the exporter, just add the necessary container to your compose configuration like this:
+
+```yaml
+services:
+  metrics:
+    image: ghcr.io/virtuos/librechat_exporter:main
+    depends_on:
+      - mongodb
+    ports:
+      - '8000:8000'
+    restart: unless-stopped
+```
+
+You can optionally also configure the exporter.
+But usually, the defaults should be just fine.
+
+```yaml
+services:
+  metrics:
+    environment:
+      - MONGODB_URI=mongodb://mongodb:27017/
+      - LOGGING_LEVEL=info
+```
+
+### Usage
+
+You can now add the exporter to your Prometheus scrape configuration:
+
+```yaml
+- job_name: librechat
+  static_configs:
+    - targets:
+        - 'librechat.example.com:8000'
+```
+
+Once scraping the metrics has started, look for `librechat_*` metrics (e.g., `librechat_registered_users`).
+The exporter provides several metrics.
+
+Have fun building your Grafana dashboard!
