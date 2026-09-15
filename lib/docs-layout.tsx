@@ -3,6 +3,7 @@ import 'server-only'
 import { DocsLayout } from 'fumadocs-ui/layouts/docs'
 import { DocsI18nProvider } from '@/components/DocsI18nProvider'
 import { docsSource } from '@/lib/source'
+import { archivedDocsSource, docsVersionOptions } from '@/lib/docs-archive'
 import { getAvailableLocalesBySlug } from '@/lib/doc-locales'
 import { baseOptions } from '@/app/layout.config'
 import { i18n, localizedDocsHref, localizedHomeHref } from '@/lib/i18n'
@@ -10,16 +11,34 @@ import { getUI } from '@/lib/ui-i18n'
 import { VersionSwitcher } from '@/components/VersionSwitcher'
 import type { ReactNode } from 'react'
 
-export function renderDocsLayout({ lang, children }: { lang: string; children: ReactNode }) {
-  const tree = docsSource.pageTree[lang] ?? docsSource.pageTree[i18n.defaultLanguage]
+/**
+ * `archivedVersion` renders a frozen snapshot from content/docs-archive: its
+ * own sidebar tree, and no language switcher because archived docs are
+ * English-only. The nav links still point at the live docs.
+ */
+export function renderDocsLayout({
+  lang,
+  children,
+  archivedVersion,
+}: {
+  lang: string
+  children: ReactNode
+  archivedVersion?: string
+}) {
+  const tree = archivedVersion
+    ? archivedDocsSource(archivedVersion).pageTree
+    : (docsSource.pageTree[lang] ?? docsSource.pageTree[i18n.defaultLanguage])
   const t = getUI(lang)
   const docsHref = localizedDocsHref('/docs', lang)
 
   return (
-    <DocsI18nProvider locale={lang} availableLocales={getAvailableLocalesBySlug()}>
+    <DocsI18nProvider
+      locale={lang}
+      availableLocales={archivedVersion ? {} : getAvailableLocalesBySlug()}
+    >
       <DocsLayout
         tree={tree}
-        i18n
+        i18n={!archivedVersion}
         {...baseOptions}
         nav={{ ...baseOptions.nav, url: localizedHomeHref(lang) }}
         links={[
@@ -46,7 +65,7 @@ export function renderDocsLayout({ lang, children }: { lang: string; children: R
           },
         ]}
         sidebar={{
-          banner: <VersionSwitcher />,
+          banner: <VersionSwitcher options={docsVersionOptions()} />,
           defaultOpenLevel: 0,
         }}
       >
