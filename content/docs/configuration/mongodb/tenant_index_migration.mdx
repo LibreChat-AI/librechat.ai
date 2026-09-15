@@ -1,0 +1,61 @@
+---
+title: Tenant Index Migration
+icon: Database
+description: Upgrade tenant-scoped MongoDB indexes from LibreChat v0.8.7 and earlier.
+---
+
+# Tenant Index Migration
+
+Databases created by LibreChat v0.8.7 or earlier can report `Index build failed` while upgrading. Legacy unique indexes such as `email_1` or `name_1` can conflict with current indexes of the same name, while tenant-scoped compound indexes now enforce uniqueness. This can affect single-tenant deployments too.
+
+The migration is an explicit maintenance command and does not run during startup. Use the updated source or image that provides the commands below. For a source checkout, install dependencies and run `npm run build:packages` first.
+
+<Steps>
+  <Step>
+    ### Stop writers
+
+    Back up MongoDB, then stop every LibreChat API replica and worker that writes to the database. Keep MongoDB running.
+  </Step>
+  <Step>
+    ### Preview the migration
+
+    Run the dry run with the deployment's normal `MONGO_URI` and `.env` connection settings:
+
+    ```bash
+    npm run migrate:tenant-indexes:dry-run
+    ```
+  </Step>
+  <Step>
+    ### Apply the migration
+
+    ```bash
+    npm run migrate:tenant-indexes
+    ```
+
+    Wait for a successful exit before restarting any writers.
+  </Step>
+  <Step>
+    ### Restart and verify
+
+    Restart LibreChat and confirm startup no longer reports index conflicts for User, Role, Preset, AccessRole, MCPServer, AgentCategory, Message, or Conversation.
+  </Step>
+</Steps>
+
+## Docker Compose
+
+Run a one-off container from the updated image while MongoDB remains available. Set the working directory to `/app`, because the production API image otherwise defaults to `/app/api`. Include the same Compose file flags used by your deployment.
+
+```bash
+docker compose stop api
+docker compose run --rm --no-deps -w /app api npm run migrate:tenant-indexes:dry-run
+docker compose run --rm --no-deps -w /app api npm run migrate:tenant-indexes
+docker compose up -d api
+```
+
+## Safety and Recovery
+
+The command builds tenant-scoped unique replacements before dropping only known superseded unique indexes, then creates the current schema indexes. It preserves custom indexes and current non-unique indexes, does not delete documents, and does not use `syncIndexes` or `dropIndexes`. It also builds current indexes when `MONGO_AUTO_INDEX=false`.
+
+The dry run lists removals only; it cannot validate replacement builds, permissions, or duplicate data. Any listing, build, or drop error fails the command. If a replacement build fails, old constraints remain. A later failure may leave a partial migration, but rerunning safely completes the remaining work. Keep writers stopped, correct the reported issue, and rerun; do not resolve failures by dropping every index.
+
+Index builds can take time on large collections.
