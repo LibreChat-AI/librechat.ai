@@ -13,6 +13,8 @@ endpoints:
     recursionLimit: 50
     maxRecursionLimit: 100
     maxSubagents: 20
+    codeApiUploadConcurrency: 3
+    codeApiMaxRetryWaitMs: 20000
     maxToolCallArgBytes: 65536
     maxDeltaEventsPerTurn: 100000
     maxToolCallArgBytesByTool:
@@ -34,6 +36,9 @@ endpoints:
       maxCatalogSkills: 20
     statefulCodeSessions:
       allowedEnvironments: ['user', 'agent-user', 'conversation']
+      principalWorkers:
+        enabled: true
+        maxPerUser: 5
       environments:
         - id: managed-default
           name: Managed Code API
@@ -58,6 +63,7 @@ endpoints:
     #   selfUrl: https://librechat.internal
     backgroundTasks:
       completionWakeups: true
+      ordinaryToolCancellation: false
     toolApproval:
       enabled: true
       mode: default
@@ -66,6 +72,16 @@ endpoints:
     checkpointer:
       type: mongo
       ttl: 86400
+    managementApi:
+      auth:
+        oidc:
+          enabled: true
+          issuer: https://identity.example.com/
+          audience: https://librechat.example.com/agents
+        clients:
+          - clientId: machine-client-id
+            userId: 507f1f77bcf86cd799439011
+            tenantId: tenant-id
     remoteApi:
       auth:
         oidc:
@@ -327,6 +343,12 @@ Cấu hình phạm vi chia sẻ và các backend thực thi tùy chọn cho các
       'Các môi trường Code API được quản lý hoặc đính kèm có tên tùy chọn hiển thị trong Agent Builder.',
       'Unset; LIBRECHAT_CODE_BASEURL_STATEFUL remains the stateful endpoint',
     ],
+    [
+      'principalWorkers',
+      'Object',
+      'Giới hạn triển khai tùy chọn cho việc đăng ký worker cá nhân. `enabled` mặc định là true và `maxPerUser` mặc định là 5.',
+      '{ enabled: true, maxPerUser: 5 }',
+    ],
   ]}
 />
 
@@ -336,6 +358,9 @@ statefulCodeSessions:
     - 'user'
     - 'agent-user'
     - 'conversation'
+  principalWorkers:
+    enabled: true
+    maxPerUser: 5
   environments:
     - id: managed-default
       name: Managed Code API
@@ -356,6 +381,8 @@ statefulCodeSessions:
       baseURL: https://code-bridge.example.com/v1
       owner: deployment
       configSchema:
+        limits:
+          maxCommandTimeoutMs: 120000
         permissions:
           fileWrite:
             allowed: [allow, ask, deny]
@@ -370,6 +397,10 @@ statefulCodeSessions:
 
 `allowedEnvironments` là bắt buộc bất cứ khi nào khối này xuất hiện và phải bao gồm ít nhất một phạm vi workspace. Hãy bỏ qua toàn bộ khối này để cho phép cả ba phạm vi và tiếp tục định tuyến công việc có trạng thái thông qua [`LIBRECHAT_CODE_BASEURL_STATEFUL`](/docs/configuration/dotenv#stateful-code-interpreter-endpoint). Mặc định cá nhân và Agent Builder chỉ cho phép các giá trị được cho phép. Nếu quản trị viên thắt chặt chính sách, mặc định cá nhân đã lưu vẫn hiển thị nhưng bị vô hiệu hóa, và các Agent mới sẽ sử dụng phạm vi được cho phép đầu tiên. Các Agent đã được kích hoạt hiện có vẫn giữ nguyên phạm vi đã lưu của chúng, nhưng một phạm vi không còn được cho phép sẽ bị chặn tại thời điểm chạy cho đến khi Agent được cấu hình lại.
 
+`principalWorkers` kiểm soát việc tự đăng ký cho các worker cá nhân được đính kèm. Các giá trị bị bỏ qua sẽ mặc định là `enabled: true` và `maxPerUser: 5`; hãy đặt `enabled: false` hoặc `maxPerUser: 0` để dừng việc đăng ký mới. Giới hạn này tính trên mọi môi trường cá nhân đã đăng ký của người dùng đó trên các control plane đã cấu hình, bao gồm cả các worker ngoại tuyến. Việc giảm giới hạn hoặc vô hiệu hóa đăng ký sẽ không thu hồi các môi trường hiện có.
+
+Deployment YAML là giới hạn tối đa cứng. Cấu hình ghi đè cho vai trò, nhóm hoặc người dùng có thể vô hiệu hóa việc đăng ký hoặc giảm `maxPerUser`, nhưng không thể tăng giá trị triển khai. Người dùng chỉ nhìn thấy các control plane đã bật tính năng ghép nối khi giới hạn hiệu dụng lớn hơn không, [`pairing.allowPrincipalWorkers`](#statefulcodesessions) được bật trên control plane đó, xác thực chính (principal authentication) khả dụng và người dùng có quyền quản lý Code Environment.
+
 Khi `environments` không trống, mỗi mục nhập yêu cầu một `id` duy nhất, một `name` hiển thị, một `type` là `managed` hoặc `attached`, và một `baseURL` HTTP(S) không chứa chuỗi truy vấn hoặc đoạn mã (fragment). Nếu danh sách chứa các môi trường có thể thực thi, chính xác một trong các mục nhập đó phải đặt `default: true`. Agent Builder sau đó sẽ thêm bộ chọn **Execution environment**; việc để ở chế độ **Deployment default** sẽ sử dụng mục nhập mặc định đó. Một danh sách chỉ chứa các control plane ghép nối tự phục vụ (self-service pairing) thì không cần mặc định. Một Agent chỉ định một môi trường sau đó bị xóa hoặc không còn truy cập được sẽ thất bại ở trạng thái đóng (fails closed) thay vì chuyển sang một backend khác.
 
 - `managed` trỏ trực tiếp đến một Code API có trạng thái do operator quản lý.
@@ -379,6 +410,7 @@ Khi `environments` không trống, mỗi mục nhập yêu cầu một `id` duy 
 - `pairing` là tùy chọn và chỉ hợp lệ cho các mục `attached` thuộc quyền sở hữu của quá trình triển khai. `pairing.workerId` xác định một worker do người vận hành quản lý để đăng ký, trong khi `pairing.allowPrincipalWorkers: true` cho phép người dùng được ủy quyền đăng ký các worker bị ràng buộc với chủ sở hữu vào control plane đó. Ít nhất một trong các trường này là bắt buộc khi `pairing` xuất hiện.
 - `pairing.tokenEnv` đặt tên cho biến môi trường chứa mã thông báo quản trị viên bridge; nó không bao giờ chứa chính mã thông báo đó. Việc ghép nối yêu cầu HTTPS ngoại trừ đối với quá trình phát triển loopback.
 - `configSchema.permissions` cho phép tùy chọn các chủ sở hữu được ủy quyền chọn chính sách `fileWrite` và `commandExecution` cho các môi trường cá nhân trong **Settings > Code environments**. Mỗi trường yêu cầu một danh sách `allowed` không trống chứa `allow`, `ask` và/hoặc `deny`; `default` sẽ là `ask` khi bị bỏ qua và phải xuất hiện trong `allowed`. LibreChat sẽ từ chối các giá trị được lưu trữ nằm ngoài danh sách của quản trị viên.
+- `configSchema.limits.maxCommandTimeoutMs` thiết lập thời gian chờ Bash tối đa mà model có thể yêu cầu cho môi trường đó. Tham số này chấp nhận giá trị từ `1` đến `300000` ms; nếu bỏ qua sẽ giữ nguyên giá trị mặc định là 30 giây. Đây là giới hạn triển khai và người dùng không thể tự cấu hình.
 - Không cấu hình `settings` trong YAML triển khai. LibreChat cung cấp trường có phạm vi yêu cầu đó từ các tùy chọn ưu tiên đã được máy chủ xác thực của chủ sở hữu.
 - Chỉ có chính sách ghi tệp và thực thi lệnh là người dùng có thể cấu hình. Các thiết lập về cô lập, mạng, mount, thực thi đặc quyền, ingress, egress và secrets vẫn do quản trị viên kiểm soát.
 - Nếu cả `workerId` cấp cao nhất và `pairing.workerId` đều hiện diện, chúng phải khớp nhau. Một mục có `allowPrincipalWorkers: true` và không có worker ID nào là chỉ dành cho ghép nối (pairing-only): nó sẽ bị loại khỏi các bộ chọn thực thi và không thể đặt `default: true`.
@@ -427,15 +459,24 @@ Kiểm soát việc liệu các công cụ nền đã hoàn thành được hỗ
       'Tự động gửi các hoàn thành tác vụ nền được hỗ trợ dưới dạng tiếp nối. Đặt thành false để chỉ sử dụng hành vi thăm dò (poll-only).',
       'true',
     ],
+    [
+      'ordinaryToolCancellation',
+      'Boolean',
+      'Cho phép chủ sở hữu yêu cầu hủy hợp tác các công cụ nền thông thường, bao gồm cả Bash được đính kèm.',
+      'false',
+    ],
   ]}
 />
 
 ```yaml filename="endpoints / agents / backgroundTasks"
 backgroundTasks:
   completionWakeups: true
+  ordinaryToolCancellation: false
 ```
 
 Tính năng phân phối hoàn tất tự động được bật ngay cả khi khối này bị bỏ qua. Hãy đặt `completionWakeups: false` để yêu cầu Agent thu thập mọi kết quả thông qua `check_background_task`.
+
+Đặt `ordinaryToolCancellation: true` để hiển thị tính năng hủy theo phạm vi chủ sở hữu cho các công cụ nền thông thường. Việc hủy mang tính hợp tác, vẫn nằm trong phạm vi tiến trình cục bộ và giữ cho tác vụ hoạt động cũng như duy trì dung lượng đã đặt trước cho đến khi quá trình gọi hoàn tất. Tính năng này không hủy các Subagents đã tách rời.
 
 Việc thực thi công cụ nền thông thường vẫn nằm trong phạm vi tiến trình cục bộ và sẽ không tồn tại sau khi tiến trình worker bị mất. Khi một kết quả terminal chỉ chứa nội dung đã được lưu trữ, việc phân phối kết quả đó sẽ bền vững và có thể tiếp tục trên một bản sao khác. Các tác vụ có artifact trực tiếp vẫn yêu cầu thăm dò (polling) trên run sở hữu. Các Subagent tách rời (Detached Subagents) giữ lại bản ghi bền vững và đường dẫn kết quả terminal riêng biệt của chúng. Việc thăm dò thủ công vẫn khả dụng cho trạng thái, điều khiển và khôi phục ở cả hai chế độ. Xem [Background Tool Calls](/docs/features/agents#background-tool-calls) và [Automatic Parent Continuation](/docs/features/subagents#automatic-parent-continuation).
 
@@ -609,6 +650,53 @@ Model specs chỉ chấp nhận `enabled`, `allowSelf`, và `agent_ids` trong `s
 
 Việc tăng giá trị này chỉ thay đổi số lượng subagent mà một agent có thể tham chiếu. Các giới hạn về độ sâu, nút đồ thị và cấu hình chạy không bị ảnh hưởng. Xem [Subagents](/docs/features/subagents#limits).
 
+## fileSharing
+
+`fileSharing` là tính năng chia sẻ theo phạm vi chạy (run-scoped), tùy chọn (opt-in) dành cho công việc của Agent được ủy quyền. Hãy đặt `enabled: true` tại đây và bật `subagents.shareFiles` trên mỗi Agent ủy quyền. Các đầu vào là chỉ đọc đối với người nhận; các đầu ra vẫn ở chế độ riêng tư trừ khi được xuất bản công khai, và các tệp đã xuất bản vẫn có thể tải xuống sau khi quá trình chạy kết thúc.
+
+```yaml filename="endpoints / agents / fileSharing"
+endpoints:
+  agents:
+    fileSharing:
+      enabled: true
+      allowSiblingSharing: false
+      maxFiles: 100
+      maxPrivateBytes: 268435456
+      ttlMs: 3600000
+```
+
+`allowSiblingSharing` cho phép các đối tượng nhận là anh em hoặc hậu duệ được chỉ định rõ ràng. `maxFiles` nằm trong khoảng từ `1` đến `1000`; `maxPrivateBytes` giới hạn các bản chụp đầu ra riêng tư được lưu giữ; và `ttlMs` là thời gian tồn tại của manifest đang hoạt động, tối đa là 24 giờ. Việc bỏ qua khối này sẽ khiến tính năng chia sẻ bị vô hiệu hóa.
+
+## Khôi phục tải lên Code API [#code-api-upload-recovery]
+
+Các cài đặt này giới hạn số lượng tải lên đồng thời và thời gian chờ thử lại khi Code API phản hồi với giới hạn tốc độ (rate limiting). Chúng được áp dụng cho từng route của Code API và principal đã xác thực, giúp ngăn chặn một người dùng hoặc quá trình triển khai bị điều tiết làm ảnh hưởng đến việc khôi phục tải lên của các tác vụ không liên quan.
+
+<OptionTable
+  options={[
+    [
+      'codeApiUploadConcurrency',
+      'Number',
+      'Số lượng tải lên Code API đồng thời tối đa cho mỗi tuyến đường và chủ thể được xác thực (1-100).',
+      '3',
+    ],
+    [
+      'codeApiMaxRetryWaitMs',
+      'Number',
+      'Tổng thời gian thực tối đa mà một thao tác có thể dành ra để chờ giới hạn tốc độ Code API (0-300000 ms).',
+      '20000',
+    ],
+  ]}
+/>
+
+```yaml filename="endpoints / agents / Code API upload recovery"
+endpoints:
+  agents:
+    codeApiUploadConcurrency: 3
+    codeApiMaxRetryWaitMs: 20000
+```
+
+LibreChat tôn trọng `Retry-After`, mở lại các luồng đã lưu cho mỗi lần thử và xóa các trình gọi bị hủy khỏi hàng đợi. Việc đặt `codeApiMaxRetryWaitMs: 0` sẽ vô hiệu hóa thời gian chờ thay vì vô hiệu hóa việc tải lên.
+
 ## maxCitations
 
 <OptionTable
@@ -781,6 +869,57 @@ Trong ví dụ này:
 - Programmatic Tool Calling vẫn bị vô hiệu hóa trừ khi bạn thêm khả năng `programmatic_tools` cùng với `execute_code`
 - Các lệnh gọi công cụ trong nền vẫn bị vô hiệu hóa trừ khi bạn thêm `run_in_background`; các công cụ Code Interpreter sau đó sẽ mặc định trở nên đủ điều kiện, trong khi các công cụ MCP, Plugin và Action đủ điều kiện vẫn yêu cầu phải được chọn.
 - Các nhãn ý định công cụ (tool intent labels) vẫn bị vô hiệu hóa trừ khi bạn thêm `tool_intents`; các công cụ gốc (native tools) sau đó sẽ tự động chọn tham gia, trong khi các công cụ MCP vẫn yêu cầu lựa chọn cho từng công cụ.
+
+## managementApi
+
+API Quản lý Agent bản beta cho phép các máy khách đáng tin cậy tạo, liệt kê, đọc, cập nhật và xóa các Agent, quản lý tệp của chúng, cũng như khám phá hoặc chỉnh sửa các Skill có thể truy cập. API này tách biệt với [`remoteApi`](#remoteapi): các tuyến đường quản lý chỉ chấp nhận danh tính máy OIDC gắn liền với triển khai và không chấp nhận khóa API LibreChat Remote Agents hoặc phiên trình duyệt.
+
+```yaml filename="endpoints / agents / managementApi"
+endpoints:
+  agents:
+    managementApi:
+      auth:
+        oidc:
+          enabled: true
+          issuer: https://identity.example.com/
+          audience: https://librechat.example.com/agents
+          # jwksUri: https://identity.example.com/.well-known/jwks.json
+        clients:
+          - clientId: machine-client-id
+            # subject: provider-specific-service-principal-subject
+            userId: 507f1f77bcf86cd799439011
+            tenantId: tenant-id
+            enabled: true
+```
+
+### managementApi.auth.oidc
+
+<OptionTable
+  options={[
+    ['enabled', 'Boolean', 'Bật xác thực máy OIDC cho các tuyến đường Quản lý Tác nhân.', 'false'],
+    ['issuer', 'String', 'Nhà phát hành chính xác được yêu cầu trong các mã truy cập đã xác minh. Bắt buộc khi được bật.', ''],
+    ['audience', 'String', 'Đối tượng mà mã truy cập phải chứa. Bắt buộc khi được bật.', ''],
+    ['jwksUri', 'String', 'Điểm cuối JWKS tùy chọn. Khi bỏ qua, LibreChat sẽ tự động phát hiện từ nhà phát hành.', ''],
+  ]}
+/>
+
+### managementApi.auth.clients
+
+`clients` là một danh sách cho phép (allowlist) thuộc quyền sở hữu của quá trình triển khai với tối đa 100 mục nhập. Cần có ít nhất một mục nhập khi tính năng xác thực OIDC được bật.
+
+<OptionTable
+  options={[
+    ['clientId', 'String', 'Định danh khách hàng OAuth được đối chiếu với claim `azp` hoặc `client_id` của token.', 'Required'],
+    ['subject', 'String', 'Yêu cầu `sub` token chính xác tùy chọn. Khi bỏ qua, `sub` phải bằng `clientId` hoặc `clientId@clients`.', ''],
+    ['userId', 'String', 'ObjectId của người dùng MongoDB LibreChat hiện có mà client sẽ kế thừa quyền.', 'Required'],
+    ['tenantId', 'String', 'Tenant chính xác chứa người dùng đó. Không được phép sử dụng tenant hệ thống.', 'Required'],
+    ['enabled', 'Boolean', 'Bật liên kết client này mà không cần xóa nó khỏi cấu hình.', 'true'],
+  ]}
+/>
+
+Các token phải chưa hết hạn và cung cấp một định danh máy khách duy nhất, không xung đột. Sau khi xác minh, LibreChat chỉ phân giải người dùng đã cấu hình bên trong tenant được liên kết và từ chối các principal bị thiếu, không hoạt động, liên tenant, bị vô hiệu hóa hoặc không khớp chủ thể. Mọi thao tác quản lý sau đó sẽ sử dụng các khả năng vai trò hiện tại của người dùng đó và các ACL của Agent hoặc Skill; việc liên kết không cấp thêm quyền truy cập tài nguyên nào khác.
+
+Các trường management-auth không xác định, ID khách hàng trùng lặp, ID người dùng hoặc ID đối tượng thuê (tenant) bị định dạng sai, và việc bật xác thực mà không có ràng buộc khách hàng sẽ khiến quá trình xác thực cấu hình thất bại. Xem [Agents API - Agent Management](/docs/features/agents_api#agent-management-api) để biết các tuyến đường và ví dụ.
 
 ## remoteApi
 

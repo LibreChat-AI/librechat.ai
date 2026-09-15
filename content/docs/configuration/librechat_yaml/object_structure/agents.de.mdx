@@ -13,6 +13,8 @@ endpoints:
     recursionLimit: 50
     maxRecursionLimit: 100
     maxSubagents: 20
+    codeApiUploadConcurrency: 3
+    codeApiMaxRetryWaitMs: 20000
     maxToolCallArgBytes: 65536
     maxDeltaEventsPerTurn: 100000
     maxToolCallArgBytesByTool:
@@ -34,6 +36,9 @@ endpoints:
       maxCatalogSkills: 20
     statefulCodeSessions:
       allowedEnvironments: ['user', 'agent-user', 'conversation']
+      principalWorkers:
+        enabled: true
+        maxPerUser: 5
       environments:
         - id: managed-default
           name: Managed Code API
@@ -58,6 +63,7 @@ endpoints:
     #   selfUrl: https://librechat.internal
     backgroundTasks:
       completionWakeups: true
+      ordinaryToolCancellation: false
     toolApproval:
       enabled: true
       mode: default
@@ -66,6 +72,16 @@ endpoints:
     checkpointer:
       type: mongo
       ttl: 86400
+    managementApi:
+      auth:
+        oidc:
+          enabled: true
+          issuer: https://identity.example.com/
+          audience: https://librechat.example.com/agents
+        clients:
+          - clientId: machine-client-id
+            userId: 507f1f77bcf86cd799439011
+            tenantId: tenant-id
     remoteApi:
       auth:
         oidc:
@@ -327,6 +343,12 @@ Konfiguriert die Freigabebereiche und optionalen Ausführungs-Backends für hoch
       'Optionale benannte verwaltete oder angehängte Code-API-Umgebungen, die im Agent Builder angezeigt werden.',
       'Unset; LIBRECHAT_CODE_BASEURL_STATEFUL remains the stateful endpoint',
     ],
+    [
+      'principalWorkers',
+      'Object',
+      'Optionale Bereitstellungsobergrenze für die Registrierung persönlicher Worker. `enabled` ist standardmäßig true und `maxPerUser` ist standardmäßig 5.',
+      '{ enabled: true, maxPerUser: 5 }',
+    ],
   ]}
 />
 
@@ -336,6 +358,9 @@ statefulCodeSessions:
     - 'user'
     - 'agent-user'
     - 'conversation'
+  principalWorkers:
+    enabled: true
+    maxPerUser: 5
   environments:
     - id: managed-default
       name: Managed Code API
@@ -356,6 +381,8 @@ statefulCodeSessions:
       baseURL: https://code-bridge.example.com/v1
       owner: deployment
       configSchema:
+        limits:
+          maxCommandTimeoutMs: 120000
         permissions:
           fileWrite:
             allowed: [allow, ask, deny]
@@ -370,6 +397,10 @@ statefulCodeSessions:
 
 `allowedEnvironments` ist erforderlich, sobald der Block vorhanden ist, und muss mindestens einen Workspace-Scope enthalten. Lassen Sie den gesamten Block weg, um alle drei Scopes zuzulassen und die Weiterleitung zustandsbehafteter Arbeit über [`LIBRECHAT_CODE_BASEURL_STATEFUL`](/docs/configuration/dotenv#stateful-code-interpreter-endpoint) fortzusetzen. Der persönliche Standardwert und der Agent Builder erlauben nur zulässige Werte. Wenn ein Administrator die Richtlinie verschärft, bleibt ein gespeicherter persönlicher Standardwert sichtbar, aber deaktiviert, und neue Agents verwenden den ersten zulässigen Scope. Bestehende aktivierte Agents behalten ihren gespeicherten Scope bei, aber ein nun unzulässiger Scope schlägt zur Laufzeit fehl, bis der Agent neu konfiguriert wird.
 
+`principalWorkers` steuert die Self-Service-Registrierung für persönlich zugewiesene Worker. Fehlende Werte werden standardmäßig als `enabled: true` und `maxPerUser: 5` aufgelöst; setzen Sie `enabled: false` oder `maxPerUser: 0`, um neue Registrierungen zu unterbinden. Das Limit zählt jede registrierte persönliche Umgebung für diesen Benutzer über alle konfigurierten Control Planes hinweg, einschließlich offline befindlicher Worker. Eine Senkung des Limits oder die Deaktivierung der Registrierung widerruft keine bestehenden Umgebungen.
+
+Die Deployment YAML ist die absolute Obergrenze. Eine Rollen-, Gruppen- oder Benutzerkonfigurationsüberschreibung kann die Registrierung deaktivieren oder `maxPerUser` senken, aber den Deployment-Wert nicht erhöhen. Ein Benutzer sieht nur dann Pairing-fähige Control Planes, wenn das effektive Limit größer als null ist, [`pairing.allowPrincipalWorkers`](#statefulcodesessions) auf dieser Control Plane aktiviert ist, eine Principal-Authentifizierung verfügbar ist und der Benutzer über die Berechtigung zur Verwaltung von Code-Umgebungen verfügt.
+
 Wenn `environments` nicht leer ist, erfordert jeder Eintrag eine eindeutige `id`, einen Anzeige-`name`, einen `type` von `managed` oder `attached` sowie eine HTTP(S)-`baseURL` ohne Query-String oder Fragment. Wenn die Liste ausführbare Umgebungen enthält, muss genau einer dieser Einträge `default: true` gesetzt haben. Der Agent Builder fügt dann eine Auswahlmöglichkeit für die **Execution environment** hinzu; die Einstellung **Deployment default** verwendet diesen Standardeintrag. Eine Liste, die nur Self-Service-Pairing-Control-Planes enthält, benötigt keinen Standardwert. Ein Agent, der eine Umgebung benennt, die später entfernt wird oder nicht mehr zugänglich ist, schlägt fehl (fails closed), anstatt auf ein anderes Backend auszuweichen.
 
 - `managed` verweist direkt auf einen vom Operator verwalteten zustandsbehafteten Code API.
@@ -379,6 +410,7 @@ Wenn `environments` nicht leer ist, erfordert jeder Eintrag eine eindeutige `id`
 - `pairing` ist optional und nur für `attached`-Einträge gültig, die sich im Besitz der Bereitstellung befinden. `pairing.workerId` identifiziert einen von einem Operator verwalteten Worker für die Registrierung, während `pairing.allowPrincipalWorkers: true` es autorisierten Benutzern ermöglicht, besitzergebundene Worker bei dieser Control Plane zu registrieren. Mindestens eines dieser Felder ist erforderlich, wenn `pairing` vorhanden ist.
 - `pairing.tokenEnv` benennt die Umgebungsvariable, die das Bridge-Administrator-Token enthält; sie enthält niemals das Token selbst. Pairing erfordert HTTPS, außer bei der Loopback-Entwicklung.
 - `configSchema.permissions` ermöglicht es autorisierten Eigentümern optional, die Richtlinien für `fileWrite` und `commandExecution` für persönliche Umgebungen unter **Einstellungen > Code-Umgebungen** festzulegen. Jedes Feld erfordert eine nicht leere `allowed`-Liste, die `allow`, `ask` und/oder `deny` enthält; `default` ist `ask`, wenn es weggelassen wird, und muss in `allowed` enthalten sein. LibreChat lehnt gespeicherte Werte ab, die außerhalb der Liste des Administrators liegen.
+- `configSchema.limits.maxCommandTimeoutMs` legt das maximale Bash-Timeout fest, das das Modell für diese Umgebung anfordern darf. Es akzeptiert Werte von `1` bis `300000` ms; bei Weglassen bleibt der Standardwert von 30 Sekunden erhalten. Dies ist eine Obergrenze für die Bereitstellung und kann nicht vom Benutzer konfiguriert werden.
 - Konfigurieren Sie `settings` nicht in der Deployment-YAML. LibreChat stellt dieses anfragebezogene Feld aus den vom Server validierten Einstellungen des authentifizierten Eigentümers bereit.
 - Nur die Richtlinien für das Schreiben von Dateien und die Ausführung von Befehlen sind durch den Benutzer konfigurierbar. Isolierung, Netzwerk, Mounts, privilegierte Ausführung, Ingress, Egress und Secrets bleiben unter der Kontrolle des Administrators.
 - Wenn sowohl die `workerId` auf oberster Ebene als auch `pairing.workerId` vorhanden sind, müssen sie übereinstimmen. Ein Eintrag mit `allowPrincipalWorkers: true`, bei dem keine der beiden Worker-IDs nur für das Pairing bestimmt ist, wird von den Ausführungsselektoren ausgeschlossen und kann nicht auf `default: true` gesetzt werden.
@@ -427,15 +459,24 @@ Steuert, ob unterstützte, abgeschlossene Hintergrund-Tools und abgetrennte Suba
       'Automatische Bereitstellung unterstützter Hintergrundaufgaben-Vervollständigungen als Fortsetzung. Auf false setzen für reines Polling-Verhalten.',
       'true',
     ],
+    [
+      'ordinaryToolCancellation',
+      'Boolean',
+      'Ermöglicht es Eigentümern, den kooperativen Abbruch gewöhnlicher Hintergrund-Tools, einschließlich angehängter Bash, anzufordern.',
+      'false',
+    ],
   ]}
 />
 
 ```yaml filename="endpoints / agents / backgroundTasks"
 backgroundTasks:
   completionWakeups: true
+  ordinaryToolCancellation: false
 ```
 
 Die automatische Übermittlung der Vervollständigung ist auch dann aktiviert, wenn dieser Block weggelassen wird. Setzen Sie `completionWakeups: false`, damit der Agent jedes Ergebnis über `check_background_task` abrufen muss.
+
+Setzen Sie `ordinaryToolCancellation: true`, um die besitzerbezogene Stornierung für gewöhnliche Hintergrund-Tools zu aktivieren. Die Stornierung erfolgt kooperativ, bleibt prozesslokal und hält die Aufgabe aktiv sowie die Kapazität reserviert, bis der Aufruf abgeschlossen ist. Sie bricht keine losgelösten Subagents ab.
 
 Die gewöhnliche Ausführung von Hintergrund-Tools bleibt prozesslokal und übersteht den Verlust ihres Worker-Prozesses nicht. Sobald ein reines Terminal-Ergebnis gespeichert wurde, ist dessen Zustellung dauerhaft und kann auf einem anderen Replikat fortgesetzt werden. Aufgaben mit aktiven Artefakten erfordern weiterhin ein Polling auf der besitzenden Ausführung. Losgelöste Subagents behalten ihren separaten, dauerhaften Transkript- und Terminal-Ergebnispfad bei. Manuelles Polling bleibt für Status, Steuerung und Wiederherstellung in beiden Modi verfügbar. Siehe [Background Tool Calls](/docs/features/agents#background-tool-calls) und [Automatic Parent Continuation](/docs/features/subagents#automatic-parent-continuation).
 
@@ -609,6 +650,53 @@ Model Specs akzeptieren unter `subagents` nur `enabled`, `allowSelf` und `agent_
 
 Das Erhöhen dieses Wertes ändert nur, auf wie viele Subagents ein Agent verweisen darf. Die Grenzwerte für Tiefe, Graph-Knoten und Laufzeitkonfiguration bleiben davon unberührt. Siehe [Subagents](/docs/features/subagents#limits).
 
+## fileSharing
+
+`fileSharing` ist eine optionale, auf den Laufzeitbereich beschränkte Freigabe für delegierte Agenten-Arbeit. Setzen Sie hier `enabled: true` und aktivieren Sie `subagents.shareFiles` bei jedem delegierenden Agenten. Eingaben sind für Empfänger schreibgeschützt; Ausgaben bleiben privat, sofern sie nicht explizit veröffentlicht werden, und veröffentlichte Dateien bleiben nach dem Lauf herunterladbar.
+
+```yaml filename="endpoints / agents / fileSharing"
+endpoints:
+  agents:
+    fileSharing:
+      enabled: true
+      allowSiblingSharing: false
+      maxFiles: 100
+      maxPrivateBytes: 268435456
+      ttlMs: 3600000
+```
+
+`allowSiblingSharing` erlaubt explizit benannte gleichrangige oder untergeordnete Empfänger. `maxFiles` reicht von `1` bis `1000`; `maxPrivateBytes` begrenzt die gespeicherten privaten Ausgabe-Snapshots; und `ttlMs` ist die aktive Manifest-Lebensdauer, die auf 24 Stunden begrenzt ist. Wenn dieser Block weggelassen wird, bleibt das Teilen deaktiviert.
+
+## Wiederherstellung von Code-API-Uploads [#code-api-upload-recovery]
+
+Diese Einstellungen begrenzen gleichzeitige Uploads und Wartezeiten bei Wiederholungsversuchen, wenn die Code API mit Ratenbegrenzung antwortet. Sie gelten pro Code API-Route und authentifiziertem Principal und verhindern, dass ein gedrosselter Benutzer oder eine Bereitstellung die Wiederherstellung unabhängiger Uploads blockiert.
+
+<OptionTable
+  options={[
+    [
+      'codeApiUploadConcurrency',
+      'Number',
+      'Maximale gleichzeitige Code API-Uploads pro Route und authentifiziertem Principal (1-100).',
+      '3',
+    ],
+    [
+      'codeApiMaxRetryWaitMs',
+      'Number',
+      'Maximale gesamte Wanduhrzeit, die ein Vorgang mit dem Warten auf Code API-Ratenbegrenzungen verbringen darf (0-300000 ms).',
+      '20000',
+    ],
+  ]}
+/>
+
+```yaml filename="endpoints / agents / Code API upload recovery"
+endpoints:
+  agents:
+    codeApiUploadConcurrency: 3
+    codeApiMaxRetryWaitMs: 20000
+```
+
+LibreChat berücksichtigt `Retry-After`, öffnet persistente Streams für jeden Versuch erneut und entfernt abgebrochene Aufrufer aus der Warteschlange. Das Setzen von `codeApiMaxRetryWaitMs: 0` deaktiviert das Warten, anstatt Uploads zu deaktivieren.
+
 ## maxCitations
 
 <OptionTable
@@ -781,6 +869,57 @@ In diesem Beispiel:
 - Programmatic Tool Calling bleibt deaktiviert, es sei denn, Sie fügen die `programmatic_tools` Capability zusammen mit `execute_code` hinzu.
 - Hintergrund-Tool-Aufrufe bleiben deaktiviert, es sei denn, Sie fügen `run_in_background` hinzu; Code Interpreter-Tools werden dann standardmäßig berechtigt, während berechtigte MCP-, Plugin- und Action-Tools weiterhin eine Auswahl erfordern.
 - Tool-Intent-Labels bleiben deaktiviert, es sei denn, Sie fügen `tool_intents` hinzu; native Tools werden dann automatisch aktiviert, während MCP-Tools weiterhin eine Auswahl pro Tool erfordern.
+
+## managementApi
+
+Die Beta-Agent-Management-API ermöglicht es vertrauenswürdigen Maschinen-Clients, Agents zu erstellen, aufzulisten, zu lesen, zu aktualisieren und zu löschen, deren Dateien zu verwalten sowie zugängliche Skills zu entdecken oder zu bearbeiten. Sie ist getrennt von [`remoteApi`](#remoteapi): Management-Routen akzeptieren nur an die Bereitstellung gebundene OIDC-Maschinenidentitäten und akzeptieren keine LibreChat Remote Agents API-Schlüssel oder Browser-Sitzungen.
+
+```yaml filename="endpoints / agents / managementApi"
+endpoints:
+  agents:
+    managementApi:
+      auth:
+        oidc:
+          enabled: true
+          issuer: https://identity.example.com/
+          audience: https://librechat.example.com/agents
+          # jwksUri: https://identity.example.com/.well-known/jwks.json
+        clients:
+          - clientId: machine-client-id
+            # subject: provider-specific-service-principal-subject
+            userId: 507f1f77bcf86cd799439011
+            tenantId: tenant-id
+            enabled: true
+```
+
+### managementApi.auth.oidc
+
+<OptionTable
+  options={[
+    ['enabled', 'Boolean', 'Aktiviere OIDC-Maschinenauthentifizierung für Agent Management-Routen.', 'false'],
+    ['issuer', 'String', 'Erwarteter exakter Aussteller in verifizierten Zugriffstokens. Erforderlich, wenn aktiviert.', ''],
+    ['audience', 'String', 'Zielgruppe, die das Zugriffstoken enthalten muss. Erforderlich, wenn aktiviert.', ''],
+    ['jwksUri', 'String', 'Optionaler expliziter JWKS endpoint. Wenn dieser weggelassen wird, ermittelt LibreChat ihn vom Issuer.', ''],
+  ]}
+/>
+
+### managementApi.auth.clients
+
+`clients` ist eine vom Deployment verwaltete Positivliste mit maximal 100 Einträgen. Wenn die OIDC-Authentifizierung aktiviert ist, ist mindestens ein Eintrag erforderlich.
+
+<OptionTable
+  options={[
+    ['clientId', 'String', 'OAuth-Client-Identifikator, der mit dem `azp`- oder `client_id`-Claim des Tokens abgeglichen wird.', 'Required'],
+    ['subject', 'String', 'Optionaler exakter Token-`sub`-Claim. Wenn weggelassen, muss `sub` gleich `clientId` oder `clientId@clients` sein.', ''],
+    ['userId', 'String', 'Bestehende LibreChat MongoDB-Benutzer-ObjectId, deren Berechtigungen der Client erbt.', 'Required'],
+    ['tenantId', 'String', 'Exakter Tenant, der diesen Benutzer enthält. Der System-Tenant ist nicht zulässig.', 'Required'],
+    ['enabled', 'Boolean', 'Aktivieren Sie diese Client-Bindung, ohne sie aus der Konfiguration zu entfernen.', 'true'],
+  ]}
+/>
+
+Tokens müssen gültig sein und einen einzelnen, nicht in Konflikt stehenden Client-Identifikator aufweisen. Nach der Überprüfung löst LibreChat den konfigurierten Benutzer nur innerhalb des gebundenen Mandanten auf und weist fehlende, inaktive, mandantenübergreifende, deaktivierte oder in Bezug auf das Subjekt nicht übereinstimmende Prinzipale zurück. Jeder Verwaltungsvorgang nutzt dann die aktuellen Rollenberechtigungen dieses Benutzers sowie die Agent- oder Skill-ACLs; die Bindung gewährt keinen zusätzlichen Ressourcenzugriff.
+
+Unbekannte management-auth-Felder, doppelte Client-IDs, fehlerhaft formatierte Benutzer- oder Mandanten-IDs sowie aktivierte Authentifizierung ohne Client-Bindung führen dazu, dass die Konfigurationsvalidierung fehlschlägt. Siehe [Agents API - Agent Management](/docs/features/agents_api#agent-management-api) für Routen und Beispiele.
 
 ## remoteApi
 

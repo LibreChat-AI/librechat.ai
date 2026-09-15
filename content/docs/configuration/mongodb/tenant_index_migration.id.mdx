@@ -1,0 +1,63 @@
+---
+title: Migrasi Indeks Tenant
+icon: Database
+description: >-
+  Tingkatkan indeks MongoDB lingkup penyewa dari LibreChat v0.8.7 dan versi
+  sebelumnya.
+---
+
+# Migrasi Indeks Tenant [#tenant-index-migration]
+
+Basis data yang dibuat oleh LibreChat v0.8.7 atau versi sebelumnya dapat melaporkan `Index build failed` saat melakukan peningkatan. Indeks unik lama seperti `email_1` atau `name_1` dapat mengalami konflik dengan indeks saat ini yang memiliki nama yang sama, sementara indeks gabungan (compound indexes) yang dicakup oleh penyewa (tenant-scoped) kini memberlakukan keunikan. Hal ini juga dapat memengaruhi penyebaran penyewa tunggal (single-tenant).
+
+Migrasi adalah perintah pemeliharaan eksplisit dan tidak berjalan saat startup. Gunakan sumber atau image yang diperbarui yang menyediakan perintah di bawah ini. Untuk checkout sumber, instal dependensi dan jalankan `npm run build:packages` terlebih dahulu.
+
+<Steps>
+  <Step>
+    ### Hentikan penulis [#stop-writers]
+
+    Cadangkan MongoDB, lalu hentikan setiap replika dan worker LibreChat API yang menulis ke basis data. Biarkan MongoDB tetap berjalan.
+  </Step>
+  <Step>
+    ### Pratinjau migrasi [#preview-the-migration]
+
+    Jalankan dry run dengan pengaturan koneksi `MONGO_URI` dan `.env` normal pada deployment:
+
+    ```bash
+    npm run migrate:tenant-indexes:dry-run
+    ```
+  </Step>
+  <Step>
+    ### Terapkan migrasi [#apply-the-migration]
+
+    ```bash
+    npm run migrate:tenant-indexes
+    ```
+
+    Tunggu hingga proses keluar berhasil sebelum memulai ulang penulis mana pun.
+  </Step>
+  <Step>
+    ### Mulai ulang dan verifikasi [#restart-and-verify]
+
+    Mulai ulang LibreChat dan pastikan proses startup tidak lagi melaporkan konflik indeks untuk User, Role, Preset, AccessRole, MCPServer, AgentCategory, Message, atau Conversation.
+  </Step>
+</Steps>
+
+## Docker Compose [#docker-compose]
+
+Jalankan kontainer sekali pakai dari image yang telah diperbarui sementara MongoDB tetap tersedia. Atur direktori kerja ke `/app`, karena image API produksi secara default akan mengarah ke `/app/api`. Sertakan flag file Compose yang sama dengan yang digunakan oleh deployment Anda.
+
+```bash
+docker compose stop api
+docker compose run --rm --no-deps -w /app api npm run migrate:tenant-indexes:dry-run
+docker compose run --rm --no-deps -w /app api npm run migrate:tenant-indexes
+docker compose up -d api
+```
+
+## Keamanan dan Pemulihan [#safety-and-recovery]
+
+Perintah ini membangun penggantian unik dengan cakupan penyewa sebelum menghapus hanya indeks unik yang sudah digantikan, kemudian membuat indeks skema saat ini. Perintah ini mempertahankan indeks kustom dan indeks non-unik saat ini, tidak menghapus dokumen, dan tidak menggunakan `syncIndexes` atau `dropIndexes`. Perintah ini juga membangun indeks saat ini ketika `MONGO_AUTO_INDEX=false`.
+
+Dry run hanya mencantumkan penghapusan; ini tidak dapat memvalidasi build pengganti, izin, atau data duplikat. Kesalahan apa pun pada daftar, build, atau drop akan menggagalkan perintah. Jika build pengganti gagal, batasan lama akan tetap ada. Kegagalan di kemudian hari mungkin menyisakan migrasi parsial, tetapi menjalankan ulang akan menyelesaikan sisa pekerjaan dengan aman. Pastikan penulis (writers) tetap dihentikan, perbaiki masalah yang dilaporkan, dan jalankan ulang; jangan menyelesaikan kegagalan dengan melakukan drop pada setiap indeks.
+
+Pembangunan indeks dapat memakan waktu pada koleksi yang besar.

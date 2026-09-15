@@ -1,0 +1,61 @@
+---
+title: 租户索引迁移
+icon: Database
+description: 升级 LibreChat v0.8.7 及更早版本的租户范围 MongoDB 索引。
+---
+
+# 租户索引迁移 [#tenant-index-migration]
+
+由 LibreChat v0.8.7 或更早版本创建的数据库在升级时可能会报告 `Index build failed`。旧有的唯一索引（如 `email_1` 或 `name_1`）可能会与当前同名的索引发生冲突，而租户范围的复合索引现在强制执行唯一性。这也可能会影响单租户部署。
+
+迁移是一个显式的维护命令，不会在启动期间运行。请使用提供以下命令的更新后的源代码或镜像。对于源代码检出，请先安装依赖项并运行 `npm run build:packages`。
+
+<Steps>
+  <Step>
+    ### 停止写入器 [#stop-writers]
+
+    备份 MongoDB，然后停止所有向数据库写入数据的 LibreChat API 副本和 worker。保持 MongoDB 运行。
+  </Step>
+  <Step>
+    ### 预览迁移 [#preview-the-migration]
+
+    使用部署的常规 `MONGO_URI` 和 `.env` 连接设置运行试运行（dry run）：
+
+    ```bash
+    npm run migrate:tenant-indexes:dry-run
+    ```
+  </Step>
+  <Step>
+    ### 应用迁移 [#apply-the-migration]
+
+    ```bash
+    npm run migrate:tenant-indexes
+    ```
+
+    在重启任何写入器之前，请等待其成功退出。
+  </Step>
+  <Step>
+    ### 重启并验证 [#restart-and-verify]
+
+    重启 LibreChat 并确认启动时不再报告 User、Role、Preset、AccessRole、MCPServer、AgentCategory、Message 或 Conversation 的索引冲突。
+  </Step>
+</Steps>
+
+## Docker Compose [#docker-compose]
+
+在 MongoDB 保持可用的情况下，从更新后的镜像运行一次性容器。将工作目录设置为 `/app`，因为生产环境 API 镜像默认指向 `/app/api`。包含部署时所使用的相同的 Compose 文件标志。
+
+```bash
+docker compose stop api
+docker compose run --rm --no-deps -w /app api npm run migrate:tenant-indexes:dry-run
+docker compose run --rm --no-deps -w /app api npm run migrate:tenant-indexes
+docker compose up -d api
+```
+
+## 安全与恢复 [#safety-and-recovery]
+
+该命令在仅删除已知的被取代的唯一索引之前，会构建租户范围内的唯一替换项，然后创建当前的模式索引。它会保留自定义索引和当前的非唯一索引，不会删除文档，也不会使用 `syncIndexes` 或 `dropIndexes`。当 `MONGO_AUTO_INDEX=false` 时，它也会构建当前索引。
+
+试运行仅列出移除项；它无法验证替换构建、权限或重复数据。任何列表、构建或删除错误都会导致命令失败。如果替换构建失败，旧的约束将保持不变。后续的失败可能会导致部分迁移，但重新运行可以安全地完成剩余工作。请保持写入器处于停止状态，修正报告的问题，然后重新运行；不要通过删除所有索引来解决失败问题。
+
+在大型集合上构建索引可能需要一些时间。

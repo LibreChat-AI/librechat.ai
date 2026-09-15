@@ -14,13 +14,15 @@ LibreChat cung cấp các tác nhân (agents) cho các ứng dụng, tập lện
 
 ## Tổng quan [#overview]
 
-Agents API cung cấp hai giao diện suy luận và phân phối sự kiện được xác thực:
+Agents API cung cấp hai giao diện suy luận, phân phối sự kiện được xác thực và các lộ trình quản lý bản beta:
 
 - **Hoàn tất trò chuyện tương thích với OpenAI** — `POST /api/agents/v1/chat/completions`
 - **API Phản hồi Mở** — `POST /api/agents/v1/responses`
 - **Sự kiện Tác nhân (Agent Events)** — `POST /api/agents/v1/events`
+- **Quản lý Tác nhân** — `/api/agents/v1/agents`
+- **Quản lý Kỹ năng** — `/api/agents/v1/skills`
 
-Các giao diện suy luận hỗ trợ xác thực bằng API-key, xác thực OIDC tùy chọn và phản hồi dạng streaming. Các Agent Events sử dụng xác thực API-key của Remote Agents để LibreChat có thể liên kết mỗi lần gửi với một định danh nguồn ổn định.
+Các giao diện suy luận hỗ trợ xác thực bằng API-key, xác thực OIDC tùy chọn và phản hồi dạng streaming. Agent Events sử dụng xác thực API-key của Remote Agents để LibreChat có thể liên kết mỗi lần gửi với một định danh nguồn ổn định. Các tuyến quản lý (management routes) thay vào đó sử dụng danh sách cho phép triển khai (deployment allowlist) để liên kết một máy khách OIDC với một người dùng và tenant hiện có trên LibreChat.
 
 LibreChat đang áp dụng [Open Responses](https://www.openresponses.org/) làm khung API chính để phục vụ các tác nhân (agents). Mặc dù endpoint Chat Completions cung cấp khả năng tương thích ngược với các công cụ tương thích với OpenAI hiện có, nhưng endpoint Open Responses đại diện cho định hướng phát triển trong tương lai.
 
@@ -93,6 +95,67 @@ Xem [Agents Endpoint - remoteApi](/docs/configuration/librechat_yaml/object_stru
 <Callout type="warning" title="Các sự kiện Agent yêu cầu một API key">
   Xác thực chỉ bằng OIDC không được hỗ trợ cho các endpoint Agent Events. Hãy sử dụng khóa API Remote Agents khi tạo binding, xếp hàng sự kiện và thăm dò trạng thái gửi.
 </Callout>
+
+## Quản lý Agent API [#agent-management-api]
+
+API Quản lý Agent bản beta cho phép một dịch vụ quản lý các Agent và các tài nguyên đính kèm của chúng mà không cần phiên trình duyệt. API này được xác thực độc lập với suy luận (inference) và Agent Events: chỉ các OIDC machine token được cấu hình trong [`endpoints.agents.managementApi`](/docs/configuration/librechat_yaml/object_structure/agents#managementapi) mới được chấp nhận.
+
+Mỗi client OAuth được cấu hình đều được liên kết với một `userId` và `tenantId` hiện có của LibreChat. Sau khi xác minh token, mọi yêu cầu sẽ chạy dưới quyền của người dùng đó và giữ nguyên các khả năng vai trò, ACL của Agent và Skill, hạn chế nhà cung cấp, quyền truy cập công cụ, giới hạn tệp và sự cô lập tenant hiện tại của người dùng. Việc liên kết client không biến người dùng thành quản trị viên hoặc cấp quyền truy cập vào các tài nguyên mà người dùng đó không thể quản lý theo cách khác.
+
+### Các Tuyến Agent [#agent-routes]
+
+| Phương thức | Đường dẫn | Mục đích |
+| -------- | ------------------------------------------ | -------------------------------------------- |
+| `POST`   | `/api/agents/v1/agents`                    | Tạo một Agent |
+| `GET`    | `/api/agents/v1/agents`                    | Liệt kê các Agent có thể truy cập |
+| `GET`    | `/api/agents/v1/agents/{id}`               | Đọc một Agent có thể truy cập |
+| `PATCH`  | `/api/agents/v1/agents/{id}`               | Cập nhật một Agent |
+| `DELETE` | `/api/agents/v1/agents/{id}`               | Xóa một Agent |
+| `POST`   | `/api/agents/v1/agents/{id}/files`         | Tải lên và đính kèm một tệp tài nguyên Agent |
+| `GET`    | `/api/agents/v1/agents/{id}/files`         | Liệt kê các tệp đính kèm mà Agent có thể truy cập |
+| `DELETE` | `/api/agents/v1/agents/{id}/files/{fileId}` | Xóa một tệp đính kèm khỏi Agent |
+
+Payload tạo và cập nhật Agent sử dụng các trường được hỗ trợ bên ngoài giống như Agent Builder và từ chối các trường cấp cao nhất không xác định. Việc tạo yêu cầu một `model`; cập nhật chỉ chấp nhận các trường được cung cấp. Các phản hồi hiển thị cấu hình Agent được hỗ trợ cùng với `id`, `provider`, `model` có thể null, `version`, `createdAt` và `updatedAt`, không bao gồm các trường quyền sở hữu lưu trữ.
+
+Các danh sách chấp nhận `limit` từ 1 đến 100, với giá trị mặc định là 20, và một `cursor` không rõ ràng. Khi `has_more` là true, hãy truyền giá trị `after` được trả về làm cursor tiếp theo; không giải mã hoặc tự tạo cursor trong các client.
+
+```bash
+curl https://your-librechat-instance/api/agents/v1/agents?limit=20 \
+  -H "Authorization: Bearer YOUR_MACHINE_ACCESS_TOKEN"
+```
+
+```bash
+curl -X POST https://your-librechat-instance/api/agents/v1/agents \
+  -H "Authorization: Bearer YOUR_MACHINE_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Release assistant",
+    "provider": "openAI",
+    "model": "gpt-5.6",
+    "instructions": "Prepare concise release notes from verified changes."
+  }'
+```
+
+Việc tải tệp lên sử dụng `multipart/form-data` với một `file` và một giá trị `tool_resource` như `context`, `file_search`, hoặc `execute_code`. LibreChat áp dụng các kiểm tra về khả năng triển khai, cấp quyền vai trò, giới hạn tốc độ tải lên, giới hạn trên mỗi tệp, số lượng tệp và tổng kích thước trước khi đính kèm tài nguyên. Việc xóa tệp yêu cầu quyền chỉnh sửa đối với Agent và không làm suy yếu các quy tắc ủy quyền tệp cơ bản.
+
+### Các Tuyến Kỹ năng (Skill Routes) [#skill-routes]
+
+| Phương thức | Tuyến đường | Mục đích |
+| ------- | ---------------------------------------------------- | ------------------------------------- |
+| `GET`   | `/api/agents/v1/skills`                              | Liệt kê các Skill có thể truy cập |
+| `GET`   | `/api/agents/v1/skills/{id}`                         | Đọc một Skill có thể truy cập |
+| `PATCH` | `/api/agents/v1/skills/{id}`                         | Cập nhật siêu dữ liệu Skill được hỗ trợ |
+| `GET`   | `/api/agents/v1/skills/{id}/files`                   | Liệt kê các tệp trong Skill |
+| `GET`   | `/api/agents/v1/skills/{id}/files/{relativePath}`    | Đọc một tệp Skill |
+| `PUT`   | `/api/agents/v1/skills/{id}/files/{relativePath}`    | Tạo hoặc thay thế một tệp được hỗ trợ |
+
+Các thao tác Skill bị giới hạn trong các Skill mà người dùng được liên kết có thể nhìn thấy. Việc đọc yêu cầu quyền truy cập Skill, trong khi việc ghi siêu dữ liệu hoặc tệp yêu cầu các quyền chỉnh sửa và quyền tác giả Skill tương ứng. Các đường dẫn được chuẩn hóa bên dưới thư mục gốc của Skill; việc duyệt thư mục, các tệp không được hỗ trợ và nội dung quá kích thước sẽ bị từ chối.
+
+### Lỗi và Xác thực [#errors-and-authentication]
+
+Các phản hồi quản lý sử dụng các lỗi có cấu trúc với mã `invalid_request`, `not_found`, `permission_denied`, `conflict`, hoặc `internal_error`. Các lỗi xác thực tài nguyên có thể được trả về dưới dạng `not_found` để người gọi không thể dò tìm các ID không được phép truy cập.
+
+Các machine token phải chưa hết hạn, khớp với issuer và audience đã cấu hình, xác định một client nằm trong danh sách cho phép thông qua `azp` hoặc `client_id`, và thỏa mãn quy tắc subject đã cấu hình. Cấu hình bị thiếu hoặc thông tin xác thực không hợp lệ sẽ trả về `401`; một tài khoản bị ràng buộc đang trong quá trình xóa sẽ trả về `409`. Xem [`managementApi.auth.clients`](/docs/configuration/librechat_yaml/object_structure/agents#managementapiauthclients) để biết các quy tắc về claim và ràng buộc đầy đủ.
 
 ## Endpoints [#endpoints]
 

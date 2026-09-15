@@ -1,0 +1,61 @@
+---
+title: テナントインデックスの移行
+icon: Database
+description: LibreChat v0.8.7以前のテナントスコープのMongoDBインデックスをアップグレードする。
+---
+
+# テナントインデックスの移行 [#tenant-index-migration]
+
+LibreChat v0.8.7 以前で作成されたデータベースは、アップグレード中に `Index build failed` を報告する場合があります。`email_1` や `name_1` といったレガシーなユニークインデックスは、同名の現在のインデックスと競合する可能性があり、一方でテナントスコープの複合インデックスは現在一意性を強制しています。これはシングルテナントのデプロイメントにも影響を及ぼす可能性があります。
+
+移行は明示的なメンテナンスコマンドであり、起動時には実行されません。以下のコマンドを提供する更新済みのソースまたはイメージを使用してください。ソースからチェックアウトしている場合は、先に依存関係をインストールし、`npm run build:packages` を実行してください。
+
+<Steps>
+  <Step>
+    ### Stop writers [#stop-writers]
+
+    MongoDBをバックアップしてから、データベースに書き込みを行うすべてのLibreChat APIレプリカとワーカーを停止してください。MongoDBは実行したままにしてください。
+  </Step>
+  <Step>
+    ### 移行をプレビューする [#preview-the-migration]
+
+    デプロイメントの通常の `MONGO_URI` および `.env` 接続設定を使用してドライランを実行します：
+
+    ```bash
+    npm run migrate:tenant-indexes:dry-run
+    ```
+  </Step>
+  <Step>
+    ### マイグレーションの適用 [#apply-the-migration]
+
+    ```bash
+    npm run migrate:tenant-indexes
+    ```
+
+    ライターを再起動する前に、正常終了するまで待機してください。
+  </Step>
+  <Step>
+    ### 再起動と確認 [#restart-and-verify]
+
+    LibreChatを再起動し、User、Role、Preset、AccessRole、MCPServer、AgentCategory、Message、またはConversationに関するインデックスの競合が起動時に報告されなくなったことを確認してください。
+  </Step>
+</Steps>
+
+## Docker Compose [#docker-compose]
+
+MongoDBが利用可能な状態で、更新されたイメージから使い捨てのコンテナを実行します。本番環境のAPIイメージはデフォルトで `/app/api` を使用するため、作業ディレクトリを `/app` に設定してください。デプロイメントで使用しているものと同じComposeファイルのフラグを含めてください。
+
+```bash
+docker compose stop api
+docker compose run --rm --no-deps -w /app api npm run migrate:tenant-indexes:dry-run
+docker compose run --rm --no-deps -w /app api npm run migrate:tenant-indexes
+docker compose up -d api
+```
+
+## 安全性と復旧 [#safety-and-recovery]
+
+このコマンドは、テナントスコープのユニークな置換を構築してから、既知の置き換えられたユニークインデックスのみを削除し、その後現在のスキーマインデックスを作成します。カスタムインデックスと現在の非ユニークインデックスは保持され、ドキュメントの削除は行われず、`syncIndexes` や `dropIndexes` も使用しません。また、`MONGO_AUTO_INDEX=false` の場合でも現在のインデックスを構築します。
+
+ドライラン（dry run）は削除のみをリストアップします。置換ビルド、権限、または重複データの検証は行えません。リストアップ、ビルド、またはドロップのいずれかでエラーが発生した場合、コマンドは失敗します。置換ビルドが失敗した場合、古い制約が残ります。後の段階で失敗すると移行が部分的に完了した状態になる可能性がありますが、再実行することで残りの作業を安全に完了できます。書き込み処理を停止したまま報告された問題を修正し、再実行してください。すべてのインデックスをドロップして失敗を解決しようとしないでください。
+
+大規模なコレクションでは、インデックスの構築に時間がかかる場合があります。

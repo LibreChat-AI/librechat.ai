@@ -12,13 +12,15 @@ LibreChat 通过推理和事件交付 API 将 agent 暴露给外部应用程序�
 
 ## 概述 [#overview]
 
-Agents API 提供了两个推理接口和经过身份验证的事件交付：
+Agents API 提供了两个推理接口、经过身份验证的事件交付以及测试版管理路由：
 
 - **兼容 OpenAI 的聊天补全 (Chat Completions)** — `POST /api/agents/v1/chat/completions`
 - **Open Responses API** — `POST /api/agents/v1/responses`
 - **智能体事件** — `POST /api/agents/v1/events`
+- **代理管理** — `/api/agents/v1/agents`
+- **技能管理** — `/api/agents/v1/skills`
 
-推理接口支持 API-key 身份验证、可选的 OIDC 身份验证以及流式响应。Agent Events 使用 Remote Agents API-key 身份验证，以便 LibreChat 可以将每次交付绑定到稳定的源身份。
+推理接口支持 API-key 身份验证、可选的 OIDC 身份验证以及流式响应。Agent Events 使用 Remote Agents API-key 身份验证，以便 LibreChat 可以将每次交付绑定到稳定的源身份。管理路由则使用部署白名单，将 OIDC 机器客户端绑定到一个现有的 LibreChat 用户和租户。
 
 LibreChat 正在采用 [Open Responses](https://www.openresponses.org/) 作为其服务智能体的首选 API 框架。虽然 Chat Completions endpoint 为现有的兼容 OpenAI 的工具提供了向后兼容性，但 Open Responses endpoint 代表了未来的发展方向。
 
@@ -91,6 +93,67 @@ curl -X POST https://your-librechat-instance/api/agents/v1/responses \
 <Callout type="warning" title="Agent Events 需要 API key">
   Agent Events 端点不支持仅使用 OIDC 进行身份验证。在创建绑定、加入事件队列以及轮询交付状态时，请使用 Remote Agents API 密钥。
 </Callout>
+
+## Agent Management API [#agent-management-api]
+
+beta 版 Agent Management API 允许服务在无需浏览器会话的情况下管理 Agent 及其关联资源。它与推理和 Agent Events 的身份验证相互独立：仅接受在 [`endpoints.agents.managementApi`](/docs/configuration/librechat_yaml/object_structure/agents#managementapi) 下配置的 OIDC 机器令牌。
+
+每个配置好的 OAuth 客户端都绑定到一个现有的 LibreChat `userId` 和 `tenantId`。在令牌验证后，每个请求都将以该用户身份运行，并保留该用户当前的角色权限、Agent 和 Skill ACL、提供商限制、工具授权、文件限制以及租户隔离。客户端绑定不会使该用户成为管理员，也不会授予其访问该用户原本无法管理的资源的权限。
+
+### Agent 路由 [#agent-routes]
+
+| 方法 | 路由 | 用途 |
+| -------- | ------------------------------------------ | -------------------------------------------- |
+| `POST`   | `/api/agents/v1/agents`                    | 创建 Agent |
+| `GET`    | `/api/agents/v1/agents`                    | 列出可访问的 Agent |
+| `GET`    | `/api/agents/v1/agents/{id}`               | 读取一个可访问的 Agent |
+| `PATCH`  | `/api/agents/v1/agents/{id}`               | 更新 Agent |
+| `DELETE` | `/api/agents/v1/agents/{id}`               | 删除 Agent |
+| `POST`   | `/api/agents/v1/agents/{id}/files`         | 上传并附加一个 Agent 资源文件 |
+| `GET`    | `/api/agents/v1/agents/{id}/files`         | 列出 Agent 可访问的附加文件 |
+| `DELETE` | `/api/agents/v1/agents/{id}/files/{fileId}` | 从 Agent 中移除一个附加文件 |
+
+Agent 创建和更新的负载使用与 Agent Builder 相同的外部支持字段，并会拒绝未知的顶级字段。创建操作需要 `model`；更新操作仅接受提供的字段。响应会公开受支持的 Agent 配置以及 `id`、`provider`、可为空的 `model`、`version`、`createdAt` 和 `updatedAt`，但不包含持久化所有权字段。
+
+列表接受从 1 到 100 的 `limit`，默认为 20，以及一个不透明的 `cursor`。当 `has_more` 为 true 时，将返回的 `after` 值作为下一个 cursor 传入；请勿在客户端中解码或构造 cursor。
+
+```bash
+curl https://your-librechat-instance/api/agents/v1/agents?limit=20 \
+  -H "Authorization: Bearer YOUR_MACHINE_ACCESS_TOKEN"
+```
+
+```bash
+curl -X POST https://your-librechat-instance/api/agents/v1/agents \
+  -H "Authorization: Bearer YOUR_MACHINE_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Release assistant",
+    "provider": "openAI",
+    "model": "gpt-5.6",
+    "instructions": "Prepare concise release notes from verified changes."
+  }'
+```
+
+文件上传使用 `multipart/form-data`，包含一个 `file` 和一个 `tool_resource` 值，例如 `context`、`file_search` 或 `execute_code`。LibreChat 在附加资源之前会应用部署能力、角色授权、上传速率限制、单文件限制、文件数量限制以及总大小检查。移除文件需要对 Agent 的编辑权限，且不会削弱底层的资源授权规则。
+
+### 技能路由 (Skill Routes) [#skill-routes]
+
+| 方法 | 路由 | 用途 |
+| ------- | ---------------------------------------------------- | ------------------------------------- |
+| `GET`   | `/api/agents/v1/skills`                              | 列出可访问的 Skills |
+| `GET`   | `/api/agents/v1/skills/{id}`                         | 读取一个可访问的 Skill |
+| `PATCH` | `/api/agents/v1/skills/{id}`                         | 更新受支持的 Skill 元数据 |
+| `GET`   | `/api/agents/v1/skills/{id}/files`                   | 列出 Skill 中的文件 |
+| `GET`   | `/api/agents/v1/skills/{id}/files/{relativePath}`    | 读取一个 Skill 文件 |
+| `PUT`   | `/api/agents/v1/skills/{id}/files/{relativePath}`    | 创建或替换一个受支持的文件 |
+
+技能操作仅限于绑定用户可见的技能。读取操作需要技能访问权限，而元数据或文件写入则需要相应的编辑和技能创作权限。路径在技能根目录下进行标准化处理；遍历、不支持的文件和超大内容将被拒绝。
+
+### 错误与身份验证 [#errors-and-authentication]
+
+管理响应使用结构化错误，代码包括 `invalid_request`、`not_found`、`permission_denied`、`conflict` 或 `internal_error`。资源授权失败可能会作为 `not_found` 返回，以防止调用者探测无法访问的 ID。
+
+机器令牌必须未过期，与配置的颁发者 (issuer) 和受众 (audience) 匹配，通过 `azp` 或 `client_id` 标识一个已加入白名单的客户端，并满足配置的主题规则。缺少配置或凭据无效将返回 `401`；正在删除的绑定账户将返回 `409`。有关完整的声明和绑定规则，请参阅 [`managementApi.auth.clients`](/docs/configuration/librechat_yaml/object_structure/agents#managementapiauthclients)。
 
 ## Endpoints [#endpoints]
 

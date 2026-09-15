@@ -13,6 +13,8 @@ endpoints:
     recursionLimit: 50
     maxRecursionLimit: 100
     maxSubagents: 20
+    codeApiUploadConcurrency: 3
+    codeApiMaxRetryWaitMs: 20000
     maxToolCallArgBytes: 65536
     maxDeltaEventsPerTurn: 100000
     maxToolCallArgBytesByTool:
@@ -34,6 +36,9 @@ endpoints:
       maxCatalogSkills: 20
     statefulCodeSessions:
       allowedEnvironments: ['user', 'agent-user', 'conversation']
+      principalWorkers:
+        enabled: true
+        maxPerUser: 5
       environments:
         - id: managed-default
           name: Managed Code API
@@ -58,6 +63,7 @@ endpoints:
     #   selfUrl: https://librechat.internal
     backgroundTasks:
       completionWakeups: true
+      ordinaryToolCancellation: false
     toolApproval:
       enabled: true
       mode: default
@@ -66,6 +72,16 @@ endpoints:
     checkpointer:
       type: mongo
       ttl: 86400
+    managementApi:
+      auth:
+        oidc:
+          enabled: true
+          issuer: https://identity.example.com/
+          audience: https://librechat.example.com/agents
+        clients:
+          - clientId: machine-client-id
+            userId: 507f1f77bcf86cd799439011
+            tenantId: tenant-id
     remoteApi:
       auth:
         oidc:
@@ -327,6 +343,12 @@ Son derece deneysel durum bilgili (stateful) Code Interpreter çalışma alanlar
       'Agent Builder\'da gösterilen isteğe bağlı adlandırılmış yönetilen veya ekli Code API ortamları.',
       'Unset; LIBRECHAT_CODE_BASEURL_STATEFUL remains the stateful endpoint',
     ],
+    [
+      'principalWorkers',
+      'Object',
+      'Kişisel çalışan kaydı için isteğe bağlı dağıtım sınırı. `enabled` varsayılan olarak true, `maxPerUser` ise varsayılan olarak 5 değerini alır.',
+      '{ enabled: true, maxPerUser: 5 }',
+    ],
   ]}
 />
 
@@ -336,6 +358,9 @@ statefulCodeSessions:
     - 'user'
     - 'agent-user'
     - 'conversation'
+  principalWorkers:
+    enabled: true
+    maxPerUser: 5
   environments:
     - id: managed-default
       name: Managed Code API
@@ -356,6 +381,8 @@ statefulCodeSessions:
       baseURL: https://code-bridge.example.com/v1
       owner: deployment
       configSchema:
+        limits:
+          maxCommandTimeoutMs: 120000
         permissions:
           fileWrite:
             allowed: [allow, ask, deny]
@@ -370,6 +397,10 @@ statefulCodeSessions:
 
 `allowedEnvironments`, blok mevcut olduğunda gereklidir ve en az bir çalışma alanı kapsamı (workspace scope) içermelidir. Üç kapsamın tamamına izin vermek ve durum bilgisi olan (stateful) işleri [`LIBRECHAT_CODE_BASEURL_STATEFUL`](/docs/configuration/dotenv#stateful-code-interpreter-endpoint) üzerinden yönlendirmeye devam etmek için bloğun tamamını atlayın. Kişisel varsayılan ve Agent Builder yalnızca izin verilen değerlere izin verir. Bir yönetici politikayı sıkılaştırırsa, kaydedilmiş bir kişisel varsayılan görünür kalır ancak devre dışı bırakılır ve yeni Agent'lar izin verilen ilk kapsamı kullanır. Mevcut etkinleştirilmiş Agent'lar kaydedilmiş kapsamlarını korurlar, ancak artık izin verilmeyen bir kapsam, Agent yeniden yapılandırılana kadar çalışma zamanında başarısız olur.
 
+`principalWorkers`, kişisel bağlı çalışanlar için self-servis kaydını kontrol eder. Belirtilmeyen değerler `enabled: true` ve `maxPerUser: 5` olarak varsayılır; yeni kayıtları durdurmak için `enabled: false` veya `maxPerUser: 0` olarak ayarlayın. Limit, çevrimdışı çalışanlar da dahil olmak üzere, yapılandırılmış kontrol düzlemleri genelinde o kullanıcı için kayıtlı her kişisel ortamı sayar. Limiti düşürmek veya kaydı devre dışı bırakmak, mevcut ortamları iptal etmez.
+
+Deployment YAML kesin sınırdır. Bir rol, grup veya kullanıcı yapılandırması geçersiz kılma işlemi kaydı devre dışı bırakabilir veya `maxPerUser` değerini düşürebilir, ancak dağıtım değerini yükseltemez. Bir kullanıcı, eşleştirme özellikli kontrol düzlemlerini yalnızca geçerli limit sıfırdan büyük olduğunda, o kontrol düzleminde [`pairing.allowPrincipalWorkers`](#statefulcodesessions) etkinleştirildiğinde, temel kimlik doğrulama mevcut olduğunda ve kullanıcının Kod Ortamı yönetimi izni olduğunda görür.
+
 `environments` boş olmadığında, her giriş benzersiz bir `id`, bir görünen `name`, `managed` veya `attached` şeklinde bir `type` ve sorgu dizisi ya da fragman içermeyen bir HTTP(S) `baseURL` gerektirir. Liste çalıştırılabilir ortamlar içeriyorsa, bu girişlerden tam olarak bir tanesi `default: true` olarak ayarlanmalıdır. Agent Builder daha sonra bir **Execution environment** seçicisi ekler; bunu **Deployment default** üzerinde bırakmak, söz konusu varsayılan girişi kullanır. Yalnızca self-servis eşleştirme kontrol düzlemlerini içeren bir liste varsayılan değer gerektirmez. Daha sonra kaldırılan veya artık erişilemeyen bir ortamı adlandıran bir Agent, başka bir arka uca geri dönmek yerine başarısız olur (fail closed).
 
 - `managed` doğrudan operatör tarafından yönetilen durum bilgisi olan (stateful) bir Code API'sine işaret eder.
@@ -379,6 +410,7 @@ statefulCodeSessions:
 - `pairing` isteğe bağlıdır ve yalnızca dağıtımın sahip olduğu `attached` girdileri için geçerlidir. `pairing.workerId`, kaydedilecek operatör yönetimindeki bir çalışanı tanımlarken, `pairing.allowPrincipalWorkers: true` yetkili kullanıcıların sahip tabanlı çalışanları bu kontrol düzlemine kaydetmesine olanak tanır. `pairing` mevcut olduğunda bu alanlardan en az birinin girilmesi zorunludur.
 - `pairing.tokenEnv`, köprü yöneticisi belirtecini içeren ortam değişkenini adlandırır; asla belirtecin kendisini içermez. Eşleştirme, loopback geliştirme haricinde HTTPS gerektirir.
 - `configSchema.permissions`, yetkili sahiplerin **Ayarlar > Kod ortamları** altında kişisel ortamlar için `fileWrite` ve `commandExecution` politikasını isteğe bağlı olarak seçmelerine olanak tanır. Her alan, `allow`, `ask` ve/veya `deny` içeren boş olmayan bir `allowed` listesi gerektirir; `default` değeri atlandığında `ask` olarak kabul edilir ve `allowed` listesinde yer almalıdır. LibreChat, yönetici listesinin dışındaki kayıtlı değerleri reddeder.
+- `configSchema.limits.maxCommandTimeoutMs`, modelin o ortam için talep edebileceği en büyük Bash zaman aşımını belirler. `1` ile `300000` ms arasındaki değerleri kabul eder; belirtilmediği takdirde 30 saniyelik varsayılan değer korunur. Bu bir dağıtım üst sınırıdır ve kullanıcı tarafından yapılandırılamaz.
 - `settings` kısmını deployment YAML dosyasında yapılandırmayın. LibreChat, bu istek kapsamlı alanı, kimliği doğrulanmış sahibin sunucu tarafından doğrulanmış tercihlerinden sağlar.
 - Yalnızca dosya yazma ve komut yürütme ilkesi kullanıcı tarafından yapılandırılabilir. İzolasyon, ağ oluşturma, bağlamalar (mounts), ayrıcalıklı yürütme, giriş (ingress), çıkış (egress) ve gizli anahtarlar (secrets) yönetici kontrolünde kalmaya devam eder.
 - Hem üst düzey `workerId` hem de `pairing.workerId` mevcutsa, bunların birbiriyle eşleşmesi gerekir. `allowPrincipalWorkers: true` değerine sahip ve her iki worker ID'si de yalnızca eşleştirme (pairing-only) olmayan bir girdi: yürütme seçicilerinden çıkarılır ve `default: true` olarak ayarlanamaz.
@@ -427,15 +459,24 @@ Desteklenen tamamlanmış arka plan araçlarının ve ayrılmış Subagent'ları
       'Desteklenen arka plan görevi tamamlamalarını otomatik olarak bir devam niteliğinde iletir. Yalnızca yoklama (poll) davranışı için false olarak ayarlayın.',
       'true',
     ],
+    [
+      'ordinaryToolCancellation',
+      'Boolean',
+      'Sahiplerin, ekli Bash dahil olmak üzere sıradan arka plan araçlarının iş birliğine dayalı iptalini talep etmelerine olanak tanır.',
+      'false',
+    ],
   ]}
 />
 
 ```yaml filename="endpoints / agents / backgroundTasks"
 backgroundTasks:
   completionWakeups: true
+  ordinaryToolCancellation: false
 ```
 
 Bu blok atlandığında bile otomatik tamamlama teslimi etkindir. Ajanın her sonucu `check_background_task` aracılığıyla toplaması için `completionWakeups: false` olarak ayarlayın.
+
+Sıradan arka plan araçları için sahip kapsamlı iptali açığa çıkarmak üzere `ordinaryToolCancellation: true` olarak ayarlayın. İptal işlemi iş birlikçidir, süreç yerelinde kalır ve çağrı sonuçlanana kadar görevi aktif tutarak kapasiteyi rezerve eder. Ayrılmış Subagent'ları iptal etmez.
 
 Sıradan arka plan aracı yürütme işlemi, süreç yerelinde kalır ve çalışan sürecinin kaybından sağ çıkamaz. Yalnızca içerik içeren bir terminal sonucu kalıcı hale getirildiğinde, teslimatı dayanıklıdır ve başka bir replikada devam edebilir. Canlı yapay nesnelere sahip görevler, hala sahip olunan çalıştırma üzerinde yoklama (polling) gerektirir. Ayrılmış Alt Temsilciler (Detached Subagents), kendi ayrı dayanıklı transkriptlerini ve terminal sonucu yollarını korurlar. Durum, kontroller ve kurtarma için manuel yoklama her iki modda da kullanılabilir durumdadır. Bkz. [Arka Plan Aracı Çağrıları](/docs/features/agents#background-tool-calls) ve [Otomatik Üst Devamlılığı](/docs/features/subagents#automatic-parent-continuation).
 
@@ -609,6 +650,53 @@ Model specs, `subagents` altında yalnızca `enabled`, `allowSelf` ve `agent_ids
 
 Bunu artırmak yalnızca bir ajanın kaç alt ajan (subagent) referans alabileceğini değiştirir. Derinlik, çizge düğümü (graph node) ve çalıştırma yapılandırması sınırları bundan etkilenmez. Bkz. [Subagents](/docs/features/subagents#limits).
 
+## fileSharing
+
+`fileSharing`, delege edilen Agent çalışmaları için isteğe bağlı (opt-in), çalışma kapsamlı (run-scoped) bir paylaşımdır. Buradan `enabled: true` olarak ayarlayın ve her bir delege eden Agent üzerinde `subagents.shareFiles` özelliğini etkinleştirin. Girdiler alıcılar için salt okunurdur; çıktılar açıkça yayınlanmadığı sürece gizli kalır ve yayınlanan dosyalar çalışma bittikten sonra da indirilebilir durumda kalır.
+
+```yaml filename="endpoints / agents / fileSharing"
+endpoints:
+  agents:
+    fileSharing:
+      enabled: true
+      allowSiblingSharing: false
+      maxFiles: 100
+      maxPrivateBytes: 268435456
+      ttlMs: 3600000
+```
+
+`allowSiblingSharing`, açıkça adlandırılmış kardeş veya alt alıcılara izin verir. `maxFiles` değeri `1` ile `1000` arasında değişir; `maxPrivateBytes` tutulan özel çıktı anlık görüntülerinin sınırını belirler ve `ttlMs` ise 24 saat ile sınırlandırılmış aktif bildirim ömrüdür. Bu bloğun atlanması, paylaşımı devre dışı bırakır.
+
+## Kod API yükleme kurtarma [#code-api-upload-recovery]
+
+Bu ayarlar, Code API hız sınırlamasıyla yanıt verdiğinde eşzamanlı yüklemeleri ve yeniden deneme bekleme sürelerini sınırlar. Bu ayarlar, Code API rotası ve kimliği doğrulanmış kullanıcı başına uygulanır; böylece kısıtlanan bir kullanıcının veya dağıtımın, ilgili olmayan yükleme kurtarma işlemlerini engellemesi önlenir.
+
+<OptionTable
+  options={[
+    [
+      'codeApiUploadConcurrency',
+      'Number',
+      'Rota ve kimliği doğrulanmış kullanıcı başına maksimum eşzamanlı Code API yüklemesi (1-100).',
+      '3',
+    ],
+    [
+      'codeApiMaxRetryWaitMs',
+      'Number',
+      'Bir işlemin Code API hız sınırlarında bekleyerek geçirebileceği maksimum toplam duvar saati süresi (0-300000 ms).',
+      '20000',
+    ],
+  ]}
+/>
+
+```yaml filename="endpoints / agents / Code API upload recovery"
+endpoints:
+  agents:
+    codeApiUploadConcurrency: 3
+    codeApiMaxRetryWaitMs: 20000
+```
+
+LibreChat, `Retry-After` başlığını dikkate alır, her deneme için kalıcı akışları yeniden açar ve iptal edilen çağrı yapanları kuyruktan kaldırır. `codeApiMaxRetryWaitMs: 0` ayarını yapmak, yüklemeleri devre dışı bırakmak yerine bekleme süresini devre dışı bırakır.
+
 ## maxCitations
 
 <OptionTable
@@ -781,6 +869,57 @@ Bu örnekte:
 - `execute_code` ile birlikte `programmatic_tools` yeteneğini eklemediğiniz sürece Programmatic Tool Calling devre dışı kalmaya devam eder.
 - Arka plan araç çağrıları, `run_in_background` eklemediğiniz sürece devre dışı kalmaya devam eder; Code Interpreter araçları varsayılan olarak uygun hale gelirken, uygun MCP, Plugin ve Action araçları hala seçim gerektirir.
 - `tool_intents` eklemediğiniz sürece araç amacı etiketleri devre dışı kalır; yerel araçlar otomatik olarak dahil olurken, MCP araçları hala araç bazında seçim gerektirir.
+
+## managementApi
+
+Beta Agent Management API, güvenilir makine istemcilerinin Agent'lar oluşturmasına, listelemesine, okumasına, güncellemesine ve silmesine, dosyalarını yönetmesine ve erişilebilir Skill'leri keşfetmesine veya düzenlemesine olanak tanır. Bu API, [`remoteApi`](#remoteapi) öğesinden ayrıdır: yönetim rotaları yalnızca dağıtıma bağlı OIDC makine kimliklerini kabul eder ve LibreChat Remote Agents API anahtarlarını veya tarayıcı oturumlarını kabul etmez.
+
+```yaml filename="endpoints / agents / managementApi"
+endpoints:
+  agents:
+    managementApi:
+      auth:
+        oidc:
+          enabled: true
+          issuer: https://identity.example.com/
+          audience: https://librechat.example.com/agents
+          # jwksUri: https://identity.example.com/.well-known/jwks.json
+        clients:
+          - clientId: machine-client-id
+            # subject: provider-specific-service-principal-subject
+            userId: 507f1f77bcf86cd799439011
+            tenantId: tenant-id
+            enabled: true
+```
+
+### managementApi.auth.oidc
+
+<OptionTable
+  options={[
+    ['enabled', 'Boolean', 'Agent Management rotaları için OIDC makine kimlik doğrulamasını etkinleştirin.', 'false'],
+    ['issuer', 'String', 'Doğrulanmış erişim belirteçlerinde beklenen tam yayıncı. Etkinleştirildiğinde gereklidir.', ''],
+    ['audience', 'String', 'Erişim belirtecinin içermesi gereken hedef kitle. Etkinleştirildiğinde gereklidir.', ''],
+    ['jwksUri', 'String', 'İsteğe bağlı açık JWKS endpoint. Belirtilmediğinde, LibreChat bunu issuer üzerinden keşfeder.', ''],
+  ]}
+/>
+
+### managementApi.auth.clients
+
+`clients`, en fazla 100 giriş içeren, dağıtıma özel bir izin listesidir. OIDC kimlik doğrulaması etkinleştirildiğinde en az bir giriş gereklidir.
+
+<OptionTable
+  options={[
+    ['clientId', 'String', '`azp` veya `client_id` talebi ile eşleştirilen OAuth istemci tanımlayıcısı.', 'Required'],
+    ['subject', 'String', 'İsteğe bağlı tam `sub` talebi. Belirtilmediğinde, `sub` değeri `clientId` veya `clientId@clients` ile eşleşmelidir.', ''],
+    ['userId', 'String', 'İstemcinin izinlerini devraldığı mevcut LibreChat MongoDB kullanıcı ObjectId\'si.', 'Required'],
+    ['tenantId', 'String', 'Bu kullanıcıyı içeren kesin kiracı. Sistem kiracısına izin verilmez.', 'Required'],
+    ['enabled', 'Boolean', 'Bu istemci bağlamasını yapılandırmadan kaldırmadan etkinleştirin.', 'true'],
+  ]}
+/>
+
+Token'ların süresi dolmamış olmalı ve tek, çakışmayan bir istemci tanımlayıcısı sunmalıdır. Doğrulamanın ardından LibreChat, yapılandırılmış kullanıcıyı yalnızca bağlı kiracı (tenant) içinde çözer ve eksik, etkin olmayan, kiracılar arası, devre dışı bırakılmış veya konu eşleşmesi olmayan asılları (principals) reddeder. Her yönetim işlemi daha sonra o kullanıcının mevcut rol yeteneklerini ve Agent veya Skill ACL'lerini kullanır; bu bağlama, ek bir kaynak erişimi sağlamaz.
+
+Bilinmeyen management-auth alanları, yinelenen istemci kimlikleri, hatalı biçimlendirilmiş kullanıcı veya kiracı kimlikleri ve istemci bağlaması olmadan etkinleştirilen kimlik doğrulaması, yapılandırma doğrulamasının başarısız olmasına neden olur. Rotalar ve örnekler için [Agents API - Agent Management](/docs/features/agents_api#agent-management-api) bölümüne bakın.
 
 ## remoteApi
 

@@ -1,0 +1,63 @@
+---
+title: Di chuyển chỉ mục khách thuê
+icon: Database
+description: >-
+  Nâng cấp các chỉ mục MongoDB theo phạm vi tenant từ LibreChat v0.8.7 trở về
+  trước.
+---
+
+# Di chuyển chỉ mục người thuê (Tenant Index Migration) [#tenant-index-migration]
+
+Các cơ sở dữ liệu được tạo bởi LibreChat v0.8.7 hoặc cũ hơn có thể báo lỗi `Index build failed` trong quá trình nâng cấp. Các chỉ mục duy nhất (unique indexes) cũ như `email_1` hoặc `name_1` có thể xung đột với các chỉ mục hiện tại có cùng tên, trong khi các chỉ mục phức hợp (compound indexes) theo phạm vi đối tượng thuê (tenant-scoped) hiện đã thực thi tính duy nhất. Điều này cũng có thể ảnh hưởng đến các triển khai đơn đối tượng thuê (single-tenant).
+
+Việc di chuyển (migration) là một lệnh bảo trì rõ ràng và không tự động chạy trong quá trình khởi động. Hãy sử dụng nguồn hoặc image đã cập nhật cung cấp các lệnh bên dưới. Đối với bản checkout từ nguồn, hãy cài đặt các phụ thuộc và chạy `npm run build:packages` trước.
+
+<Steps>
+  <Step>
+    ### Dừng trình viết [#stop-writers]
+
+    Sao lưu MongoDB, sau đó dừng mọi bản sao (replica) và worker của LibreChat API đang ghi vào cơ sở dữ liệu. Giữ cho MongoDB tiếp tục chạy.
+  </Step>
+  <Step>
+    ### Xem trước quá trình di chuyển [#preview-the-migration]
+
+    Chạy thử nghiệm (dry run) với các cài đặt kết nối `MONGO_URI` và `.env` thông thường của bản triển khai:
+
+    ```bash
+    npm run migrate:tenant-indexes:dry-run
+    ```
+  </Step>
+  <Step>
+    ### Áp dụng di chuyển (migration) [#apply-the-migration]
+
+    ```bash
+    npm run migrate:tenant-indexes
+    ```
+
+    Đợi thoát thành công trước khi khởi động lại bất kỳ trình ghi nào.
+  </Step>
+  <Step>
+    ### Khởi động lại và xác minh [#restart-and-verify]
+
+    Khởi động lại LibreChat và xác nhận rằng quá trình khởi động không còn báo cáo xung đột chỉ mục (index conflicts) cho User, Role, Preset, AccessRole, MCPServer, AgentCategory, Message hoặc Conversation.
+  </Step>
+</Steps>
+
+## Docker Compose [#docker-compose]
+
+Chạy một container dùng một lần từ image đã cập nhật trong khi MongoDB vẫn khả dụng. Đặt thư mục làm việc là `/app`, vì image API production mặc định là `/app/api`. Bao gồm các cờ Compose file giống như các cờ được sử dụng bởi quá trình triển khai của bạn.
+
+```bash
+docker compose stop api
+docker compose run --rm --no-deps -w /app api npm run migrate:tenant-indexes:dry-run
+docker compose run --rm --no-deps -w /app api npm run migrate:tenant-indexes
+docker compose up -d api
+```
+
+## An toàn và Khôi phục [#safety-and-recovery]
+
+Lệnh này xây dựng các bản thay thế duy nhất theo phạm vi tenant trước khi xóa các chỉ mục duy nhất đã biết là lỗi thời, sau đó tạo các chỉ mục lược đồ hiện tại. Nó bảo toàn các chỉ mục tùy chỉnh và các chỉ mục không duy nhất hiện tại, không xóa tài liệu và không sử dụng `syncIndexes` hoặc `dropIndexes`. Nó cũng xây dựng các chỉ mục hiện tại khi `MONGO_AUTO_INDEX=false`.
+
+Chế độ chạy thử (dry run) chỉ liệt kê các mục sẽ bị xóa; nó không thể xác thực các bản dựng thay thế, quyền hoặc dữ liệu trùng lặp. Bất kỳ lỗi liệt kê, bản dựng hoặc lỗi drop nào cũng sẽ khiến lệnh thất bại. Nếu một bản dựng thay thế thất bại, các ràng buộc cũ sẽ được giữ nguyên. Một lỗi xảy ra sau đó có thể dẫn đến việc di chuyển dữ liệu một phần, nhưng việc chạy lại lệnh sẽ hoàn tất công việc còn lại một cách an toàn. Hãy giữ cho các trình ghi (writers) ở trạng thái dừng, khắc phục sự cố đã báo cáo và chạy lại; đừng giải quyết các lỗi bằng cách drop mọi chỉ mục (index).
+
+Việc xây dựng chỉ mục có thể mất thời gian đối với các tập hợp dữ liệu lớn.

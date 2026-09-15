@@ -14,13 +14,15 @@ LibreChat expose les agents à des applications, scripts et services externes vi
 
 ## Vue d'ensemble [#overview]
 
-L'API Agents fournit deux interfaces d'inférence et une livraison d'événements authentifiée :
+L'API Agents fournit deux interfaces d'inférence, une livraison d'événements authentifiée et des routes de gestion bêta :
 
 - **Chat Completions compatibles avec OpenAI** — `POST /api/agents/v1/chat/completions`
 - **API de réponses ouvertes** — `POST /api/agents/v1/responses`
 - **Événements d'agent** — `POST /api/agents/v1/events`
+- **Gestion des agents** — `/api/agents/v1/agents`
+- **Gestion des compétences** — `/api/agents/v1/skills`
 
-Les interfaces d'inférence prennent en charge l'authentification par clé API, l'authentification OIDC optionnelle et les réponses en streaming. Les événements d'agent utilisent l'authentification par clé API des Remote Agents afin que LibreChat puisse lier chaque livraison à une identité source stable.
+Les interfaces d'inférence prennent en charge l'authentification par clé API, l'authentification OIDC optionnelle et les réponses en streaming. Les Agent Events utilisent l'authentification par clé API des Remote Agents afin que LibreChat puisse lier chaque livraison à une identité source stable. Les routes de gestion utilisent quant à elles une liste d'autorisation de déploiement qui lie un client machine OIDC à un utilisateur et un tenant LibreChat existants.
 
 LibreChat adopte [Open Responses](https://www.openresponses.org/) comme cadre d'API principal pour servir les agents. Bien que le endpoint Chat Completions assure une rétrocompatibilité avec les outils existants compatibles avec OpenAI, le endpoint Open Responses représente l'orientation future.
 
@@ -93,6 +95,67 @@ Voir [Agents Endpoint - remoteApi](/docs/configuration/librechat_yaml/object_str
 <Callout type="warning" title="Les événements d'agent nécessitent une clé API">
   L'authentification OIDC uniquement n'est pas prise en charge pour les endpoints Agent Events. Utilisez une clé API Remote Agents lors de la création de liaisons, de la mise en file d'attente d'événements et de l'interrogation du statut de livraison.
 </Callout>
+
+## API de gestion des agents [#agent-management-api]
+
+L'API de gestion des Agents en version bêta permet à un service de gérer les Agents et leurs ressources associées sans session de navigateur. Elle est authentifiée indépendamment de l'inférence et des événements d'Agent (Agent Events) : seuls les jetons machine OIDC configurés sous [`endpoints.agents.managementApi`](/docs/configuration/librechat_yaml/object_structure/agents#managementapi) sont acceptés.
+
+Chaque client OAuth configuré est lié à un `userId` et un `tenantId` LibreChat existants. Après la vérification du jeton, chaque requête est exécutée en tant qu'utilisateur et conserve les capacités de rôle actuelles de l'utilisateur, les ACL des Agents et des Skills, les restrictions de fournisseur, les autorisations d'outils, les limites de fichiers et l'isolation des tenants. Une liaison de client ne fait pas de l'utilisateur un administrateur et n'accorde pas l'accès à des ressources que l'utilisateur ne peut pas gérer par ailleurs.
+
+### Routes d'agent [#agent-routes]
+
+| Méthode | Route | Objectif |
+| -------- | ------------------------------------------ | -------------------------------------------- |
+| `POST`   | `/api/agents/v1/agents`                    | Créer un Agent |
+| `GET`    | `/api/agents/v1/agents`                    | Lister les Agents accessibles |
+| `GET`    | `/api/agents/v1/agents/{id}`               | Lire un Agent accessible |
+| `PATCH`  | `/api/agents/v1/agents/{id}`               | Mettre à jour un Agent |
+| `DELETE` | `/api/agents/v1/agents/{id}`               | Supprimer un Agent |
+| `POST`   | `/api/agents/v1/agents/{id}/files`         | Téléverser et joindre un fichier de ressource à l'Agent |
+| `GET`    | `/api/agents/v1/agents/{id}/files`         | Lister les fichiers joints accessibles par l'Agent |
+| `DELETE` | `/api/agents/v1/agents/{id}/files/{fileId}` | Supprimer un fichier joint de l'Agent |
+
+Les charges utiles de création et de mise à jour d'un Agent utilisent les mêmes champs pris en charge en externe que l'Agent Builder et rejettent les champs de premier niveau inconnus. La création nécessite un `model` ; la mise à jour n'accepte que les champs fournis. Les réponses exposent la configuration de l'Agent prise en charge ainsi que `id`, `provider`, `model` (pouvant être nul), `version`, `createdAt` et `updatedAt`, sans les champs de propriété de persistance.
+
+Les listes acceptent un `limit` allant de 1 à 100, avec une valeur par défaut de 20, ainsi qu'un `cursor` opaque. Lorsque `has_more` est vrai, passez la valeur `after` renvoyée comme curseur suivant ; ne décodez pas et ne construisez pas de curseurs dans les clients.
+
+```bash
+curl https://your-librechat-instance/api/agents/v1/agents?limit=20 \
+  -H "Authorization: Bearer YOUR_MACHINE_ACCESS_TOKEN"
+```
+
+```bash
+curl -X POST https://your-librechat-instance/api/agents/v1/agents \
+  -H "Authorization: Bearer YOUR_MACHINE_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Release assistant",
+    "provider": "openAI",
+    "model": "gpt-5.6",
+    "instructions": "Prepare concise release notes from verified changes."
+  }'
+```
+
+Les téléchargements de fichiers utilisent `multipart/form-data` avec un `file` et une valeur `tool_resource` telle que `context`, `file_search` ou `execute_code`. LibreChat applique les vérifications de capacité de déploiement, d'octroi de rôle, de limite de taux de téléchargement, par fichier, de nombre de fichiers et de taille globale avant de joindre la ressource. La suppression d'un fichier nécessite un accès en modification à l'Agent et n'affaiblit pas les règles d'autorisation de fichier sous-jacentes.
+
+### Routes de compétences [#skill-routes]
+
+| Méthode | Route | Objectif |
+| ------- | ---------------------------------------------------- | ------------------------------------- |
+| `GET`   | `/api/agents/v1/skills`                              | Lister les Skills accessibles |
+| `GET`   | `/api/agents/v1/skills/{id}`                         | Lire un Skill accessible |
+| `PATCH` | `/api/agents/v1/skills/{id}`                         | Mettre à jour les métadonnées d'un Skill pris en charge |
+| `GET`   | `/api/agents/v1/skills/{id}/files`                   | Lister les fichiers dans le Skill |
+| `GET`   | `/api/agents/v1/skills/{id}/files/{relativePath}`    | Lire un fichier de Skill |
+| `PUT`   | `/api/agents/v1/skills/{id}/files/{relativePath}`    | Créer ou remplacer un fichier pris en charge |
+
+Les opérations sur les Skills sont limitées aux Skills visibles par l'utilisateur lié. Les lectures nécessitent un accès aux Skills, tandis que les écritures de métadonnées ou de fichiers nécessitent les autorisations correspondantes de modification et de création de Skills. Les chemins sont normalisés sous la racine du Skill ; le parcours de répertoires, les fichiers non pris en charge et le contenu trop volumineux sont rejetés.
+
+### Erreurs et authentification [#errors-and-authentication]
+
+Les réponses de gestion utilisent des erreurs structurées avec les codes `invalid_request`, `not_found`, `permission_denied`, `conflict` ou `internal_error`. Les échecs d'autorisation de ressources peuvent être renvoyés sous forme de `not_found` afin que les appelants ne puissent pas sonder les identifiants inaccessibles.
+
+Les jetons machine doivent être valides (non expirés), correspondre à l'émetteur et à l'audience configurés, identifier un client autorisé via `azp` ou `client_id`, et satisfaire la règle de sujet configurée. Une configuration manquante ou des identifiants invalides renvoient `401` ; un compte lié en cours de suppression renvoie `409`. Voir [`managementApi.auth.clients`](/docs/configuration/librechat_yaml/object_structure/agents#managementapiauthclients) pour les règles complètes de revendication et de liaison.
 
 ## Endpoints [#endpoints]
 

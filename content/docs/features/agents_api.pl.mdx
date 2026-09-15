@@ -14,13 +14,15 @@ LibreChat udostępnia agentów zewnętrznym aplikacjom, skryptom i usługom za p
 
 ## Przegląd [#overview]
 
-API Agents zapewnia dwa interfejsy wnioskowania oraz uwierzytelnione dostarczanie zdarzeń:
+API Agents zapewnia dwa interfejsy wnioskowania, uwierzytelnione dostarczanie zdarzeń oraz trasy zarządzania w wersji beta:
 
 - **Zgodne z OpenAI Chat Completions** — `POST /api/agents/v1/chat/completions`
 - **API otwartych odpowiedzi** — `POST /api/agents/v1/responses`
 - **Zdarzenia agenta** — `POST /api/agents/v1/events`
+- **Zarządzanie agentami** — `/api/agents/v1/agents`
+- **Zarządzanie umiejętnościami** — `/api/agents/v1/skills`
 
-Interfejsy wnioskowania obsługują uwierzytelnianie za pomocą klucza API, opcjonalne uwierzytelnianie OIDC oraz odpowiedzi strumieniowe. Zdarzenia agentów (Agent Events) wykorzystują uwierzytelnianie za pomocą klucza API Remote Agents, dzięki czemu LibreChat może powiązać każde dostarczenie ze stabilną tożsamością źródłową.
+Interfejsy wnioskowania obsługują uwierzytelnianie za pomocą API-key, opcjonalne uwierzytelnianie OIDC oraz odpowiedzi strumieniowe. Zdarzenia agentów (Agent Events) wykorzystują uwierzytelnianie za pomocą API-key dla Remote Agents, dzięki czemu LibreChat może powiązać każde dostarczenie ze stabilną tożsamością źródłową. Trasy zarządzania (Management routes) korzystają natomiast z listy dozwolonych wdrożeń (deployment allowlist), która wiąże klienta maszynowego OIDC z jednym istniejącym użytkownikiem i dzierżawcą (tenant) LibreChat.
 
 LibreChat przyjmuje [Open Responses](https://www.openresponses.org/) jako swój główny framework API do obsługi agentów. Chociaż endpoint Chat Completions zapewnia wsteczną kompatybilność z istniejącymi narzędziami zgodnymi z OpenAI, endpoint Open Responses wyznacza przyszły kierunek rozwoju.
 
@@ -93,6 +95,67 @@ Zobacz [Agents Endpoint - remoteApi](/docs/configuration/librechat_yaml/object_s
 <Callout type="warning" title="Zdarzenia agenta wymagają klucza API">
   Uwierzytelnianie wyłącznie przez OIDC nie jest obsługiwane dla endpointów Agent Events. Użyj klucza API Remote Agents podczas tworzenia powiązań (bindings), dodawania zdarzeń do kolejki oraz sprawdzania statusu dostarczenia.
 </Callout>
+
+## Zarządzanie Agentami przez API [#agent-management-api]
+
+Beta API zarządzania Agentami pozwala usłudze zarządzać Agentami i przypisanymi do nich zasobami bez sesji przeglądarki. Jest ona uwierzytelniana niezależnie od wnioskowania (inference) i zdarzeń Agenta (Agent Events): akceptowane są wyłącznie tokeny maszynowe OIDC skonfigurowane w [`endpoints.agents.managementApi`](/docs/configuration/librechat_yaml/object_structure/agents#managementapi).
+
+Każdy skonfigurowany klient OAuth jest powiązany z jednym istniejącym `userId` i `tenantId` w LibreChat. Po weryfikacji tokena każde żądanie jest wykonywane jako ten użytkownik i zachowuje jego bieżące uprawnienia roli, listy kontroli dostępu (ACL) dla Agentów i Umiejętności, ograniczenia dostawców, przyznane narzędzia, limity plików oraz izolację dzierżawcy. Powiązanie klienta nie czyni użytkownika administratorem ani nie zapewnia dostępu do zasobów, którymi użytkownik nie mógłby zarządzać w inny sposób.
+
+### Trasy agentów [#agent-routes]
+
+| Metoda   | Trasa                                      | Cel                                          |
+| -------- | ------------------------------------------ | -------------------------------------------- |
+| `POST`   | `/api/agents/v1/agents`                    | Utwórz Agenta                                |
+| `GET`    | `/api/agents/v1/agents`                    | Wyświetl listę dostępnych Agentów            |
+| `GET`    | `/api/agents/v1/agents/{id}`               | Odczytaj jednego dostępnego Agenta           |
+| `PATCH`  | `/api/agents/v1/agents/{id}`               | Zaktualizuj Agenta                           |
+| `DELETE` | `/api/agents/v1/agents/{id}`               | Usuń Agenta                                  |
+| `POST`   | `/api/agents/v1/agents/{id}/files`         | Prześlij i dołącz plik zasobu Agenta         |
+| `GET`    | `/api/agents/v1/agents/{id}/files`         | Wyświetl listę dostępnych plików Agenta      |
+| `DELETE` | `/api/agents/v1/agents/{id}/files/{fileId}` | Usuń dołączony plik z Agenta                 |
+
+Ładunki (payloads) tworzenia i aktualizacji Agentów używają tych samych zewnętrznie obsługiwanych pól, co Agent Builder, i odrzucają nieznane pola najwyższego poziomu. Tworzenie wymaga pola `model`; aktualizacja akceptuje tylko dostarczone pola. Odpowiedzi ujawniają obsługiwaną konfigurację Agenta oraz `id`, `provider`, dopuszczający wartość null `model`, `version`, `createdAt` i `updatedAt`, bez pól własności trwałości (persistence ownership).
+
+Listy akceptują `limit` od 1 do 100, z wartością domyślną 20, oraz nieprzejrzysty `cursor`. Gdy `has_more` ma wartość true, przekaż zwróconą wartość `after` jako następny kursor; nie dekoduj ani nie konstruuj kursorów po stronie klienta.
+
+```bash
+curl https://your-librechat-instance/api/agents/v1/agents?limit=20 \
+  -H "Authorization: Bearer YOUR_MACHINE_ACCESS_TOKEN"
+```
+
+```bash
+curl -X POST https://your-librechat-instance/api/agents/v1/agents \
+  -H "Authorization: Bearer YOUR_MACHINE_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Release assistant",
+    "provider": "openAI",
+    "model": "gpt-5.6",
+    "instructions": "Prepare concise release notes from verified changes."
+  }'
+```
+
+Przesyłanie plików wykorzystuje `multipart/form-data` z jednym `file` oraz wartością `tool_resource`, taką jak `context`, `file_search` lub `execute_code`. LibreChat stosuje weryfikację możliwości wdrożenia, przyznania roli, limitu szybkości przesyłania, limitów na plik, liczby plików oraz łącznego rozmiaru przed dołączeniem zasobu. Usunięcie pliku wymaga uprawnień do edycji Agenta i nie osłabia podstawowych zasad autoryzacji plików.
+
+### Trasy umiejętności (Skill Routes) [#skill-routes]
+
+| Metoda  | Trasa                                                | Cel                                   |
+| ------- | ---------------------------------------------------- | ------------------------------------- |
+| `GET`   | `/api/agents/v1/skills`                              | Wyświetl dostępne umiejętności (Skills) |
+| `GET`   | `/api/agents/v1/skills/{id}`                         | Odczytaj jedną dostępną umiejętność   |
+| `PATCH` | `/api/agents/v1/skills/{id}`                         | Zaktualizuj metadane obsługiwanej umiejętności |
+| `GET`   | `/api/agents/v1/skills/{id}/files`                   | Wyświetl pliki w umiejętności         |
+| `GET`   | `/api/agents/v1/skills/{id}/files/{relativePath}`    | Odczytaj jeden plik umiejętności      |
+| `PUT`   | `/api/agents/v1/skills/{id}/files/{relativePath}`    | Utwórz lub zastąp jeden obsługiwany plik |
+
+Operacje na Skillach są ograniczone do Skillów widocznych dla przypisanego użytkownika. Odczyty wymagają dostępu do Skilla, podczas gdy zapisy metadanych lub plików wymagają odpowiednich uprawnień do edycji i tworzenia Skillów. Ścieżki są normalizowane w obrębie katalogu głównego Skilla; próby wyjścia poza katalog (traversal), nieobsługiwane pliki oraz zbyt duża zawartość są odrzucane.
+
+### Błędy i uwierzytelnianie [#errors-and-authentication]
+
+Odpowiedzi zarządzania wykorzystują ustrukturyzowane błędy z kodami `invalid_request`, `not_found`, `permission_denied`, `conflict` lub `internal_error`. Błędy autoryzacji zasobów mogą być zwracane jako `not_found`, aby wywołujący nie mogli sprawdzać niedostępnych identyfikatorów.
+
+Tokeny maszynowe muszą być ważne, zgadzać się ze skonfigurowanym wystawcą i odbiorcą, identyfikować jednego klienta z listy dozwolonych poprzez `azp` lub `client_id` oraz spełniać skonfigurowaną regułę podmiotu. Brak konfiguracji lub nieprawidłowe dane uwierzytelniające skutkują zwróceniem błędu `401`; powiązane konto w trakcie usuwania skutkuje zwróceniem błędu `409`. Zobacz [`managementApi.auth.clients`](/docs/configuration/librechat_yaml/object_structure/agents#managementapiauthclients), aby zapoznać się z pełnymi zasadami dotyczącymi roszczeń i powiązań.
 
 ## Endpoints [#endpoints]
 

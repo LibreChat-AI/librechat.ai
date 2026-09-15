@@ -13,6 +13,8 @@ endpoints:
     recursionLimit: 50
     maxRecursionLimit: 100
     maxSubagents: 20
+    codeApiUploadConcurrency: 3
+    codeApiMaxRetryWaitMs: 20000
     maxToolCallArgBytes: 65536
     maxDeltaEventsPerTurn: 100000
     maxToolCallArgBytesByTool:
@@ -34,6 +36,9 @@ endpoints:
       maxCatalogSkills: 20
     statefulCodeSessions:
       allowedEnvironments: ['user', 'agent-user', 'conversation']
+      principalWorkers:
+        enabled: true
+        maxPerUser: 5
       environments:
         - id: managed-default
           name: Managed Code API
@@ -58,6 +63,7 @@ endpoints:
     #   selfUrl: https://librechat.internal
     backgroundTasks:
       completionWakeups: true
+      ordinaryToolCancellation: false
     toolApproval:
       enabled: true
       mode: default
@@ -66,6 +72,16 @@ endpoints:
     checkpointer:
       type: mongo
       ttl: 86400
+    managementApi:
+      auth:
+        oidc:
+          enabled: true
+          issuer: https://identity.example.com/
+          audience: https://librechat.example.com/agents
+        clients:
+          - clientId: machine-client-id
+            userId: 507f1f77bcf86cd799439011
+            tenantId: tenant-id
     remoteApi:
       auth:
         oidc:
@@ -327,6 +343,12 @@ capabilities:
       '在 Agent Builder 中显示的可选命名托管或挂载的 Code API 环境。',
       'Unset; LIBRECHAT_CODE_BASEURL_STATEFUL remains the stateful endpoint',
     ],
+    [
+      'principalWorkers',
+      'Object',
+      '个人工作者注册的可选部署上限。`enabled` 默认为 true，`maxPerUser` 默认为 5。',
+      '{ enabled: true, maxPerUser: 5 }',
+    ],
   ]}
 />
 
@@ -336,6 +358,9 @@ statefulCodeSessions:
     - 'user'
     - 'agent-user'
     - 'conversation'
+  principalWorkers:
+    enabled: true
+    maxPerUser: 5
   environments:
     - id: managed-default
       name: Managed Code API
@@ -356,6 +381,8 @@ statefulCodeSessions:
       baseURL: https://code-bridge.example.com/v1
       owner: deployment
       configSchema:
+        limits:
+          maxCommandTimeoutMs: 120000
         permissions:
           fileWrite:
             allowed: [allow, ask, deny]
@@ -370,6 +397,10 @@ statefulCodeSessions:
 
 当该代码块存在时，`allowedEnvironments` 是必需的，且必须至少包含一个工作区范围。省略整个代码块即表示允许所有三个范围，并继续通过 [`LIBRECHAT_CODE_BASEURL_STATEFUL`](/docs/configuration/dotenv#stateful-code-interpreter-endpoint) 路由有状态工作。个人默认设置和 Agent Builder 仅允许使用已授权的值。如果管理员收紧了策略，已保存的个人默认设置将保持可见但处于禁用状态，且新的 Agent 将使用第一个允许的范围。现有的已启用 Agent 将保留其已保存的范围，但如果某个范围现在被禁止，则在运行时会失败并关闭，直到重新配置该 Agent 为止。
 
+`principalWorkers` 控制个人附属 worker 的自助注册。省略的值将解析为 `enabled: true` 和 `maxPerUser: 5`；设置 `enabled: false` 或 `maxPerUser: 0` 可停止新注册。该限制会统计该用户在所有已配置控制平面中注册的每个个人环境，包括离线 worker。降低限制或禁用注册不会撤销现有的环境。
+
+Deployment YAML 是硬性上限。角色、组或用户配置覆盖可能会禁用注册或降低 `maxPerUser`，但无法提高部署设置的值。只有当有效限制大于零、该控制平面上启用了 [`pairing.allowPrincipalWorkers`](#statefulcodesessions)、主体身份验证可用，且用户拥有 Code Environment 管理权限时，用户才能看到启用了配对的控制平面。
+
 当 `environments` 非空时，每个条目都需要一个唯一的 `id`、一个显示名称 `name`、一个 `managed` 或 `attached` 类型的 `type`，以及一个不带查询字符串或片段的 HTTP(S) `baseURL`。如果列表中包含可执行环境，则必须有且仅有一个条目设置 `default: true`。随后 Agent Builder 会添加一个 **Execution environment**（执行环境）选择器；将其保留为 **Deployment default**（部署默认值）将使用该默认条目。仅包含自助服务配对控制平面的列表无需设置默认值。如果 Agent 指定的环境随后被移除或无法访问，该 Agent 将会关闭失败，而不会回退到其他后端。
 
 - `managed` 直接指向一个由 operator 管理的有状态 Code API。
@@ -379,6 +410,7 @@ statefulCodeSessions:
 - `pairing` 是可选的，且仅对部署拥有的 `attached` 条目有效。`pairing.workerId` 用于标识要注册的由操作员管理的 worker，而 `pairing.allowPrincipalWorkers: true` 则允许授权用户将绑定所有者的 worker 注册到该控制平面。当存在 `pairing` 时，必须至少提供其中一个字段。
 - `pairing.tokenEnv` 指定了包含网桥管理员令牌的环境变量名称；它本身不包含令牌。除本地回环开发外，配对需要 HTTPS。
 - `configSchema.permissions` 允许授权所有者为个人环境选择 `fileWrite` 和 `commandExecution` 策略，具体设置位于 **Settings > Code environments**。每个字段都需要一个非空的 `allowed` 列表，其中包含 `allow`、`ask` 和/或 `deny`；如果省略 `default`，则默认为 `ask`，且该值必须出现在 `allowed` 中。LibreChat 会拒绝管理员列表之外的存储值。
+- `configSchema.limits.maxCommandTimeoutMs` 设置了模型在该环境中可请求的最大 Bash 超时时间。它接受 `1` 到 `300000` 毫秒之间的值；省略该项则保留 30 秒的默认值。这是部署层面的上限，用户无法进行配置。
 - 不要在部署的 YAML 中配置 `settings`。LibreChat 会从经过服务器验证的已认证所有者的偏好设置中提供该请求范围内的字段。
 - 只有文件写入和命令执行策略是用户可配置的。隔离、网络、挂载、特权执行、入站、出站和密钥仍由管理员控制。
 - 如果同时存在顶层的 `workerId` 和 `pairing.workerId`，它们必须匹配。如果一个条目设置了 `allowPrincipalWorkers: true` 且两个 worker ID 均非仅配对（pairing-only）模式：它将从执行选择器中被忽略，且不能设置 `default: true`。
@@ -427,15 +459,24 @@ Event Actor detached Action completion 会自动从内置生成存储中选择�
       '自动将受支持的后台任务补全作为延续交付。设置为 false 以仅使用轮询行为。',
       'true',
     ],
+    [
+      'ordinaryToolCancellation',
+      'Boolean',
+      '允许所有者请求协作取消普通后台工具，包括附加的 Bash。',
+      'false',
+    ],
   ]}
 />
 
 ```yaml filename="endpoints / agents / backgroundTasks"
 backgroundTasks:
   completionWakeups: true
+  ordinaryToolCancellation: false
 ```
 
 即使省略此代码块，自动补全交付功能也会启用。设置 `completionWakeups: false` 以要求 Agent 通过 `check_background_task` 收集每一个结果。
+
+设置 `ordinaryToolCancellation: true` 以针对普通后台工具公开所有者范围内的取消功能。取消操作是协作式的，保持在进程本地，并保持任务处于活动状态且保留容量，直到调用结束。它不会取消分离的 Subagents。
 
 普通的后台工具执行仍保持在进程本地，且无法在工作进程丢失后存活。一旦仅包含内容的终端结果被持久化，其交付就是持久的，并可能在另一个副本上继续。带有实时工件的任务仍需要在所属运行中进行轮询。分离的子代理（Subagents）保留其独立的持久化记录和终端结果路径。在两种模式下，手动轮询仍可用于状态、控制和恢复。请参阅 [Background Tool Calls](/docs/features/agents#background-tool-calls) 和 [Automatic Parent Continuation](/docs/features/subagents#automatic-parent-continuation)。
 
@@ -609,6 +650,53 @@ Model specs 在 `subagents` 下仅接受 `enabled`、`allowSelf` 和 `agent_ids`
 
 提高此值只会改变一个 agent 可以引用的子 agent 数量。深度、图节点和运行配置限制不受影响。请参阅 [Subagents](/docs/features/subagents#limits)。
 
+## fileSharing
+
+`fileSharing` 是用于委派 Agent 工作的选择性加入（opt-in）、运行范围（run-scoped）共享功能。请在此处设置 `enabled: true`，并在每个委派 Agent 上启用 `subagents.shareFiles`。接收者对输入内容仅拥有只读权限；输出内容除非明确发布，否则保持私有，且已发布的文件在运行结束后仍可下载。
+
+```yaml filename="endpoints / agents / fileSharing"
+endpoints:
+  agents:
+    fileSharing:
+      enabled: true
+      allowSiblingSharing: false
+      maxFiles: 100
+      maxPrivateBytes: 268435456
+      ttlMs: 3600000
+```
+
+`allowSiblingSharing` 允许显式命名的同级或后代接收者。`maxFiles` 的范围为 `1` 到 `1000`；`maxPrivateBytes` 用于限制保留的私有输出快照；`ttlMs` 是活动清单的生命周期，上限为 24 小时。省略此代码块将禁用共享。
+
+## 代码 API 上传恢复 [#code-api-upload-recovery]
+
+这些设置限制了当 Code API 响应速率限制时的并发上传和重试等待时间。它们适用于每个 Code API 路由和已认证的主体，防止单个受限用户或部署阻塞不相关的上传恢复。
+
+<OptionTable
+  options={[
+    [
+      'codeApiUploadConcurrency',
+      'Number',
+      '每个路由和已认证主体的最大并发 Code API 上传数 (1-100)。',
+      '3',
+    ],
+    [
+      'codeApiMaxRetryWaitMs',
+      'Number',
+      '单个操作在等待 Code API 速率限制时允许花费的最大总挂钟时间（0-300000 毫秒）。',
+      '20000',
+    ],
+  ]}
+/>
+
+```yaml filename="endpoints / agents / Code API upload recovery"
+endpoints:
+  agents:
+    codeApiUploadConcurrency: 3
+    codeApiMaxRetryWaitMs: 20000
+```
+
+LibreChat 会遵循 `Retry-After`，为每次尝试重新打开持久化流，并从队列中移除已取消的调用者。将 `codeApiMaxRetryWaitMs: 0` 设置为 0 会禁用等待，而不是禁用上传。
+
 ## maxCitations
 
 <OptionTable
@@ -781,6 +869,57 @@ endpoints:
 - 除非你同时添加 `programmatic_tools` 和 `execute_code` 功能，否则 Programmatic Tool Calling 将保持禁用状态。
 - 除非您添加 `run_in_background`，否则后台工具调用将保持禁用状态；此时 Code Interpreter 工具将默认变为可用，而符合条件的 MCP、Plugin 和 Action 工具仍需手动选择。
 - 除非您添加 `tool_intents`，否则工具意图标签将保持禁用状态；原生工具会自动选择加入，而 MCP 工具仍需要逐个选择。
+
+## managementApi
+
+Beta 版 Agent Management API 允许受信任的机器客户端创建、列出、读取、更新和删除 Agent，管理其文件，以及发现或编辑可访问的 Skills。它与 [`remoteApi`](#remoteapi) 是分开的：管理路由仅接受绑定部署的 OIDC 机器身份，不接受 LibreChat Remote Agents API 密钥或浏览器会话。
+
+```yaml filename="endpoints / agents / managementApi"
+endpoints:
+  agents:
+    managementApi:
+      auth:
+        oidc:
+          enabled: true
+          issuer: https://identity.example.com/
+          audience: https://librechat.example.com/agents
+          # jwksUri: https://identity.example.com/.well-known/jwks.json
+        clients:
+          - clientId: machine-client-id
+            # subject: provider-specific-service-principal-subject
+            userId: 507f1f77bcf86cd799439011
+            tenantId: tenant-id
+            enabled: true
+```
+
+### managementApi.auth.oidc
+
+<OptionTable
+  options={[
+    ['enabled', 'Boolean', '为 Agent Management 路由启用 OIDC 机器身份验证。', 'false'],
+    ['issuer', 'String', '验证访问令牌中预期的确切颁发者。启用时为必填项。', ''],
+    ['audience', 'String', '受众（Audience）必须包含的访问令牌。启用时为必填项。', ''],
+    ['jwksUri', 'String', '可选的显式 JWKS endpoint。如果省略，LibreChat 将从 issuer 中自动发现。', ''],
+  ]}
+/>
+
+### managementApi.auth.clients
+
+`clients` 是一个由部署方拥有的允许列表，最多包含 100 个条目。当启用 OIDC 身份验证时，至少需要一个条目。
+
+<OptionTable
+  options={[
+    ['clientId', 'String', '与令牌 `azp` 或 `client_id` 声明匹配的 OAuth 客户端标识符。', 'Required'],
+    ['subject', 'String', '可选的精确 token `sub` 声明。如果省略，`sub` 必须等于 `clientId` 或 `clientId@clients`。', ''],
+    ['userId', 'String', '现有的 LibreChat MongoDB 用户 ObjectId，客户端将继承其权限。', 'Required'],
+    ['tenantId', 'String', '包含该用户的确切租户。不允许使用系统租户。', 'Required'],
+    ['enabled', 'Boolean', '在不从配置中移除的情况下启用此客户端绑定。', 'true'],
+  ]}
+/>
+
+令牌必须未过期且提供唯一的、无冲突的客户端标识符。验证后，LibreChat 仅在绑定的租户内解析已配置的用户，并拒绝缺失、非活动、跨租户、已禁用或主体不匹配的身份。此后的每项管理操作都将使用该用户当前的角色能力以及 Agent 或 Skill ACL；该绑定不会授予任何额外的资源访问权限。
+
+未知的 management-auth 字段、重复的客户端 ID、格式错误的用户名或租户 ID，以及在未绑定客户端的情况下启用身份验证，都会导致配置验证失败。请参阅 [Agents API - Agent Management](/docs/features/agents_api#agent-management-api) 以获取路由和示例。
 
 ## remoteApi
 

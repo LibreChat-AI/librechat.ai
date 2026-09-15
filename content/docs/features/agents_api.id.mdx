@@ -14,13 +14,15 @@ LibreChat mengekspos agen ke aplikasi, skrip, dan layanan eksternal melalui API 
 
 ## Ikhtisar [#overview]
 
-Agents API menyediakan dua antarmuka inferensi dan pengiriman peristiwa terautentikasi:
+Agents API menyediakan dua antarmuka inferensi, pengiriman acara terautentikasi, dan rute manajemen beta:
 
 - **Chat Completions yang kompatibel dengan OpenAI** — `POST /api/agents/v1/chat/completions`
 - **API Respons Terbuka** — `POST /api/agents/v1/responses`
 - **Peristiwa Agen** — `POST /api/agents/v1/events`
+- **Manajemen Agen** — `/api/agents/v1/agents`
+- **Manajemen Skill** — `/api/agents/v1/skills`
 
-Antarmuka inferensi mendukung autentikasi API-key, autentikasi OIDC opsional, dan respons streaming. Agent Events menggunakan autentikasi API-key Remote Agents agar LibreChat dapat mengikat setiap pengiriman ke identitas sumber yang stabil.
+Antarmuka inferensi mendukung autentikasi API-key, autentikasi OIDC opsional, dan respons streaming. Agent Events menggunakan autentikasi API-key Remote Agents agar LibreChat dapat mengikat setiap pengiriman ke identitas sumber yang stabil. Rute manajemen justru menggunakan daftar izin (allowlist) penyebaran yang mengikat klien mesin OIDC ke satu pengguna dan penyewa LibreChat yang sudah ada.
 
 LibreChat mengadopsi [Open Responses](https://www.openresponses.org/) sebagai kerangka kerja API utamanya untuk melayani agen. Meskipun endpoint Chat Completions menyediakan kompatibilitas mundur dengan perangkat yang kompatibel dengan OpenAI yang sudah ada, endpoint Open Responses mewakili arah masa depan.
 
@@ -93,6 +95,67 @@ Lihat [Agents Endpoint - remoteApi](/docs/configuration/librechat_yaml/object_st
 <Callout type="warning" title="Agent Events memerlukan kunci API">
   Autentikasi khusus OIDC tidak didukung untuk endpoint Agent Events. Gunakan kunci API Remote Agents saat membuat binding, mengantrekan peristiwa, dan melakukan polling status pengiriman.
 </Callout>
+
+## Manajemen API Agen [#agent-management-api]
+
+API Manajemen Agen versi beta memungkinkan sebuah layanan untuk mengelola Agen dan sumber daya yang terlampir tanpa sesi peramban. API ini diautentikasi secara independen dari inferensi dan Peristiwa Agen: hanya token mesin OIDC yang dikonfigurasi di bawah [`endpoints.agents.managementApi`](/docs/configuration/librechat_yaml/object_structure/agents#managementapi) yang diterima.
+
+Setiap klien OAuth yang dikonfigurasi terikat pada satu `userId` dan `tenantId` LibreChat yang sudah ada. Setelah verifikasi token, setiap permintaan dijalankan sebagai pengguna tersebut dan tetap mempertahankan kapabilitas peran pengguna saat ini, ACL Agen dan Skill, pembatasan penyedia, pemberian alat, batas file, dan isolasi tenant. Pengikatan klien tidak menjadikan pengguna sebagai administrator atau memberikan akses ke sumber daya yang tidak dapat dikelola oleh pengguna tersebut.
+
+### Rute Agen [#agent-routes]
+
+| Metode   | Rute                                       | Tujuan                                       |
+| -------- | ------------------------------------------ | -------------------------------------------- |
+| `POST`   | `/api/agents/v1/agents`                    | Membuat Agent                                |
+| `GET`    | `/api/agents/v1/agents`                    | Mencantumkan Agent yang dapat diakses        |
+| `GET`    | `/api/agents/v1/agents/{id}`               | Membaca satu Agent yang dapat diakses        |
+| `PATCH`  | `/api/agents/v1/agents/{id}`               | Memperbarui Agent                            |
+| `DELETE` | `/api/agents/v1/agents/{id}`               | Menghapus Agent                              |
+| `POST`   | `/api/agents/v1/agents/{id}/files`         | Mengunggah dan melampirkan satu file sumber daya Agent |
+| `GET`    | `/api/agents/v1/agents/{id}/files`         | Mencantumkan file terlampir yang dapat diakses Agent |
+| `DELETE` | `/api/agents/v1/agents/{id}/files/{fileId}` | Menghapus file terlampir dari Agent          |
+
+Payload pembuatan dan pembaruan Agent menggunakan bidang yang didukung secara eksternal yang sama seperti Agent Builder dan menolak bidang tingkat atas yang tidak dikenal. Pembuatan memerlukan `model`; pembaruan hanya menerima bidang yang diberikan. Respons mengekspos konfigurasi Agent yang didukung ditambah `id`, `provider`, `model` yang dapat bernilai null, `version`, `createdAt`, dan `updatedAt`, tanpa bidang kepemilikan persistensi.
+
+Daftar menerima `limit` dari 1 hingga 100, dengan nilai default 20, dan `cursor` yang bersifat opaque. Ketika `has_more` bernilai true, teruskan nilai `after` yang dikembalikan sebagai cursor berikutnya; jangan melakukan dekode atau menyusun cursor di sisi klien.
+
+```bash
+curl https://your-librechat-instance/api/agents/v1/agents?limit=20 \
+  -H "Authorization: Bearer YOUR_MACHINE_ACCESS_TOKEN"
+```
+
+```bash
+curl -X POST https://your-librechat-instance/api/agents/v1/agents \
+  -H "Authorization: Bearer YOUR_MACHINE_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Release assistant",
+    "provider": "openAI",
+    "model": "gpt-5.6",
+    "instructions": "Prepare concise release notes from verified changes."
+  }'
+```
+
+Unggahan file menggunakan `multipart/form-data` dengan satu `file` dan nilai `tool_resource` seperti `context`, `file_search`, atau `execute_code`. LibreChat menerapkan kemampuan deployment, pemberian peran, batas kecepatan unggah, per-file, jumlah file, dan pemeriksaan ukuran agregat sebelum melampirkan sumber daya. Menghapus file memerlukan akses edit ke Agent dan tidak melemahkan aturan otorisasi file yang mendasarinya.
+
+### Rute Skill [#skill-routes]
+
+| Metode  | Rute                                                 | Tujuan                                |
+| ------- | ---------------------------------------------------- | ------------------------------------- |
+| `GET`   | `/api/agents/v1/skills`                              | Mencantumkan Skill yang dapat diakses |
+| `GET`   | `/api/agents/v1/skills/{id}`                         | Membaca satu Skill yang dapat diakses |
+| `PATCH` | `/api/agents/v1/skills/{id}`                         | Memperbarui metadata Skill yang didukung |
+| `GET`   | `/api/agents/v1/skills/{id}/files`                   | Mencantumkan file dalam Skill         |
+| `GET`   | `/api/agents/v1/skills/{id}/files/{relativePath}`    | Membaca satu file Skill               |
+| `PUT`   | `/api/agents/v1/skills/{id}/files/{relativePath}`    | Membuat atau mengganti satu file yang didukung |
+
+Operasi Skill dibatasi pada Skill yang terlihat oleh pengguna yang terikat. Pembacaan memerlukan akses Skill, sementara penulisan metadata atau file memerlukan izin edit dan penulisan Skill yang sesuai. Jalur dinormalisasi di bawah root Skill; traversal, file yang tidak didukung, dan konten yang terlalu besar akan ditolak.
+
+### Error dan Autentikasi [#errors-and-authentication]
+
+Respons manajemen menggunakan error terstruktur dengan kode `invalid_request`, `not_found`, `permission_denied`, `conflict`, atau `internal_error`. Kegagalan otorisasi sumber daya dapat dikembalikan sebagai `not_found` agar pemanggil tidak dapat menyelidiki ID yang tidak dapat diakses.
+
+Token mesin harus belum kedaluwarsa, sesuai dengan penerbit (issuer) dan audiens yang dikonfigurasi, mengidentifikasi satu klien yang ada dalam daftar izin (allowlisted) melalui `azp` atau `client_id`, serta memenuhi aturan subjek yang dikonfigurasi. Konfigurasi yang hilang atau kredensial yang tidak valid akan mengembalikan `401`; akun terikat yang sedang dalam proses penghapusan akan mengembalikan `409`. Lihat [`managementApi.auth.clients`](/docs/configuration/librechat_yaml/object_structure/agents#managementapiauthclients) untuk aturan klaim dan pengikatan selengkapnya.
 
 ## Endpoints [#endpoints]
 

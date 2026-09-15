@@ -14,13 +14,15 @@ LibreChat, çıkarım (inference) ve olay iletimi (event-delivery) API'leri arac
 
 ## Genel Bakış [#overview]
 
-Agents API, iki çıkarım arayüzü ve kimlik doğrulamalı olay teslimi sağlar:
+Agents API, iki çıkarım arayüzü, kimlik doğrulamalı olay iletimi ve beta yönetim rotaları sağlar:
 
 - **OpenAI ile uyumlu Chat Completions** — `POST /api/agents/v1/chat/completions`
 - **Open Responses API** — `POST /api/agents/v1/responses`
 - **Ajan Etkinlikleri** — `POST /api/agents/v1/events`
+- **Ajan Yönetimi** — `/api/agents/v1/agents`
+- **Beceri Yönetimi** — `/api/agents/v1/skills`
 
-Çıkarım arayüzleri, API anahtarı kimlik doğrulamasını, isteğe bağlı OIDC kimlik doğrulamasını ve akış yanıtlarını destekler. Agent Events, LibreChat'in her teslimatı kararlı bir kaynak kimliğine bağlayabilmesi için Remote Agents API anahtarı kimlik doğrulamasını kullanır.
+Çıkarım arayüzleri, API anahtarı kimlik doğrulamasını, isteğe bağlı OIDC kimlik doğrulamasını ve akış yanıtlarını destekler. Agent Events, LibreChat'in her teslimatı kararlı bir kaynak kimliğine bağlayabilmesi için Remote Agents API anahtarı kimlik doğrulamasını kullanır. Yönetim rotaları ise bunun yerine, bir OIDC makine istemcisini mevcut bir LibreChat kullanıcısına ve kiracısına bağlayan bir dağıtım izin listesi kullanır.
 
 LibreChat, ajanlara hizmet vermek için birincil API çerçevesi olarak [Open Responses](https://www.openresponses.org/) sistemini benimsiyor. Chat Completions endpoint'i, mevcut OpenAI uyumlu araçlarla geriye dönük uyumluluk sağlasa da, Open Responses endpoint'i gelecekteki yönü temsil etmektedir.
 
@@ -93,6 +95,67 @@ Tüm yapılandırma seçenekleri için [Agents Endpoint - remoteApi](/docs/confi
 <Callout type="warning" title="Agent Events bir API anahtarı gerektirir">
   Yalnızca OIDC kimlik doğrulaması, Agent Events uç noktaları için desteklenmemektedir. Bağlamalar oluştururken, olayları kuyruğa alırken ve teslimat durumunu sorgularken bir Remote Agents API anahtarı kullanın.
 </Callout>
+
+## Temsilci Yönetimi API'si [#agent-management-api]
+
+Beta Agent Management API, bir servisin tarayıcı oturumu olmadan Agent'ları ve onlara bağlı kaynakları yönetmesine olanak tanır. Bu API, çıkarım (inference) ve Agent Events'ten bağımsız olarak doğrulanır: yalnızca [`endpoints.agents.managementApi`](/docs/configuration/librechat_yaml/object_structure/agents#managementapi) altında yapılandırılmış OIDC makine belirteçleri (machine tokens) kabul edilir.
+
+Yapılandırılmış her OAuth istemcisi, mevcut bir LibreChat `userId` ve `tenantId` değerine bağlanır. Belirteç doğrulamasından sonra, her istek o kullanıcı olarak çalıştırılır ve kullanıcının mevcut rol yetkilerini, Ajan ve Beceri ACL'lerini, sağlayıcı kısıtlamalarını, araç izinlerini, dosya sınırlarını ve kiracı izolasyonunu korur. Bir istemci bağlaması, kullanıcıyı yönetici yapmaz veya kullanıcının başka şekilde yönetemeyeceği kaynaklara erişim izni vermez.
+
+### Ajan Rotaları [#agent-routes]
+
+| Yöntem   | Rota                                       | Amaç                                         |
+| -------- | ------------------------------------------ | -------------------------------------------- |
+| `POST`   | `/api/agents/v1/agents`                    | Bir Agent oluşturun                          |
+| `GET`    | `/api/agents/v1/agents`                    | Erişilebilir Agent'ları listeleyin          |
+| `GET`    | `/api/agents/v1/agents/{id}`               | Erişilebilir bir Agent'ı okuyun             |
+| `PATCH`  | `/api/agents/v1/agents/{id}`               | Bir Agent'ı güncelleyin                     |
+| `DELETE` | `/api/agents/v1/agents/{id}`               | Bir Agent'ı silin                           |
+| `POST`   | `/api/agents/v1/agents/{id}/files`         | Bir Agent kaynak dosyası yükleyin ve ekleyin |
+| `GET`    | `/api/agents/v1/agents/{id}/files`         | Agent'ın erişilebilir ekli dosyalarını listeleyin |
+| `DELETE` | `/api/agents/v1/agents/{id}/files/{fileId}` | Bir ekli dosyayı Agent'tan kaldırın         |
+
+Ajan oluşturma ve güncelleme yükleri (payloads), Ajan Oluşturucu (Agent Builder) ile aynı harici olarak desteklenen alanları kullanır ve bilinmeyen üst düzey alanları reddeder. Oluşturma işlemi bir `model` gerektirir; güncelleme işlemi ise yalnızca sağlanan alanları kabul eder. Yanıtlar, desteklenen Ajan yapılandırmasının yanı sıra `id`, `provider`, boş değer alabilen `model`, `version`, `createdAt` ve `updatedAt` alanlarını, kalıcılık sahipliği alanları olmaksızın açığa çıkarır.
+
+Listeler 1 ile 100 arasında `limit` kabul eder, varsayılan değer 20'dir ve opak bir `cursor` kullanır. `has_more` değeri true olduğunda, döndürülen `after` değerini bir sonraki imleç (cursor) olarak iletin; istemcilerde imleçlerin kodunu çözmeyin veya oluşturmayın.
+
+```bash
+curl https://your-librechat-instance/api/agents/v1/agents?limit=20 \
+  -H "Authorization: Bearer YOUR_MACHINE_ACCESS_TOKEN"
+```
+
+```bash
+curl -X POST https://your-librechat-instance/api/agents/v1/agents \
+  -H "Authorization: Bearer YOUR_MACHINE_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Release assistant",
+    "provider": "openAI",
+    "model": "gpt-5.6",
+    "instructions": "Prepare concise release notes from verified changes."
+  }'
+```
+
+Dosya yüklemeleri, bir `file` ve `context`, `file_search` veya `execute_code` gibi bir `tool_resource` değeri ile `multipart/form-data` kullanır. LibreChat, kaynağı eklemeden önce dağıtım yeteneği, rol ataması, yükleme hız sınırı, dosya başına sınır, dosya sayısı ve toplam boyut kontrollerini uygular. Bir dosyayı kaldırmak, Agent üzerinde düzenleme erişimi gerektirir ve temel dosya yetkilendirme kurallarını zayıflatmaz.
+
+### Beceri Rotaları [#skill-routes]
+
+| Metot | Rota | Amaç |
+| ------- | ---------------------------------------------------- | ------------------------------------- |
+| `GET`   | `/api/agents/v1/skills`                              | Erişilebilir Yetenekleri listele |
+| `GET`   | `/api/agents/v1/skills/{id}`                         | Bir erişilebilir Yeteneği oku |
+| `PATCH` | `/api/agents/v1/skills/{id}`                         | Desteklenen Yetenek meta verilerini güncelle |
+| `GET`   | `/api/agents/v1/skills/{id}/files`                   | Yetenek içindeki dosyaları listele |
+| `GET`   | `/api/agents/v1/skills/{id}/files/{relativePath}`    | Bir Yetenek dosyasını oku |
+| `PUT`   | `/api/agents/v1/skills/{id}/files/{relativePath}`    | Desteklenen bir dosyayı oluştur veya değiştir |
+
+Beceri işlemleri, ilişkili kullanıcı tarafından görülebilen Beceriler ile sınırlıdır. Okuma işlemleri Beceri erişimi gerektirirken, meta veri veya dosya yazma işlemleri ilgili düzenleme ve Beceri yazma izinlerini gerektirir. Yollar, Beceri kök dizini altında normalleştirilir; dizin geçişleri (traversal), desteklenmeyen dosyalar ve aşırı büyük içerikler reddedilir.
+
+### Hatalar ve Kimlik Doğrulama [#errors-and-authentication]
+
+Yönetim yanıtları `invalid_request`, `not_found`, `permission_denied`, `conflict` veya `internal_error` kodlarını içeren yapılandırılmış hatalar kullanır. Kaynak yetkilendirme hataları, çağıranların erişilemeyen kimlikleri (ID) sorgulamasını engellemek amacıyla `not_found` olarak döndürülebilir.
+
+Makine belirteçlerinin (tokens) süresi dolmamış olmalı, yapılandırılmış yayıncı (issuer) ve hedef kitle (audience) ile eşleşmeli, `azp` veya `client_id` aracılığıyla izin verilenler listesindeki bir istemciyi tanımlamalı ve yapılandırılmış konu (subject) kuralını karşılamalıdır. Eksik yapılandırma veya geçersiz kimlik bilgileri `401` hatası döndürür; silinme sürecindeki ilişkili bir hesap ise `409` hatası döndürür. Eksiksiz talep ve bağlama kuralları için [`managementApi.auth.clients`](/docs/configuration/librechat_yaml/object_structure/agents#managementapiauthclients) bölümüne bakın.
 
 ## Endpoints [#endpoints]
 

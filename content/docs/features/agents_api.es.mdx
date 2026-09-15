@@ -14,13 +14,15 @@ LibreChat expone agentes a aplicaciones, scripts y servicios externos a través 
 
 ## Descripción general [#overview]
 
-La API de Agents proporciona dos interfaces de inferencia y entrega de eventos autenticados:
+La API de Agents proporciona dos interfaces de inferencia, entrega de eventos autenticada y rutas de gestión beta:
 
 - **Chat Completions compatibles con OpenAI** — `POST /api/agents/v1/chat/completions`
 - **API de respuestas abiertas** — `POST /api/agents/v1/responses`
 - **Eventos de Agente** — `POST /api/agents/v1/events`
+- **Gestión de agentes** — `/api/agents/v1/agents`
+- **Gestión de habilidades** — `/api/agents/v1/skills`
 
-Las interfaces de inferencia admiten autenticación mediante API-key, autenticación OIDC opcional y respuestas en streaming. Los Agent Events utilizan la autenticación mediante API-key de Remote Agents para que LibreChat pueda vincular cada entrega a una identidad de origen estable.
+Las interfaces de inferencia admiten autenticación mediante API-key, autenticación OIDC opcional y respuestas en streaming. Los Agent Events utilizan la autenticación mediante API-key de Remote Agents para que LibreChat pueda vincular cada entrega a una identidad de origen estable. Las rutas de gestión, en cambio, utilizan una lista de permitidos de despliegue que vincula un cliente de máquina OIDC a un usuario y tenant de LibreChat existentes.
 
 LibreChat está adoptando [Open Responses](https://www.openresponses.org/) como su framework de API principal para servir agentes. Si bien el endpoint Chat Completions proporciona compatibilidad con versiones anteriores para herramientas existentes compatibles con OpenAI, el endpoint Open Responses representa la dirección futura.
 
@@ -93,6 +95,67 @@ Consulte [Agents Endpoint - remoteApi](/docs/configuration/librechat_yaml/object
 <Callout type="warning" title="Los eventos de agente requieren una clave API">
   La autenticación exclusiva mediante OIDC no es compatible con los endpoints de Agent Events. Utilice una clave de API de Remote Agents al crear enlaces, poner eventos en cola y consultar el estado de entrega.
 </Callout>
+
+## API de Gestión de Agentes [#agent-management-api]
+
+La API de gestión de Agents en versión beta permite que un servicio gestione Agents y sus recursos adjuntos sin necesidad de una sesión de navegador. Se autentica de forma independiente a la inferencia y a los Agent Events: solo se aceptan tokens de máquina OIDC configurados bajo [`endpoints.agents.managementApi`](/docs/configuration/librechat_yaml/object_structure/agents#managementapi).
+
+Cada cliente OAuth configurado está vinculado a un `userId` y `tenantId` de LibreChat existentes. Tras la verificación del token, cada solicitud se ejecuta como ese usuario y mantiene las capacidades de rol actuales del usuario, las ACL de Agentes y Skills, las restricciones de proveedor, las concesiones de herramientas, los límites de archivos y el aislamiento de inquilinos. Un enlace de cliente no convierte al usuario en administrador ni otorga acceso a recursos que el usuario no pueda gestionar de otro modo.
+
+### Rutas de Agentes [#agent-routes]
+
+| Método   | Ruta                                       | Propósito                                    |
+| -------- | ------------------------------------------ | -------------------------------------------- |
+| `POST`   | `/api/agents/v1/agents`                    | Crear un Agent                               |
+| `GET`    | `/api/agents/v1/agents`                    | Listar Agents accesibles                     |
+| `GET`    | `/api/agents/v1/agents/{id}`               | Leer un Agent accesible                      |
+| `PATCH`  | `/api/agents/v1/agents/{id}`               | Actualizar un Agent                          |
+| `DELETE` | `/api/agents/v1/agents/{id}`               | Eliminar un Agent                            |
+| `POST`   | `/api/agents/v1/agents/{id}/files`         | Subir y adjuntar un archivo de recurso al Agent |
+| `GET`    | `/api/agents/v1/agents/{id}/files`         | Listar los archivos adjuntos accesibles del Agent |
+| `DELETE` | `/api/agents/v1/agents/{id}/files/{fileId}` | Eliminar un archivo adjunto del Agent        |
+
+Las cargas útiles (payloads) de creación y actualización de agentes utilizan los mismos campos soportados externamente que el Agent Builder y rechazan los campos de nivel superior desconocidos. La creación requiere un `model`; la actualización solo acepta los campos proporcionados. Las respuestas exponen la configuración del agente soportada además de `id`, `provider`, `model` (anulable), `version`, `createdAt` y `updatedAt`, sin los campos de propiedad de persistencia.
+
+Las listas aceptan un `limit` de 1 a 100, con un valor predeterminado de 20, y un `cursor` opaco. Cuando `has_more` es true, pase el valor `after` devuelto como el siguiente cursor; no decodifique ni construya cursores en los clientes.
+
+```bash
+curl https://your-librechat-instance/api/agents/v1/agents?limit=20 \
+  -H "Authorization: Bearer YOUR_MACHINE_ACCESS_TOKEN"
+```
+
+```bash
+curl -X POST https://your-librechat-instance/api/agents/v1/agents \
+  -H "Authorization: Bearer YOUR_MACHINE_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Release assistant",
+    "provider": "openAI",
+    "model": "gpt-5.6",
+    "instructions": "Prepare concise release notes from verified changes."
+  }'
+```
+
+Las cargas de archivos utilizan `multipart/form-data` con un `file` y un valor de `tool_resource` como `context`, `file_search` o `execute_code`. LibreChat aplica las comprobaciones de capacidad de despliegue, concesión de roles, límite de tasa de carga, por archivo, recuento de archivos y tamaño agregado antes de adjuntar el recurso. Eliminar un archivo requiere acceso de edición al Agent y no debilita las reglas de autorización de archivos subyacentes.
+
+### Rutas de habilidades [#skill-routes]
+
+| Método  | Ruta                                                 | Propósito                             |
+| ------- | ---------------------------------------------------- | ------------------------------------- |
+| `GET`   | `/api/agents/v1/skills`                              | Listar habilidades accesibles        |
+| `GET`   | `/api/agents/v1/skills/{id}`                         | Leer una habilidad accesible          |
+| `PATCH` | `/api/agents/v1/skills/{id}`                         | Actualizar metadatos de habilidad soportada |
+| `GET`   | `/api/agents/v1/skills/{id}/files`                   | Listar archivos en la habilidad       |
+| `GET`   | `/api/agents/v1/skills/{id}/files/{relativePath}`    | Leer un archivo de habilidad          |
+| `PUT`   | `/api/agents/v1/skills/{id}/files/{relativePath}`    | Crear o reemplazar un archivo soportado |
+
+Las operaciones de Skill están limitadas a los Skills visibles para el usuario vinculado. Las lecturas requieren acceso al Skill, mientras que los metadatos o las escrituras de archivos requieren los permisos correspondientes de edición y de creación de Skills. Las rutas se normalizan debajo de la raíz del Skill; el recorrido de directorios, los archivos no compatibles y el contenido de gran tamaño son rechazados.
+
+### Errores y autenticación [#errors-and-authentication]
+
+Las respuestas de gestión utilizan errores estructurados con los códigos `invalid_request`, `not_found`, `permission_denied`, `conflict` o `internal_error`. Los fallos de autorización de recursos pueden devolverse como `not_found` para que los llamadores no puedan sondear IDs inaccesibles.
+
+Los tokens de máquina deben estar vigentes, coincidir con el emisor y la audiencia configurados, identificar a un cliente incluido en la lista de permitidos a través de `azp` o `client_id`, y satisfacer la regla de asunto configurada. La falta de configuración o las credenciales no válidas devuelven `401`; una cuenta vinculada que está en proceso de eliminación devuelve `409`. Consulta [`managementApi.auth.clients`](/docs/configuration/librechat_yaml/object_structure/agents#managementapiauthclients) para conocer las reglas completas de reclamación y vinculación.
 
 ## Endpoints [#endpoints]
 

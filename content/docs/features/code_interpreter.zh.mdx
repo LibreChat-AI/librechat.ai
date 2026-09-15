@@ -43,6 +43,8 @@ LibreChat 的 Code Interpreter API 提供了一种安全且便捷的方式，通
 
 LibreChat 会在 Agent 运行前将引用的对话文件恢复到当前的 Code Interpreter 环境中。如果所有必需的 Code Interpreter 文件均恢复失败，运行将在模型调用前停止，并提示用户重新附加文件，而不是继续使用过期的引用。
 
+Code API 上传通过遵循 `Retry-After`、为每次尝试重新打开源流以及共享有限的等待预算，从 `429` 速率限制中恢复。管理员可以通过 [`codeApiUploadConcurrency` 和 `codeApiMaxRetryWaitMs`](/docs/configuration/librechat_yaml/object_structure/agents#code-api-upload-recovery) 来调整每个用户、每个路由的恢复设置。
+
 当对话输入挂载到相同的沙盒目标路径时，LibreChat 会在执行前解决冲突。共享对话文件会被优先分配，先于 Agent 私有文件；在每个作用域内，最新的内容写入将保留原始目标路径。冲突的路径会在必要时被扁平化或添加基于标识的后缀，解析后的 `/mnt/data/...` 路径会被包含在 Agent 的文件上下文中。这也涵盖了上传文件与生成的输出文件共享同一文件名的情况，因此单次冲突不会导致对话中后续所有的代码解释器（Code Interpreter）运行被拒绝。重复的种子引用如果仍解析为已被占用的目标路径，则会被跳过，而不会导致整个请求失败。
 
 沙盒图像在有界窗口中传输。请设置 [`LIBRECHAT_CODE_SANDBOX_OUTPUT_MAX_SIZE`](/docs/configuration/dotenv#code-interpreter) 以匹配 worker 的 `SANDBOX_OUTPUT_MAX_SIZE`；LibreChat 会根据该预算推导出最大的安全图像窗口，并在一次读取失败后学习到更小的单服务限制。仅在需要精确覆盖窗口时使用 `LIBRECHAT_CODE_IMAGE_CHUNK_BYTES`。先前下载的生成工件会在请求中尽可能重用，从而避免再次进行沙盒读取。
@@ -73,6 +75,8 @@ LibreChat 会在 Agent 运行前将引用的对话文件恢复到当前的 Code 
 此功能需要在部署级别选择开启。请在 [Agents endpoint capabilities](/docs/configuration/librechat_yaml/object_structure/agents#capabilities) 中将 `run_in_background` 与 `execute_code` 一起添加，然后在 Agent 上启用 Code Interpreter。代码执行和 shell 调用将自动具备后台运行资格；当 Agent 需要退出此功能时，请在 Code Interpreter 工具设置中关闭 **Background execution**。模型仍会针对每次调用决定是否将符合条件的工作分派到后台执行。
 
 普通的后台执行仍然是进程局部的，且无法在应用工作进程（app worker）丢失后存活。一旦仅包含内容（content-only）的终端结果被持久化，其自动交付就是持久的，并可能在另一个副本上继续；带有实时工件（live artifact）的任务仍然需要在所属的运行（run）上进行轮询。设置 [`endpoints.agents.backgroundTasks.completionWakeups: false`](/docs/configuration/librechat_yaml/object_structure/agents#backgroundtasks) 以要求对每个结果进行轮询。后台调度不会延长 Code Interpreter 服务的执行限制；部署的常规服务器端超时设置仍然适用。
+
+通过 [`ordinaryToolCancellation: true`](/docs/configuration/librechat_yaml/object_structure/agents#backgroundtasks)，所有者可以请求协作取消普通的后台 Code 工具，包括附加的 Bash。任务在调用结束前将保持活动状态并占用容量；忽略取消请求的工具仍可能继续完成。
 
 ### 有状态代码会话 [#stateful-code-sessions]
 
@@ -113,11 +117,29 @@ Stateful code sessions 让 LibreChat Agent 能够在多次执行中复用同一�
 
 拥有代码环境管理权限的用户可以打开 **Settings > Code environments**，为环境命名，选择已批准的控制平面，然后选择 **Connect VM**。LibreChat 会显示一个短暂的、一次性的 `librechat-code pair ...` 命令。在用户的虚拟机上运行该命令，然后通过将 `LIBRECHAT_CODE_SANDBOX_ENDPOINT` 指向该机器的沙盒服务来启动 `@librechat/code`。UI 会列出用户的环境，并允许后续撤销和移除它们；沙盒文件将保留在虚拟机上。
 
+管理员可以通过 [`statefulCodeSessions.principalWorkers`](/docs/configuration/librechat_yaml/object_structure/agents#statefulcodesessions) 来限制注册。如果省略此配置块，则默认启用注册，且每个用户最多可注册五个环境。该计数包含所有控制平面上的离线 worker。部署配置是上限：特定于主体的配置可以降低或禁用该限制，但不能提高它。收紧策略不会撤销已经注册的机器。
+
 个人环境绑定到经过身份验证的用户和租户，受 Code Environment ACL 保护，并仅分配服务器验证的 ID 和已批准的基准 URL。LibreChat 不会向客户端公开网桥管理员令牌或任意操作员 URL。移除环境会在删除注册表项之前撤销其工作节点凭据，而用户删除操作会通过后台协调机制为中断的尝试安排相同的撤销和清理工作。所选的工作节点路由一致地应用于 Code Interpreter、shell、生成文件访问以及程序化工具调用。
+
+使用已挂载工作区的 Agent 可以列出其目录树、读取文件、搜索文件内容、创建或编辑文件，并在选定的 worker 上运行 Bash。文件引用使用相对于工作区的路径，创建的文件会显示在响应的 **Workspace changes** 行中，工具故障会保留 worker 的受限 HTTP 诊断信息。Agent 还可以为在该工作区中创建的提交存储每个 Agent 专属的 Git 名称和电子邮件；这些值仅用于配置作者身份，不提供仓库凭据。
+
+附加的 worker 会通告其可用的工作区根目录。Composer 允许用户为通过 Agent 或其子 Agent 可访问的每个附加环境选择一个工作区；对于新的对话，系统会自动选择一个明确的工作区。LibreChat 会将这些选择存储在对话中，在执行前根据实时 worker 对其进行重新验证，并在批准暂停和恢复运行期间保持固定。当缺少必要的选择或选择不可用时，发送操作将被阻止，且 LibreChat 绝不会静默替换为其他工作区。即使在 worker 不支持可重用运行时会话的情况下，原生文件和 Bash 工作区工具也可以使用已通告的根目录。附加的程序化 Bash 目前不可用，因为该工具无法携带所选的工作区标识；支持工作区的 Bash 仍然可以直接使用。**Stop** 会取消支持信号的运行中 BYOM 命令，而不会使后续命令的工作区失效；分离的任务保留其独立的取消生命周期。
+
+对于附加的执行环境，Agent Builder 可以将**工作区默认值 (Workspace default)** 设置为当前已广播的根目录之一。它会根据该附加环境进行验证，并用于初始化该 Agent 的新对话。选择**上次使用 (Last used)** 将使用已登录用户在该 Agent 和环境下的浏览器本地偏好设置；这仅是一个便捷提示，绝非授权许可或对话绑定。更改执行环境会清除显式默认值，而不再广播的已保存根目录虽然仍可见，但在重新配置之前无法被选中。
+
+Attached Bash 默认使用 30 秒的超时时间。环境可以通过 [`configSchema.limits.maxCommandTimeoutMs`](/docs/configuration/librechat_yaml/object_structure/agents#statefulcodesessions) 暴露更大的模型可请求预算，最高可达 5 分钟的协议上限。请求的超时时间永远不会超过部署限制。
 
 #### 附加环境工具权限 [#attached-environment-tool-permissions]
 
 附加环境和个人环境对文件写入以及命令或代码执行采用默认询问的批准策略。只读和搜索操作继续遵循部署的常规工具策略。如果管理员通过 [`configSchema.permissions`](/docs/configuration/librechat_yaml/object_structure/agents#statefulcodesessions) 公开了任一类别，拥有代码环境管理权限的用户可以在 **设置 > 代码环境** 下选择允许的 **允许 (Allow)**、**询问 (Ask)** 或 **拒绝 (Deny)** 值。缺失、过期或被禁止的设置将安全地回退到 **询问 (Ask)**。
+
+当所选的附加环境支持时，编辑器会显示对话级别的 **Code approval mode**：
+
+- **Ask before changes** 会在文件编辑或命令执行前进行询问。
+- **Accept edits** 允许文件编辑，但在执行命令前会继续询问。
+- **完全访问权限**允许两类操作，无需常规提示。
+
+所选模式会随该对话一同生效，并与部署的允许值及环境策略进行交集运算。**Full access** 仅在 `fileWrite` 和 `commandExecution` 均允许 `allow` 时才会出现；它不会绕过沙盒隔离、角色授权、显式的 endpoint `ask` 或 `deny` 规则、Skill-file 确认或审批钩子。
 
 这些控件涵盖了文件创作工具、Shell 和代码执行、编译检查以及程序化工具调用（Programmatic Tool Calling）。即使在允许普通文件写入的情况下，当技能创作（Skill authoring）功能可用时，对持久化技能文件的写入仍需要确认。这些设置不会更改 VM 隔离、网络、挂载、特权执行、入站、出站或密钥访问。
 

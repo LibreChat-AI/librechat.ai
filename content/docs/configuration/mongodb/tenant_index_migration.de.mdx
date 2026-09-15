@@ -1,0 +1,63 @@
+---
+title: Migration des Mandantenindex
+icon: Database
+description: >-
+  Aktualisierung der mandantenspezifischen MongoDB-Indizes von LibreChat v0.8.7
+  und früher.
+---
+
+# Tenant Index Migration [#tenant-index-migration]
+
+Datenbanken, die mit LibreChat v0.8.7 oder früher erstellt wurden, können während eines Upgrades den Fehler `Index build failed` melden. Veraltete eindeutige Indizes wie `email_1` oder `name_1` können mit aktuellen Indizes desselben Namens in Konflikt geraten, während mandantenspezifische zusammengesetzte Indizes nun die Eindeutigkeit erzwingen. Dies kann auch Single-Tenant-Bereitstellungen betreffen.
+
+Die Migration ist ein expliziter Wartungsbefehl und wird nicht während des Startvorgangs ausgeführt. Verwenden Sie die aktualisierte Quelle oder das Image, das die unten aufgeführten Befehle bereitstellt. Installieren Sie bei einem Quell-Checkout zuerst die Abhängigkeiten und führen Sie `npm run build:packages` aus.
+
+<Steps>
+  <Step>
+    ### Stop-Schreiber [#stop-writers]
+
+    Sichern Sie MongoDB und stoppen Sie anschließend jede LibreChat API-Replik und jeden Worker, die in die Datenbank schreiben. Lassen Sie MongoDB weiterlaufen.
+  </Step>
+  <Step>
+    ### Vorschau der Migration [#preview-the-migration]
+
+    Führen Sie den Probelauf mit den normalen `MONGO_URI`- und `.env`-Verbindungseinstellungen der Bereitstellung aus:
+
+    ```bash
+    npm run migrate:tenant-indexes:dry-run
+    ```
+  </Step>
+  <Step>
+    ### Migration anwenden [#apply-the-migration]
+
+    ```bash
+    npm run migrate:tenant-indexes
+    ```
+
+    Warten Sie auf einen erfolgreichen Beendigungsvorgang, bevor Sie Writer neu starten.
+  </Step>
+  <Step>
+    ### Neustart und Überprüfung [#restart-and-verify]
+
+    Starten Sie LibreChat neu und bestätigen Sie, dass beim Start keine Indexkonflikte mehr für User, Role, Preset, AccessRole, MCPServer, AgentCategory, Message oder Conversation gemeldet werden.
+  </Step>
+</Steps>
+
+## Docker Compose [#docker-compose]
+
+Führen Sie einen einmaligen Container aus dem aktualisierten Image aus, während MongoDB verfügbar bleibt. Setzen Sie das Arbeitsverzeichnis auf `/app`, da das Produktions-API-Image standardmäßig auf `/app/api` eingestellt ist. Verwenden Sie dabei dieselben Compose-Datei-Flags, die auch für Ihre Bereitstellung genutzt werden.
+
+```bash
+docker compose stop api
+docker compose run --rm --no-deps -w /app api npm run migrate:tenant-indexes:dry-run
+docker compose run --rm --no-deps -w /app api npm run migrate:tenant-indexes
+docker compose up -d api
+```
+
+## Sicherheit und Wiederherstellung [#safety-and-recovery]
+
+Der Befehl erstellt mandantenspezifische, eindeutige Ersetzungen, bevor er nur bekannte, überholte eindeutige Indizes löscht, und erstellt anschließend die aktuellen Schema-Indizes. Er bewahrt benutzerdefinierte Indizes sowie aktuelle nicht eindeutige Indizes, löscht keine Dokumente und verwendet weder `syncIndexes` noch `dropIndexes`. Er erstellt außerdem aktuelle Indizes, wenn `MONGO_AUTO_INDEX=false` gesetzt ist.
+
+Der Probelauf listet nur Entfernungen auf; er kann keine Ersetzungs-Builds, Berechtigungen oder doppelte Daten validieren. Jeder Fehler bei der Auflistung, dem Build oder dem Löschvorgang führt zum Abbruch des Befehls. Wenn ein Ersetzungs-Build fehlschlägt, bleiben die alten Einschränkungen bestehen. Ein späterer Fehler kann zu einer teilweisen Migration führen, aber ein erneuter Durchlauf schließt die verbleibende Arbeit sicher ab. Lassen Sie Schreibvorgänge gestoppt, beheben Sie das gemeldete Problem und führen Sie den Vorgang erneut aus; beheben Sie Fehler nicht durch das Löschen jedes Index.
+
+Das Erstellen von Indizes kann bei großen Sammlungen einige Zeit in Anspruch nehmen.

@@ -1,0 +1,61 @@
+---
+title: 테넌트 인덱스 마이그레이션
+icon: Database
+description: LibreChat v0.8.7 이하 버전에서 테넌트 범위 MongoDB 인덱스를 업그레이드하세요.
+---
+
+# 테넌트 인덱스 마이그레이션 [#tenant-index-migration]
+
+LibreChat v0.8.7 이하 버전에서 생성된 데이터베이스는 업그레이드 중에 `Index build failed` 오류를 보고할 수 있습니다. `email_1` 또는 `name_1`과 같은 레거시 고유 인덱스는 동일한 이름의 현재 인덱스와 충돌할 수 있으며, 테넌트 범위의 복합 인덱스는 이제 고유성을 강제합니다. 이는 단일 테넌트 배포에도 영향을 줄 수 있습니다.
+
+마이그레이션은 명시적인 유지 관리 명령이며 시작 시 자동으로 실행되지 않습니다. 아래 명령을 제공하는 업데이트된 소스 또는 이미지를 사용하십시오. 소스 체크아웃의 경우, 먼저 종속성을 설치하고 `npm run build:packages`를 실행하십시오.
+
+<Steps>
+  <Step>
+    ### Stop writers [#stop-writers]
+
+    MongoDB를 백업한 다음, 데이터베이스에 쓰는 모든 LibreChat API 복제본과 워커를 중지하세요. MongoDB는 계속 실행 상태로 두어야 합니다.
+  </Step>
+  <Step>
+    ### 마이그레이션 미리보기 [#preview-the-migration]
+
+    배포의 일반적인 `MONGO_URI` 및 `.env` 연결 설정을 사용하여 드라이 런(dry run)을 실행하세요:
+
+    ```bash
+    npm run migrate:tenant-indexes:dry-run
+    ```
+  </Step>
+  <Step>
+    ### 마이그레이션 적용 [#apply-the-migration]
+
+    ```bash
+    npm run migrate:tenant-indexes
+    ```
+
+    모든 작성기를 다시 시작하기 전에 성공적인 종료를 기다리십시오.
+  </Step>
+  <Step>
+    ### 재시작 및 확인 [#restart-and-verify]
+
+    LibreChat을 재시작하고 User, Role, Preset, AccessRole, MCPServer, AgentCategory, Message 또는 Conversation에 대한 인덱스 충돌이 더 이상 보고되지 않는지 확인하세요.
+  </Step>
+</Steps>
+
+## Docker Compose [#docker-compose]
+
+MongoDB가 계속 실행되는 동안 업데이트된 이미지에서 일회성 컨테이너를 실행하세요. 프로덕션 API 이미지는 기본적으로 `/app/api`로 설정되므로 작업 디렉토리를 `/app`으로 설정해야 합니다. 배포에 사용된 것과 동일한 Compose 파일 플래그를 포함하세요.
+
+```bash
+docker compose stop api
+docker compose run --rm --no-deps -w /app api npm run migrate:tenant-indexes:dry-run
+docker compose run --rm --no-deps -w /app api npm run migrate:tenant-indexes
+docker compose up -d api
+```
+
+## 안전 및 복구 [#safety-and-recovery]
+
+이 명령어는 알려진 대체된 고유 인덱스만 삭제하기 전에 테넌트 범위의 고유 대체 항목을 빌드한 다음, 현재 스키마 인덱스를 생성합니다. 이 과정에서 사용자 지정 인덱스와 현재의 비고유 인덱스는 유지되며, 문서를 삭제하지 않고 `syncIndexes`나 `dropIndexes`를 사용하지 않습니다. 또한 `MONGO_AUTO_INDEX=false`일 때 현재 인덱스를 빌드합니다.
+
+dry run은 제거 항목만 나열하며, 대체 빌드, 권한 또는 중복 데이터를 검증할 수 없습니다. 나열, 빌드 또는 삭제 오류가 발생하면 명령이 실패합니다. 대체 빌드가 실패하면 이전 제약 조건이 유지됩니다. 이후에 실패가 발생하면 마이그레이션이 부분적으로 완료된 상태로 남을 수 있지만, 다시 실행하면 안전하게 나머지 작업을 완료할 수 있습니다. 쓰기 작업을 중지한 상태로 유지하고, 보고된 문제를 수정한 후 다시 실행하십시오. 모든 인덱스를 삭제하여 실패를 해결하려고 하지 마십시오.
+
+대규모 컬렉션의 경우 인덱스 빌드에 시간이 걸릴 수 있습니다.

@@ -1,0 +1,63 @@
+---
+title: Migracja indeksu dzierżawcy
+icon: Database
+description: >-
+  Aktualizacja indeksów MongoDB o zasięgu dzierżawy z LibreChat v0.8.7 i
+  wcześniejszych wersji.
+---
+
+# Migracja indeksu dzierżawcy (Tenant Index) [#tenant-index-migration]
+
+Bazy danych utworzone przez LibreChat w wersji v0.8.7 lub starszej mogą zgłaszać błąd `Index build failed` podczas aktualizacji. Starsze unikalne indeksy, takie jak `email_1` lub `name_1`, mogą powodować konflikty z bieżącymi indeksami o tej samej nazwie, podczas gdy złożone indeksy o zasięgu dzierżawy (tenant-scoped) wymuszają teraz unikalność. Może to dotyczyć również wdrożeń jednodzierżawowych (single-tenant).
+
+Migracja jest jawnym poleceniem konserwacyjnym i nie jest uruchamiana podczas startu. Użyj zaktualizowanego źródła lub obrazu, który udostępnia poniższe polecenia. W przypadku pobrania źródła, najpierw zainstaluj zależności i uruchom `npm run build:packages`.
+
+<Steps>
+  <Step>
+    ### Stop writers [#stop-writers]
+
+    Wykonaj kopię zapasową MongoDB, a następnie zatrzymaj każdą replikę i proces worker LibreChat API, który zapisuje dane do bazy. Pozostaw MongoDB uruchomione.
+  </Step>
+  <Step>
+    ### Podgląd migracji [#preview-the-migration]
+
+    Uruchom próbę generalną (dry run) z użyciem standardowych ustawień połączenia `MONGO_URI` oraz `.env` dla danego wdrożenia:
+
+    ```bash
+    npm run migrate:tenant-indexes:dry-run
+    ```
+  </Step>
+  <Step>
+    ### Zastosuj migrację [#apply-the-migration]
+
+    ```bash
+    npm run migrate:tenant-indexes
+    ```
+
+    Poczekaj na poprawne zakończenie przed ponownym uruchomieniem jakichkolwiek procesów zapisujących (writers).
+  </Step>
+  <Step>
+    ### Restart i weryfikacja [#restart-and-verify]
+
+    Zrestartuj LibreChat i upewnij się, że podczas uruchamiania nie są już zgłaszane konflikty indeksów dla User, Role, Preset, AccessRole, MCPServer, AgentCategory, Message lub Conversation.
+  </Step>
+</Steps>
+
+## Docker Compose [#docker-compose]
+
+Uruchom jednorazowy kontener ze zaktualizowanego obrazu, podczas gdy MongoDB pozostaje dostępne. Ustaw katalog roboczy na `/app`, ponieważ obraz produkcyjny API domyślnie używa `/app/api`. Uwzględnij te same flagi pliku Compose, których używasz w swoim wdrożeniu.
+
+```bash
+docker compose stop api
+docker compose run --rm --no-deps -w /app api npm run migrate:tenant-indexes:dry-run
+docker compose run --rm --no-deps -w /app api npm run migrate:tenant-indexes
+docker compose up -d api
+```
+
+## Bezpieczeństwo i odzyskiwanie danych [#safety-and-recovery]
+
+Polecenie tworzy unikalne zamienniki o zasięgu dzierżawy (tenant-scoped) przed usunięciem tylko znanych zastąpionych unikalnych indeksów, a następnie tworzy bieżące indeksy schematu. Zachowuje ono indeksy niestandardowe oraz bieżące indeksy nieunikalne, nie usuwa dokumentów i nie używa `syncIndexes` ani `dropIndexes`. Buduje również bieżące indeksy, gdy `MONGO_AUTO_INDEX=false`.
+
+Testowy przebieg (dry run) wyświetla tylko usunięcia; nie może on zweryfikować kompilacji zastępczych, uprawnień ani zduplikowanych danych. Każdy błąd związany z listowaniem, kompilacją lub porzuceniem powoduje niepowodzenie polecenia. Jeśli kompilacja zastępcza nie powiedzie się, stare ograniczenia pozostają w mocy. Późniejsza awaria może pozostawić częściową migrację, ale ponowne uruchomienie bezpiecznie dokończy pozostałe prace. Utrzymuj procesy zapisu zatrzymane, popraw zgłoszony problem i uruchom ponownie; nie rozwiązuj błędów poprzez usuwanie każdego indeksu.
+
+Budowanie indeksów może zająć trochę czasu w przypadku dużych kolekcji.

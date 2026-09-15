@@ -13,6 +13,8 @@ endpoints:
     recursionLimit: 50
     maxRecursionLimit: 100
     maxSubagents: 20
+    codeApiUploadConcurrency: 3
+    codeApiMaxRetryWaitMs: 20000
     maxToolCallArgBytes: 65536
     maxDeltaEventsPerTurn: 100000
     maxToolCallArgBytesByTool:
@@ -34,6 +36,9 @@ endpoints:
       maxCatalogSkills: 20
     statefulCodeSessions:
       allowedEnvironments: ['user', 'agent-user', 'conversation']
+      principalWorkers:
+        enabled: true
+        maxPerUser: 5
       environments:
         - id: managed-default
           name: Managed Code API
@@ -58,6 +63,7 @@ endpoints:
     #   selfUrl: https://librechat.internal
     backgroundTasks:
       completionWakeups: true
+      ordinaryToolCancellation: false
     toolApproval:
       enabled: true
       mode: default
@@ -66,6 +72,16 @@ endpoints:
     checkpointer:
       type: mongo
       ttl: 86400
+    managementApi:
+      auth:
+        oidc:
+          enabled: true
+          issuer: https://identity.example.com/
+          audience: https://librechat.example.com/agents
+        clients:
+          - clientId: machine-client-id
+            userId: 507f1f77bcf86cd799439011
+            tenantId: tenant-id
     remoteApi:
       auth:
         oidc:
@@ -327,6 +343,12 @@ capabilities:
       'Agent Builder에 표시되는 선택적 명명된 관리형 또는 연결된 Code API 환경입니다.',
       'Unset; LIBRECHAT_CODE_BASEURL_STATEFUL remains the stateful endpoint',
     ],
+    [
+      'principalWorkers',
+      'Object',
+      '개인 작업자 등록을 위한 선택적 배포 제한입니다. `enabled`는 기본값이 true이며, `maxPerUser`는 기본값이 5입니다.',
+      '{ enabled: true, maxPerUser: 5 }',
+    ],
   ]}
 />
 
@@ -336,6 +358,9 @@ statefulCodeSessions:
     - 'user'
     - 'agent-user'
     - 'conversation'
+  principalWorkers:
+    enabled: true
+    maxPerUser: 5
   environments:
     - id: managed-default
       name: Managed Code API
@@ -356,6 +381,8 @@ statefulCodeSessions:
       baseURL: https://code-bridge.example.com/v1
       owner: deployment
       configSchema:
+        limits:
+          maxCommandTimeoutMs: 120000
         permissions:
           fileWrite:
             allowed: [allow, ask, deny]
@@ -370,6 +397,10 @@ statefulCodeSessions:
 
 `allowedEnvironments`는 해당 블록이 존재할 때 필수이며, 최소 하나의 작업 공간(workspace) 범위를 포함해야 합니다. 전체 블록을 생략하면 세 가지 범위가 모두 허용되며, 상태 유지 작업은 계속해서 [`LIBRECHAT_CODE_BASEURL_STATEFUL`](/docs/configuration/dotenv#stateful-code-interpreter-endpoint)을 통해 라우팅됩니다. 개인 기본값 및 Agent Builder는 허용된 값만 사용할 수 있습니다. 관리자가 정책을 강화하면 저장된 개인 기본값은 계속 표시되지만 비활성화되며, 새로운 Agent는 첫 번째로 허용된 범위를 사용합니다. 기존에 활성화된 Agent는 저장된 범위를 유지하지만, 이제 허용되지 않는 범위는 Agent가 재구성될 때까지 런타임에 실패(fail closed) 처리됩니다.
 
+`principalWorkers`는 개인 연결 워커에 대한 셀프 서비스 등록을 제어합니다. 값이 생략되면 `enabled: true` 및 `maxPerUser: 5`로 설정됩니다. 새로운 등록을 중단하려면 `enabled: false` 또는 `maxPerUser: 0`으로 설정하십시오. 제한은 오프라인 워커를 포함하여 구성된 제어 평면 전반에서 해당 사용자에 대해 등록된 모든 개인 환경을 계산합니다. 제한을 낮추거나 등록을 비활성화해도 기존 환경은 취소되지 않습니다.
+
+Deployment YAML은 상한선 역할을 합니다. 역할, 그룹 또는 사용자 구성 재정의를 통해 등록을 비활성화하거나 `maxPerUser` 값을 낮출 수는 있지만, 배포 값을 높일 수는 없습니다. 사용자는 유효 제한이 0보다 크고, 해당 제어 평면에서 [`pairing.allowPrincipalWorkers`](#statefulcodesessions)가 활성화되어 있으며, 주체 인증(principal authentication)을 사용할 수 있고, 사용자에게 Code Environment 관리 권한이 있는 경우에만 페어링이 활성화된 제어 평면을 볼 수 있습니다.
+
 `environments`가 비어 있지 않은 경우, 모든 항목에는 고유한 `id`, 표시용 `name`, `managed` 또는 `attached` 유형의 `type`, 그리고 쿼리 문자열이나 프래그먼트가 없는 HTTP(S) `baseURL`이 필요합니다. 목록에 실행 가능한 환경이 포함된 경우, 해당 항목 중 정확히 하나는 `default: true`로 설정되어야 합니다. 그러면 Agent Builder가 **Execution environment** 선택기를 추가하며, 이를 **Deployment default**로 두면 해당 기본 항목이 사용됩니다. 셀프 서비스 페어링 제어 평면만 포함된 목록에는 기본값이 필요하지 않습니다. 나중에 제거되거나 더 이상 액세스할 수 없는 환경을 지정한 에이전트는 다른 백엔드로 대체되지 않고 실패 상태로 종료됩니다.
 
 - `managed`는 운영자가 관리하는 상태 저장 Code API를 직접 가리킵니다.
@@ -379,6 +410,7 @@ statefulCodeSessions:
 - `pairing`은 선택 사항이며 배포 소유의 `attached` 항목에 대해서만 유효합니다. `pairing.workerId`는 등록할 운영자 관리 워커를 식별하며, `pairing.allowPrincipalWorkers: true`는 승인된 사용자가 소유자 귀속 워커를 해당 제어 평면에 등록할 수 있도록 합니다. `pairing`이 존재할 경우, 이 필드 중 최소 하나는 필수입니다.
 - `pairing.tokenEnv`는 브리지 관리자 토큰을 포함하는 환경 변수의 이름을 지정하며, 토큰 자체를 포함하지는 않습니다. 페어링에는 루프백 개발을 제외하고 HTTPS가 필요합니다.
 - `configSchema.permissions`는 선택적으로 권한이 있는 소유자가 **Settings > Code environments**에서 개인 환경에 대한 `fileWrite` 및 `commandExecution` 정책을 선택할 수 있도록 합니다. 각 필드는 `allow`, `ask` 및/또는 `deny`를 포함하는 비어 있지 않은 `allowed` 목록을 요구합니다. `default`는 생략 시 `ask`이며 반드시 `allowed`에 포함되어야 합니다. LibreChat은 관리자가 설정한 목록 외의 저장된 값은 거부합니다.
+- `configSchema.limits.maxCommandTimeoutMs`는 해당 환경에서 모델이 요청할 수 있는 최대 Bash 타임아웃을 설정합니다. `1`에서 `300000` ms 사이의 값을 허용하며, 생략 시 기본값인 30초가 유지됩니다. 이는 배포 상한선이며 사용자가 구성할 수 없습니다.
 - 배포 YAML에서 `settings`를 구성하지 마십시오. LibreChat은 인증된 소유자의 서버 검증된 기본 설정에서 해당 요청 범위(request-scoped) 필드를 제공합니다.
 - 파일 쓰기 및 명령 실행 정책만 사용자가 구성할 수 있습니다. 격리, 네트워킹, 마운트, 권한 있는 실행, 인그레스, 이그레스 및 보안 비밀은 관리자가 제어합니다.
 - 최상위 `workerId`와 `pairing.workerId`가 모두 존재할 경우, 두 값은 일치해야 합니다. `allowPrincipalWorkers: true`로 설정된 항목에 워커 ID가 모두 없는 경우, 해당 항목은 페어링 전용(pairing-only)으로 간주됩니다. 이 경우 실행 선택기(execution selectors)에서 제외되며 `default: true`를 설정할 수 없습니다.
@@ -427,15 +459,24 @@ Event Actor detached Action completion은 내장된 생성 저장소(generation 
       '지원되는 백그라운드 작업 완료를 연속 작업으로 자동 전달합니다. 폴링 전용 동작을 원하면 false로 설정하세요.',
       'true',
     ],
+    [
+      'ordinaryToolCancellation',
+      'Boolean',
+      '소유자가 연결된 Bash를 포함한 일반적인 백그라운드 도구의 협력적 취소를 요청할 수 있도록 허용합니다.',
+      'false',
+    ],
   ]}
 />
 
 ```yaml filename="endpoints / agents / backgroundTasks"
 backgroundTasks:
   completionWakeups: true
+  ordinaryToolCancellation: false
 ```
 
 이 블록이 생략된 경우에도 자동 완성 전달이 활성화됩니다. 에이전트가 `check_background_task`를 통해 모든 결과를 수집하도록 하려면 `completionWakeups: false`로 설정하세요.
+
+`ordinaryToolCancellation: true`를 설정하여 일반 백그라운드 도구에 대한 소유자 범위의 취소를 노출합니다. 취소는 협력적이며 프로세스 로컬로 유지되고, 호출이 완료될 때까지 작업을 활성 상태로 유지하며 용량을 예약합니다. 분리된 Subagents는 취소하지 않습니다.
 
 일반적인 백그라운드 도구 실행은 프로세스 로컬 상태로 유지되며, 작업자 프로세스가 종료되면 함께 소멸합니다. 콘텐츠 전용 터미널 결과가 영구 저장되면 해당 결과는 내구성을 갖게 되며 다른 복제본에서 전달이 계속될 수 있습니다. 라이브 아티팩트가 포함된 작업은 여전히 소유 실행(owning run)에서 폴링이 필요합니다. 분리된 서브에이전트(Detached Subagents)는 별도의 영구 기록 및 터미널 결과 경로를 유지합니다. 두 모드 모두에서 상태 확인, 제어 및 복구를 위한 수동 폴링을 사용할 수 있습니다. [Background Tool Calls](/docs/features/agents#background-tool-calls) 및 [Automatic Parent Continuation](/docs/features/subagents#automatic-parent-continuation)을 참조하세요.
 
@@ -609,6 +650,53 @@ Model specs는 `subagents` 하위에서 `enabled`, `allowSelf`, `agent_ids`만 �
 
 이 값을 높이는 것은 하나의 에이전트가 참조할 수 있는 하위 에이전트의 수만 변경합니다. 깊이, 그래프 노드 및 실행 구성 제한은 영향을 받지 않습니다. [Subagents](/docs/features/subagents#limits)를 참조하세요.
 
+## fileSharing
+
+`fileSharing`은 위임된 Agent 작업을 위한 옵트인(opt-in), 실행 범위(run-scoped) 공유 기능입니다. 여기서 `enabled: true`를 설정하고 각 위임 Agent에서 `subagents.shareFiles`를 활성화하세요. 입력값은 수신자에게 읽기 전용으로 제공되며, 출력값은 명시적으로 게시하지 않는 한 비공개로 유지됩니다. 게시된 파일은 실행이 종료된 후에도 다운로드할 수 있습니다.
+
+```yaml filename="endpoints / agents / fileSharing"
+endpoints:
+  agents:
+    fileSharing:
+      enabled: true
+      allowSiblingSharing: false
+      maxFiles: 100
+      maxPrivateBytes: 268435456
+      ttlMs: 3600000
+```
+
+`allowSiblingSharing`는 명시적으로 지정된 형제 또는 하위 수신자를 허용합니다. `maxFiles`는 `1`에서 `1000` 사이의 범위를 가지며, `maxPrivateBytes`는 보존되는 비공개 출력 스냅샷의 크기를 제한하고, `ttlMs`는 활성 매니페스트의 수명으로 최대 24시간으로 제한됩니다. 이 블록을 생략하면 공유 기능이 비활성화됩니다.
+
+## Code API 업로드 복구 [#code-api-upload-recovery]
+
+이 설정들은 Code API가 속도 제한(rate limiting)으로 응답할 때 동시 업로드 및 재시도 대기 시간을 제한합니다. 이 설정은 Code API 경로 및 인증된 주체(authenticated principal)별로 적용되므로, 특정 사용자의 제한이나 배포가 관련 없는 업로드 복구를 차단하는 것을 방지합니다.
+
+<OptionTable
+  options={[
+    [
+      'codeApiUploadConcurrency',
+      'Number',
+      '경로 및 인증된 주체당 최대 동시 Code API 업로드 수 (1-100).',
+      '3',
+    ],
+    [
+      'codeApiMaxRetryWaitMs',
+      'Number',
+      '하나의 작업이 Code API 속도 제한을 기다리는 데 소요할 수 있는 최대 총 벽시계 시간(0-300000 ms).',
+      '20000',
+    ],
+  ]}
+/>
+
+```yaml filename="endpoints / agents / Code API upload recovery"
+endpoints:
+  agents:
+    codeApiUploadConcurrency: 3
+    codeApiMaxRetryWaitMs: 20000
+```
+
+LibreChat은 `Retry-After`를 준수하며, 각 시도마다 지속된 스트림을 다시 열고, 대기열에서 취소된 호출자를 제거합니다. `codeApiMaxRetryWaitMs: 0`을 설정하면 업로드를 비활성화하는 것이 아니라 대기를 비활성화합니다.
+
 ## maxCitations
 
 <OptionTable
@@ -781,6 +869,57 @@ endpoints:
 - `execute_code`와 함께 `programmatic_tools` 기능을 추가하지 않으면 Programmatic Tool Calling은 비활성화된 상태로 유지됩니다.
 - 백그라운드 도구 호출은 `run_in_background`를 추가하지 않는 한 비활성화된 상태로 유지됩니다. Code Interpreter 도구는 기본적으로 사용 가능하게 되지만, 사용 가능한 MCP, Plugin 및 Action 도구는 여전히 선택이 필요합니다.
 - `tool_intents`를 추가하지 않으면 도구 의도(tool intent) 레이블은 비활성화된 상태로 유지됩니다. 기본 도구(native tools)는 자동으로 옵트인(opt in)되지만, MCP 도구는 여전히 도구별로 선택해야 합니다.
+
+## managementApi
+
+베타 Agent Management API를 사용하면 신뢰할 수 있는 머신 클라이언트가 Agent를 생성, 나열, 읽기, 업데이트 및 삭제하고, 파일을 관리하며, 액세스 가능한 Skill을 검색하거나 편집할 수 있습니다. 이는 [`remoteApi`](#remoteapi)와는 별개입니다. 관리 경로는 배포에 바인딩된 OIDC 머신 ID만 허용하며, LibreChat Remote Agents API 키나 브라우저 세션은 허용하지 않습니다.
+
+```yaml filename="endpoints / agents / managementApi"
+endpoints:
+  agents:
+    managementApi:
+      auth:
+        oidc:
+          enabled: true
+          issuer: https://identity.example.com/
+          audience: https://librechat.example.com/agents
+          # jwksUri: https://identity.example.com/.well-known/jwks.json
+        clients:
+          - clientId: machine-client-id
+            # subject: provider-specific-service-principal-subject
+            userId: 507f1f77bcf86cd799439011
+            tenantId: tenant-id
+            enabled: true
+```
+
+### managementApi.auth.oidc
+
+<OptionTable
+  options={[
+    ['enabled', 'Boolean', '에이전트 관리 경로에 대한 OIDC 머신 인증을 활성화합니다.', 'false'],
+    ['issuer', 'String', '검증된 액세스 토큰에서 예상되는 정확한 발급자입니다. 활성화 시 필수입니다.', ''],
+    ['audience', 'String', '액세스 토큰이 포함해야 하는 대상(Audience)입니다. 활성화 시 필수입니다.', ''],
+    ['jwksUri', 'String', '선택적 명시적 JWKS endpoint입니다. 생략 시 LibreChat이 issuer로부터 이를 자동으로 탐색합니다.', ''],
+  ]}
+/>
+
+### managementApi.auth.clients
+
+`clients`는 최대 100개의 항목을 포함할 수 있는 배포 소유의 허용 목록(allowlist)입니다. OIDC 인증이 활성화된 경우 최소 하나의 항목이 필요합니다.
+
+<OptionTable
+  options={[
+    ['clientId', 'String', '토큰 `azp` 또는 `client_id` 클레임과 일치하는 OAuth 클라이언트 식별자입니다.', 'Required'],
+    ['subject', 'String', '선택적 정확한 토큰 `sub` 클레임입니다. 생략 시 `sub`는 `clientId` 또는 `clientId@clients`와 같아야 합니다.', ''],
+    ['userId', 'String', '클라이언트가 권한을 상속받는 기존 LibreChat MongoDB 사용자 ObjectId입니다.', 'Required'],
+    ['tenantId', 'String', '해당 사용자를 포함하는 정확한 테넌트입니다. 시스템 테넌트는 허용되지 않습니다.', 'Required'],
+    ['enabled', 'Boolean', '구성에서 제거하지 않고 이 클라이언트 바인딩을 활성화합니다.', 'true'],
+  ]}
+/>
+
+토큰은 만료되지 않아야 하며 단일하고 충돌하지 않는 클라이언트 식별자를 제공해야 합니다. 검증 후, LibreChat은 바인딩된 테넌트 내부에서만 구성된 사용자를 확인하며, 누락되었거나 비활성 상태이거나, 테넌트 간 교차, 비활성화 또는 주체 불일치가 있는 프린시펄은 거부합니다. 이후 모든 관리 작업은 해당 사용자의 현재 역할 기능과 Agent 또는 Skill ACL을 사용하며, 바인딩은 추가적인 리소스 액세스 권한을 부여하지 않습니다.
+
+알 수 없는 management-auth 필드, 중복된 클라이언트 ID, 형식이 잘못된 사용자 또는 테넌트 ID, 그리고 클라이언트 바인딩 없이 활성화된 인증은 구성 유효성 검사에 실패합니다. 경로 및 예제는 [Agents API - Agent Management](/docs/features/agents_api#agent-management-api)를 참조하세요.
 
 ## remoteApi
 

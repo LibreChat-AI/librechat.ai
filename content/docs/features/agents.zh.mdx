@@ -92,6 +92,10 @@ Skills 使用它们自己的选择器，可以单独选择，也可以作为完�
 
 当部署启用了自助服务 worker 时，拥有 Code Environment 管理权限的用户可以打开 **Settings > Code environments**，将出站的 `@librechat/code` worker 与其自己的虚拟机（VM）配对，在 Agent Builder 中选择它，并可在稍后撤销。个人环境与所有者绑定，并为代码、Shell 和程序化工具调用（Programmatic Tool Calling）使用相同的路由。有关实验性设置和安全模型，请参阅 [Attached environments and pairing](/docs/features/code_interpreter#attached-environments-and-pairing)。
 
+在附加的工作区内，Agents 可以列出目录、读取文件、搜索文本、创建文件，并通过选定的 worker 运行 Bash。每个 Agent 都可以设置专属的 Git 用户名和邮箱，以便在无需提供仓库凭据的情况下标识在那里提交的记录。部署时可以通过 [`statefulCodeSessions.principalWorkers`](/docs/configuration/librechat_yaml/object_structure/agents#statefulcodesessions) 来限制新的个人 worker。
+
+当附加的 worker 通告多个工作区根目录时，聊天编辑器需要为 Agent 或其子 Agent 使用的每个附加环境进行一次选择。对话会在多轮交互和批准恢复期间保留这些选择；LibreChat 会根据实时 worker 对其进行验证，如果缺少必要的工作区或工作区不可用，则会阻止发送。如果 worker 仅通告一个工作区，则会自动为新对话选中该工作区。有关详细信息和当前限制，请参阅 [Attached environments and pairing](/docs/features/code_interpreter#attached-environments-and-pairing)。
+
 新创建的 Agents 最初会使用登录用户在 **Settings > Data Controls > Code execution** 中设置的 **Default stateful workspace**。在更改之前，个人默认设置均为 **User workspace**。更新此偏好设置不会更改现有的 Agents，也不会自动启用 Stateful Code Sessions。管理员可以通过 [`statefulCodeSessions.allowedEnvironments`](/docs/configuration/librechat_yaml/object_structure/agents#statefulcodesessions) 来限制可用的作用域；当已保存的个人默认设置不再被允许时，新的 Agents 将使用第一个被允许的作用域。
 
 <Callout type="warning" title="高度实验性">
@@ -103,6 +107,8 @@ Skills 使用它们自己的选择器，可以单独选择，也可以作为完�
 当缺少专用 URL 或不兼容时，有状态请求不会回退到正常的无状态 Code Interpreter endpoint。有状态会话和无状态会话也不会共享实时文件或已安装的包。有状态工作区可能会在任何时候重置，无论其范围如何。请将重要输出保存到 `/mnt/data` 下，不要将其他会话状态视为持久存储。
 
 当有状态的 `create_file` 或 `edit_file` 工具在响应期间创建文件时，助手消息会显示一个紧凑的 **Workspace changes** 行。展开该行即可查看已更改的唯一路径，并通过 LibreChat 的身份验证文件流下载每个文件。这是这些工具所创建文件的逐条消息记录，而非完整工作区的持久快照；无状态的 Code Interpreter 输出将继续使用常规的内联附件界面。
+
+对于已连接的环境，composer 可以将 **Ask before changes**（更改前询问）、**Accept edits**（接受编辑）和 **Full access**（完全访问）作为对话级别的代码批准模式进行公开。其可用性受限于环境管理员定义的权限方案；选择更宽松的模式绝不会覆盖角色授权、显式工具规则、钩子或沙盒边界。请参阅 [Attached-environment tool permissions](/docs/features/code_interpreter#attached-environment-tool-permissions)。
 
 ### 文件搜索 [#file-search]
 
@@ -258,6 +264,8 @@ MCP 是一个开放协议，它标准化了应用程序向大语言模型 (LLMs)
 当服务器在之前的后台运行结束后启动该延续任务时，打开的对话会附加到新的生成任务上，并刷新已完成的任务输出，而无需重新加载。
 
 除非管理员设置了 [`endpoints.agents.backgroundTasks.completionWakeups: false`](/docs/configuration/librechat_yaml/object_structure/agents#backgroundtasks)（这将恢复为仅轮询行为），否则自动完成唤醒功能处于启用状态。主机可能会将多个符合条件的纯内容完成任务合并为一次延续。生成实时工件的任务仍然需要对拥有该运行的进程进行轮询。
+
+管理员还可以选择启用所有者范围内的取消功能，配置项为 [`endpoints.agents.backgroundTasks.ordinaryToolCancellation: true`](/docs/configuration/librechat_yaml/object_structure/agents#backgroundtasks)。该任务会报告已请求取消，直到底层调用结束，且在此期间其容量保持占用状态。取消是协作式的：忽略中止信号的工具仍可能成功完成。此控制适用于普通的进程内后台工具（包括已附加的 Bash），但不适用于独立拥有的已分离子代理（Subagents）。
 
 只有符合条件的工具才会公开此设置。普通的后台执行是进程局部的，且无法在工作进程丢失后存活。然而，一旦仅包含内容的终端结果被持久化，自动交付就是持久的，并可能在另一个副本上继续。进程局部注册表限制了每个对话、用户和进程中正在运行的任务及保留的结果负载；它会在安全时驱逐已完成的工作，并在挂起的处理阻止安全驱逐时返回作用域容量结果。如果调用忽略了取消请求，LibreChat 将在中止后的一分钟宽限期后停止续订其生产者租约，并停止自动完成交付，而不会错误地将不确定的外部工作标记为超时。分离式子代理（Detached Subagents）使用单独的持久任务和记录路径，并配有 Redis 路由的实时控制；请参阅 [分离式子代理线程](/docs/features/subagents#detached-subagent-threads)。
 
@@ -474,6 +482,8 @@ Agents 支持多种处理文件的方式：
 ## 共享与权限 [#sharing-and-permissions]
 
 Agents 使用 LibreChat 的细粒度 [access control](/docs/features/access_control) 系统。每个 Agent 都有其自己的访问控制列表 (ACL)，并且可以与特定的 **users**、**groups**、**roles** 共享，或者 **publicly**（公开）共享，每种共享方式都可以设置特定的权限级别。
+
+受信任的服务也可以通过测试版 [Agent Management API](/docs/features/agents_api#agent-management-api) 管理 Agent、附加文件和 Skills。管理员将每个 OIDC 机器客户端绑定到一个现有的 LibreChat 用户和租户；每个请求都会继承该用户当前的角色权限和资源 ACL，而不是获得单独的管理员访问权限。
 
 ### 访问角色 [#access-roles]
 

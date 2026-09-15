@@ -1,0 +1,63 @@
+---
+title: Migrazione dell'indice tenant
+icon: Database
+description: >-
+  Aggiorna gli indici MongoDB con ambito tenant da LibreChat v0.8.7 e versioni
+  precedenti.
+---
+
+# Migrazione dell'indice dei tenant [#tenant-index-migration]
+
+I database creati da LibreChat v0.8.7 o versioni precedenti possono segnalare `Index build failed` durante l'aggiornamento. Gli indici univoci legacy come `email_1` o `name_1` possono entrare in conflitto con gli indici correnti con lo stesso nome, mentre gli indici composti con ambito tenant ora impongono l'univocità. Ciò può influire anche sulle distribuzioni a tenant singolo.
+
+La migrazione è un comando di manutenzione esplicito e non viene eseguita all'avvio. Utilizza la sorgente o l'immagine aggiornata che fornisce i comandi sottostanti. Per un checkout della sorgente, installa le dipendenze ed esegui prima `npm run build:packages`.
+
+<Steps>
+  <Step>
+    ### Stop writers [#stop-writers]
+
+    Eseguire il backup di MongoDB, quindi arrestare ogni replica e worker di LibreChat API che scrive nel database. Mantenere MongoDB in esecuzione.
+  </Step>
+  <Step>
+    ### Anteprima della migrazione [#preview-the-migration]
+
+    Esegui il dry run con le normali impostazioni di connessione `MONGO_URI` e `.env` della distribuzione:
+
+    ```bash
+    npm run migrate:tenant-indexes:dry-run
+    ```
+  </Step>
+  <Step>
+    ### Applica la migrazione [#apply-the-migration]
+
+    ```bash
+    npm run migrate:tenant-indexes
+    ```
+
+    Attendere un'uscita corretta prima di riavviare qualsiasi writer.
+  </Step>
+  <Step>
+    ### Riavvia e verifica [#restart-and-verify]
+
+    Riavvia LibreChat e conferma che l'avvio non riporti più conflitti di indice per User, Role, Preset, AccessRole, MCPServer, AgentCategory, Message o Conversation.
+  </Step>
+</Steps>
+
+## Docker Compose [#docker-compose]
+
+Esegui un container una tantum dall'immagine aggiornata mentre MongoDB rimane disponibile. Imposta la directory di lavoro su `/app`, poiché l'immagine dell'API di produzione altrimenti utilizza `/app/api` come impostazione predefinita. Includi gli stessi flag del file Compose utilizzati dalla tua distribuzione.
+
+```bash
+docker compose stop api
+docker compose run --rm --no-deps -w /app api npm run migrate:tenant-indexes:dry-run
+docker compose run --rm --no-deps -w /app api npm run migrate:tenant-indexes
+docker compose up -d api
+```
+
+## Sicurezza e ripristino [#safety-and-recovery]
+
+Il comando crea sostituzioni univoche con ambito tenant prima di eliminare solo gli indici univoci obsoleti noti, quindi crea gli indici dello schema corrente. Preserva gli indici personalizzati e gli indici non univoci correnti, non elimina i documenti e non utilizza `syncIndexes` o `dropIndexes`. Inoltre, crea gli indici correnti quando `MONGO_AUTO_INDEX=false`.
+
+La simulazione (dry run) elenca solo le rimozioni; non può convalidare build di sostituzione, autorizzazioni o dati duplicati. Qualsiasi errore di elenco, build o eliminazione causa il fallimento del comando. Se una build di sostituzione fallisce, rimangono i vincoli precedenti. Un errore successivo potrebbe lasciare una migrazione parziale, ma rieseguire il comando completa in sicurezza il lavoro rimanente. Mantieni i writer fermi, correggi il problema segnalato e riesegui; non risolvere i fallimenti eliminando ogni indice.
+
+La creazione di indici può richiedere tempo su collezioni di grandi dimensioni.

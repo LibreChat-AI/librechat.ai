@@ -12,13 +12,15 @@ LibreChatは、推論APIおよびイベント配信APIを通じて、エージ�
 
 ## 概要 [#overview]
 
-Agents APIは、2つの推論インターフェースと認証済みイベント配信を提供します：
+Agents APIは、2つの推論インターフェース、認証済みイベント配信、およびベータ管理ルートを提供します：
 
 - **OpenAI互換のChat Completions** — `POST /api/agents/v1/chat/completions`
 - **Open Responses API** — `POST /api/agents/v1/responses`
 - **エージェントイベント** — `POST /api/agents/v1/events`
+- **エージェント管理** — `/api/agents/v1/agents`
+- **スキル管理** — `/api/agents/v1/skills`
 
-推論インターフェースは、APIキー認証、オプションのOIDC認証、およびストリーミングレスポンスをサポートしています。Agent EventsはRemote AgentsのAPIキー認証を使用するため、LibreChatは各配信を安定したソースIDに紐付けることができます。
+推論インターフェースは、APIキー認証、オプションのOIDC認証、およびストリーミングレスポンスをサポートしています。Agent EventsはRemote AgentsのAPIキー認証を使用するため、LibreChatは各配信を安定したソースIDに紐付けることができます。一方、管理ルートは、OIDCマシンクライアントを既存のLibreChatユーザーおよびテナントに紐付けるデプロイメント許可リストを使用します。
 
 LibreChatは、エージェントを提供するための主要なAPIフレームワークとして[Open Responses](https://www.openresponses.org/)を採用しています。Chat Completions endpointは既存のOpenAI互換ツールとの後方互換性を提供しますが、Open Responses endpointは将来の方向性を表しています。
 
@@ -91,6 +93,67 @@ curl -X POST https://your-librechat-instance/api/agents/v1/responses \
 <Callout type="warning" title="Agent EventsにはAPIキーが必要です">
   Agent Events エンドポイントでは、OIDC のみの認証はサポートされていません。バインディングの作成、イベントのエンキュー、および配信ステータスのポーリングを行う際は、Remote Agents API キーを使用してください。
 </Callout>
+
+## エージェント管理 API [#agent-management-api]
+
+ベータ版の Agent Management API を使用すると、ブラウザセッションなしでサービスが Agent およびその関連リソースを管理できるようになります。これは推論や Agent Events とは独立して認証されます。[`endpoints.agents.managementApi`](/docs/configuration/librechat_yaml/object_structure/agents#managementapi) で設定された OIDC マシントークンのみが受け入れられます。
+
+設定された各OAuthクライアントは、既存のLibreChatの`userId`および`tenantId`に紐付けられます。トークンの検証後、すべてのリクエストはそのユーザーとして実行され、ユーザーの現在のロール権限、AgentおよびSkillのACL、プロバイダー制限、ツール付与、ファイル制限、およびテナント分離が維持されます。クライアントの紐付けによってユーザーが管理者になったり、本来管理できないリソースへのアクセス権が付与されたりすることはありません。
+
+### エージェントルート [#agent-routes]
+
+| メソッド | ルート | 目的 |
+| -------- | ------------------------------------------ | -------------------------------------------- |
+| `POST`   | `/api/agents/v1/agents`                    | エージェントの作成 |
+| `GET`    | `/api/agents/v1/agents`                    | アクセス可能なエージェントの一覧表示 |
+| `GET`    | `/api/agents/v1/agents/{id}`               | アクセス可能な特定エージェントの読み取り |
+| `PATCH`  | `/api/agents/v1/agents/{id}`               | エージェントの更新 |
+| `DELETE` | `/api/agents/v1/agents/{id}`               | エージェントの削除 |
+| `POST`   | `/api/agents/v1/agents/{id}/files`         | エージェントリソースファイルのアップロードと添付 |
+| `GET`    | `/api/agents/v1/agents/{id}/files`         | エージェントがアクセス可能な添付ファイルの一覧表示 |
+| `DELETE` | `/api/agents/v1/agents/{id}/files/{fileId}` | エージェントから添付ファイルを削除 |
+
+Agentの作成および更新のペイロードは、Agent Builderと同一の外部サポートフィールドを使用し、未知のトップレベルフィールドは拒否されます。作成には `model` が必須であり、更新では提供されたフィールドのみが受け入れられます。レスポンスには、サポートされているAgent設定に加え、`id`、`provider`、null許容の `model`、`version`、`createdAt`、および `updatedAt` が含まれますが、永続化の所有権フィールドは含まれません。
+
+リストは1から100までの `limit` を受け付け、デフォルトは20で、不透明な `cursor` を使用します。`has_more` が true の場合、返された `after` の値を次のカーソルとして渡してください。クライアント側でカーソルをデコードしたり構築したりしないでください。
+
+```bash
+curl https://your-librechat-instance/api/agents/v1/agents?limit=20 \
+  -H "Authorization: Bearer YOUR_MACHINE_ACCESS_TOKEN"
+```
+
+```bash
+curl -X POST https://your-librechat-instance/api/agents/v1/agents \
+  -H "Authorization: Bearer YOUR_MACHINE_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Release assistant",
+    "provider": "openAI",
+    "model": "gpt-5.6",
+    "instructions": "Prepare concise release notes from verified changes."
+  }'
+```
+
+ファイルアップロードは、1つの `file` と `context`、`file_search`、または `execute_code` といった `tool_resource` 値を含む `multipart/form-data` を使用します。LibreChatは、リソースを添付する前に、デプロイメント機能、ロール権限、アップロードレート制限、ファイルごとの制限、ファイル数制限、および合計サイズチェックを適用します。ファイルの削除にはAgentへの編集アクセス権が必要であり、基盤となるファイルの認可ルールを弱めることはありません。
+
+### Skill Routes [#skill-routes]
+
+| メソッド | ルート | 目的 |
+| ------- | ---------------------------------------------------- | ------------------------------------- |
+| `GET`   | `/api/agents/v1/skills`                              | アクセス可能なSkillの一覧を取得 |
+| `GET`   | `/api/agents/v1/skills/{id}`                         | アクセス可能なSkillを1つ読み込む |
+| `PATCH` | `/api/agents/v1/skills/{id}`                         | サポートされているSkillのメタデータを更新 |
+| `GET`   | `/api/agents/v1/skills/{id}/files`                   | Skill内のファイル一覧を取得 |
+| `GET`   | `/api/agents/v1/skills/{id}/files/{relativePath}`    | Skillファイルを1つ読み込む |
+| `PUT`   | `/api/agents/v1/skills/{id}/files/{relativePath}`    | サポートされているファイルを1つ作成または置換 |
+
+スキル操作は、バインドされたユーザーに表示されるスキルに限定されます。読み取りにはスキルへのアクセス権が必要であり、メタデータやファイルの書き込みには、対応する編集権限およびスキル作成権限が必要です。パスはスキルルート配下で正規化され、トラバーサル、サポートされていないファイル、およびサイズ超過のコンテンツは拒否されます。
+
+### エラーと認証 [#errors-and-authentication]
+
+管理レスポンスは、`invalid_request`、`not_found`、`permission_denied`、`conflict`、または `internal_error` コードを使用した構造化エラーを使用します。リソースの認可失敗は、呼び出し元がアクセスできないIDを調査できないようにするため、`not_found` として返される場合があります。
+
+マシン・トークンは、有効期限が切れておらず、設定された発行者（issuer）および対象者（audience）と一致し、`azp` または `client_id` を通じて許可リストに登録されたクライアントを特定し、設定されたサブジェクト・ルールを満たしている必要があります。設定が欠落している場合や認証情報が無効な場合は `401` が返されます。削除中のバインドされたアカウントは `409` を返します。クレームおよびバインディング・ルールの詳細については、[`managementApi.auth.clients`](/docs/configuration/librechat_yaml/object_structure/agents#managementapiauthclients) を参照してください。
 
 ## Endpoints [#endpoints]
 
