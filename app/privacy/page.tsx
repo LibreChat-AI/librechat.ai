@@ -52,7 +52,7 @@ export default function PrivacyPolicyPage() {
             Regulation and the California Consumer Privacy Act), the data controller is the
             LibreChat project maintainers. You can reach us at{' '}
             <Link href="mailto:contact@librechat.ai">contact@librechat.ai</Link> or via the{' '}
-            <Link href="https://github.com/danny-avila/LibreChat">
+            <Link href="https://github.com/LibreChat-AI/LibreChat">
               project repository on GitHub
             </Link>
             .

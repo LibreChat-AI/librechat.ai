@@ -26,7 +26,7 @@ export const organizationSchema: JsonLdObject = {
   url: SITE_URL,
   logo: absoluteUrl('/android-chrome-512x512.png'),
   description: 'The Open-Source AI Platform.',
-  sameAs: ['https://github.com/danny-avila/LibreChat', 'https://discord.librechat.ai'],
+  sameAs: ['https://github.com/LibreChat-AI/LibreChat', 'https://discord.librechat.ai'],
 }
 
 export const websiteSchema: JsonLdObject = {
@@ -47,7 +47,7 @@ export const softwareApplicationSchema: JsonLdObject = {
   url: SITE_URL,
   description:
     'LibreChat brings together all your AI conversations in one unified, customizable, open-source interface.',
-  license: 'https://github.com/danny-avila/LibreChat/blob/main/LICENSE',
+  license: 'https://github.com/LibreChat-AI/LibreChat/blob/main/LICENSE',
   isAccessibleForFree: true,
   offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
 }

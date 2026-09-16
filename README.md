@@ -8,7 +8,7 @@
 
 <p align="center">
   The official documentation, blog, and changelog for
-  <a href="https://github.com/danny-avila/LibreChat">LibreChat</a>,
+  <a href="https://github.com/LibreChat-AI/LibreChat">LibreChat</a>,
   the open-source, self-hostable AI chat platform.
 </p>
 
@@ -55,7 +55,7 @@ Read the [full v0.8.8-rc2 changelog](https://www.librechat.ai/changelog/v0.8.8-r
 
 This repository powers **[www.librechat.ai](https://www.librechat.ai)**: the docs, guides, blog, and changelog for LibreChat. It is a [Next.js](https://nextjs.org) application built on [Fumadocs](https://fumadocs.dev), with content authored in MDX.
 
-> Looking for the LibreChat app itself? It lives at **[danny-avila/LibreChat](https://github.com/danny-avila/LibreChat)**. Open code and product issues there, and documentation issues here.
+> Looking for the LibreChat app itself? It lives at **[LibreChat-AI/LibreChat](https://github.com/LibreChat-AI/LibreChat)**. Open code and product issues there, and documentation issues here.
 
 ## Table of Contents
 
@@ -198,14 +198,14 @@ Contributions are welcome, from fixing a typo to writing a whole new guide.
 3. Before opening a PR, run `pnpm lint`, `pnpm typecheck`, and `pnpm build`.
 4. Open a pull request describing what you changed and why.
 
-For questions about the documentation, join the [Discord](https://discord.librechat.ai). For issues with the LibreChat application itself, please use the [main repository](https://github.com/danny-avila/LibreChat).
+For questions about the documentation, join the [Discord](https://discord.librechat.ai). For issues with the LibreChat application itself, please use the [main repository](https://github.com/LibreChat-AI/LibreChat).
 
 ## Community & Support
 
 - 🌐 **Website:** [www.librechat.ai](https://www.librechat.ai)
 - 💬 **Discord:** [discord.librechat.ai](https://discord.librechat.ai)
 - 🧠 **Ask DeepWiki:** [deepwiki.com/LibreChat-AI/librechat.ai](https://deepwiki.com/LibreChat-AI/librechat.ai)
-- 🚀 **Main app:** [danny-avila/LibreChat](https://github.com/danny-avila/LibreChat)
+- 🚀 **Main app:** [LibreChat-AI/LibreChat](https://github.com/LibreChat-AI/LibreChat)
 
 ## License
 
