@@ -151,6 +151,8 @@ test.describe('First chat guide', () => {
     await expect(section).toContainText('Railway')
     // The remote Docker guide runs a non-default compose file as root.
     await expect(section).toContainText('deploy-compose.yml')
+    // kubectl defaults to the current namespace, not the release's.
+    await expect(section).toContainText('-n <release-namespace>')
     await expect(section.getByRole('link', { name: 'Helm' })).toHaveAttribute(
       'href',
       '/docs/local/helm_chart',
@@ -178,6 +180,12 @@ test.describe('First chat guide', () => {
     await expect(serverKey).toContainText('Space Secrets')
     // docker compose restart reuses the container's existing environment.
     await expect(serverKey).toContainText('docker compose up -d')
+
+    // Open registration plus a shared key on a public URL is anyone's to spend.
+    const sharedKeyWarning = body(page).getByText(
+      "A shared key on a public URL is anyone's to spend",
+    )
+    await expect(sharedKeyWarning).toBeVisible()
 
     // The browsing address comes from the host, not from DOMAIN_CLIENT.
     const openStep = body(page).locator('p').filter({ hasText: 'DOMAIN_CLIENT' })
