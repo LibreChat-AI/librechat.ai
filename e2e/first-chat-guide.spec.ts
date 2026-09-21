@@ -103,6 +103,9 @@ test.describe('First chat guide', () => {
     const noSignup = body(page).locator('p').filter({ hasText: 'No Sign up on the page' })
     await expect(noSignup).toContainText('ALLOW_REGISTRATION')
     await expect(noSignup).toContainText('LDAP is configured')
+    // External auth can still create the account, so do not send those readers to an operator.
+    await expect(noSignup).toContainText('ALLOW_SOCIAL_REGISTRATION')
+    await expect(noSignup).toContainText('provisions a user from the directory')
 
     const callout = body(page).getByText('First Account = Admin').locator('..')
     await expect(callout).toContainText('becomes the admin account')
