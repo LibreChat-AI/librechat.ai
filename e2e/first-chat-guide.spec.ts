@@ -157,10 +157,11 @@ test.describe('First chat guide', () => {
         .evaluateAll((links) =>
           links
             .map((link) => (link as HTMLAnchorElement).getAttribute('href') ?? '')
-            .filter((href) => href.startsWith('/')),
+            .filter((href) => href.startsWith('/') || href.startsWith('#')),
         )
       expect(hrefs.length, `${source} should have internal links`).toBeGreaterThan(0)
-      for (const href of hrefs) seen.add(href)
+      // A same-page link carries no path, so bind it to the page it was found on.
+      for (const href of hrefs) seen.add(href.startsWith('#') ? `${source}${href}` : href)
     }
 
     // The landing callout links the demo's own terms and privacy pages.
