@@ -176,6 +176,8 @@ test.describe('First chat guide', () => {
     await expect(serverKey).toContainText('Kubernetes Secret')
     await expect(serverKey).toContainText('Railway')
     await expect(serverKey).toContainText('Space Secrets')
+    // docker compose restart reuses the container's existing environment.
+    await expect(serverKey).toContainText('docker compose up -d')
 
     // The browsing address comes from the host, not from DOMAIN_CLIENT.
     const openStep = body(page).locator('p').filter({ hasText: 'DOMAIN_CLIENT' })
