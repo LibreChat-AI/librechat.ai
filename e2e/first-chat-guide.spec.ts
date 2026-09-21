@@ -139,25 +139,49 @@ test.describe('First chat guide', () => {
     )
   })
 
-  test('@scenario:first-chat-internal-links-resolve every internal link on the guide resolves', async ({
+  test('@scenario:first-chat-internal-links-resolve every internal link on the guide and the landing callout resolves', async ({
     page,
     request,
   }) => {
-    await page.goto(FIRST_CHAT)
+    const seen = new Set<string>()
 
-    const hrefs: string[] = await body(page)
-      .getByRole('link')
-      .evaluateAll((links) =>
-        links
-          .map((link) => (link as HTMLAnchorElement).getAttribute('href') ?? '')
-          .filter((href) => href.startsWith('/')),
-      )
-
-    expect(hrefs.length).toBeGreaterThan(0)
-    for (const href of [...new Set(hrefs)]) {
-      const response = await request.get(href.split('#')[0])
-      expect(response.status(), `${href} should resolve`).toBe(200)
+    for (const source of [FIRST_CHAT, '/docs']) {
+      await page.goto(source)
+      const hrefs: string[] = await body(page)
+        .getByRole('link')
+        .evaluateAll((links) =>
+          links
+            .map((link) => (link as HTMLAnchorElement).getAttribute('href') ?? '')
+            .filter((href) => href.startsWith('/')),
+        )
+      expect(hrefs.length, `${source} should have internal links`).toBeGreaterThan(0)
+      for (const href of hrefs) seen.add(href)
     }
+
+    // The landing callout links the demo's own terms and privacy pages.
+    expect(seen).toContain('/demo/terms')
+    expect(seen).toContain('/demo/privacy')
+
+    let fragmentsChecked = 0
+    for (const href of seen) {
+      const [path, fragment] = href.split('#')
+      const response = await request.get(path)
+      expect(response.status(), `${href} should resolve`).toBe(200)
+
+      // A fragment that names no heading is a dead link CI would otherwise miss.
+      if (fragment) {
+        fragmentsChecked += 1
+        await page.goto(path)
+        await expect(
+          page.locator(`[id="${fragment}"]`),
+          `${href} should have a target on the page`,
+        ).toHaveCount(1)
+      }
+    }
+
+    // Guards the anchor assertion itself: it is conditional, so a page that
+    // lost every fragment link would otherwise pass without checking one.
+    expect(fragmentsChecked).toBeGreaterThan(0)
   })
 
   test('@scenario:first-chat-renders-in-both-themes the guide renders in light and dark mode', async ({
