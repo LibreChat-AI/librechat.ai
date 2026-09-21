@@ -99,13 +99,16 @@ test.describe('First chat guide', () => {
   }) => {
     await page.goto(FIRST_CHAT)
 
-    // A reader on an instance with registration off has no Sign up control.
-    const noSignup = body(page).locator('p').filter({ hasText: 'No Sign up on the page' })
-    await expect(noSignup).toContainText('ALLOW_REGISTRATION')
-    await expect(noSignup).toContainText('LDAP is configured')
-    // External auth can still create the account, so do not send those readers to an operator.
-    await expect(noSignup).toContainText('ALLOW_SOCIAL_REGISTRATION')
-    await expect(noSignup).toContainText('provisions a user from the directory')
+    // A reader whose instance shows no Sign up needs the symptom answered, not
+    // the precedence of ALLOW_EMAIL_LOGIN, ALLOW_REGISTRATION and LDAP, which
+    // the authentication reference owns.
+    const noSignup = body(page).locator('p').filter({ hasText: 'If there is no Sign up' })
+    await expect(noSignup).toContainText('create your account on first sign-in')
+    await expect(noSignup).toContainText('ask whoever runs the instance')
+    await expect(noSignup.getByRole('link', { name: 'authentication settings' })).toHaveAttribute(
+      'href',
+      '/docs/configuration/authentication',
+    )
 
     const callout = body(page).getByText('First Account = Admin').locator('..')
     await expect(callout).toContainText('becomes the admin account')
