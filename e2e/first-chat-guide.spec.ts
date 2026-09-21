@@ -162,6 +162,13 @@ test.describe('First chat guide', () => {
   }) => {
     await page.goto(FIRST_CHAT)
 
+    // user_provided is an .env.example default, not a universal one.
+    const userProvided = body(page)
+      .locator('p')
+      .filter({ hasText: 'a default only where the install starts from' })
+    await expect(userProvided).toContainText('Helm')
+    await expect(userProvided).toContainText('does not load at all')
+
     const serverKey = body(page).getByText('To configure a key once for everyone')
     await expect(serverKey).toContainText('.env')
     await expect(serverKey).toContainText('Kubernetes Secret')
