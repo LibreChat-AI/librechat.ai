@@ -75,11 +75,16 @@ test.describe('First chat guide', () => {
   test('@scenario:install-guides-hand-off-to-first-chat every install path ends by linking to the guide', async ({
     page,
   }) => {
+    // Every terminal install path advertised by the Local Installation and
+    // Remote Hosting indexes, so none of them can quietly dead-end again.
     for (const guide of [
       '/docs/quick_start/local_setup',
       '/docs/local/docker',
       '/docs/local/npm',
+      '/docs/local/helm_chart',
       '/docs/remote/railway',
+      '/docs/remote/docker_linux',
+      '/docs/remote/huggingface',
     ]) {
       await page.goto(guide)
       await expect(
