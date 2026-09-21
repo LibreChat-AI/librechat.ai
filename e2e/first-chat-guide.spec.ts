@@ -138,10 +138,29 @@ test.describe('First chat guide', () => {
     // Every install path the page links to needs its own check, Helm included.
     await expect(section).toContainText('kubectl get pods')
     await expect(section).toContainText('Railway')
+    // The remote Docker guide runs a non-default compose file as root.
+    await expect(section).toContainText('deploy-compose.yml')
     await expect(section.getByRole('link', { name: 'Helm' })).toHaveAttribute(
       'href',
       '/docs/local/helm_chart',
     )
+  })
+
+  test('@scenario:server-key-location-matches-the-install-path the server-key step names where each install keeps its environment', async ({
+    page,
+  }) => {
+    await page.goto(FIRST_CHAT)
+
+    const serverKey = body(page).getByText('To configure a key once for everyone')
+    await expect(serverKey).toContainText('.env')
+    await expect(serverKey).toContainText('Kubernetes Secret')
+    await expect(serverKey).toContainText('Railway')
+    await expect(serverKey).toContainText('Space Secrets')
+
+    // The browsing address comes from the host, not from DOMAIN_CLIENT.
+    const openStep = body(page).locator('p').filter({ hasText: 'DOMAIN_CLIENT' })
+    await expect(openStep).toContainText('the address LibreChat puts in the links it generates')
+    await expect(openStep).toContainText('the one your deployment hands you')
   })
 
   test('@scenario:first-chat-internal-links-resolve every internal link on the guide and the landing callout resolves', async ({
