@@ -99,6 +99,11 @@ test.describe('First chat guide', () => {
   }) => {
     await page.goto(FIRST_CHAT)
 
+    // A reader on an instance with registration off has no Sign up control.
+    const noSignup = body(page).locator('p').filter({ hasText: 'No Sign up on the page' })
+    await expect(noSignup).toContainText('ALLOW_REGISTRATION')
+    await expect(noSignup).toContainText('LDAP is configured')
+
     const callout = body(page).getByText('First Account = Admin').locator('..')
     await expect(callout).toContainText('becomes the admin account')
     // OPENID_ADMIN_ROLE elevates a later account, so the page must not promise
