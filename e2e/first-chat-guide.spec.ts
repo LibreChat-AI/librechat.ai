@@ -130,7 +130,13 @@ test.describe('First chat guide', () => {
     const section = body(page).locator('ul').filter({ hasText: 'docker compose ps' })
     await expect(section).toContainText('docker compose logs api')
     await expect(section).toContainText('npm run backend')
+    // Every install path the page links to needs its own check, Helm included.
+    await expect(section).toContainText('kubectl get pods')
     await expect(section).toContainText('Railway')
+    await expect(section.getByRole('link', { name: 'Helm' })).toHaveAttribute(
+      'href',
+      '/docs/local/helm_chart',
+    )
   })
 
   test('@scenario:first-chat-internal-links-resolve every internal link on the guide resolves', async ({
