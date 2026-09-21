@@ -168,6 +168,8 @@ test.describe('First chat guide', () => {
       .filter({ hasText: 'a default only where the install starts from' })
     await expect(userProvided).toContainText('Helm')
     await expect(userProvided).toContainText('does not load at all')
+    // The tab renders as "Data & Privacy" (com_ui_settings_tab_data), not "Data controls".
+    await expect(userProvided).toContainText('Data & Privacy')
 
     const serverKey = body(page).getByText('To configure a key once for everyone')
     await expect(serverKey).toContainText('.env')
