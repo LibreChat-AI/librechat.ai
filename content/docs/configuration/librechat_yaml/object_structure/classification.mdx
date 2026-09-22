@@ -1,0 +1,156 @@
+---
+title: "Classification Object Structure"
+icon: SlidersHorizontal
+---
+
+## Overview
+
+The `classification` configuration connects LibreChat to a classifier: a model that
+answers small typed questions about text and returns probabilities, rather than
+writing prose. Features use it where a decision has to be made before or around a
+model call, such as picking which tools a turn needs.
+
+Three question shapes are available:
+
+- **boolean** asks whether something holds and returns the probability of yes.
+- **choice** picks one option from a defined set and returns the full distribution.
+- **score** rates against ordered levels and returns a weighted position.
+
+Classification is disabled by default. When it is off, or when no provider is
+configured, every feature built on it behaves exactly as it does without it.
+
+## Example
+
+```yaml filename="Classification Object Structure"
+classification:
+  enabled: true
+  provider: http
+  providers:
+    http:
+      baseURL: https://classifier.example.com/v1/classify
+      apiKeyEnv: CLASSIFIER_API_KEY
+      timeoutMs: 4000
+      maxRetries: 2
+
+  toolSelection:
+    enabled: true
+    shortlist: 5
+    needsToolThreshold: 0.15
+    lowConfidenceExtra: 3
+
+  memoryGate:
+    enabled: true
+    threshold: 0.25
+```
+
+## Configuration
+
+### Subkeys
+
+<OptionTable
+  options={[
+    ['enabled', 'Boolean', 'Master switch. When false, no capability below runs and no request is made.', 'false'],
+    ['provider', 'String', 'Which registered provider answers. An unknown name disables classification and logs a warning naming the providers this build supports.', 'http'],
+    ['providers', 'Object', 'Settings per provider, keyed by provider name.', '{}'],
+    ['toolSelection', 'Object', 'Surfaces the deferred MCP tools a turn is likely to need.', 'Disabled.'],
+    ['memoryGate', 'Object', 'Skips the memory model on turns that carry nothing worth remembering.', 'Disabled.'],
+  ]}
+/>
+
+## providers
+
+Each provider reads its API key from an environment variable. The key is never
+written in `librechat.yaml`; only the name of the variable is.
+
+<OptionTable
+  options={[
+    ['baseURL', 'String', 'Endpoint the provider posts to.', 'Required for the `http` provider. The `typesafe` provider defaults to its public API.'],
+    ['model', 'String', 'Provider-specific model name.', 'Provider specific.'],
+    ['apiKeyEnv', 'String', 'Name of the environment variable holding the key for this provider.', 'CLASSIFIER_API_KEY'],
+    ['timeoutMs', 'Number', 'Per-request ceiling. A judgment that misses it is abandoned rather than awaited.', '4000'],
+    ['maxRetries', 'Number', 'Retries for a rate limit or a server error only. Honors `retry-after` when the response carries one.', '2'],
+  ]}
+/>
+
+## toolSelection
+
+An agent holding a large MCP catalog pays for every tool's argument schema on every
+turn. Deferring those schemas solves the cost, but the model then spends a
+`tool_search` round trip discovering the tool it needs, on the turn it needs it.
+
+Tool selection ranks the deferred tools against the request before the model runs
+and surfaces the few it is likely to need, so their schemas arrive with the first
+call. It requires tools that are already deferred, whether by the per-tool toggle in
+the agent builder or by [`mcpSettings.deferSchemaBytes`](/docs/configuration/librechat_yaml/object_structure/mcp_settings).
+
+Selection only ever adds. A tool it passes over stays listed by name in the
+`tool_search` description and remains one search away, so a wrong prediction costs a
+round trip rather than an answer.
+
+<OptionTable
+  options={[
+    ['enabled', 'Boolean', 'Whether to rank deferred tools before the turn.', 'false'],
+    ['shortlist', 'Number', 'How many tools may be surfaced for one turn.', '5'],
+    ['minProbability', 'Number', 'A tool below this probability is not surfaced even inside the shortlist.', '0.05'],
+    ['needsToolThreshold', 'Number', 'Below this probability that the turn needs any tool at all, only tools the request names outright are surfaced. Set to 0 to surface on every turn.', '0.15'],
+    ['lowConfidenceExtra', 'Number', 'When the ranking is not confident, surface this many extra tools rather than fewer. An omission costs a round trip while an extra schema costs only tokens. Set to 0 to keep the shortlist fixed.', '3'],
+    ['lowConfidenceBelow', 'Number', 'Confidence at or below which `lowConfidenceExtra` applies. A provider that cannot measure confidence is treated as unconfident.', '0.5'],
+    ['surfaceNamedTools', 'Boolean', 'Surface any tool whose name the request mentions outright, whatever the ranking said. Covers a user correcting the assistant.', 'true'],
+    ['maxCatalogTools', 'Number', 'Largest catalog one ranking request may carry. Above it the catalog is ranked in batches.', '200'],
+    ['descriptionChars', 'Number', 'Characters of each tool description carried into the ranking request.', '300'],
+    ['instructions', 'String', 'Replaces the wording of the ranking question.', 'A built-in question.'],
+    ['guidance', 'String', 'Replaces the rubric shown beside the ranking question.', 'Built-in guidance.'],
+    ['needsToolInstructions', 'String', 'Replaces the question asking whether the turn needs a tool at all.', 'A built-in question.'],
+  ]}
+/>
+
+## memoryGate
+
+The memory model runs after every turn, and most turns carry nothing durable. The
+gate asks one yes/no question first and skips that call when the answer is no.
+
+A gate that cannot reach its provider answers yes, so an outage never causes a
+memory to be lost.
+
+<OptionTable
+  options={[
+    ['enabled', 'Boolean', 'Whether to ask before running the memory model.', 'false'],
+    ['threshold', 'Number', 'Below this probability that the turn holds a durable fact, memory is skipped. The comparison is inclusive.', '0.25'],
+    ['instructions', 'String', 'Replaces the wording of the durability question.', 'A built-in question.'],
+    ['whenTrue', 'String', 'Describes what a yes means.', 'Built-in wording.'],
+    ['whenFalse', 'String', 'Describes what a no means.', 'Built-in wording.'],
+  ]}
+/>
+
+<Callout type="info">
+  `whenTrue` and `whenFalse` are named that way because YAML reads bare `true:` and
+  `false:` keys as booleans rather than strings.
+</Callout>
+
+## Customizing the questions
+
+Every question ships with default wording, and an operator can replace it without
+touching code. A support deployment can tell the ranker what its tools are for, and
+a deployment with its own idea of what is worth remembering can say so:
+
+```yaml filename="Custom question wording"
+classification:
+  toolSelection:
+    instructions: Pick the tool for this support ticket.
+    guidance: Prefer billing tools for anything about an invoice.
+  memoryGate:
+    instructions: Is there a dietary requirement here?
+    whenTrue: An allergy or a standing preference.
+    whenFalse: Anything about one meal only.
+```
+
+## Notes on accuracy
+
+A classifier returns probabilities, and the thresholds above decide what to do with
+them. Two properties are worth understanding before enabling either capability:
+
+- Thresholds are domain specific. Start with the defaults, observe your own traffic,
+  and adjust rather than assuming the defaults transfer.
+- Probabilities are only useful when the provider produces calibrated ones. A
+  provider that cannot measure confidence reports it as absent, and tool selection
+  treats that as unconfident and widens the shortlist instead of narrowing it.
