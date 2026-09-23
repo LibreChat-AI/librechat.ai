@@ -39,6 +39,17 @@ interface:
 
 **참고:** 관리자 사용자는 기본적으로 모든 원격 에이전트 권한이 활성화되어 있습니다.
 
+### OpenAPI 사양 및 대화형 문서 [#openapi-specification-and-interactive-docs]
+
+LibreChat은 `/api/openapi.json`에서 공개 Agents API 사양을, `/api/docs`에서 대화형 Swagger UI 문서를 제공할 수 있습니다. 두 경로 모두 기본적으로 비활성화되어 있습니다. 최상위 `openapi` 설정을 사용하여 활성화하십시오:
+
+```yaml filename="librechat.yaml"
+openapi:
+  enabled: true
+```
+
+이 사양은 이 페이지에 설명된 공개 추론(inference), 이벤트, 에이전트(Agent) 관리 및 스킬(Skill) 관리 경로를 다룹니다. 배포 환경에서 API 문서를 노출할 의도가 없다면 해당 경로를 비활성화 상태로 유지하세요.
+
 ## API Key Management [#api-key-management]
 
 `remoteAgents.use` 및 `remoteAgents.create`가 활성화되면, 사용자는 LibreChat UI에서 API 키를 생성할 수 있습니다. 이 키들은 Agents API에 대한 요청을 인증하는 데 사용됩니다.
@@ -153,7 +164,7 @@ Skill 작업은 바인딩된 사용자에게 표시되는 Skill로 제한됩니�
 
 관리 응답은 `invalid_request`, `not_found`, `permission_denied`, `conflict` 또는 `internal_error` 코드가 포함된 구조화된 오류를 사용합니다. 리소스 권한 부여 실패는 호출자가 접근할 수 없는 ID를 탐색하지 못하도록 `not_found`로 반환될 수 있습니다.
 
-Machine 토큰은 만료되지 않아야 하며, 구성된 발급자(issuer) 및 대상(audience)과 일치해야 하고, `azp` 또는 `client_id`를 통해 허용 목록에 있는 클라이언트 중 하나를 식별해야 하며, 구성된 주체(subject) 규칙을 충족해야 합니다. 구성이 누락되었거나 자격 증명이 유효하지 않은 경우 `401`을 반환하며, 삭제 중인 바인딩된 계정은 `409`를 반환합니다. 전체 클레임 및 바인딩 규칙은 [`managementApi.auth.clients`](/docs/configuration/librechat_yaml/object_structure/agents#managementapiauthclients)를 참조하세요.
+머신 토큰은 만료되지 않아야 하며, 구성된 발급자와 일치해야 하고, `azp` 또는 `client_id`를 통해 허용 목록에 있는 클라이언트 중 하나를 식별해야 하며, 구성된 주체(subject) 규칙을 충족해야 합니다. 기본적으로 토큰은 구성된 대상(audience)과도 일치해야 합니다. `aud` 대신 `client_id`가 포함된 머신 액세스 토큰을 발급하는 Amazon Cognito와 같은 제공업체의 경우, `tokenUse: access`를 설정하고 `audience`를 생략하며 `requiredScopes`를 통해 필요한 OAuth 범위를 요구하십시오. 구성이 누락되었거나 자격 증명이 유효하지 않으면 `401`이 반환되며, 삭제 중인 바인딩된 계정은 `409`를 반환합니다. 전체 클레임 및 바인딩 규칙은 [`managementApi.auth.oidc`](/docs/configuration/librechat_yaml/object_structure/agents#managementapiauthoidc) 및 [`managementApi.auth.clients`](/docs/configuration/librechat_yaml/object_structure/agents#managementapiauthclients)를 참조하십시오.
 
 ## Endpoints [#endpoints]
 
@@ -223,6 +234,33 @@ curl -X POST https://your-librechat-instance/api/agents/v1/responses \
     "input": "What is the weather today?"
   }'
 ```
+
+#### Caller-Executed Function Tools [#caller-executed-function-tools]
+
+Open Responses endpoint는 호출자가 제공하는 표준 `function` 도구를 허용합니다. LibreChat은 이러한 정의를 모델에 노출하지만 직접 실행하지는 않습니다. 모델이 도구를 선택하면, 응답에는 호출자가 실행할 수 있는 `function_call` 출력 항목이 포함됩니다.
+
+계속하려면, 반환된 `function_call` 항목과 그에 대응하는 `function_call_output` 항목을 순서대로 `input`에 포함하여 새로운 요청을 보내야 합니다. 이 핸드오프는 상태를 저장하지 않습니다(stateless). 즉, 일시 중단된 실행(suspended run)을 생성하지 않으며, `previous_response_id`만으로는 재현된 도구 교환을 대체할 수 없습니다.
+
+```json
+{
+  "model": "agent_abc123",
+  "input": [
+    {
+      "type": "function_call",
+      "call_id": "call_abc123",
+      "name": "lookup_order",
+      "arguments": "{\"order_id\":\"A-42\"}"
+    },
+    {
+      "type": "function_call_output",
+      "call_id": "call_abc123",
+      "output": "{\"status\":\"shipped\"}"
+    }
+  ]
+}
+```
+
+Caller 도구 이름은 문자, 숫자, 밑줄, 하이픈을 포함할 수 있습니다. 이름은 고유해야 하며 서버에서 제공하는 도구를 대체할 수 없습니다. Caller가 실행하는 도구는 해당 턴에서 선택된 유일한 도구여야 합니다. 만약 모델이 이를 서버에서 실행되는 도구와 혼용할 경우, LibreChat은 모델에게 Caller 도구만 단독으로 다시 시도하도록 요청합니다.
 
 ## Agent Events [#agent-events]
 
