@@ -1,0 +1,336 @@
+---
+title: "Classification Object Structure"
+icon: SlidersHorizontal
+---
+
+## Overview
+
+The `classification` configuration connects LibreChat to a classifier: a model that
+answers small typed questions about text and returns probabilities, rather than
+writing prose. Features use it where a decision has to be made before or around a
+model call, such as picking which tools a turn needs.
+
+Two question shapes are available:
+
+- **boolean** asks whether something holds and returns the probability of yes.
+- **choice** picks one option from a defined set and returns the full distribution.
+
+Classification is disabled by default. When it is off, or when no provider is
+configured, every feature built on it behaves exactly as it does without it.
+
+Every enabled capability sends conversation text to the configured host. Tool
+selection sends the latest request and the deferred tools' descriptions; the memory
+gate sends the last few messages. Point `baseURL` at a host you are allowed to send
+that data to.
+
+Classifier usage is recorded as transactions with the context `classification`, so it
+appears in token usage and draws on the balance like any other model call. TypeSafe's
+Jev is priced at $0.042 per million input tokens with free output; a model with no
+known price is charged at the default rate.
+
+## Example
+
+```yaml filename="Classification Object Structure"
+classification:
+  enabled: true
+  provider: http
+  providers:
+    http:
+      baseURL: https://classifier.example.com/v1/classify
+      apiKeyEnv: CLASSIFIER_API_KEY
+      timeoutMs: 4000
+      maxRetries: 2
+
+  toolSelection:
+    enabled: true
+    shortlist: 5
+    needsToolThreshold: 0.15
+    lowConfidenceExtra: 3
+
+  memoryGate:
+    enabled: true
+    threshold: 0.5
+```
+
+## Configuration
+
+### Subkeys
+
+<OptionTable
+  options={[
+    ['enabled', 'Boolean', 'Master switch. When false, no capability below runs and no request is made.', 'false'],
+    ['provider', 'String', 'Which entry under `providers` answers. A name with a preset needs no more than its key; a name with no preset works too, as long as its entry gives a `baseURL`.', 'http'],
+    ['providers', 'Object', 'Settings per provider, keyed by provider name.', '{}'],
+    ['toolSelection', 'Object', 'Surfaces the deferred MCP tools a turn is likely to need.', 'Disabled.'],
+    ['memoryGate', 'Object', 'Skips the memory model on turns that do not ask to remember, update or forget anything.', 'Disabled.'],
+  ]}
+/>
+
+## providers
+
+Each provider reads its API key from an environment variable. The key is never
+written in `librechat.yaml`; only the name of the variable is.
+
+<OptionTable
+  options={[
+    ['baseURL', 'String', 'Full URL the provider posts to, not a base path.', 'Supplied by the preset, except for `cloudflare` whose URL carries your account id.'],
+    ['model', 'String', 'Model name sent in the request body.', 'Supplied by the preset.'],
+    ['dialect', "'port' | 'systemone'", 'Which wire vocabulary the endpoint speaks. The only difference is the word for a yes/no question: the port calls it a boolean, System One calls it a noul.', 'port'],
+    ['requestKey', 'String', 'Nests `state` and `questions` under this key, for hosts that wrap the request body.', 'Unset, so the body is flat.'],
+    ['responseKey', 'String', 'Reads the answer envelope from this key, for hosts that wrap the response.', 'Unset, so the body is read as it arrives.'],
+    ['apiKeyEnv', 'String', 'Name of the environment variable holding the key for this provider.', 'CLASSIFIER_API_KEY'],
+    ['timeoutMs', 'Number', 'Ceiling for one judgment, retries and backoff included. A judgment that misses it is abandoned rather than awaited.', '4000'],
+    ['maxRetries', 'Number', 'Retries inside `timeoutMs`, for a rate limit, server or network error only. Honors `retry-after` when the response carries one, and gives up when that wait would outrun `timeoutMs`.', '2'],
+  ]}
+/>
+
+### Presets
+
+The hosts that serve a classification model over HTTP differ only in their URL,
+their model name and how they wrap the body. That is configuration rather than
+behaviour, so each one ships as a preset: a set of defaults you can name, and
+override field by field.
+
+<OptionTable
+  options={[
+    ['http', 'Preset', 'Posts the port vocabulary to whatever `baseURL` names. For your own classifier, or anything behind a small adapter service.', 'Needs a baseURL.'],
+    ['typesafe', 'Preset', 'The TypeSafe System One API.', 'https://api.typesafe.ai/v1/systemone, jev-latest, TYPESAFE_API_KEY'],
+    ['openrouter', 'Preset', "OpenRouter's decisions endpoint, which serves the same model.", 'https://openrouter.ai/api/alpha/decisions, ~typesafe/jev-latest, OPENROUTER_KEY'],
+    ['cloudflare', 'Preset', 'Cloudflare Workers AI, which serves the same model and wraps both the request and the response.', 'typesafe/jev, CLOUDFLARE_API_TOKEN. No default URL.'],
+  ]}
+/>
+
+Naming a preset is usually the whole configuration:
+
+```yaml filename="A preset, with nothing to add"
+classification:
+  enabled: true
+  provider: typesafe
+  providers:
+    typesafe:
+      apiKeyEnv: TYPESAFE_API_KEY
+```
+
+`cloudflare` is the exception, because its URL carries your account id. Without
+one it stays off and says so rather than guessing:
+
+```yaml filename="Cloudflare"
+classification:
+  enabled: true
+  provider: cloudflare
+  providers:
+    cloudflare:
+      baseURL: https://api.cloudflare.com/client/v4/accounts/<account-id>/ai/run
+      apiKeyEnv: CLOUDFLARE_API_TOKEN
+```
+
+### A host with no preset
+
+A host nobody has written a preset for needs no code either, only its shape:
+
+```yaml filename="Any other host"
+classification:
+  enabled: true
+  provider: inhouse
+  providers:
+    inhouse:
+      baseURL: https://classify.internal/v1/run
+      model: your-model
+      dialect: systemone
+      requestKey: input
+      responseKey: result
+      apiKeyEnv: INHOUSE_CLASSIFIER_KEY
+```
+
+<Callout type="warn">
+  A provider entry rejects keys it does not recognise, so `requestkey` fails at
+  config load instead of being dropped and surfacing later as a missing setting.
+</Callout>
+
+### What can answer these questions
+
+This expects a classification model, not a chat model. The difference is not the
+protocol but what comes back: a classifier returns a probability it was trained to
+calibrate, and every threshold on this page reads one. A chat model asked to report
+its own confidence returns a number that looks the same and means much less.
+
+That narrows the field considerably. Two model families answer caller-defined
+questions with calibrated probabilities:
+
+<OptionTable
+  options={[
+    ['TypeSafe System One', 'Hosted', 'The `jev` family. Reachable directly, and resold through Cloudflare Workers AI, OpenRouter and the Vercel AI Gateway, each with its own wire format for the same model.', 'Use the `typesafe` provider for the direct API.'],
+    ['Laya', 'Self-hosted', 'An Apache-2.0 model from Convai Innovations implementing the same three question shapes. Published as weights rather than an API, so it needs a small service in front of it.', 'Use the `http` provider against that service.'],
+  ]}
+/>
+
+Laya ships as weights, so it needs a small service in front of it. It implements
+the same three question shapes, so `dialect: systemone` describes it and no code
+is involved:
+
+```yaml filename="A self-hosted classifier"
+classification:
+  enabled: true
+  provider: laya
+  providers:
+    laya:
+      baseURL: http://laya.internal:8080/classify
+      dialect: systemone
+      apiKeyEnv: CLASSIFIER_API_KEY
+```
+
+Three things that look like they should work and do not:
+
+- **Chat completion endpoints**, including OpenAI, Anthropic and the general
+  OpenRouter catalog. No provider here speaks chat completions, and nothing reads
+  logprobs.
+- **Moderation endpoints** such as OpenAI's or Mistral's. They return scores over a
+  fixed taxonomy and cannot answer a question you define.
+- **Zero-shot classification by embedding similarity**, such as Jina's classifier or
+  a hosted NLI model. These do take caller-defined labels, but the scores are
+  similarities and nobody claims they are calibrated. They will work in the
+  mechanical sense and quietly make the thresholds meaningless.
+
+<Callout type="info">
+  If a provider cannot measure confidence it should report it as absent rather than
+  as a number. Tool selection treats absent confidence as unconfident and widens the
+  shortlist, which is the safe direction; a fabricated `0` or `1.0` defeats that.
+</Callout>
+
+## toolSelection
+
+An agent holding a large MCP catalog pays for every tool's argument schema on every
+turn. Deferring those schemas solves the cost, but the model then spends a
+`tool_search` round trip discovering the tool it needs, on the turn it needs it.
+
+Tool selection ranks the deferred tools against the request before the model runs
+and surfaces the few it is likely to need, so their schemas arrive with the first
+call. It requires tools that are already deferred, whether by the per-tool toggle in
+the agent builder or by [`mcpSettings.deferSchemaChars`](/docs/configuration/librechat_yaml/object_structure/mcp_settings).
+
+Selection only ever adds. A tool it passes over stays listed by name in the
+`tool_search` description and remains one search away, so a wrong prediction costs a
+round trip rather than an answer.
+
+<OptionTable
+  options={[
+    ['enabled', 'Boolean', 'Whether to rank deferred tools before the turn.', 'false'],
+    ['timeoutMs', 'Number', "Overrides the provider's timeout for ranking requests only. Ranking runs before the first model call, so this is also the most latency it can add to a turn. A large catalog may need longer than a yes/no question.", "The provider's timeout."],
+    ['shortlist', 'Number', 'How many tools may be surfaced for one turn.', '5'],
+    ['minProbability', 'Number', 'A tool below this probability is not surfaced even inside the shortlist.', '0.05'],
+    ['needsToolThreshold', 'Number', 'Below this probability that the turn needs any tool at all, only tools the request names outright are surfaced. Set to 0 to surface on every turn.', '0.15'],
+    ['lowConfidenceExtra', 'Number', 'When the ranking is not confident, surface this many extra tools rather than fewer. An omission costs a round trip while an extra schema costs only tokens. Set to 0 to keep the shortlist fixed.', '3'],
+    ['lowConfidenceBelow', 'Number', 'Confidence at or below which `lowConfidenceExtra` applies. A provider that cannot measure confidence is treated as unconfident.', '0.5'],
+    ['surfaceNamedTools', 'Boolean', 'Surface any tool whose name the request mentions outright, whatever the ranking said. Covers a user correcting the assistant.', 'true'],
+    ['maxCatalogTools', 'Number', 'Largest catalog one ranking request may carry. Above it the catalog is ranked in batches.', '200'],
+    ['descriptionChars', 'Number', 'Characters of each tool description carried into the ranking request.', '300'],
+    ['instructions', 'String', 'Replaces the wording of the ranking question.', 'A built-in question.'],
+    ['guidance', 'String', 'Replaces the rubric shown beside the ranking question.', 'Built-in guidance.'],
+    ['needsToolInstructions', 'String', 'Replaces the question asking whether the turn needs a tool at all.', 'A built-in question.'],
+  ]}
+/>
+
+## memoryGate
+
+The memory model runs after every turn, and most turns ask it for nothing. The
+gate asks one yes/no question first and skips that call when the answer is no.
+
+By default the question is whether the user's newest message asks the assistant to
+remember, update or forget something. That matches the default memory
+instructions, which only store what the user asks to keep: a preference mentioned
+in passing is skipped by both, while "please remember...", "forget where I live"
+and a short yes to an offer to remember all go through. If your
+`memory.instructions` also keep facts the user did not ask to keep, replace the
+question to match (see [Customizing the questions](#customizing-the-questions)).
+
+It sits in front of the automatic memory agent, so it requires
+[`memory`](/docs/configuration/librechat_yaml/object_structure/memory) to be
+configured with `memory.agent.enabled: true`. Without automatic extraction there is
+no call to skip, and the gate never runs.
+
+A gate that cannot reach its provider answers yes, so an outage never causes a
+memory to be lost.
+
+The gate judges only the user's newest message. The few messages before it are sent
+along as context, so "yes, remember that" is read against the offer it answers, but
+an earlier request is not judged again on the next turn.
+
+<OptionTable
+  options={[
+    ['enabled', 'Boolean', 'Whether to ask before running the memory model.', 'false'],
+    ['timeoutMs', 'Number', "Overrides the provider's timeout for the gate only. The gate asks one short question, so it can afford a tighter ceiling than tool selection.", "The provider's timeout."],
+    ['threshold', 'Number', 'Below this probability that the newest message asks for a memory change, memory is skipped. The comparison is inclusive.', '0.5'],
+    ['instructions', 'String', 'Replaces the wording of the gate question. Refer to the newest message as `latest` and to the earlier messages as `conversation`.', 'A built-in question.'],
+    ['whenTrue', 'String', 'Describes what a yes means.', 'Built-in wording.'],
+    ['whenFalse', 'String', 'Describes what a no means.', 'Built-in wording.'],
+    ['categorize', 'Boolean', 'Also ask which of `memory.validKeys` the request concerns, and suggest it to the memory model. Requires `validKeys`; ignored without them.', 'false'],
+    ['categoryThreshold', 'Number', 'Below this probability the suggested key is dropped rather than shown.', '0.4'],
+    ['detectUpdates', 'Boolean', 'Also ask whether the turn changes something already stored, rather than adding something new.', 'false'],
+  ]}
+/>
+
+`categorize` and `detectUpdates` ride in the request the gate already makes, so
+they cost no additional round trip.
+
+Each capability can set its own `timeoutMs` because one ceiling does not suit
+both. Ranking a large catalog is a request of several thousand tokens; the gate
+asks one short question about the recent turn. The result reaches the memory model as a
+suggestion it may ignore, not as an override:
+
+```text
+<memory_hint>
+This request most likely belongs under `work_context`. It looks
+like a change to what is already stored there, not a new fact.
+Ignore this if it does not fit what the user actually said.
+</memory_hint>
+```
+
+<Callout type="info">
+  `whenTrue` and `whenFalse` are named that way because YAML reads bare `true:` and
+  `false:` keys as booleans rather than strings.
+</Callout>
+
+## Customizing the questions
+
+Every question ships with default wording, and an operator can replace it without
+touching code. A support deployment can tell the ranker what its tools are for, and
+a deployment with its own idea of what is worth remembering can say so:
+
+```yaml filename="Custom question wording"
+classification:
+  toolSelection:
+    instructions: Pick the tool for this support ticket.
+    guidance: Prefer billing tools for anything about an invoice.
+  memoryGate:
+    instructions: Does `latest` mention a dietary requirement?
+    whenTrue: An allergy or a standing preference.
+    whenFalse: Anything about one meal only.
+```
+
+A deployment whose `memory.instructions` keep anything worth remembering, not only
+what the user asks to keep, can ask about that instead:
+
+```yaml filename="Gate on anything worth remembering"
+classification:
+  memoryGate:
+    instructions: Does `latest` say something about the user that would still matter weeks from now?
+    whenTrue: A lasting preference, or a fact about who they are or what they work on.
+    whenFalse: Small talk, or a detail that only matters inside this task.
+```
+
+## Notes on accuracy
+
+A classifier returns probabilities, and the thresholds above decide what to do with
+them. Two properties are worth understanding before enabling either capability:
+
+- Thresholds are domain specific. Start with the defaults, observe your own traffic,
+  and adjust rather than assuming the defaults transfer.
+- Probabilities are only useful when the provider produces calibrated ones. A
+  provider that cannot measure confidence reports it as absent, and tool selection
+  treats that as unconfident and widens the shortlist instead of narrowing it.
+- Low confidence usually means two candidates are close, not that the answer is
+  poor. A catalog holding several tools that genuinely could serve the same request
+  will report low confidence often, which is the case `lowConfidenceExtra` exists
+  for: surfacing both costs one extra schema, while surfacing the wrong one alone
+  costs a `tool_search` round trip. Raise `lowConfidenceBelow` if your catalog has
+  many near-duplicates, lower it if its tools are sharply distinct.
