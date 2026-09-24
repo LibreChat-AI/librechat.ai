@@ -41,7 +41,7 @@ export default function TermsOfServicePage() {
           <p>
             These Terms apply to the documentation website only. The LibreChat application itself,
             which you self-host and operate, is licensed separately under the{' '}
-            <Link href="https://github.com/danny-avila/LibreChat/blob/main/LICENSE">
+            <Link href="https://github.com/LibreChat-AI/LibreChat/blob/main/LICENSE">
               MIT License
             </Link>
             . Use of the public LibreChat Demo is governed by its separate{' '}
@@ -78,8 +78,8 @@ export default function TermsOfServicePage() {
           <h2>4. Open-Source Project</h2>
           <p>
             LibreChat is an open-source project. The application source code is published at{' '}
-            <Link href="https://github.com/danny-avila/LibreChat">
-              github.com/danny-avila/LibreChat
+            <Link href="https://github.com/LibreChat-AI/LibreChat">
+              github.com/LibreChat-AI/LibreChat
             </Link>{' '}
             under the MIT License. The Site itself is published at{' '}
             <Link href="https://github.com/LibreChat-AI/librechat.ai">

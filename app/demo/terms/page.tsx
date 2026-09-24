@@ -306,8 +306,8 @@ export default function DemoTermsPage() {
             Email: <Link href="mailto:contact@librechat.ai">contact@librechat.ai</Link>
             <br />
             GitHub:{' '}
-            <Link href="https://github.com/danny-avila/LibreChat">
-              github.com/danny-avila/LibreChat
+            <Link href="https://github.com/LibreChat-AI/LibreChat">
+              github.com/LibreChat-AI/LibreChat
             </Link>
           </p>
 

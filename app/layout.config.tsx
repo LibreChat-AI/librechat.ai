@@ -25,5 +25,5 @@ export const baseOptions: BaseLayoutProps = {
       url: '/changelog',
     },
   ],
-  githubUrl: 'https://github.com/danny-avila/LibreChat',
+  githubUrl: 'https://github.com/LibreChat-AI/LibreChat',
 }

@@ -4,7 +4,7 @@ export const revalidate = 3600
 
 export async function GET() {
   try {
-    const response = await fetch('https://api.github.com/repos/danny-avila/LibreChat', {
+    const response = await fetch('https://api.github.com/repos/LibreChat-AI/LibreChat', {
       headers: {
         Accept: 'application/vnd.github.v3+json',
         ...(process.env.GITHUB_TOKEN && {

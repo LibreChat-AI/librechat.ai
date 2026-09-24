@@ -39,11 +39,11 @@ type HomeStrings = UIStrings['home']
 async function getGitHubData(): Promise<{ stars: number; contributors: number }> {
   try {
     const [repoRes, contribRes] = await Promise.all([
-      fetch('https://api.github.com/repos/danny-avila/LibreChat', {
+      fetch('https://api.github.com/repos/LibreChat-AI/LibreChat', {
         next: { revalidate: 3600 },
       }),
       fetch(
-        'https://api.github.com/repos/danny-avila/LibreChat/contributors?per_page=1&anon=true',
+        'https://api.github.com/repos/LibreChat-AI/LibreChat/contributors?per_page=1&anon=true',
         { next: { revalidate: 3600 } },
       ),
     ])
@@ -104,11 +104,14 @@ async function getDockerHubPulls(repo: string): Promise<number> {
   }
 }
 
-async function getGhcrDownloads(pkg: string): Promise<number> {
+/** Packages published before the repository moved stay under the original owner, so both are counted. */
+const GHCR_OWNERS = ['users/danny-avila', 'orgs/LibreChat-AI']
+
+async function getGhcrDownloads(owner: string, pkg: string): Promise<number> {
   try {
     const encodedPackage = encodeURIComponent(pkg)
     const res = await fetch(
-      `https://github.com/users/danny-avila/packages/container/package/${encodedPackage}`,
+      `https://github.com/${owner}/packages/container/package/${encodedPackage}`,
       { next: { revalidate: 3600 } },
     )
     if (!res.ok) return 0
@@ -120,12 +123,17 @@ async function getGhcrDownloads(pkg: string): Promise<number> {
   }
 }
 
-async function getGhcrDownloadsTotal(): Promise<number> {
+async function getGhcrDownloadsForOwner(owner: string): Promise<number> {
   let total = 0
   for (const pkg of GHCR_PACKAGES) {
-    total += await getGhcrDownloads(pkg)
+    total += await getGhcrDownloads(owner, pkg)
   }
   return total
+}
+
+async function getGhcrDownloadsTotal(): Promise<number> {
+  const totals = await Promise.all(GHCR_OWNERS.map(getGhcrDownloadsForOwner))
+  return totals.reduce((sum, n) => sum + n, 0)
 }
 
 async function getContainerPulls(): Promise<number> {
@@ -226,7 +234,7 @@ function HeroSection({ stars, t, lang }: { stars: number; t: HomeStrings; lang: 
         {/* GitHub stars badge */}
         {stars > 0 && (
           <Link
-            href="https://github.com/danny-avila/LibreChat"
+            href="https://github.com/LibreChat-AI/LibreChat"
             target="_blank"
             rel="noopener noreferrer"
             className="mb-8 inline-flex items-center rounded-full border border-border text-sm transition-colors hover:bg-accent"
@@ -463,7 +471,7 @@ function CommunitySection({
         {/* Links */}
         <nav className="flex items-center justify-center gap-4" aria-label={t.communityLinksAria}>
           <Link
-            href="https://github.com/danny-avila/LibreChat"
+            href="https://github.com/LibreChat-AI/LibreChat"
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-5 py-3 text-sm font-medium text-foreground transition-colors hover:bg-muted"
