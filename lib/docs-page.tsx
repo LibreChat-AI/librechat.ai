@@ -1,5 +1,6 @@
 import 'server-only'
 
+import { ArchivedVersionBanner } from '@/components/ArchivedVersionBanner'
 import { DocsHub } from '@/components/DocsHub'
 import { FeaturesHub } from '@/components/FeaturesHub'
 import { Feedback } from '@/components/Feedback'
@@ -10,6 +11,7 @@ import { QuickStartHub } from '@/components/QuickStartHub'
 import { LLMCopyButton, ViewOptions } from '@/components/page-actions'
 import { CredentialsGeneratorMDX } from '@/components/tools/CredentialsGeneratorMDX'
 import { YAMLValidatorMDX } from '@/components/tools/YAMLValidatorMDX'
+import { archivedDocsSource, archivedVersions } from '@/lib/docs-archive'
 import { i18n, localizedDocsHref } from '@/lib/i18n'
 import { mdxComponents } from '@/lib/mdx-components'
 import { ogImageUrl } from '@/lib/og'
@@ -33,6 +35,23 @@ function isRealTranslation(lang: string, path: string): boolean {
   return lang !== i18n.defaultLanguage && path.endsWith(`.${lang}.mdx`)
 }
 
+/**
+ * Interactive MDX widgets render localized chrome but are invoked from MDX
+ * without props. Bind a locale to them per request so they pick up the right
+ * dictionary on /<locale>/docs pages.
+ */
+function localizedMdxComponents(lang: string) {
+  return {
+    ...mdxComponents,
+    DocsHub: () => <DocsHub lang={lang} />,
+    QuickStartHub: () => <QuickStartHub lang={lang} />,
+    FeaturesHub: () => <FeaturesHub lang={lang} />,
+    LocalInstallHub: () => <LocalInstallHub lang={lang} />,
+    CredentialsGeneratorMDX: () => <CredentialsGeneratorMDX lang={lang} />,
+    YAMLValidatorMDX: () => <YAMLValidatorMDX lang={lang} />,
+  }
+}
+
 export async function renderDocsPage(params: DocsRouteParams) {
   const page = docsSource.getPage(params.slug, params.lang)
   if (!page) notFound()
@@ -52,18 +71,7 @@ export async function renderDocsPage(params: DocsRouteParams) {
 
   const MDX = page.data.body
 
-  // Interactive MDX widgets render localized chrome but are invoked from MDX
-  // without props. Bind the current locale to them per request so they pick up
-  // the right dictionary on /<locale>/docs pages.
-  const components = {
-    ...mdxComponents,
-    DocsHub: () => <DocsHub lang={params.lang} />,
-    QuickStartHub: () => <QuickStartHub lang={params.lang} />,
-    FeaturesHub: () => <FeaturesHub lang={params.lang} />,
-    LocalInstallHub: () => <LocalInstallHub lang={params.lang} />,
-    CredentialsGeneratorMDX: () => <CredentialsGeneratorMDX lang={params.lang} />,
-    YAMLValidatorMDX: () => <YAMLValidatorMDX lang={params.lang} />,
-  }
+  const components = localizedMdxComponents(params.lang)
 
   // Fumadocs falls back to the English page for a non-default locale that has
   // no foo.<locale>.mdx yet. Gate the banner (and the hreflang alternates below)
@@ -168,6 +176,83 @@ export function generateLocalizedDocsParams() {
       docsSource.getPage(params.slug, params.lang)?.path.endsWith(`.${params.lang}.mdx`) ?? false
     )
   })
+}
+
+/**
+ * A frozen snapshot page from content/docs-archive, served at
+ * `/<version>/docs/...`. Archived pages are English-only and deliberately
+ * leaner than the live ones: no GitHub edit link or last-update stamp (the
+ * snapshot has no upstream file), no markdown/LLM actions (the .md and
+ * llms.mdx routes only exist for the live docs), no feedback widget, and no
+ * JSON-LD because they are noindex.
+ */
+export async function renderArchivedDocsPage({
+  version,
+  slug,
+}: {
+  version: string
+  slug?: string[]
+}) {
+  const page = archivedDocsSource(version).getPage(slug)
+  if (!page) notFound()
+
+  const MDX = page.data.body
+
+  // Send readers to the same page on the live docs when it still exists,
+  // otherwise to the docs root — a removed page must not become a dead link.
+  const livePage = docsSource.getPage(slug, i18n.defaultLanguage)
+  const currentHref = livePage ? englishDocsHref(slug) : '/docs'
+
+  return (
+    <DocsPage
+      toc={page.data.toc}
+      tableOfContent={{ style: 'clerk', single: false }}
+      breadcrumb={{
+        enabled: true,
+        includeRoot: { url: `/${version}/docs` },
+        includePage: true,
+      }}
+    >
+      <DocsTitle>{page.data.title}</DocsTitle>
+      <DocsDescription>{page.data.description}</DocsDescription>
+      <DocsBody>
+        <ArchivedVersionBanner version={version} currentHref={currentHref} />
+        <MDX components={localizedMdxComponents(i18n.defaultLanguage)} />
+      </DocsBody>
+    </DocsPage>
+  )
+}
+
+/**
+ * Archived pages are prerendered through the `[lang]` segment: the version id
+ * sits in the same URL slot as a locale (`/v0.7.x/docs/...`).
+ */
+export function generateArchivedDocsParams() {
+  return archivedVersions.flatMap((version) =>
+    archivedDocsSource(version)
+      .generateParams()
+      .map(({ slug }) => ({ lang: version, slug })),
+  )
+}
+
+export async function generateArchivedDocsMetadata({
+  version,
+  slug,
+}: {
+  version: string
+  slug?: string[]
+}): Promise<Metadata> {
+  const page = archivedDocsSource(version).getPage(slug)
+  if (!page) notFound()
+
+  return {
+    title: `${page.data.title} (${version})`,
+    description: page.data.description,
+    // Frozen duplicates of live pages: keep them reachable for readers on an
+    // old release, out of the index, and out of the sitemap (next-sitemap.config.js).
+    robots: { index: false, follow: true },
+    alternates: { canonical: page.url },
+  }
 }
 
 export async function generateDocsMetadata(params: DocsRouteParams): Promise<Metadata> {

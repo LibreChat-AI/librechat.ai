@@ -6,6 +6,28 @@ export const docs = defineDocs({
   dir: 'content/docs',
 })
 
+/**
+ * Frozen snapshots of older docs versions, one directory per version
+ * (`content/docs-archive/v0.7.x/...`) served at `/<version>/docs`. A separate
+ * collection — not a subfolder of `content/docs` — so archived pages stay out
+ * of the live page tree, search index, llms text, translations and the
+ * config-version sync by construction. See content/docs-archive/README.md.
+ */
+export const docsArchive = defineDocs({
+  dir: 'content/docs-archive',
+  // Snapshots only ever contain .mdx pages and meta.json sidebars. Pinning the
+  // page glob keeps the directory's own README.md (and any stray .md) out of
+  // the collection — fumadocs collects .md as a page and would reject it for
+  // missing frontmatter.
+  //
+  // Deliberately NOT `dynamic: true`: archived pages inherit real MDX imports
+  // (`next/image`, `@/components/...`) from the docs they snapshot, and
+  // on-demand compilation cannot resolve those specifiers at runtime. Bundling
+  // keeps every snapshot renderable, at the cost of build memory — see the
+  // NODE_OPTIONS in the `build` script.
+  docs: { files: ['**/*.mdx'] },
+})
+
 export const blog = defineCollections({
   type: 'doc',
   dir: 'content/blog',
