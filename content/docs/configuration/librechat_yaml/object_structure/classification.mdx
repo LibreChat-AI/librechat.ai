@@ -44,7 +44,7 @@ classification:
 
   memoryGate:
     enabled: true
-    threshold: 0.25
+    threshold: 0.5
 ```
 
 ## Configuration
@@ -57,7 +57,7 @@ classification:
     ['provider', 'String', 'Which entry under `providers` answers. A name with a preset needs no more than its key; a name with no preset works too, as long as its entry gives a `baseURL`.', 'http'],
     ['providers', 'Object', 'Settings per provider, keyed by provider name.', '{}'],
     ['toolSelection', 'Object', 'Surfaces the deferred MCP tools a turn is likely to need.', 'Disabled.'],
-    ['memoryGate', 'Object', 'Skips the memory model on turns that carry nothing worth remembering.', 'Disabled.'],
+    ['memoryGate', 'Object', 'Skips the memory model on turns that do not ask to remember, update or forget anything.', 'Disabled.'],
   ]}
 />
 
@@ -227,8 +227,16 @@ round trip rather than an answer.
 
 ## memoryGate
 
-The memory model runs after every turn, and most turns carry nothing durable. The
+The memory model runs after every turn, and most turns ask it for nothing. The
 gate asks one yes/no question first and skips that call when the answer is no.
+
+By default the question is whether the user's newest message asks the assistant to
+remember, update or forget something. That matches the default memory
+instructions, which only store what the user asks to keep: a preference mentioned
+in passing is skipped by both, while "please remember...", "forget where I live"
+and a short yes to an offer to remember all go through. If your
+`memory.instructions` also keep facts the user did not ask to keep, replace the
+question to match (see [Customizing the questions](#customizing-the-questions)).
 
 It sits in front of the automatic memory agent, so it requires
 [`memory`](/docs/configuration/librechat_yaml/object_structure/memory) to be
@@ -238,18 +246,19 @@ no call to skip, and the gate never runs.
 A gate that cannot reach its provider answers yes, so an outage never causes a
 memory to be lost.
 
-The gate reads the recent messages newest first, so the turn that just happened
-is always part of what it judges, even after a long tool result.
+The gate judges only the user's newest message. The few messages before it are sent
+along as context, so "yes, remember that" is read against the offer it answers, but
+an earlier request is not judged again on the next turn.
 
 <OptionTable
   options={[
     ['enabled', 'Boolean', 'Whether to ask before running the memory model.', 'false'],
     ['timeoutMs', 'Number', "Overrides the provider's timeout for the gate only. The gate asks one short question, so it can afford a tighter ceiling than tool selection.", "The provider's timeout."],
-    ['threshold', 'Number', 'Below this probability that the turn holds a durable fact, memory is skipped. The comparison is inclusive.', '0.25'],
-    ['instructions', 'String', 'Replaces the wording of the durability question.', 'A built-in question.'],
+    ['threshold', 'Number', 'Below this probability that the newest message asks for a memory change, memory is skipped. The comparison is inclusive.', '0.5'],
+    ['instructions', 'String', 'Replaces the wording of the gate question. Refer to the newest message as `latest` and to the earlier messages as `conversation`.', 'A built-in question.'],
     ['whenTrue', 'String', 'Describes what a yes means.', 'Built-in wording.'],
     ['whenFalse', 'String', 'Describes what a no means.', 'Built-in wording.'],
-    ['categorize', 'Boolean', 'Also ask which of `memory.validKeys` the turn belongs under, and suggest it to the memory model. Requires `validKeys`; ignored without them.', 'false'],
+    ['categorize', 'Boolean', 'Also ask which of `memory.validKeys` the request concerns, and suggest it to the memory model. Requires `validKeys`; ignored without them.', 'false'],
     ['categoryThreshold', 'Number', 'Below this probability the suggested key is dropped rather than shown.', '0.4'],
     ['detectUpdates', 'Boolean', 'Also ask whether the turn changes something already stored, rather than adding something new.', 'false'],
   ]}
@@ -265,7 +274,7 @@ suggestion it may ignore, not as an override:
 
 ```text
 <memory_hint>
-The durable part of this turn most likely belongs under `work_context`. It looks
+This request most likely belongs under `work_context`. It looks
 like a change to what is already stored there, not a new fact.
 Ignore this if it does not fit what the user actually said.
 </memory_hint>
@@ -288,9 +297,20 @@ classification:
     instructions: Pick the tool for this support ticket.
     guidance: Prefer billing tools for anything about an invoice.
   memoryGate:
-    instructions: Is there a dietary requirement here?
+    instructions: Does `latest` mention a dietary requirement?
     whenTrue: An allergy or a standing preference.
     whenFalse: Anything about one meal only.
+```
+
+A deployment whose `memory.instructions` keep anything worth remembering, not only
+what the user asks to keep, can ask about that instead:
+
+```yaml filename="Gate on anything worth remembering"
+classification:
+  memoryGate:
+    instructions: Does `latest` say something about the user that would still matter weeks from now?
+    whenTrue: A lasting preference, or a fact about who they are or what they work on.
+    whenFalse: Small talk, or a detail that only matters inside this task.
 ```
 
 ## Notes on accuracy
