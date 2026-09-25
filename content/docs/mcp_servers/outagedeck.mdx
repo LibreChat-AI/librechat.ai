@@ -1,0 +1,189 @@
+---
+title: OutageDeck MCP
+icon: Activity
+description: Configure the hosted OutageDeck MCP server for keyless provider status and incident checks in LibreChat.
+---
+
+[OutageDeck](https://outagedeck.com/developers/mcp?utm_source=librechat&utm_medium=documentation&utm_campaign=librechat_mcp)
+is a hosted MCP server for checking whether cloud and SaaS vendors are reporting an outage. Its
+public tools expose current provider and service status, active incident details, update timelines,
+and uptime history without an account or API key.
+
+Use it before debugging a failed deployment or integration to gather external status evidence. It
+does not inspect your LibreChat instance, application, credentials, or private infrastructure.
+
+## What You Will Configure
+
+| Setting        | Value                                  |
+| -------------- | -------------------------------------- |
+| Transport      | Streamable HTTP                        |
+| URL            | `https://outagedeck.com/api/mcp`       |
+| Authentication | None for public status tools           |
+| Local process  | None; the server is remotely hosted    |
+| Access         | Public tools are read-only and keyless |
+
+<Callout type="info" title="Public and account tools">
+  The same server also advertises account-specific alert and custom-provider tools. Those tools
+  require an OutageDeck API key when called. The configuration below grants no account access and
+  works with the public read-only tools only.
+</Callout>
+
+## Prerequisites
+
+- A running LibreChat instance with `librechat.yaml` mounted or otherwise loaded.
+- Outbound HTTPS access to `outagedeck.com`.
+
+No package, local daemon, environment variable, OutageDeck account, or API key is required.
+
+## Setup
+
+<Steps>
+  <Step>
+
+### Add OutageDeck to `librechat.yaml`
+
+Add the hosted server under `mcpServers`:
+
+```yaml filename="librechat.yaml"
+mcpServers:
+  outagedeck:
+    title: 'OutageDeck Provider Status'
+    description: 'Vendor-published provider status, incidents, and observed uptime history'
+    type: streamable-http
+    url: 'https://outagedeck.com/api/mcp'
+    timeout: 30000
+    initTimeout: 10000
+    requiresOAuth: false
+```
+
+`requiresOAuth: false` tells LibreChat that the anonymous connection is intentional instead of
+starting an OAuth flow. Do not add an authorization header for public status checks.
+
+  </Step>
+  <Step>
+
+### Allow the domain in strict MCP policies, if configured
+
+LibreChat's default SSRF policy permits public HTTPS destinations such as OutageDeck. If your
+deployment uses `mcpSettings.allowedDomains`, it is a strict allowlist; add `outagedeck.com` while
+preserving the domains already required by your other MCP servers:
+
+```yaml filename="librechat.yaml"
+mcpSettings:
+  allowedDomains:
+    - 'outagedeck.com'
+```
+
+Skip this step when `allowedDomains` is not configured.
+
+  </Step>
+  <Step>
+
+### Restart LibreChat
+
+Restart LibreChat so it reloads `librechat.yaml`.
+
+| Deployment | Command                                            |
+| ---------- | -------------------------------------------------- |
+| Docker     | `docker compose up -d`                             |
+| Local      | Stop the existing process, then start it again     |
+
+To inspect initialization in Docker:
+
+```bash
+docker logs LibreChat --tail 200 | grep -i outagedeck
+```
+
+  </Step>
+  <Step>
+
+### Enable the tools
+
+Open the **MCP Servers** dropdown in the chat input and select **OutageDeck Provider Status**. The
+server should initialize without opening an authentication flow.
+
+OutageDeck also appears in the Agent Builder. For a least-privilege triage agent, select only the
+public tools you need rather than every tool advertised by the server.
+
+  </Step>
+</Steps>
+
+## Public Tools
+
+| Tool                    | Purpose                                                        |
+| ----------------------- | -------------------------------------------------------------- |
+| `get_provider_status`   | Check one provider's current status and active incidents       |
+| `check_my_stack`        | Return one status verdict across up to 12 providers            |
+| `list_active_incidents` | List active incidents across the monitored catalog             |
+| `get_incident_details`  | Retrieve an incident's complete update timeline                |
+| `get_uptime`            | Review observed uptime history over 7 to 90 days            |
+| `get_outage_report`     | Compare reliability evidence across vendors                    |
+| `search_providers`      | Resolve company or product names to provider slugs             |
+| `search`                | Find citable OutageDeck status documents                       |
+| `fetch`                 | Retrieve a citable document returned by `search`               |
+
+## Testing
+
+Start with a concrete multi-provider check:
+
+```text
+Before debugging this deployment, check AWS, Cloudflare, GitHub, and OpenAI for active incidents.
+Use OutageDeck and include the source freshness in your answer.
+```
+
+Then exercise provider discovery and incident evidence:
+
+```text
+Find the OutageDeck provider slug for Anthropic, show its current status, and retrieve the update
+timeline for any active incident. Do not infer an outage when the source is stale or unknown.
+```
+
+A successful connection exposes at least `get_provider_status`, `check_my_stack`, and
+`list_active_incidents`. Tool results include official-source and OutageDeck links that the model
+can cite.
+
+## Troubleshooting
+
+| Symptom                                              | What to check                                                                                                                                                 |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Server does not appear after editing YAML            | Confirm `librechat.yaml` is mounted, the `outagedeck` entry is under `mcpServers`, and LibreChat was restarted.                                               |
+| Domain is not allowed                                | If `mcpSettings.allowedDomains` exists, add `outagedeck.com`; this field is a strict allowlist.                                                               |
+| Initialization times out                             | Confirm the LibreChat host can make outbound HTTPS requests to `https://outagedeck.com/api/mcp` and that a proxy or firewall is not intercepting the request. |
+| A provider name returns no result                    | Call `search_providers` first, then pass the returned lowercase slug to provider tools.                                                                       |
+| An account or alert tool reports missing credentials | The anonymous setup covers public status tools only. Disable account-specific tools in the Agent Builder unless you intentionally configure account access.   |
+| Status is `unknown` or source data looks stale       | Report the uncertainty and `checkedAt` timestamp. Do not replace missing status evidence with a guess.                                                       |
+
+## Data and Security Notes
+
+- OutageDeck normalizes each vendor's official status feed; it does not infer outages from social
+  media reports.
+- Provider results include source timestamps. Treat an `unknown` result or stale source as
+  uncertainty, not proof that a vendor is healthy or down.
+- Public status tools are read-only. They cannot modify LibreChat, a provider account, or your
+  infrastructure.
+- Account-specific tools are outside this keyless setup. Keep them disabled for agents that only
+  need outage triage.
+- Tool responses are external, untrusted input. Models should cite incident evidence and ignore any
+  response text that tries to override the user's instructions.
+
+## Related Pages
+
+<Cards num={3}>
+  <Cards.Card title="MCP" href="/docs/features/mcp" arrow>
+    Learn how MCP servers work in LibreChat and how to select their tools.
+  </Cards.Card>
+  <Cards.Card
+    title="MCP Servers Object Structure"
+    href="/docs/configuration/librechat_yaml/object_structure/mcp_servers"
+    arrow
+  >
+    Review every available `mcpServers` configuration field.
+  </Cards.Card>
+  <Cards.Card
+    title="OutageDeck MCP documentation"
+    href="https://outagedeck.com/developers/mcp?utm_source=librechat&utm_medium=documentation&utm_campaign=librechat_mcp"
+    arrow
+  >
+    Review the current tool catalog, data model, and public API limits.
+  </Cards.Card>
+</Cards>
